@@ -39,20 +39,22 @@ afterEach(() => {
 });
 
 describe("HomeRail", () => {
-  it("mounts on its resting page and offers all three pages", () => {
+  it("mounts on its resting page and offers all four pages", () => {
     const markup = draw("chat:s1");
 
     expect(markup).toContain("home-rail");
     expect(markup).toContain("Now");
     expect(markup).toContain("Sessions");
     expect(markup).toContain("Files");
+    expect(markup).toContain("Search");
     expect(markup).toContain("home-rail-tab-now");
     expect(markup).toContain("home-rail-tab-sessions");
     expect(markup).toContain("home-rail-tab-files");
+    expect(markup).toContain("home-rail-tab-search");
   });
 
   // The narrow-rail contract, asserted as behaviour rather than as class
-  // strings: an inactive page drops its WORD (that is what lets three fit the
+  // strings: an inactive page drops its WORD (that is what lets four fit the
   // pill at the 240px floor) but must keep its NAME, or the icon that replaces
   // the word is unreadable to a screen reader and unnameable to a query.
   it("names every page even where only the selected one wears its label", () => {
@@ -61,10 +63,12 @@ describe("HomeRail", () => {
     expect(markup).toContain('aria-label="Now"');
     expect(markup).toContain('aria-label="Sessions"');
     expect(markup).toContain('aria-label="Files"');
-    // Resting page selected; the other two are icons, so their word is absent.
+    expect(markup).toContain('aria-label="Search"');
+    // Resting page selected; the other three are icons, so their word is absent.
     expect(markup).toContain(">Now<");
     expect(markup).not.toContain(">Sessions<");
     expect(markup).not.toContain(">Files<");
+    expect(markup).not.toContain(">Search<");
   });
 
   it("mounts the Main-checkout navigator on its Files page", () => {
@@ -77,6 +81,20 @@ describe("HomeRail", () => {
     expect(markup).toContain('data-testid="home-files-panel"');
     expect(markup).toContain("Project files");
     expect(markup).toContain("Volli Code");
+  });
+
+  it("mounts the Search page at Home scope, pointed at the Main checkout", () => {
+    useUiStore.getInitialState().homeRailMode = "search";
+
+    const markup = draw("chat:s1");
+
+    expect(markup).toContain('data-testid="file-search-panel"');
+    // The navigator's own sub-line: at Home scope it names the project, the
+    // same word the Files page uses for the same checkout.
+    expect(markup).toContain("Volli Code");
+    // Idle until something is typed: an empty Search page is a resting state,
+    // not a list of the whole checkout.
+    expect(markup).toContain('data-testid="file-search-idle"');
   });
 
   it("names the venue block and the session block", () => {

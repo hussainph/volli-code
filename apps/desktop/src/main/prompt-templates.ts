@@ -31,6 +31,8 @@ import {
   isWritablePromptTemplateName,
   mergePromptTemplates,
   promptTemplateDescription,
+  SKILL_DISABLE_MODEL_INVOCATION_KEY,
+  SKILL_USER_INVOCABLE_KEY,
   type PromptTemplate,
 } from "@volli/shared";
 
@@ -49,12 +51,44 @@ interface Frontmatter {
   readonly description: unknown;
   /**
    * The spec's `metadata` map, unread and untyped at this layer. Templates
-   * ignore it; skills read one key out of it (`isUserInvokeOnly`). Surfaced
+   * ignore it; skills read the legacy invocation alias out of it. Surfaced
    * here rather than parsed twice because this is the module that already
    * holds the YAML.
    */
   readonly metadata: unknown;
+  /**
+   * The two top-level invocation flags, likewise unread here (VC-181):
+   * `disable-model-invocation` and `user-invocable`. Neither is in the Agent
+   * Skills core format. The model flag is shared across Claude Code, Cursor,
+   * Copilot and Pi; the user flag is a Claude/Copilot extension. Both are
+   * surfaced as `unknown` and given their meaning by `@volli/shared`'s
+   * `readAuthorInvocationPolicy`, which is
+   * the one place that decides what a declared policy means. Templates ignore
+   * them the way they ignore `metadata`.
+   */
+  readonly disableModelInvocation: unknown;
+  readonly userInvocable: unknown;
+  /** Why a present frontmatter block could not be read, on one UI-safe line. */
+  readonly frontmatterDiagnostic: string | null;
   readonly body: string;
+}
+
+/** No frontmatter at all. */
+const NO_FRONTMATTER = {
+  description: undefined,
+  metadata: undefined,
+  disableModelInvocation: undefined,
+  userInvocable: undefined,
+  frontmatterDiagnostic: null,
+} as const;
+
+/** Present but unusable frontmatter; skill callers fail it closed and surface this line. */
+function malformedFrontmatter(body: string, reason: string): Frontmatter {
+  return {
+    ...NO_FRONTMATTER,
+    frontmatterDiagnostic: `YAML frontmatter ${reason}; declared fields were ignored.`,
+    body,
+  };
 }
 
 /**
@@ -71,20 +105,31 @@ interface Frontmatter {
  */
 export function parsePromptTemplateFile(raw: string): Frontmatter {
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith(FRONTMATTER_FENCE))
-    return { description: undefined, metadata: undefined, body: normalized };
-  const endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, FRONTMATTER_FENCE.length);
-  if (endIndex === -1) return { description: undefined, metadata: undefined, body: normalized };
+  if (normalized !== FRONTMATTER_FENCE && !normalized.startsWith(`${FRONTMATTER_FENCE}\n`)) {
+    return { ...NO_FRONTMATTER, body: normalized };
+  }
+  let endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, FRONTMATTER_FENCE.length);
+  while (endIndex !== -1 && endIndex + 4 < normalized.length && normalized[endIndex + 4] !== "\n") {
+    endIndex = normalized.indexOf(`\n${FRONTMATTER_FENCE}`, endIndex + 4);
+  }
+  if (endIndex === -1) return malformedFrontmatter(normalized, "has no closing fence");
   const body = normalized.slice(endIndex + 4).trim();
   try {
     const frontmatter: unknown = parseYaml(normalized.slice(4, endIndex));
-    const fields =
-      typeof frontmatter === "object" && frontmatter !== null
-        ? (frontmatter as Record<string, unknown>)
-        : undefined;
-    return { description: fields?.["description"], metadata: fields?.["metadata"], body };
+    if (typeof frontmatter !== "object" || frontmatter === null || Array.isArray(frontmatter)) {
+      return malformedFrontmatter(body, "must be a mapping");
+    }
+    const fields = frontmatter as Record<string, unknown>;
+    return {
+      description: fields["description"],
+      metadata: fields["metadata"],
+      disableModelInvocation: fields[SKILL_DISABLE_MODEL_INVOCATION_KEY],
+      userInvocable: fields[SKILL_USER_INVOCABLE_KEY],
+      frontmatterDiagnostic: null,
+      body,
+    };
   } catch {
-    return { description: undefined, metadata: undefined, body };
+    return malformedFrontmatter(body, "could not be parsed");
   }
 }
 

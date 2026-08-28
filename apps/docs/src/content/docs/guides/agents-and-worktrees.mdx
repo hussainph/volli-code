@@ -42,6 +42,16 @@ volli worktree diff VC-12
 `worktree diff` compares the ticket branch with its base branch. Add
 `--working-tree` to see uncommitted changes.
 
+When the base has moved on, `volli worktree sync VC-12` merges it into the
+ticket branch and reports what moved, or which paths conflicted. It never waits
+on checks or CI, and it leaves a conflicted merge in place for you to resolve;
+`--abort` undoes one.
+
+Because parallel tickets work on separate branches, they can also work on the
+same files. `volli conflicts` reports which active worktrees touch the same
+paths, so overlapping work can be scheduled around rather than discovered at
+merge time.
+
 ## Chat history
 
 A chat is not tied to an open tab or terminal pane. Its history remains

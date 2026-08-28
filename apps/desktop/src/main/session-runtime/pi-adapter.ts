@@ -73,7 +73,6 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
-  appendPromptResources,
   askChoice,
   askOffer,
   askInteractionId,
@@ -342,8 +341,8 @@ export interface PiAdapterOptions {
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**
-   * Runs one product verb a Session's Role bundle names, in main's own process
-   * (VC-162).
+   * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
+   * own process (VC-162).
    *
    * Unlike {@link resolveWebPorts}, this decides no membership. The Session's
    * frozen record decides that, and this supplies the one closure every verb in
@@ -1070,6 +1069,7 @@ class PiBinding implements BindingHandle {
     // is durable: chosen through `model.select`, and applied at attach from
     // the Session's own projected selection.
     const text = messageText(command.message);
+    const resources = readSkillResources(command.message.parts);
     // Attachments are prepared BEFORE the empty-text check, because they can
     // make an otherwise-empty message a real one: dragging in a screenshot and
     // pressing return without typing is an ordinary way to ask "what is this?"
@@ -1081,7 +1081,7 @@ class PiBinding implements BindingHandle {
     } catch (error) {
       return this.#rejected(command.commandId, "PI_ATTACHMENT_FAILED", errorMessage(error));
     }
-    if (text.trim().length === 0 && attachments.note.length === 0) {
+    if (text.trim().length === 0 && attachments.note.length === 0 && resources.length === 0) {
       return this.#rejected(
         command.commandId,
         "PI_EMPTY_MESSAGE",
@@ -1101,6 +1101,7 @@ class PiBinding implements BindingHandle {
         command.delivery,
         command.commandId,
         attachments.images,
+        resources,
       );
       return outcome.kind === "delivered"
         ? this.#accepted(command.commandId)
@@ -1387,16 +1388,10 @@ class PiBinding implements BindingHandle {
 }
 
 /**
- * Pi takes one string; a `UIMessage` may carry several text parts — and,
- * since VC-49, skill resource parts. This is where the two halves of such a
- * message become the delivered prompt: the user's text first and verbatim
- * (its `/skill` reference intact, mid-sentence included), then each skill
- * body as its own delimited RESOURCE block, adjacent to the text and never
- * spliced into it.
+ * Pi takes one text string plus typed resources; a `UIMessage` may carry
+ * several text parts. Resource extraction stays separate so the runtime can
+ * frame them for delivery while retaining their identity across compaction.
  */
 function messageText(message: UIMessage): string {
-  const text = message.parts
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n\n");
-  return appendPromptResources(text, readSkillResources(message.parts));
+  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
 }

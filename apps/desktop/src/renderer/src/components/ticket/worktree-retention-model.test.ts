@@ -9,7 +9,7 @@ function state(overrides: Partial<TicketRetentionState> = {}): TicketRetentionSt
     prUrl: null,
     prState: null,
     hasConflicts: false,
-    failingChecks: [],
+    checks: [],
     archiveReady: false,
     reason: null,
     keep: false,
@@ -69,33 +69,23 @@ describe("resolveRetention — keep pin", () => {
 });
 
 describe("resolveRetention — surfacing (never gating)", () => {
-  it("surfaces a merge-conflict notice without any gating detail", () => {
+  it("surfaces a merge-conflict notice", () => {
     const view = resolveRetention(state({ prState: "open", hasConflicts: true }), 14);
-    expect(view.notices).toEqual([{ text: "PR has merge conflicts", detail: null }]);
+    expect(view.notices).toEqual([{ text: "PR has merge conflicts" }]);
   });
 
-  it("surfaces a singular failing-check notice with the check name as tooltip detail", () => {
-    const view = resolveRetention(state({ prState: "open", failingChecks: ["lint"] }), 14);
-    expect(view.notices).toEqual([{ text: "1 check failing", detail: "lint" }]);
-  });
-
-  it("pluralizes and joins multiple failing checks into the tooltip detail", () => {
+  it("says nothing about checks — the card's CI row owns that subject (VC-182)", () => {
+    // A failing suite used to add a second notice here. It now has a row of its
+    // own above these lines, so this model staying quiet is the assertion: two
+    // sentences about one suite in one card is the outcome being prevented.
     const view = resolveRetention(
-      state({ prState: "open", failingChecks: ["lint", "typecheck", "test"] }),
+      state({
+        prState: "open",
+        checks: [{ name: "lint", workflow: "CI", state: "failing", url: null }],
+      }),
       14,
     );
-    expect(view.notices).toEqual([{ text: "3 checks failing", detail: "lint, typecheck, test" }]);
-  });
-
-  it("surfaces both a conflict and failing checks together, conflict first", () => {
-    const view = resolveRetention(
-      state({ prState: "open", hasConflicts: true, failingChecks: ["lint"] }),
-      14,
-    );
-    expect(view.notices).toEqual([
-      { text: "PR has merge conflicts", detail: null },
-      { text: "1 check failing", detail: "lint" },
-    ]);
+    expect(view.notices).toEqual([]);
   });
 
   it("still surfaces conflicts alongside an archive-ready merged PR", () => {
@@ -105,6 +95,6 @@ describe("resolveRetention — surfacing (never gating)", () => {
     );
     expect(view.archiveReady).toBe(true);
     expect(view.reasonLine).toBe("PR merged");
-    expect(view.notices).toEqual([{ text: "PR has merge conflicts", detail: null }]);
+    expect(view.notices).toEqual([{ text: "PR has merge conflicts" }]);
   });
 });

@@ -179,9 +179,11 @@ such process still does not belong here.
 _Avoid_: agent surface (alone), planning CLI
 
 **Agent Tool Surface**:
-The named, schema'd tools a Session's Role bundle offers inside the Agent
-Runtime. A tool call is bound to the Session that made it and never crosses the
-agent socket, so availability itself is enforcement: what a Role was not handed
+The named, schema'd tools a Session receives inside the Agent Runtime:
+`bundle(Role) ∪ grants(session)`. A grant is durable app-owned data, scoped with
+its verb, and frozen at Session birth; it is never a hot bundle edit. A tool call
+is bound to the Session that made it and never crosses the agent socket, so
+availability itself is enforcement: what a Role or birth grant did not hand it
 cannot be called.
 _Avoid_: Pi tools (as product vocabulary)
 
@@ -210,9 +212,9 @@ surface's projection)
 **Verb Tier**:
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
-session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. A verb on no agent surface at all
-holds no tier. No verb needs a higher tier than the ambient authority its
+session actor, judged by per-actor policy. Control tier: named tool only, held
+through a Role bundle or a scoped birth grant, absent from the agent socket. A
+verb on no agent surface at all holds no tier. No verb needs a higher tier than the ambient authority its
 effect already lies within.
 _Avoid_: dangerous tier, middle tier
 
@@ -546,7 +548,9 @@ _resolved_ model and reasoning produced a given Session. A Run owns exactly one
 Session and always starts a fresh one: it never wakes an existing Session, whose
 Authority Snapshot was granted while a person was present and whose context is
 stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. Runs outlive the app — one whose Session died is interrupted, never lost,
+time. A Project Session can start one too, through the `automation.run` tool its
+Role bundle holds; the Run it starts carries the automation Actor and is
+indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
 and only a human restarts it. A Session a user opens from the composer belongs
 to no Run and never moves the board.
 _Avoid_: job, task, session (a Run has a Session — it is not one)
@@ -563,3 +567,68 @@ not open. It is recorded with its reason and never replayed — the next
 occurrence stands — and a person may start it by hand from the Run history
 afterwards. A skip and a silence must not look the same.
 _Avoid_: missed run, failed run
+
+**Skill**:
+A directory holding a `SKILL.md` — frontmatter naming and describing it, body
+of instructions — under the `.agents/skills/` convention, in either the
+project's own tier or the personal `~/.agents/skills/`. Its identity is the
+directory slug, not the frontmatter `name`: the slug is what a person types
+after `/`, what the picker offers, and what the delivered RESOURCE block
+carries, so the reference and the injection can never disagree about what the
+thing is called. A Skill's body reaches a model three ways, each visible in the
+prompt or the transcript — an explicit `/slug` in the composer, an attach-time
+selection, or the model's own read of a SKILL.md it found in the Skills index.
+_Avoid_: plugin, tool, extension, macro
+
+**Invocation policy**:
+What one Skill is currently allowed to do, on two independent axes: **Model
+discoverable** (its metadata rides the Skills index and the model may activate
+it unprompted) and **User invokable** (it appears in `/` completion and an
+explicit reference resolves). A Skill that is neither is **Unavailable**. The
+two are separate questions — the index is a prompt-budget question, the picker
+a discoverability question for a person — and every consumer resolves the same
+policy, so the index, the picker, explicit submit, attach-time selection and
+Settings can never disagree.
+_Avoid_: enabled, visibility, permission, scope
+
+**Skill mode**:
+A Project's complete per-Skill override: `Auto` opens model discovery and user
+invocation, `Manual` closes model discovery and keeps user invocation, and
+`Off` closes both. The author-only fourth combination — model discoverable but
+not user invokable — applies only where the Project has no override; Settings
+names it `Model only (author)` rather than mislabelling it Auto. A stored mode
+outranks both author axes and is removed when it exactly restores the file's
+declaration.
+_Avoid_: skill setting, toggle, enablement
+
+**Author invocation default**:
+What a `SKILL.md` asks for before any Project has its say. The top-level
+`disable-model-invocation` spelling is the portable manual default honoured by
+Claude Code, Cursor, Copilot and Pi. `user-invocable` is the independent
+Claude/Copilot spelling Volli also accepts; neither extension belongs to the
+Agent Skills core format. Volli's legacy
+`metadata.volli-user-invoke-only` remains an alias, the portable top-level key
+wins a conflict, and any declaration that cannot be read earns a surfaced
+diagnostic. Unparseable YAML fails closed until the file or a Project override
+fixes it.
+_Avoid_: frontmatter flag (alone), skill config
+
+**Skill activation lifecycle**:
+An explicit `/slug` is attached to one user message: the transcript keeps the
+person's reference and one typed delivery receipt containing the exact resource
+bytes and Skill root. Repeating the same resolved name in that message delivers
+it once; invoking it again in a later message creates a new receipt and delivers
+it again. Context compaction restores one exact active resource per Skill name,
+using the latest delivered bytes, so summarization cannot silently replace its
+instructions. This preservation is user-message context, not a persistent mode;
+starting a Session with a Skill is the separate attach-time route and places its
+resource in the attachment's stable system prompt. Attach-time names are also
+deduplicated.
+
+Project policy writes automatically invalidate every mounted supply. Consumers
+expose no previous-policy rows while the replacement disk read is in flight,
+and main resolves policy again after that read before index or delivery. Skill
+file adds, edits and removals are intentionally not watched: `/reload` is the
+explicit disk rescan and recovery action. A past transcript receipt never
+changes when either policy or disk content changes.
+_Avoid_: active plugin, sticky slash command

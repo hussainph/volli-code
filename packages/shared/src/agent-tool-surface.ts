@@ -69,9 +69,10 @@ import type { VerbToolKey } from "./verb-registry";
  * `subagent` stays empty until VC-9 defines what a Subagent Session is.
  *
  * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
- * it is the property this ticket exists to make true. A Ticket Session's tool
- * array holds no agent-control tool, so an injected instruction telling it to
- * start ten Sessions has nothing to call.
+ * it is the default property this map exists to make true. A Ticket Session can
+ * receive an explicit durable grant at birth (VC-183), but that exception feeds
+ * the `grants` parameter below and never edits this bundle map — a Ticket with
+ * no such record still has nothing an injected instruction can call.
  *
  * `ticket.await` sits in BOTH working bundles, by VC-92's ruling on VC-85:
  * blocking is a runtime property, not a privilege, so an executor waiting on
@@ -79,6 +80,16 @@ import type { VerbToolKey } from "./verb-registry";
  * given Session may await is per-actor policy data
  * (`AuthorityActorPolicy.awaitable`), judged at call time — bundle membership
  * is deliberately not the control.
+ *
+ * `automation.run` sits in the `project` bundle ALONE (VC-134, filed by
+ * VC-112). Starting an Automation Run is agent control — it spends model budget
+ * and opens work on a Ticket — so it travels with `session.start` under VC-92's
+ * pairing rule. And its absence from the `ticket` bundle is the whole of what
+ * keeps orchestrator authority out of a Ticket Session: VC-112 declines
+ * OpenClaw's "cap a created job to the creating turn's tools" rule on the
+ * grounds that it patches a hole `bundle(Role) ∪ grants(session)` never opens.
+ * A Session that never held the verb has nothing to inherit or to be capped
+ * from, so there is deliberately no capping rule anywhere beside this map.
  *
  * Declared as a total map over {@link SessionRole} so adding a Role is a bundle
  * decision made at the compiler rather than a silent empty default — the same
@@ -88,11 +99,17 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
   // The whole agent-control family travels together (VC-92's pairing rule,
   // completed by VC-86): a build that shipped stop/send as tools while start
   // stayed elsewhere — or the reverse — would make the bundle no boundary.
+  // `automation.run` (VC-134) travels with them by the same rule.
+  //
+  // Literal order here is cosmetic: `resolveAgentToolSurface` reorders the
+  // union through `VERB_TOOL_KEYS`, so registry declaration order — not this
+  // array — is what a frozen Cache Prefix records.
   project: Object.freeze([
     "session.start",
     "session.stop",
     "session.send",
     "ticket.await",
+    "automation.run",
   ]) as readonly VerbToolKey[],
   ticket: Object.freeze(["ticket.await"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],

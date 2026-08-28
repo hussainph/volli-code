@@ -37,6 +37,7 @@ import {
   skillResourcePart,
   skillsIndexResource,
   ticketBranchName,
+  userInvokableSkills,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
@@ -100,6 +101,7 @@ import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createAutoTitler } from "./session-runtime/auto-title";
+import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
   StructuredSessionsError,
@@ -778,6 +780,10 @@ app.whenReady().then(async () => {
       );
     }
   }
+  // Per-Session control grants live beside VC-44's app-owned policy data. The
+  // store is intentionally constructed before any Session surface: it resolves
+  // birth grants and the door later consumes the exact durable record.
+  const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -794,9 +800,9 @@ app.whenReady().then(async () => {
       })
     : null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
-    webAccess !== null && sessionEngine !== null
+    webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role) => {
+          resolve: (role, grants) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -815,9 +821,11 @@ app.whenReady().then(async () => {
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
                 ],
               },
-              // No grants: VC-162 ships the resolver seam and no store. A
-              // durable per-Session grant is a later slice, and it inherits a
-              // resolver that already refuses an unknown or non-tool key.
+              // The store supplies canonical Registry keys from an immutable
+              // birth record. The resolver remains the fail-closed vocabulary
+              // boundary: a malformed durable grant refuses the Session before
+              // it reaches a model as a mysteriously smaller tool surface.
+              grants,
             });
           },
           record: async (sessionId, tools) => {
@@ -986,10 +994,10 @@ app.whenReady().then(async () => {
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
               //
-              // The Role comes from the Session's own durable `ticketId`, which
-              // is what the Role IS — so a legacy Project Session backfills the
-              // project bundle and a legacy Ticket Session backfills none, the
-              // same answer its mint would have given had this existed then.
+              // A legacy Session has no durable birth-grant record, so it gets
+              // no new grant here. Applying today's role default would be a hot
+              // privilege edit to an existing Session; the fail-closed empty
+              // list leaves only the Role bundle it could honestly have held.
               toolSurface = toolSurfaceTools(
                 await sessionEngine.getOrRecordSessionInput({
                   sessionId,
@@ -997,6 +1005,7 @@ app.whenReady().then(async () => {
                     kind: "tool-surface",
                     tools: sessionToolSurface.resolve(
                       attaching.ticketId === null ? "project" : "ticket",
+                      [],
                     ),
                   },
                   provenance,
@@ -1147,10 +1156,21 @@ app.whenReady().then(async () => {
                 `The project's skills could not be read: ${read.error}`,
               );
             }
-            // A skill this project switched off is not "hidden from the model"
-            // — it is not available, so resolving it by name fails like any
-            // other name the project does not have.
-            const available = applySkillModes(read.skills, project.skillModes ?? {});
+            // Re-read AFTER disk I/O: a policy write can land while SKILL.md
+            // files are being read, and attach-time delivery must resolve the
+            // policy current at delivery rather than the snapshot that chose
+            // the directory. Human attach-time selection is a user invocation
+            // route, so a model-only author policy is not eligible either.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                "The project for this Session was not found.",
+              );
+            }
+            const available = userInvokableSkills(
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
+            );
             // Order and dedup follow the request, not the directory: the
             // record should say what was asked for, once each.
             return [...new Set(names)].map((name) => {
@@ -1173,22 +1193,28 @@ app.whenReady().then(async () => {
             // the user installed rather than to hold an opinion about it.
             //
             // Two things can narrow that, and neither is Volli deciding on the
-            // user's behalf: the skill's own frontmatter (`isUserInvokeOnly`),
-            // and this project's explicit per-skill rule (VC-111, migration
-            // 023). The second exists because this index is ~94% of a fresh
+            // user's behalf: the skill's own frontmatter -- the portable
+            // `disable-model-invocation` every major harness honours -- and
+            // this project's explicit per-skill rule (VC-111, migration 023).
+            // The second exists because this index is ~94% of a fresh
             // Session's Volli-composed prompt and is re-sent as the stable
             // prefix of every turn, so "which skills are worth their prompt
             // share here" is a real question a project should be able to
-            // answer. Both land in the same place -- `applySkillModes` folds
-            // the rule onto `userInvokeOnly`, and `skillsIndexResource` reads
-            // only that.
+            // answer. Both land in the same place -- `applySkillModes` resolves
+            // them into one effective policy per skill, and
+            // `skillsIndexResource` reads only its `modelDiscoverable` axis
+            // (VC-181).
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
             });
             if (!read.ok) return null;
+            // Policy is read after the filesystem for the same race the
+            // explicit attach route closes above.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) return null;
             return skillsIndexResource(
-              applySkillModes(read.skills, project.skillModes ?? {}),
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
               injectedNames,
             );
           },
@@ -1209,7 +1235,8 @@ app.whenReady().then(async () => {
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null &&
-    sessionToolSurface !== null
+    sessionToolSurface !== null &&
+    sessionDelegation !== null
       ? createSessions({
           runtime: sessionRuntime,
           // The inheritance chain, in rung order (VC-112, VC-126): the
@@ -1236,6 +1263,7 @@ app.whenReady().then(async () => {
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
+          grants: sessionDelegation,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
@@ -1410,12 +1438,25 @@ app.whenReady().then(async () => {
   // rest: the project list grows, and the facade is built further down this
   // same function. See the declaration above for why the binding is split.
   agentToolDoor =
-    sessionDb === null
+    sessionDb === null || sessionDelegation === null
       ? null
       : createAgentToolDoor({
           db: sessionDb,
           projects: () => listProjects(sessionDb),
           sessions: () => sessions,
+          delegation: sessionDelegation,
+          // `automation.run`'s host (VC-134). Read through a closure like
+          // every other dependency here, because the runner is composed much
+          // further down this same function; and it is the RUNNER, never the
+          // Session facade, so an agent's Run travels the one Run door the
+          // palette and the Ticket rail already call.
+          automations: () =>
+            automationRunner === null
+              ? null
+              : {
+                  list: (projectId) => listAutomationsForProject(sessionDb, projectId),
+                  run: (input) => automationRunner!.run(input),
+                },
           // `ticket.await`'s two ports (VC-85): the wait is judged against the
           // caller's project policy when it starts, and parks on the
           // post-commit wake bus until a planner fact matches.
@@ -1784,11 +1825,13 @@ app.whenReady().then(async () => {
             ]);
             if (!loaded.ok) throw new Error(loaded.error);
             if (!skills.ok) throw new Error(skills.error);
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) throw new Error("Unknown project");
             return {
               templates: loaded.templates,
-              // The ruled list, exactly as `volli:prompt-templates` hands the
-              // composer: an `off` skill is not offered, a `manual` one is.
-              skills: applySkillModes(skills.skills, project.skillModes ?? {}),
+              // Resolve against the policy current after the filesystem read,
+              // not the snapshot that supplied the stable project path.
+              skills: applySkillModes(skills.skills, currentProject.skillModes ?? {}),
             };
           },
           // The composer's message shape, with the Run's durable command/message
@@ -2554,7 +2597,10 @@ app.whenReady().then(async () => {
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
             shimPath: await realpath(shimPath).catch(() => shimPath),
-            liveSessionIds: ptyManager.liveSessionIds(),
+            // A writing caller is live exactly while its attachment token is
+            // valid at the socket door. PTY membership excludes structured
+            // attachments, so it cannot answer this diagnostic truthfully.
+            liveSessionIds: sessionTokens.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
                   harnessId: record.slug,

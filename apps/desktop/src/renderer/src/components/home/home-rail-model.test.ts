@@ -16,9 +16,13 @@ describe("Home rail pages", () => {
     expect(HOME_RAIL_MODES[0]).toBe(DEFAULT_HOME_RAIL_MODE);
   });
 
-  it("adds Project Files after the two existing pages", () => {
-    expect(HOME_RAIL_MODES).toEqual(["now", "sessions", "files"]);
+  // Every page appends, and that is the rule rather than an accident of two
+  // tickets: the list is a keyboard order, so inserting one in the middle moves
+  // every page after it under a reader's fingers.
+  it("adds Project Files, then Search, after the two original pages", () => {
+    expect(HOME_RAIL_MODES).toEqual(["now", "sessions", "files", "search"]);
     expect(HOME_RAIL_MODE_LABELS.files).toBe("Files");
+    expect(HOME_RAIL_MODE_LABELS.search).toBe("Search");
   });
 
   it("names every page it offers", () => {
@@ -33,6 +37,10 @@ describe("sanitizeHomeRailMode", () => {
     expect(sanitizeHomeRailMode("now")).toBe("now");
     expect(sanitizeHomeRailMode("sessions")).toBe("sessions");
     expect(sanitizeHomeRailMode("files")).toBe("files");
+  });
+
+  it("keeps the page this build added", () => {
+    expect(sanitizeHomeRailMode("search")).toBe("search");
   });
 
   it("lands a retired or corrupt page on the resting one", () => {

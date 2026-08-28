@@ -4,12 +4,21 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  link as hardLink,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { DirChangedEvent, FileChangedEvent, VolliIpcChannel } from "../ipc/contract";
@@ -26,9 +35,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 // under `vi.useFakeTimers()` instead of racing a real fs.watch/OS debounce.
 // Every other suite runs against real directories, real symlinks, and real disk
 // I/O (and real `git`), untouched by this mock.
-const { handlers, showItemInFolderMock, watchMock } = vi.hoisted(() => ({
+const { handlers, showItemInFolderMock, trashItemMock, watchMock } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   showItemInFolderMock: vi.fn(),
+  // Delete goes to the TRASH, so the test double is the real seam: an
+  // implementation that unlinked instead would still pass a "the file is gone"
+  // assertion, and this is the mock that would not have been called.
+  trashItemMock: vi.fn(async (_path: string) => {}),
   watchMock: vi.fn(),
 }));
 
@@ -38,7 +51,7 @@ vi.mock("electron", () => ({
       handlers.set(channel, handler);
     },
   },
-  shell: { showItemInFolder: showItemInFolderMock },
+  shell: { showItemInFolder: showItemInFolderMock, trashItem: trashItemMock },
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -49,13 +62,19 @@ vi.mock("node:fs", async (importOriginal) => {
 import {
   buildFileIndex,
   createArtifact,
+  createDirectory,
+  createFile,
+  duplicateEntryName,
+  duplicateFile,
   ensureProjectArtifactsDir,
   ensureVolliDir,
   FileWatchManager,
   fsFaultText,
   readFile as readFsFile,
   registerFileIpcHandlers,
+  renameEntry,
   revealFile,
+  trashEntry,
   writeFile as writeFsFile,
 } from "./volli-fs";
 import { insertProject } from "./db/projects-repo";
@@ -124,6 +143,7 @@ afterEach(() => {
   }
   handlers.clear();
   showItemInFolderMock.mockClear();
+  trashItemMock.mockClear();
   vi.useRealTimers();
 });
 
@@ -242,7 +262,7 @@ describe("buildFileIndex", () => {
 
     // A cap of 2 forces truncation: the artifact survives (pushed first), one
     // repo file fills the rest, the remainder is skipped without materializing.
-    const { files, truncated } = await buildFileIndex(project, 2);
+    const { files, truncated } = await buildFileIndex(project, { indexCap: 2 });
     expect(truncated).toBe(true);
     expect(files).toHaveLength(2);
     expect(files.some((f) => f.relPath === ".volli/artifacts/art.md" && f.artifact)).toBe(true);
@@ -252,7 +272,7 @@ describe("buildFileIndex", () => {
     const project = makeGitRepoDir();
     await writeFile(join(project, "a.md"), "a", "utf8");
     await writeFile(join(project, "b.md"), "b", "utf8");
-    const { files, truncated } = await buildFileIndex(project, 2);
+    const { files, truncated } = await buildFileIndex(project, { indexCap: 2 });
     expect(truncated).toBe(false);
     expect(files).toHaveLength(2);
   });
@@ -290,6 +310,47 @@ describe("buildFileIndex", () => {
 
     expect(paths).toContain("main.py");
     expect(paths.some((p) => p.includes("generated"))).toBe(false);
+  });
+
+  // Quick-open's scope (VC-190). The split is decision #6's, the same one a
+  // READ applies per path: repo files come from the worktree, `.volli/**`
+  // never does — so a row the index offered and the read that follows it can
+  // never name two different files.
+  it("lists repo files from a worktree root while artifacts still come from Main", async () => {
+    const project = makeGitRepoDir();
+    const worktree = makeGitRepoDir();
+    await writeFile(join(project, "main-only.ts"), "main", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "worktree", "utf8");
+    await createArtifact(project, "notes"); // Main's .volli/artifacts/notes.md
+    await createArtifact(worktree, "never"); // must never be reached
+
+    const { files } = await buildFileIndex(project, { worktreeRoot: worktree });
+    const paths = files.map((f) => f.relPath);
+
+    expect(paths).toContain("worktree-only.ts");
+    expect(paths).not.toContain("main-only.ts");
+    expect(paths).toContain(".volli/artifacts/notes.md");
+    expect(paths).not.toContain(".volli/artifacts/never.md");
+  });
+
+  it("treats a null worktree root as the main checkout", async () => {
+    const project = makeGitRepoDir();
+    await writeFile(join(project, "main-only.ts"), "main", "utf8");
+    const { files } = await buildFileIndex(project, { worktreeRoot: null });
+    expect(files.map((f) => f.relPath)).toContain("main-only.ts");
+  });
+
+  it("falls back to a bounded walk of the WORKTREE when git can't answer there", async () => {
+    const project = makeGitRepoDir();
+    const worktree = makeTempProjectDir(); // NOT a git repo → git ls-files fails
+    await writeFile(join(worktree, "walked.ts"), "x", "utf8");
+    await mkdir(join(worktree, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(worktree, "node_modules", "pkg", "index.js"), "x", "utf8");
+
+    const { files } = await buildFileIndex(project, { worktreeRoot: worktree });
+    const paths = files.map((f) => f.relPath);
+    expect(paths).toContain("walked.ts");
+    expect(paths.some((p) => p.startsWith("node_modules/"))).toBe(false);
   });
 });
 
@@ -735,6 +796,390 @@ describe("createArtifact", () => {
     const result = await createArtifact(project, "notes");
     expect(result.ok).toBe(false);
     expect(readFileSync(outsideFile, "utf8")).toBe("untouched");
+  });
+});
+
+// ---- the creation track (VC-191) ---------------------------------------------
+
+describe("createFile", () => {
+  it("creates an empty file and resolves with the path it was asked for", async () => {
+    const project = makeTempProjectDir();
+    const result = await createFile(project, null, "notes.md");
+    expect(result).toEqual({ ok: true, relPath: "notes.md" });
+    expect(await readFile(join(project, "notes.md"), "utf8")).toBe("");
+  });
+
+  it("creates the missing parent folders on the way", async () => {
+    const project = makeTempProjectDir();
+    const result = await createFile(project, null, "src/deep/new.ts");
+    expect(result).toEqual({ ok: true, relPath: "src/deep/new.ts" });
+    expect(existsSync(join(project, "src", "deep", "new.ts"))).toBe(true);
+  });
+
+  it("refuses to overwrite an existing file, leaving its bytes alone", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "original", "utf8");
+    const result = await createFile(project, null, "notes.md");
+    expect(result).toEqual({ ok: false, error: '"notes.md" already exists' });
+    expect(await readFile(join(project, "notes.md"), "utf8")).toBe("original");
+  });
+
+  it("refuses to write through a symlink parked at the target name", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    const outsideFile = join(outside, "target.md");
+    writeFileSync(outsideFile, "untouched", "utf8");
+    symlinkSync(outsideFile, join(project, "notes.md"), "file");
+    const result = await createFile(project, null, "notes.md");
+    expect(result).toEqual({ ok: false, error: "Path is a symlink" });
+    expect(readFileSync(outsideFile, "utf8")).toBe("untouched");
+  });
+
+  it("refuses to create through a directory symlinked OUT of the project", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    symlinkSync(outside, join(project, "escape"), "dir");
+    const result = await createFile(project, null, "escape/planted.ts");
+    expect(result).toEqual({ ok: false, error: "Resolved path escapes the project root" });
+    expect(existsSync(join(outside, "planted.ts"))).toBe(false);
+  });
+
+  it("follows a directory symlinked WITHIN the project, exactly as a read does", async () => {
+    const project = realpathSync(makeTempProjectDir());
+    await mkdir(join(project, "real"));
+    symlinkSync(join(project, "real"), join(project, "linked"), "dir");
+    expect(await createFile(project, null, "linked/new.ts")).toEqual({
+      ok: true,
+      relPath: "linked/new.ts",
+    });
+    expect(existsSync(join(project, "real", "new.ts"))).toBe(true);
+  });
+
+  it("reports a dangling intermediate symlink rather than creating past it", async () => {
+    const project = makeTempProjectDir();
+    symlinkSync(join(makeTempProjectDir(), "gone"), join(project, "broken"), "dir");
+    expect(await createFile(project, null, "broken/new.ts")).toEqual({
+      ok: false,
+      error: "File was not found",
+    });
+  });
+
+  it.each([["../outside.md"], ["/etc/passwd"], [""], ["a/../../b"]])(
+    "rejects the unsafe relPath %j before touching disk",
+    async (relPath) => {
+      const project = makeTempProjectDir();
+      expect(await createFile(project, null, relPath)).toEqual({
+        ok: false,
+        error: "Invalid file path",
+      });
+    },
+  );
+
+  it("refuses a path whose middle segment is an existing FILE", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "x", "utf8");
+    expect(await createFile(project, null, "notes.md/child.ts")).toEqual({
+      ok: false,
+      error: "Not a directory",
+    });
+  });
+
+  it("reports a missing project folder rather than resolving to a hole", async () => {
+    const gone = join(makeTempProjectDir(), "never-existed");
+    expect(await createFile(gone, null, "notes.md")).toEqual({
+      ok: false,
+      error: "Project folder was not found",
+    });
+  });
+
+  it("resolves against the ticket worktree when one is given", async () => {
+    const project = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    const result = await createFile(project, worktree, "src/new.ts");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(worktree, "src", "new.ts"))).toBe(true);
+    expect(existsSync(join(project, "src", "new.ts"))).toBe(false);
+  });
+
+  it("keeps .volli/** on Main even inside a worktree scope (decision #6)", async () => {
+    const project = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    await ensureProjectArtifactsDir(project);
+    const result = await createFile(project, worktree, ".volli/artifacts/new.md");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(project, ".volli", "artifacts", "new.md"))).toBe(true);
+  });
+});
+
+describe("createDirectory", () => {
+  it("creates one directory", async () => {
+    const project = makeTempProjectDir();
+    expect(await createDirectory(project, null, "src/components")).toEqual({
+      ok: true,
+      relPath: "src/components",
+    });
+    expect((await stat(join(project, "src", "components"))).isDirectory()).toBe(true);
+  });
+
+  it("refuses a name that is already taken, rather than reporting success for it", async () => {
+    const project = makeTempProjectDir();
+    await mkdir(join(project, "src"));
+    expect(await createDirectory(project, null, "src")).toEqual({
+      ok: false,
+      error: '"src" already exists',
+    });
+  });
+
+  it("refuses when a FILE already holds the name", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "src"), "x", "utf8");
+    expect(await createDirectory(project, null, "src")).toEqual({
+      ok: false,
+      error: '"src" already exists',
+    });
+  });
+
+  it("rejects an unsafe relPath", async () => {
+    const project = makeTempProjectDir();
+    expect(await createDirectory(project, null, "../escape")).toEqual({
+      ok: false,
+      error: "Invalid file path",
+    });
+  });
+});
+
+describe("renameEntry", () => {
+  it("renames a file and resolves with its new path", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "old.md"), "body", "utf8");
+    expect(await renameEntry(project, null, "old.md", "new.md")).toEqual({
+      ok: true,
+      relPath: "new.md",
+    });
+    expect(existsSync(join(project, "old.md"))).toBe(false);
+    expect(await readFile(join(project, "new.md"), "utf8")).toBe("body");
+  });
+
+  it("renames a directory", async () => {
+    const project = makeTempProjectDir();
+    await mkdir(join(project, "old"));
+    await writeFile(join(project, "old", "a.ts"), "x", "utf8");
+    expect((await renameEntry(project, null, "old", "new")).ok).toBe(true);
+    expect(existsSync(join(project, "new", "a.ts"))).toBe(true);
+  });
+
+  it("refuses to clobber an occupied destination", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "b.md"), "b", "utf8");
+    expect(await renameEntry(project, null, "a.md", "b.md")).toEqual({
+      ok: false,
+      error: '"b.md" already exists',
+    });
+    expect(await readFile(join(project, "b.md"), "utf8")).toBe("b");
+    expect(existsSync(join(project, "a.md"))).toBe(true);
+  });
+
+  // macOS's default volume is case-insensitive but case-preserving, so the
+  // occupied-destination `lstat` answers for a spelling that is really the file
+  // being renamed. These three pin the seam that tells that apart from a real
+  // collision, and each asserts the same thing on either kind of volume.
+  it("changes only the letter case of a name, which is not an overwrite", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "readme.md"), "body", "utf8");
+    expect(await renameEntry(project, null, "readme.md", "README.md")).toEqual({
+      ok: true,
+      relPath: "README.md",
+    });
+    expect(await readFile(join(project, "README.md"), "utf8")).toBe("body");
+    expect(readdirSync(project)).toEqual(["README.md"]);
+  });
+
+  it("still refuses a HARDLINK of the same file — one inode, but two names", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await hardLink(join(project, "a.md"), join(project, "b.md"));
+    expect(await renameEntry(project, null, "a.md", "b.md")).toEqual({
+      ok: false,
+      error: '"b.md" already exists',
+    });
+    expect(existsSync(join(project, "a.md"))).toBe(true);
+  });
+
+  it("refuses a case variant that is a second real file, where the volume keeps them apart", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    await writeFile(join(project, "A.md"), "A", "utf8");
+    if ((await readFile(join(project, "a.md"), "utf8")) !== "a") {
+      // A case-insensitive volume folded the two writes into one file, so there
+      // is no second file here for the refusal to be about.
+      expect(readdirSync(project)).toHaveLength(1);
+      return;
+    }
+    expect(await renameEntry(project, null, "a.md", "A.md")).toEqual({
+      ok: false,
+      error: '"A.md" already exists',
+    });
+    expect(await readFile(join(project, "A.md"), "utf8")).toBe("A");
+  });
+
+  it("refuses a destination in a folder that does not exist", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    expect(await renameEntry(project, null, "a.md", "nope/a.md")).toEqual({
+      ok: false,
+      error: "Destination folder was not found",
+    });
+    expect(existsSync(join(project, "a.md"))).toBe(true);
+  });
+
+  it("refuses a rename that would cross checkouts (.volli always resolves to Main)", async () => {
+    const project = makeTempProjectDir();
+    const worktree = makeTempProjectDir();
+    await writeFile(join(worktree, "a.md"), "a", "utf8");
+    await ensureProjectArtifactsDir(project);
+    expect(await renameEntry(project, worktree, "a.md", ".volli/artifacts/a.md")).toEqual({
+      ok: false,
+      error: "A rename cannot move a file between checkouts",
+    });
+    expect(existsSync(join(worktree, "a.md"))).toBe(true);
+    expect(existsSync(join(project, ".volli", "artifacts", "a.md"))).toBe(false);
+  });
+
+  it("reports a source that is not there", async () => {
+    const project = makeTempProjectDir();
+    expect(await renameEntry(project, null, "ghost.md", "other.md")).toEqual({
+      ok: false,
+      error: "File was not found",
+    });
+  });
+
+  it("rejects an unsafe destination path", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "a.md"), "a", "utf8");
+    expect(await renameEntry(project, null, "a.md", "../escaped.md")).toEqual({
+      ok: false,
+      error: "Invalid file path",
+    });
+  });
+
+  it("rejects an unsafe source path", async () => {
+    const project = makeTempProjectDir();
+    expect(await renameEntry(project, null, "../outside.md", "a.md")).toEqual({
+      ok: false,
+      error: "Invalid file path",
+    });
+  });
+
+  it("refuses to rename a symlink (the read path refuses to open one too)", async () => {
+    const project = makeTempProjectDir();
+    const outside = makeTempProjectDir();
+    const outsideFile = join(outside, "target.md");
+    writeFileSync(outsideFile, "untouched", "utf8");
+    symlinkSync(outsideFile, join(project, "link.md"), "file");
+    expect(await renameEntry(project, null, "link.md", "moved.md")).toEqual({
+      ok: false,
+      error: "Path is a symlink",
+    });
+    expect(existsSync(outsideFile)).toBe(true);
+  });
+});
+
+describe("duplicateEntryName", () => {
+  it("puts the suffix before the extension so the copy stays the same kind of file", () => {
+    expect(duplicateEntryName("plan.md", 1)).toBe("plan copy.md");
+    expect(duplicateEntryName("plan.md", 2)).toBe("plan copy 2.md");
+  });
+
+  it("keeps a dotfile whole and handles a name with no extension", () => {
+    expect(duplicateEntryName(".gitignore", 1)).toBe(".gitignore copy");
+    expect(duplicateEntryName("Makefile", 3)).toBe("Makefile copy 3");
+  });
+});
+
+describe("duplicateFile", () => {
+  it("copies a file to the first free copy name and resolves with it", async () => {
+    const project = makeTempProjectDir();
+    await mkdir(join(project, "src"));
+    await writeFile(join(project, "src", "plan.md"), "body", "utf8");
+    expect(await duplicateFile(project, null, "src/plan.md")).toEqual({
+      ok: true,
+      relPath: "src/plan copy.md",
+    });
+    expect(await readFile(join(project, "src", "plan copy.md"), "utf8")).toBe("body");
+  });
+
+  it("walks past taken copy names instead of overwriting one", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "plan.md"), "body", "utf8");
+    await writeFile(join(project, "plan copy.md"), "first", "utf8");
+    expect(await duplicateFile(project, null, "plan.md")).toEqual({
+      ok: true,
+      relPath: "plan copy 2.md",
+    });
+    expect(await readFile(join(project, "plan copy.md"), "utf8")).toBe("first");
+  });
+
+  it("refuses a directory out loud", async () => {
+    const project = makeTempProjectDir();
+    await mkdir(join(project, "src"));
+    expect(await duplicateFile(project, null, "src")).toEqual({
+      ok: false,
+      error: "Only files can be duplicated",
+    });
+  });
+
+  it("reports a source that is not there", async () => {
+    const project = makeTempProjectDir();
+    expect(await duplicateFile(project, null, "ghost.md")).toEqual({
+      ok: false,
+      error: "File was not found",
+    });
+  });
+
+  it("rejects an unsafe relPath", async () => {
+    const project = makeTempProjectDir();
+    expect(await duplicateFile(project, null, "../outside.md")).toEqual({
+      ok: false,
+      error: "Invalid file path",
+    });
+  });
+});
+
+describe("trashEntry", () => {
+  it("hands the resolved path to shell.trashItem — never an in-place unlink", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "x", "utf8");
+    expect(await trashEntry(project, null, "notes.md")).toEqual({ ok: true });
+    expect(trashItemMock).toHaveBeenCalledWith(join(project, "notes.md"));
+  });
+
+  it("reports a file that is not there without calling the Trash", async () => {
+    const project = makeTempProjectDir();
+    expect(await trashEntry(project, null, "ghost.md")).toEqual({
+      ok: false,
+      error: "File was not found",
+    });
+    expect(trashItemMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a Trash failure rather than swallowing it", async () => {
+    const project = makeTempProjectDir();
+    await writeFile(join(project, "notes.md"), "x", "utf8");
+    trashItemMock.mockRejectedValueOnce(new Error("Trash is full"));
+    expect(await trashEntry(project, null, "notes.md")).toEqual({
+      ok: false,
+      error: "Trash is full",
+    });
+  });
+
+  it("rejects an unsafe relPath before resolving anything", async () => {
+    const project = makeTempProjectDir();
+    expect(await trashEntry(project, null, "../outside.md")).toEqual({
+      ok: false,
+      error: "Invalid file path",
+    });
+    expect(trashItemMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1590,6 +2035,102 @@ describe("registerFileIpcHandlers", () => {
     }
   });
 
+  it("runs the whole creation track through the ticket's worktree, never Main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = join(setup.projectPath, "ticket-worktree");
+    await mkdir(worktree, { recursive: true });
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+    const scope = { projectId: setup.projectId, ticketId: ticket.id };
+
+    expect(
+      await invoke<{ ok: boolean }>("volli:dir-create", {}, { ...scope, relPath: "src" }),
+    ).toEqual({ ok: true, relPath: "src" });
+    expect(
+      await invoke<{ ok: boolean }>("volli:file-create", {}, { ...scope, relPath: "src/a.ts" }),
+    ).toEqual({ ok: true, relPath: "src/a.ts" });
+    expect(
+      await invoke<{ ok: boolean }>("volli:file-duplicate", {}, { ...scope, relPath: "src/a.ts" }),
+    ).toEqual({ ok: true, relPath: "src/a copy.ts" });
+    expect(
+      await invoke<{ ok: boolean }>(
+        "volli:file-rename",
+        {},
+        { ...scope, relPath: "src/a.ts", toRelPath: "src/b.ts" },
+      ),
+    ).toEqual({ ok: true, relPath: "src/b.ts" });
+    expect(
+      await invoke<{ ok: boolean }>("volli:file-delete", {}, { ...scope, relPath: "src/b.ts" }),
+    ).toEqual({ ok: true });
+
+    // Everything landed in the worktree; the main checkout never grew a `src`.
+    expect(existsSync(join(worktree, "src", "a copy.ts"))).toBe(true);
+    expect(existsSync(join(setup.projectPath, "src"))).toBe(false);
+    expect(trashItemMock).toHaveBeenCalledWith(join(worktree, "src", "b.ts"));
+  });
+
+  it("refuses a creation-track call for a ticket that belongs to another project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const otherProject = testProject({ path: makeGitRepoDir() });
+    insertProject(ctx.db, otherProject);
+    const foreign = testTicket(otherProject.id, { ticketNumber: 3 });
+    insertTicket(ctx.db, foreign);
+
+    for (const channel of [
+      "volli:file-create",
+      "volli:dir-create",
+      "volli:file-duplicate",
+      "volli:file-delete",
+    ] as const) {
+      expect(
+        await invoke<{ ok: boolean; error?: string }>(
+          channel,
+          {},
+          { projectId: setup.projectId, ticketId: foreign.id, relPath: "a.ts" },
+        ),
+      ).toEqual({ ok: false, error: "Ticket does not belong to project" });
+    }
+    expect(
+      await invoke<{ ok: boolean; error?: string }>(
+        "volli:file-rename",
+        {},
+        {
+          projectId: setup.projectId,
+          ticketId: foreign.id,
+          relPath: "a.ts",
+          toRelPath: "b.ts",
+        },
+      ),
+    ).toEqual({ ok: false, error: "Ticket does not belong to project" });
+    expect(trashItemMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a create that would overwrite, and a rename that would clobber", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "a.md"), "a", "utf8");
+    await writeFile(join(setup.projectPath, "b.md"), "b", "utf8");
+
+    expect(
+      await invoke<{ ok: boolean; error?: string }>(
+        "volli:file-create",
+        {},
+        { projectId: setup.projectId, relPath: "a.md" },
+      ),
+    ).toEqual({ ok: false, error: '"a.md" already exists' });
+    expect(
+      await invoke<{ ok: boolean; error?: string }>(
+        "volli:file-rename",
+        {},
+        { projectId: setup.projectId, relPath: "a.md", toRelPath: "b.md" },
+      ),
+    ).toEqual({ ok: false, error: '"b.md" already exists' });
+    expect(await readFile(join(setup.projectPath, "a.md"), "utf8")).toBe("a");
+    expect(await readFile(join(setup.projectPath, "b.md"), "utf8")).toBe("b");
+  });
+
   it("reveals a file via the IPC channel", async () => {
     const setup = setupDbAndHandlers();
     ctx = setup.ctx;
@@ -2019,6 +2560,7 @@ describe("registerFileIpcHandlers", () => {
   it.each([
     "volli:file-index",
     "volli:file-read",
+    "volli:search",
     "volli:file-write",
     "volli:artifact-create",
     "volli:file-reveal",
@@ -2047,6 +2589,201 @@ describe("registerFileIpcHandlers", () => {
       { projectId: "nope" },
     );
     expect(result).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  // ---- file-index scope (VC-190) --------------------------------------------
+  // The index now takes the SAME `{ projectId, ticketId }` pair a read takes,
+  // through the same `resolveFileScope` seam — so quick-open in a Ticket
+  // workspace offers that worktree's files, and the read behind the row it
+  // picked resolves to the same checkout.
+
+  it("indexes the ticket's live worktree when given the scope pair", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = join(setup.projectPath, "ticket-worktree");
+    await mkdir(worktree);
+    await writeFile(join(setup.projectPath, "main-only.ts"), "main", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "worktree", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "shared" });
+
+    const scoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id },
+    );
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    const paths = scoped.files.map((f) => f.relPath);
+    expect(paths).toContain("worktree-only.ts");
+    expect(paths).not.toContain("main-only.ts");
+    // `.volli/**` stays on Main whatever the scope (decision #6), so an
+    // artifact is `@`-referenceable from either surface.
+    expect(paths).toContain(".volli/artifacts/shared.md");
+
+    const unscoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId },
+    );
+    expect(unscoped.ok).toBe(true);
+    if (!unscoped.ok) return;
+    const mainPaths = unscoped.files.map((f) => f.relPath);
+    expect(mainPaths).toContain("main-only.ts");
+    expect(mainPaths).not.toContain("worktree-only.ts");
+  });
+
+  it("degrades a ticket whose worktree folder is gone to the main checkout, exactly as a read does", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "main-only.ts"), "main", "utf8");
+    const ticket = testTicket(setup.projectId, {
+      worktreePath: join(makeTempProjectDir(), "missing-worktree"),
+    });
+    insertTicket(ctx.db, ticket);
+
+    const result = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.files.map((f) => f.relPath)).toContain("main-only.ts");
+  });
+
+  it("rejects an unknown ticket rather than silently indexing Main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: "nope" },
+    );
+    expect(result).toEqual({ ok: false, error: "Unknown ticket" });
+  });
+
+  it("rejects a ticket that belongs to another project", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const otherProject = testProject({ path: makeGitRepoDir() });
+    insertProject(ctx.db, otherProject);
+    const foreign = testTicket(otherProject.id, { ticketNumber: 3 });
+    insertTicket(ctx.db, foreign);
+
+    const result = await invoke<{ ok: boolean; error?: string }>(
+      "volli:file-index",
+      {},
+      { projectId: setup.projectId, ticketId: foreign.id },
+    );
+    expect(result).toEqual({ ok: false, error: "Ticket does not belong to project" });
+  });
+
+  // ---- search scope (VC-193, plan §4.7) -------------------------------------
+  // `volli:search` resolves through the SAME `resolveFileScope` seam a read
+  // does, which is the property that keeps a result row honest: the checkout
+  // that answered the search is the checkout the click on that row opens. The
+  // ripgrep run itself is `file-search.test.ts`'s subject; what these assert is
+  // the scope, the refusals, and the truncation flag crossing the boundary.
+
+  it("searches the ticket's live worktree when given the scope pair, and Main without one", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const worktree = join(makeTempProjectDir(), "ticket-worktree");
+    mkdirSync(worktree, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: worktree });
+    await writeFile(join(setup.projectPath, "main-only.ts"), "const needle = 1;\n", "utf8");
+    await writeFile(join(worktree, "worktree-only.ts"), "const needle = 2;\n", "utf8");
+    const ticket = testTicket(setup.projectId, { worktreePath: worktree });
+    insertTicket(ctx.db, ticket);
+
+    const scoped = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, query: "needle" },
+    );
+    expect(scoped.ok).toBe(true);
+    if (!scoped.ok) return;
+    expect(scoped.files.map((file) => file.relPath)).toEqual(["worktree-only.ts"]);
+
+    const home = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, query: "needle" },
+    );
+    expect(home.ok).toBe(true);
+    if (!home.ok) return;
+    expect(home.files.map((file) => file.relPath)).toEqual(["main-only.ts"]);
+  });
+
+  it("degrades a ticket whose worktree folder is gone to the main checkout, exactly as a read does", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "main-only.ts"), "const needle = 1;\n", "utf8");
+    const ticket = testTicket(setup.projectId, {
+      worktreePath: join(makeTempProjectDir(), "missing-worktree"),
+    });
+    insertTicket(ctx.db, ticket);
+
+    const result = await invoke<{ ok: true; files: { relPath: string }[] } | { ok: false }>(
+      "volli:search",
+      {},
+      { projectId: setup.projectId, ticketId: ticket.id, query: "needle" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.files.map((file) => file.relPath)).toEqual(["main-only.ts"]);
+  });
+
+  it("reports the cap that ended a search rather than presenting a partial list as the whole", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "many.ts"), "needle\n".repeat(600), "utf8");
+
+    const result = await invoke<
+      { ok: true; matches: number; limit: string } | { ok: false; error: string }
+    >("volli:search", {}, { projectId: setup.projectId, query: "needle" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.matches).toBe(500);
+    expect(result.limit).toBe("matches");
+  });
+
+  it("answers an empty query with nothing rather than listing the checkout", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await writeFile(join(setup.projectPath, "a.ts"), "const needle = 1;\n", "utf8");
+
+    expect(
+      await invoke<unknown>("volli:search", {}, { projectId: setup.projectId, query: "  " }),
+    ).toEqual({ ok: true, files: [], matches: 0, limit: "none" });
+  });
+
+  it("refuses a search scoped to an unknown or foreign ticket instead of searching Main", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const otherProject = testProject({ path: makeGitRepoDir() });
+    insertProject(ctx.db, otherProject);
+    const foreign = testTicket(otherProject.id, { ticketNumber: 4 });
+    insertTicket(ctx.db, foreign);
+
+    expect(
+      await invoke<unknown>(
+        "volli:search",
+        {},
+        { projectId: setup.projectId, ticketId: "nope", query: "needle" },
+      ),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+    expect(
+      await invoke<unknown>(
+        "volli:search",
+        {},
+        { projectId: setup.projectId, ticketId: foreign.id, query: "needle" },
+      ),
+    ).toEqual({ ok: false, error: "Ticket does not belong to project" });
+    expect(
+      await invoke<unknown>("volli:search", {}, { projectId: "nope", query: "needle" }),
+    ).toEqual({ ok: false, error: "Unknown project" });
   });
 
   it("answers prompt-templates with both tiers, the project's name winning", async () => {
@@ -2096,7 +2833,9 @@ describe("registerFileIpcHandlers", () => {
         name: string;
         description: string;
         body: string;
-        userInvokeOnly: boolean;
+        authorPolicy: { modelDiscoverable: boolean; userInvokable: boolean };
+        effectivePolicy: { modelDiscoverable: boolean; userInvokable: boolean };
+        policyDiagnostic: string | null;
         root: string;
       }[];
     }>("volli:prompt-templates", {}, { projectId: setup.projectId });
@@ -2107,14 +2846,18 @@ describe("registerFileIpcHandlers", () => {
         name: "logos",
         description: "Draw logos",
         body: "# Logos",
-        userInvokeOnly: false,
+        authorPolicy: { modelDiscoverable: true, userInvokable: true },
+        effectivePolicy: { modelDiscoverable: true, userInvokable: true },
+        policyDiagnostic: null,
         root: ".agents/skills/logos",
       },
       {
         name: "pdf",
         description: "Fill PDFs",
         body: "# PDF",
-        userInvokeOnly: false,
+        authorPolicy: { modelDiscoverable: true, userInvokable: true },
+        effectivePolicy: { modelDiscoverable: true, userInvokable: true },
+        policyDiagnostic: null,
         root: `${setup.globalSkillsDir}/pdf`,
       },
     ]);

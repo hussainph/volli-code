@@ -19,7 +19,7 @@
 import { existsSync } from "node:fs";
 import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
-import type { TicketRetentionState } from "../../ipc/contract";
+import type { PrCheck, TicketRetentionState } from "../../ipc/contract";
 
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
@@ -93,7 +93,8 @@ interface RetentionObservation {
   prUrl: string | null;
   prState: "open" | "merged" | "closed" | null;
   hasConflicts: boolean;
-  failingChecks: string[];
+  /** The PR's whole check rollup as of this poll (VC-182); empty when it has none. */
+  checks: PrCheck[];
 }
 
 /**
@@ -152,15 +153,27 @@ function hasPrMergedEvent(db: Database.Database, ticketId: string): boolean {
   return (row?.n ?? 0) > 0;
 }
 
-/** True when two observations differ (drives the single broadcast per cycle). */
+/**
+ * True when two observations differ (drives the single broadcast per cycle).
+ *
+ * The rollup is compared on NAME AND STATE, not on identity or on the failing
+ * subset alone: a suite going green one job at a time changes no name and no
+ * count, and comparing only counts would leave the rail showing "3 running"
+ * until something unrelated happened to broadcast (VC-182). `url` is
+ * deliberately not compared — a re-run mints a fresh `detailsUrl` for an
+ * otherwise identical row, and a broadcast per poll is what the whole
+ * change-detection here exists to avoid.
+ */
 function observationChanged(a: RetentionObservation | undefined, b: RetentionObservation): boolean {
   if (!a) return true;
   return (
     a.prUrl !== b.prUrl ||
     a.prState !== b.prState ||
     a.hasConflicts !== b.hasConflicts ||
-    a.failingChecks.length !== b.failingChecks.length ||
-    a.failingChecks.some((name, i) => name !== b.failingChecks[i])
+    a.checks.length !== b.checks.length ||
+    a.checks.some(
+      (check, i) => check.name !== b.checks[i]?.name || check.state !== b.checks[i]?.state,
+    )
   );
 }
 
@@ -262,7 +275,7 @@ export async function pollRetention(
         prUrl,
         prState: status.value.state,
         hasConflicts: status.value.hasConflicts,
-        failingChecks: status.value.failingChecks,
+        checks: status.value.checks,
       };
       if (observationChanged(store.observations.get(ticket.id), observation)) result.changed = true;
       store.observations.set(ticket.id, observation);
@@ -364,7 +377,7 @@ const EMPTY_OBSERVATION: RetentionObservation = {
   prUrl: null,
   prState: null,
   hasConflicts: false,
-  failingChecks: [],
+  checks: [],
 };
 
 /**
@@ -406,7 +419,7 @@ export function getRetentionState(
     prUrl: observation.prUrl,
     prState: observation.prState,
     hasConflicts: observation.hasConflicts,
-    failingChecks: observation.failingChecks,
+    checks: observation.checks,
     archiveReady: readiness.archiveReady,
     reason: readiness.reason,
     keep,

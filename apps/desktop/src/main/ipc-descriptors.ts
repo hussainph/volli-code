@@ -769,13 +769,42 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 // external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
+/**
+ * The `{ projectId, ticketId? }` scope pair the file index is listed for
+ * (VC-190) — {@link isFilePathInput} minus the path. An absent `ticketId` means
+ * the project's main checkout; a present one means that ticket's worktree, and
+ * main re-checks the pair against the db before it resolves anything.
+ */
+function isFileIndexInput(value: unknown): value is { projectId: string; ticketId?: string } {
+  if (!isRecord(value)) return false;
+  if (typeof value["projectId"] !== "string") return false;
+  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+}
+
 /** The `{ projectId, ticketId?, relPath }` shape shared by read/reveal/watch/unwatch. */
 function isFilePathInput(
   value: unknown,
 ): value is { projectId: string; ticketId?: string; relPath: string } {
-  if (!isRecord(value)) return false;
-  if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
-  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+  return isRecord(value) && typeof value["relPath"] === "string" && isFileIndexInput(value);
+}
+
+/**
+ * The search shape (plan §4.7): the index's scope pair plus the literal text.
+ * Only its TYPE is judged here — an empty or whitespace-only query is a request
+ * main answers with an empty result rather than a malformed-request refusal,
+ * because it is what a Search page holds every time it is opened.
+ */
+function isFileSearchInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["query"] === "string" && isFileIndexInput(value);
+}
+
+/**
+ * The rename shape: the file-path input plus the destination path (VC-191).
+ * Both are checked as strings HERE; whether either is a safe relative path, and
+ * whether the two resolve against the same checkout, is main's two-layer job.
+ */
+function isFileRenameInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["toRelPath"] === "string" && isFilePathInput(value);
 }
 
 /** The file-path shape plus one closed app id — callers never name a bundle or command. */
@@ -819,12 +848,17 @@ function isDirPathInput(value: unknown): value is { projectId: string; relPath: 
 export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:file-index": {
     guard: (args): args is IpcArgs<"volli:file-index"> =>
-      args.length === 1 && isProjectIdInput(args[0]),
+      args.length === 1 && isFileIndexInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:file-read": {
     guard: (args): args is IpcArgs<"volli:file-read"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:search": {
+    guard: (args): args is IpcArgs<"volli:search"> =>
+      args.length === 1 && isFileSearchInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:external-app-list": {
@@ -853,6 +887,33 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
       if (typeof input["content"] !== "string") return false;
       return input["expectedMtime"] === undefined || typeof input["expectedMtime"] === "number";
     },
+    invalidError: "Invalid request",
+  },
+  // The creation track (plan §4.5). Four of the five carry nothing beyond the
+  // scoped path the read channels already take; only rename names a second one.
+  "volli:file-create": {
+    guard: (args): args is IpcArgs<"volli:file-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:dir-create": {
+    guard: (args): args is IpcArgs<"volli:dir-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-rename": {
+    guard: (args): args is IpcArgs<"volli:file-rename"> =>
+      args.length === 1 && isFileRenameInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-duplicate": {
+    guard: (args): args is IpcArgs<"volli:file-duplicate"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-delete": {
+    guard: (args): args is IpcArgs<"volli:file-delete"> =>
+      args.length === 1 && isFilePathInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:artifact-create": {

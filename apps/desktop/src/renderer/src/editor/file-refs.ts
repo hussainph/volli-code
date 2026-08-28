@@ -103,6 +103,32 @@ export type FileRefCompletion =
     });
 
 /**
+ * The ranking itself, with nothing of `@`'s grammar in it: score every indexed
+ * file against `query`, drop the misses, best first, bounded.
+ *
+ * Exported because quick-open (VC-190) ranks the same index for the same
+ * question — "which file did they mean?" — and a second matcher beside this one
+ * would be two answers to it. What quick-open must NOT inherit is the caller's
+ * side of {@link rankFileRefCompletions}: the `isExpressibleRefPath` filter is
+ * about what the `@` grammar can WRITE, and a file named `design notes.md` is
+ * perfectly openable even though no ref can name it. So the filter stays at the
+ * call site that needs it and the ranking lives here.
+ */
+export function rankIndexedFiles(input: {
+  query: string;
+  index: readonly IndexedFile[];
+  /** Result ceiling; defaults to {@link MAX_PICKER_RESULTS}. */
+  limit?: number;
+}): readonly IndexedFile[] {
+  return input.index
+    .map((file) => ({ file, score: scoreFileMatch(input.query, file.relPath) }))
+    .filter((entry): entry is { file: IndexedFile; score: number } => entry.score !== null)
+    .toSorted((a, b) => b.score - a.score)
+    .slice(0, input.limit ?? MAX_PICKER_RESULTS)
+    .map((entry) => entry.file);
+}
+
+/**
  * Rank the index for one `@` query.
  *
  * Artifacts sort above ordinary files because `scoreFileMatch` gives them a
@@ -121,12 +147,10 @@ export function rankFileRefCompletions(input: {
 }): readonly FileRefCompletion[] {
   const { query, index } = input;
   const filterText = `@${query}`;
-  const ranked = index
-    .filter((file) => isExpressibleRefPath(file.relPath))
-    .map((file) => ({ file, score: scoreFileMatch(query, file.relPath) }))
-    .filter((entry): entry is { file: IndexedFile; score: number } => entry.score !== null)
-    .toSorted((a, b) => b.score - a.score)
-    .slice(0, MAX_PICKER_RESULTS);
+  const ranked = rankIndexedFiles({
+    query,
+    index: index.filter((file) => isExpressibleRefPath(file.relPath)),
+  });
 
   const results: FileRefCompletion[] = [];
 
@@ -149,7 +173,7 @@ export function rankFileRefCompletions(input: {
   }
 
   results.push(
-    ...ranked.map(({ file }, position): FileRefCompletion => {
+    ...ranked.map((file, position): FileRefCompletion => {
       return {
         kind: "file",
         label: baseNameOf(file.relPath),

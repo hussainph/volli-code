@@ -28,7 +28,7 @@ import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
-import { runGitCapturing } from "./worktree";
+import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 
 export { composeProjectBrief, composeTicketBrief } from "./agent-dispatch/briefs";
 export { CHAT_PEEK_ENTRIES } from "./agent-dispatch/session-verbs";
@@ -60,6 +60,10 @@ export function createAgentCommandService(
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
   const git = options.git ?? runGitCapturing;
+  // Keep the default physically asynchronous. A custom synchronous test seam
+  // may still serve status/diff reads, but sync and radar must never fall back
+  // to it for a hook-bearing or whole-worktree operation.
+  const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
@@ -174,6 +178,7 @@ export function createAgentCommandService(
         now,
         newId,
         git,
+        gitAsync,
         worktreeExists,
         sessionEngine,
         watermarks,
@@ -182,6 +187,7 @@ export function createAgentCommandService(
         projections,
         sessions,
         envSession,
+        authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
       };
       return binding.handle(context, request);

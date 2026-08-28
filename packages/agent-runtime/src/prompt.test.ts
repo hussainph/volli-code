@@ -479,7 +479,7 @@ describe("composeTurnReminderBlock — the workspace environment fact", () => {
       --- END PROJECT BRIEF ---
 
       --- BEGIN SESSION TOOLS ---
-      This Project Session's Role bundle holds these Volli verbs as named tools:
+      This Project Session's frozen tool surface holds these Volli verbs as named tools:
         session.start — call it as session_start
       Membership was fixed when this Session was created and does not change while
       it runs. A Volli verb not named here is not in this Session's tool array: do
@@ -513,11 +513,11 @@ describe("composeTurnReminderBlock — the workspace environment fact", () => {
 });
 
 describe("composeFirstUserMessage", () => {
-  it("leads with a delimited brief block, then names the Role bundle", () => {
-    // A Ticket Session holds no verbs, and is told so. That sentence is the
-    // whole point of the block for this Role (VC-162): what stops a Session
-    // from spending turns hunting for an agent-control tool is being told the
-    // room does not contain one.
+  it("leads with a delimited brief block, then names the frozen tool surface", () => {
+    // A Ticket Session holding no grants has no verbs, and is told so. That
+    // sentence is the whole point of the block for this Role (VC-162): what
+    // stops a Session from spending turns hunting for an agent-control tool is
+    // being told the room does not contain one.
     expect(
       composeFirstUserMessage(
         spec({ brief: { text: "VC-12 — add an MCP server." } }),
@@ -529,7 +529,7 @@ describe("composeFirstUserMessage", () => {
       --- END TICKET BRIEF ---
 
       --- BEGIN SESSION TOOLS ---
-      This Ticket Session's Role bundle holds no Volli verbs as named tools.
+      This Ticket Session's frozen tool surface holds no Volli verbs as named tools.
       Membership was fixed when this Session was created and does not change while
       it runs. A Volli verb not named here is not in this Session's tool array: do
       not probe for it, and do not reach for an equivalent another way. Where the
@@ -538,6 +538,15 @@ describe("composeFirstUserMessage", () => {
 
       Start with the transport."
     `);
+  });
+
+  it("does not mislabel a per-Session grant as Role-bundle membership", () => {
+    expect(
+      composeToolSurfaceBlock("ticket", {
+        tools: ["read"],
+        verbs: ["session.start"],
+      }),
+    ).toContain("This Ticket Session's frozen tool surface holds these Volli verbs");
   });
 
   it("still names a verb this build stopped projecting", () => {
@@ -568,7 +577,7 @@ describe("composeFirstUserMessage", () => {
       --- END PROJECT BRIEF ---
 
       --- BEGIN SESSION TOOLS ---
-      This Project Session's Role bundle holds these Volli verbs as named tools:
+      This Project Session's frozen tool surface holds these Volli verbs as named tools:
         session.start — call it as session_start
       Membership was fixed when this Session was created and does not change while
       it runs. A Volli verb not named here is not in this Session's tool array: do

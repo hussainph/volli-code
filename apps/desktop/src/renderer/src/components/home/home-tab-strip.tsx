@@ -12,6 +12,8 @@ import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
 import type { SkillReference } from "@volli/shared";
 
+import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
+import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import {
@@ -65,6 +67,12 @@ export type HomeTabDescriptor =
 export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
 
 interface HomeTabStripProps {
+  /**
+   * The project whose Main checkout Home's File tabs come from — what Copy Path
+   * resolves against. Home has no ticket, so those paths never resolve into a
+   * worktree copy.
+   */
+  projectId: string;
   tabs: readonly HomeTabDescriptor[];
   activeTabId: string;
   onSelect(tab: HomeTabDescriptor): void;
@@ -72,6 +80,12 @@ interface HomeTabStripProps {
   onClose(tab: HomeTabDescriptor): void;
   /** Never raised for the Board or File tabs, which are not renamable. */
   onRename(tab: HomeTabDescriptor, title: string): void;
+  /**
+   * A tab was dragged to a new place (VC-189): the tab that moved, and Home's
+   * movable tab ids in the order the drop left them. Optional — a strip
+   * without it does not arrange, and mounts no drag machinery.
+   */
+  onReorder?(movedId: string, ids: readonly string[]): void;
   /** Double-click / Keep Open on a preview File tab. */
   onPinFile(relPath: string): void;
   /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
@@ -107,20 +121,29 @@ interface HomeTabStripProps {
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
  * without a ticket — terminals first and chats after — then Main-checkout File
- * tabs in their reducer order. A trailing split control starts either Session;
- * every tab but the Board carries a hover-revealed close and a right-click
- * menu. Session tabs rename on double-click; preview File tabs pin.
+ * tabs in their reducer order. That composed order is what the caller hands
+ * down; whether the person has since ARRANGED it (VC-189) is decided one level
+ * up, in the `tabOrder` overlay, so this strip still just draws the list it is
+ * given. A trailing split control starts either Session; every tab but the
+ * Board carries a hover-revealed close and a right-click menu. Session tabs
+ * rename on double-click; preview File tabs pin.
+ *
+ * The Board tab does not drag and nothing drops before it — it is simply left
+ * out of the sortable ids and given no `dragId`, which is the same statement
+ * made twice for the two halves that could otherwise disagree.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
  * #51), and a chat Session holds none.
  */
 export function HomeTabStrip({
+  projectId,
   tabs,
   activeTabId,
   onSelect,
   onClose,
   onRename,
+  onReorder,
   onPinFile,
   onCloseOtherFiles,
   onNewSession,
@@ -137,11 +160,15 @@ export function HomeTabStrip({
     tabs.length,
     tabs.findIndex((tab) => tab.id === activeTabId),
   );
+  // Every tab but the permanent Board tab may be dragged; the strip holds this
+  // list's identity steady for dnd-kit itself.
+  const movableIds = tabs.filter((tab) => tab.kind !== "board").map((tab) => tab.id);
 
   return (
     <TabStrip
       variant="folder"
       label="Home tabs"
+      reorder={onReorder === undefined ? undefined : { ids: movableIds, onReorder }}
       actions={
         <>
           {/* The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
@@ -201,9 +228,11 @@ export function HomeTabStrip({
           return (
             <HomeFileTab
               key={descriptor.id}
+              projectId={projectId}
               tab={descriptor}
               active={active}
               tabStop={tabStop}
+              dragId={descriptor.id}
               onSelect={() => onSelect(descriptor)}
               onPin={() => onPinFile(descriptor.relPath)}
               onClose={() => onClose(descriptor)}
@@ -217,6 +246,7 @@ export function HomeTabStrip({
         const shared = {
           active,
           tabStop,
+          dragId: descriptor.id,
           editing: editingId === descriptor.id,
           onClose: () => onClose(descriptor),
           onStartRename: () => setEditingId(descriptor.id),
@@ -288,24 +318,28 @@ function BoardTab({
  * One Main-checkout File tab.
  *
  * These are main-checkout files, opened out of the same `FileWorkspaceState`
- * reducer ticket File tabs share, and this tab carries its own menu: Keep
- * Open (disabled once pinned, so the menu keeps one shape), Close, Close
- * Others. The ticket strip differs because a pinned ticket File tab has no
- * menu at all, which would leave Home's keyboard users with no route to
- * Close.
+ * reducer ticket File tabs share, and this tab carries its own menu: the two
+ * Copy Path items, Word Wrap, then Keep Open (disabled once pinned, so the menu
+ * keeps one shape), Close, Close Others. The ticket strip differs because a
+ * pinned ticket File tab has no menu at all, which would leave Home's keyboard
+ * users with no route to Close.
  */
 function HomeFileTab({
+  projectId,
   tab,
   active,
   tabStop,
+  dragId,
   onSelect,
   onPin,
   onClose,
   onCloseOthers,
 }: {
+  projectId: string;
   tab: Extract<HomeTabDescriptor, { kind: "file" }>;
   active: boolean;
   tabStop: boolean;
+  dragId: string;
   onSelect(): void;
   onPin(): void;
   onClose(): void;
@@ -323,6 +357,7 @@ function HomeFileTab({
       hint={tab.hint ?? undefined}
       active={active}
       tabStop={tabStop}
+      dragId={dragId}
       dirty={tab.dirty}
       labelClassName={tab.preview ? "italic" : undefined}
       onActivate={onSelect}
@@ -335,6 +370,10 @@ function HomeFileTab({
     <ContextMenu>
       <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
       <ContextMenuContent>
+        <CopyPathContextMenuItems target={{ projectId, relPath: tab.relPath }} />
+        <ContextMenuSeparator />
+        <WordWrapContextMenuItem />
+        <ContextMenuSeparator />
         <ContextMenuItem icon={PushPinIcon} disabled={!tab.preview} onSelect={onPin}>
           Keep Open
         </ContextMenuItem>
@@ -352,6 +391,8 @@ function HomeFileTab({
 interface KindTabProps {
   active: boolean;
   tabStop: boolean;
+  /** This tab's id, for the strip's sortable (VC-189). */
+  dragId: string;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -370,16 +411,18 @@ function sharedTabProps(
   {
     active,
     tabStop,
+    dragId,
     editing,
     onClose,
     onStartRename,
     onCommitRename,
     onCancelRename,
   }: Omit<KindTabProps, "onSelect">,
-): Pick<TabProps, "active" | "tabStop" | "renaming" | "onClose" | "onDoubleClick"> {
+): Pick<TabProps, "active" | "tabStop" | "dragId" | "renaming" | "onClose" | "onDoubleClick"> {
   return {
     active,
     tabStop,
+    dragId,
     renaming: editing ? { value: label, onCommit: onCommitRename, onCancel: onCancelRename } : null,
     onClose,
     onDoubleClick: onStartRename,
@@ -422,7 +465,7 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
             exited
               ? `Exited (${exitCode})`
               : parked
-                ? "Parked to save memory. Click to wake."
+                ? "Terminal is parked to save memory. Select to wake it."
                 : tab.title
           }
           labelClassName={exited ? "line-through" : undefined}

@@ -122,6 +122,8 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.",
     "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
     "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
+    "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
+    "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
     "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
     "Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
     "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
@@ -232,12 +234,12 @@ function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string |
   if (!entry.accessModes.includes("tool") || entry.accessModes.includes("cli")) return null;
   if (runtime.surface !== null) {
     return runtime.surface.tools.includes(entry.key)
-      ? `Role availability: carried by this ${runtime.surface.role} Session's frozen bundle.`
-      : `Role availability: not carried by this ${runtime.surface.role} Session's frozen bundle.`;
+      ? `Tool availability: carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`
+      : `Tool availability: not carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
-    ? "Role availability: not claimed outside a resolved Session."
-    : `Role availability: unknown (${runtime.surfaceUnknownReason}).`;
+    ? "Tool availability: not claimed outside a resolved Session."
+    : `Tool availability: unknown (${runtime.surfaceUnknownReason}).`;
 }
 
 /** The complete compact shell reference plus honest discovery of non-shell doors. */

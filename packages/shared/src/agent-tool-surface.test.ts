@@ -23,19 +23,21 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 }
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
-  it("gives a Project Session the agent-control family and a Ticket Session none", () => {
+  it("gives a Project Session the agent-control family and a Ticket Role's default bundle none", () => {
     // The whole family travels together (VC-92's pairing rule; stop and send
-    // joined start in VC-86) — shipping part of it would make the bundle no
-    // boundary.
+    // joined start in VC-86, and `automation.run` rides with them per VC-134)
+    // — shipping part of it would make the bundle no boundary.
     expect(roleVerbBundle("project")).toEqual([
       "session.start",
       "session.stop",
       "session.send",
       "ticket.await",
+      "automation.run",
     ]);
-    // The property this ticket exists to make true, asserted as absence
-    // rather than described. An injected instruction telling a Ticket Session
-    // to start ten Sessions has nothing to call. `ticket.await` is not of the
+    // The default-bundle property is asserted as absence rather than prose. An
+    // injected instruction telling a Ticket Session to start ten Sessions has
+    // nothing to call, and a durable birth grant is the explicit exception
+    // (VC-183), never a bundle edit. `ticket.await` is not part of the
     // agent-control family — waiting controls nobody (VC-85/VC-92).
     expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
     // VC-9 defines this one; until then an empty bundle is the honest answer.
@@ -54,9 +56,9 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
 describe("resolveAgentToolSurface — the three sets, kept apart", () => {
   it("resolves capability tools, then the Role's verbs, in canonical order", () => {
     // Verb order is REGISTRY DECLARATION order, not bundle order: stop and
-    // send were appended after ticket.await (VC-86), so they follow it —
-    // that is what keeps `ticket.await`'s position stable inside every
-    // tool-surface record frozen before they existed.
+    // send were appended after `automation.run` (VC-86), so they follow it —
+    // that is what keeps `ticket.await`'s and `automation.run`'s positions
+    // stable inside every tool-surface record frozen before they existed.
     expect(resolveAgentToolSurface(capabilities())).toEqual([
       "read",
       "edit",
@@ -67,14 +69,20 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "automation.run",
       "session.stop",
       "session.send",
     ]);
   });
 
-  it("puts a Ticket Session in a room with no agent-control tool in it", () => {
+  it("puts an ungranted Ticket Session in a room with no agent-control tool", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
+    // VC-134's whole enforcement, stated as absence: an Automation Run fans a
+    // sweep out across Tickets, so the verb that starts one belongs to the
+    // Role that orchestrates. A Ticket Session's room does not hold it, and
+    // that is why no inheritance or capping rule is needed to keep it out.
+    expect(surface).not.toContain("automation.run");
     // The await tool is deliberately in this room too (VC-92's ruling on
     // VC-85): blocking is a runtime property, not a privilege, and what may
     // be awaited is policy data judged at call time.
@@ -108,6 +116,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "ask_user",
       "session.start",
       "ticket.await",
+      "automation.run",
       "session.stop",
       "session.send",
     ]);
@@ -132,17 +141,49 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "web_search",
       "session.start",
       "ticket.await",
+      "automation.run",
       "session.stop",
       "session.send",
     ]);
   });
 });
 
-describe("resolveAgentToolSurface — grants, as data with no store behind them", () => {
+describe("automation.run is the orchestrator's verb, and only that (VC-134)", () => {
+  it("is in the project bundle only, with no cap or inheritance rule beside it", () => {
+    expect(roleVerbBundle("project")).toContain("automation.run");
+    // VC-112 is explicit that OpenClaw's "cap a created job to the creating
+    // turn's tools" rule is NOT adopted: it patches a hole that
+    // `bundle(Role) ∪ grants(session)` never opens. Absence from these two
+    // bundles is the entire mechanism, so it is asserted rather than described.
+    expect(roleVerbBundle("ticket")).not.toContain("automation.run");
+    expect(roleVerbBundle("subagent")).not.toContain("automation.run");
+  });
+
+  it("names a verb the registry can actually project as a tool", () => {
+    expect(VERB_TOOL_KEYS).toContain("automation.run");
+    expect(isSessionToolId("automation.run")).toBe(true);
+    // The durable identity keeps its dot; `automation_run` is the wire
+    // rendering and is not what a record or a grant may spell.
+    expect(isSessionToolId("automation_run")).toBe(false);
+  });
+
+  it("holds its canonical index, so no frozen surface shifted under it", () => {
+    // Appended, never inserted: a Session frozen before this verb existed must
+    // find every tool it already held at the position it already had, or it
+    // pays a full Cache Prefix miss for a list that did not change for it.
+    //
+    // Asserted as a PREFIX rather than as "automation.run is last", because
+    // last is an incidental fact about the newest verb while the prefix is the
+    // invariant. VC-86's supervision pair appended behind this row and would
+    // have falsified the incidental spelling of a discipline it in fact kept.
+    expect(VERB_TOOL_KEYS.slice(0, 3)).toEqual(["session.start", "ticket.await", "automation.run"]);
+  });
+});
+
+describe("resolveAgentToolSurface — grants stay distinct from Role bundles", () => {
   it("adds a granted verb to a Role that does not carry it", () => {
-    // The seam VC-162 ships. No product caller supplies grants yet; the rules
-    // over them are enforced here so the slice that adds the durable store
-    // inherits a resolver that already fails closed.
+    // The resolver remains the fail-closed vocabulary seam for the durable
+    // store: it validates grants before a Session receives a tool.
     expect(
       resolveAgentToolSurface(capabilities({ role: "ticket", grants: ["session.start"] })),
     ).toContain("session.start");

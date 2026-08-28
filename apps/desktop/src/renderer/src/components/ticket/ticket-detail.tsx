@@ -1,8 +1,10 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  arrangeTabs,
   baseNameOf,
   displayTicketId,
+  EMPTY_TAB_ORDER,
   errorMessage,
   type FileSource,
   type FileWorkspaceTab,
@@ -18,6 +20,7 @@ import {
   type TabCloseResolution,
 } from "@renderer/components/files/close-guard";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
+import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import type {
   DocumentFileRefs,
@@ -152,9 +155,11 @@ export function TicketDetail({
   const pinTicketFile = useWorkspaceStore((state) => state.pinTicketFile);
   const markTicketFileEdited = useWorkspaceStore((state) => state.markTicketFileEdited);
   const closeTicketFile = useWorkspaceStore((state) => state.closeTicketFile);
+  const renameTicketFile = useWorkspaceStore((state) => state.renameTicketFile);
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
+  const moveTicketTab = useWorkspaceStore((state) => state.moveTicketTab);
   const setTicketDiffViewState = useWorkspaceStore((state) => state.setTicketDiffViewState);
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
@@ -316,6 +321,8 @@ export function TicketDetail({
   const openFiles = ticketTabsState?.files ?? NO_OPEN_FILES;
   const openDiffs = ticketTabsState?.diffs ?? NO_OPEN_DIFFS;
   const diffMeta = ticketTabsState?.diffMeta ?? NO_DIFF_META;
+  // How this ticket's strip is arranged (VC-189) — empty until someone drags.
+  const tabOrder = ticketTabsState?.tabOrder ?? EMPTY_TAB_ORDER;
   const activeTabId = ticketTabsState?.active ?? BODY_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
@@ -719,6 +726,20 @@ export function TicketDetail({
     (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
     [pinTicketFile, projectId, ticket.id],
   );
+  // A file the navigator just created opens PINNED and focused (VC-191): it was
+  // made to be typed in, so it is never the replaceable preview glance.
+  const openCreatedFileFromRail = React.useCallback(
+    (relPath: string) => openTicketFile(projectId, ticket.id, relPath),
+    [openTicketFile, projectId, ticket.id],
+  );
+  // A renamed file's tab follows it. The rename itself is refused while that
+  // document is dirty (`use-navigator-mutations.ts`), so what arrives here is
+  // always a clean tab: the strip keeps its slot and the FileView, keyed by
+  // relPath, remounts onto the new path and re-reads.
+  const renameFileFromRail = React.useCallback(
+    (from: string, to: string) => renameTicketFile(projectId, ticket.id, from, to),
+    [renameTicketFile, projectId, ticket.id],
+  );
   const openDiff = React.useCallback(
     (file: { path: string; previousPath?: string; status: string; binary: boolean }) => {
       openTicketDiff(projectId, ticket.id, file.path, {
@@ -753,7 +774,7 @@ export function TicketDetail({
   // file tab + one `"diff"`-kind descriptor per open Change Set diff + one
   // `"session"`-kind descriptor per live session; routing below is keyed off
   // `kind`, not id, so the plane and content branch generically.
-  const tabs: TicketTabDescriptor[] = [
+  const composedTabs: TicketTabDescriptor[] = [
     { id: BODY_TAB_ID, kind: "body", label: displayId },
     ...openFiles.map(
       (tab): TicketTabDescriptor => ({
@@ -793,6 +814,10 @@ export function TicketDetail({
       }),
     ),
   ];
+  // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one
+  // thing that can interleave a file tab with a chat tab, and the Body tab at
+  // index 0 is outside its reach.
+  const tabs = arrangeTabs(composedTabs, tabOrder, 1);
   // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
   const activeTabIsRenderable = activeTab.id === activeTabId;
@@ -1003,6 +1028,7 @@ export function TicketDetail({
             activeTabId={activeTab.id}
             creating={creating || creatingChat}
             onSelectTab={setActiveTab}
+            onReorderTabs={(movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids)}
             onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
             onCloseTab={(tab) => {
               if (tab.kind === "file" && tab.relPath !== undefined) {
@@ -1182,6 +1208,18 @@ export function TicketDetail({
                     handle={ticketAttachments}
                     onPreviewFile={previewFileFromRail}
                     onPinFile={pinFileFromRail}
+                    onOpenCreatedFile={openCreatedFileFromRail}
+                    onRenameFile={renameFileFromRail}
+                  />
+                }
+                searchContent={
+                  // Scoped to THIS ticket, so the search runs in its worktree
+                  // through the same seam a read does — and a match opens in
+                  // the same preview slot a navigator row opens (VC-193).
+                  <FileSearchPanel
+                    scope={{ kind: "ticket", projectId, ticketId: ticket.id }}
+                    root={ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+                    onOpenMatch={previewFileFromRail}
                   />
                 }
               />

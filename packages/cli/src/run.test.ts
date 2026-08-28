@@ -42,10 +42,11 @@ const helpWith = async (
 /** One `--dry-run` attempt against an app whose identify answers as scripted. */
 const previewAgainst = async (
   identifyData: unknown,
+  argv: readonly string[] = ["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"],
 ): Promise<{ code: number; stderr: string; commands: string[] }> => {
   const stderr: string[] = [];
   const requests: AgentRequest[] = [];
-  const code = await runCli(["ticket", "comment", "VC-1", "-m", "hi", "--dry-run"], {
+  const code = await runCli(argv, {
     env: { VOLLI_SOCKET: "/socket" },
     cwd: "/work",
     stdout: () => undefined,
@@ -93,7 +94,9 @@ describe("runCli", () => {
     );
     expect(carried).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("project Role's frozen bundle carries session.start"),
+      reason: expect.stringContaining(
+        "project Session's frozen tool surface carries session.start",
+      ),
       next: expect.stringContaining("named session.start tool"),
     });
 
@@ -108,7 +111,9 @@ describe("runCli", () => {
     );
     expect(absent).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining("ticket Role's frozen bundle does not carry session.start"),
+      reason: expect.stringContaining(
+        "ticket Session's frozen tool surface does not carry session.start",
+      ),
       next: expect.stringContaining("do not bypass the refusal"),
     });
 
@@ -121,16 +126,16 @@ describe("runCli", () => {
       },
       lookup,
     );
-    expect(unknown.reason).toContain("Role availability is unknown because the app is stopped");
+    expect(unknown.reason).toContain("Tool availability is unknown because the app is stopped");
 
-    // A wrong door whose declared entry is not a tool teaches without Role
-    // claims: there is no bundle that could carry it.
+    // A wrong door whose declared entry is not a tool teaches without
+    // availability claims: there is no surface that could carry it.
     const undeclared = teachingErrorForParseResult(parsed, null, () => undefined);
     expect(undeclared).toEqual(makeAgentError("WRONG_DOOR", parsed.message));
 
     // Without a runtime at all, the refusal names the missing Session honestly.
     const outside = teachingErrorForParseResult(parsed, null, lookup);
-    expect(outside.reason).toContain("Role availability is unknown outside a resolved Session");
+    expect(outside.reason).toContain("Tool availability is unknown outside a resolved Session");
   });
 
   it("renders a wrong door through the optional Role read and every other parse error locally", async () => {
@@ -224,7 +229,7 @@ describe("runCli", () => {
       }),
     ).toBe(0);
     expect(socketless.join("")).toContain(
-      "unknown (VOLLI_SOCKET is absent, so the frozen bundle cannot be read)",
+      "unknown (VOLLI_SOCKET is absent, so the frozen Agent Tool Surface cannot be read)",
     );
 
     // The read itself failed in transit.
@@ -954,6 +959,72 @@ describe("runCli — doctor", () => {
     });
   });
 
+  it("previews a ticket signal through the shared contract without sending a write", async () => {
+    const stdout: string[] = [];
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("ticket.signal")!, {
+      kind: "ticket",
+      id: "VC-1",
+      label: "VC-1",
+    });
+    const code = await runCli(
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
+      {
+        env: { VOLLI_SOCKET: "/socket" },
+        cwd: "/work",
+        stdout: (text) => stdout.push(text),
+        stderr: () => undefined,
+        readText: async () => "",
+        observe: async () => ({}),
+        request: async (_socket, request) => {
+          requests.push(request);
+          return request.cmd === "identify"
+            ? { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } }
+            : { v: 1, ok: true, data: plan };
+        },
+        launch: async () => ({ alreadyRunning: true }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "ticket.signal"]);
+    expect(requests[1]?.args).toEqual({
+      id: "VC-1",
+      kind: "implement",
+      verdict: "pass",
+      dryRun: true,
+    });
+    expect(stdout.join("")).toContain("Side-effect preview");
+  });
+
+  it("sends a worktree sync preview through the shared contract", async () => {
+    const requests: AgentRequest[] = [];
+    const plan = buildMutationPlan(verbEntry("worktree.sync")!, {
+      kind: "ticket",
+      id: "VC-1",
+      label: "VC-1",
+    });
+    const code = await runCli(["worktree", "sync", "VC-1", "--dry-run"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return request.cmd === "identify"
+          ? { v: 1, ok: true, data: { previewContract: MUTATION_PLAN_CONTRACT } }
+          : { v: 1, ok: true, data: plan };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(code).toBe(0);
+    expect(requests.map((request) => request.cmd)).toEqual(["identify", "worktree.sync"]);
+    expect(requests[1]?.args).toEqual({ id: "VC-1", dryRun: true });
+  });
+
   it("keeps doctor --fix preview free of local observation and a second request", async () => {
     const requests: AgentRequest[] = [];
     let observed = false;
@@ -1014,6 +1085,22 @@ describe("runCli — doctor", () => {
     expect(malformed.stderr).toContain(
       "The running app does not declare the side-effect preview contract",
     );
+
+    // Signals are append-only, so this new coordination write has to receive
+    // the same preflight protection as every older previewable write.
+    const signal = await previewAgainst({ appVersion: "0.1.1" }, [
+      "ticket",
+      "signal",
+      "VC-1",
+      "--kind",
+      "implement",
+      "--verdict",
+      "pass",
+      "--dry-run",
+    ]);
+    expect(signal.code).toBe(1);
+    expect(signal.commands).toEqual(["identify"]);
+    expect(signal.stderr).toContain("side-effect preview contract");
   });
 
   it("surfaces the preflight identify refusal instead of sending the preview", async () => {

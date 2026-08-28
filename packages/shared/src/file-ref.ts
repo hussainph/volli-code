@@ -40,6 +40,55 @@ export function isArtifactRelPath(relPath: string): boolean {
   return relPath === VOLLI_ARTIFACTS_REL_DIR || relPath.startsWith(`${VOLLI_ARTIFACTS_REL_DIR}/`);
 }
 
+/** The project-relative directory Volli's own files live under (decision #1). */
+export const VOLLI_REL_DIR = ".volli";
+
+/**
+ * Whether `relPath` is (or is under) `.volli/` — the tier that always resolves
+ * against the MAIN checkout, never a ticket's worktree copy.
+ */
+export function isVolliRelPath(relPath: string): boolean {
+  return relPath === VOLLI_REL_DIR || relPath.startsWith(`${VOLLI_REL_DIR}/`);
+}
+
+/**
+ * Which checkout a project-relative path resolves against (decision #6):
+ * `.volli/**` always the main checkout, everything else the ticket's live
+ * worktree when there is one.
+ *
+ * Stated here rather than in main because it is no longer only main's question.
+ * Main answers it to READ bytes; the renderer answers it to say where those
+ * bytes are — a Copy Path that composed the rule a second time would be free to
+ * name a file the app itself would never have opened. `worktreePath` is the
+ * caller's already-confirmed live worktree root (main stats it first), or
+ * `null` for the main checkout.
+ */
+export function resolveFileRoot(input: {
+  projectPath: string;
+  worktreePath: string | null;
+  relPath: string;
+}): { root: string; source: FileSource } {
+  if (input.worktreePath !== null && !isVolliRelPath(input.relPath)) {
+    return { root: input.worktreePath, source: "worktree" };
+  }
+  return { root: input.projectPath, source: "main" };
+}
+
+/**
+ * The absolute path a project-relative path resolves to — {@link resolveFileRoot}
+ * joined to `relPath`. POSIX separators throughout: every checkout root this
+ * app knows comes from macOS.
+ */
+export function absoluteFilePath(input: {
+  projectPath: string;
+  worktreePath: string | null;
+  relPath: string;
+}): string {
+  const { root } = resolveFileRoot(input);
+  if (input.relPath === "") return root;
+  return root.endsWith("/") ? `${root}${input.relPath}` : `${root}/${input.relPath}`;
+}
+
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 /**
  * RASTER image extensions. `"image"` is the kind that means "these bytes are

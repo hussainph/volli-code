@@ -76,7 +76,27 @@ function retentionState(ticketId: string): TicketRetentionState {
     prUrl: archiveReady ? "https://github.com/demo/voltaic/pull/482" : null,
     prState: archiveReady ? "merged" : null,
     hasConflicts: false,
-    failingChecks: [],
+    // A real rollup on the one ticket that has a PR, so an app-shell run shows
+    // the card's CI row (VC-182) rather than the shape that hides it. It is
+    // only reachable once `tkt-11` has a worktree — the repository card gates
+    // its retention read on one — so the row's own states are judged in the
+    // `pr-checks` scratch, which drives the component directly.
+    checks: archiveReady
+      ? [
+          {
+            name: "Check + Test",
+            workflow: "CI",
+            state: "passing",
+            url: "https://github.com/demo/voltaic/actions/runs/1",
+          },
+          {
+            name: "Desktop smoke (manual)",
+            workflow: "CI",
+            state: "skipped",
+            url: "https://github.com/demo/voltaic/actions/runs/2",
+          },
+        ]
+      : [],
     archiveReady,
     reason: archiveReady ? "pr-merged" : null,
     keep: false,

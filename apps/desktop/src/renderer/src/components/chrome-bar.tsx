@@ -8,11 +8,13 @@ import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
 import { AutomationEditorDialog } from "@renderer/components/automations/automation-editor";
 import { CommandPalette } from "@renderer/components/command-palette";
+import { QuickOpen } from "@renderer/components/files/quick-open";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { navBack, navForward } from "@renderer/hooks/use-nav-history";
+import { useQuickOpenShortcut } from "@renderer/hooks/use-quick-open-shortcut";
 import { useTerminalFocusShortcut } from "@renderer/hooks/use-terminal-focus-shortcut";
 import { cn } from "@renderer/lib/utils";
 import { canGoBack, canGoForward } from "@renderer/lib/nav-history";
@@ -35,11 +37,18 @@ export function ChromeBar() {
   const fullScreen = useFullScreen();
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const [commandPaletteOpen, setCommandPaletteOpen] = useCommandPaletteShortcut();
+  // Quick-open (VC-190) mounts beside the palette for the palette's own reason:
+  // it is a window-level surface summoned by a chord from anywhere, and it is
+  // suppressed by the same terminal focus for the same reason.
+  const [quickOpenOpen, setQuickOpenOpen] = useQuickOpenShortcut();
   // The band owns the terminal-focus control, so it owns its chord too.
   useTerminalFocusShortcut();
   React.useEffect(() => {
-    if (terminalFocusTarget !== null) setCommandPaletteOpen(false);
-  }, [terminalFocusTarget, setCommandPaletteOpen]);
+    if (terminalFocusTarget !== null) {
+      setCommandPaletteOpen(false);
+      setQuickOpenOpen(false);
+    }
+  }, [terminalFocusTarget, setCommandPaletteOpen, setQuickOpenOpen]);
 
   return (
     <>
@@ -87,6 +96,7 @@ export function ChromeBar() {
         <TerminalFocusExit />
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      <QuickOpen open={quickOpenOpen} onOpenChange={setQuickOpenOpen} />
       {/* The Automation editor mounts beside the palette that opens it: both are
           window-level surfaces summoned from anywhere (VC-126). */}
       <AutomationEditorDialog />

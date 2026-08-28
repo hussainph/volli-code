@@ -16,7 +16,7 @@
 import { COMPOSER_VERBS } from "./composer-verb";
 import type { PromptTemplate } from "./prompt-template";
 import { isSlashInvocationName } from "./slash-name";
-import type { SkillReference } from "./skill";
+import { userInvokableSkills, type SkillReference } from "./skill";
 
 /** The qualifier a template wears when it cannot keep its bare name. */
 export const COMMAND_QUALIFIER = "command";
@@ -95,8 +95,15 @@ const SLASH_SOURCE_ENTRIES = [
   slashSource("skill", {
     qualifier: SKILL_QUALIFIER,
     heading: "Skills",
+    // The `userInvokable` axis is applied HERE and nowhere else (VC-181),
+    // which is what makes picker/submit parity structural rather than a
+    // convention two call sites keep. `expandCommandInvocation` resolves
+    // through this same namespace, so a skill the picker will not offer is a
+    // skill submit cannot resolve, and a `/name` for one stays ordinary prose
+    // because it was never an offered row. Filtering in the composer instead
+    // would have left submit resolving a name the menu refused to show.
     candidates: ({ skills }) =>
-      skills
+      userInvokableSkills(skills)
         .toSorted((a, b) => a.name.localeCompare(b.name))
         .map((skill) => ({
           kind: "skill",

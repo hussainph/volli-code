@@ -22,7 +22,7 @@ export function AddProjectTile() {
           <span className="sr-only">Add Project</span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="right">Add Project…</TooltipContent>
+      <TooltipContent side="right">Add project</TooltipContent>
     </Tooltip>
   );
 }

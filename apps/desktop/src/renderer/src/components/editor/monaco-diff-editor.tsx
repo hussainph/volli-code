@@ -14,9 +14,11 @@ import { errorMessage } from "@volli/shared";
 import {
   planExplicitSave,
   saveFailureMessage,
+  wordWrapOption,
   type MonacoFileSaveResult,
 } from "@renderer/components/editor/monaco-file-editor";
 import type { DocumentLease } from "@renderer/editor/document-registry";
+import { surfaceGoToLine } from "@renderer/editor/go-to-line";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { applyMonacoThemeForDiffEditor } from "@renderer/editor/monaco-theme";
 import { toastError } from "@renderer/lib/toast";
@@ -42,10 +44,13 @@ type MonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>
  */
 export function diffEditorConstructionOptions(input: {
   presentation: DiffPresentation;
+  /** The app-wide word-wrap choice (stores/ui); both sides wrap together. */
+  wordWrap?: boolean;
 }): editor.IDiffEditorConstructionOptions {
   return {
     automaticLayout: true,
     renderSideBySide: input.presentation !== "inline",
+    ...(input.wordWrap === undefined ? {} : { wordWrap: wordWrapOption(input.wordWrap) }),
     // Honor the user's Side-by-side choice even in a narrow ticket pane —
     // Monaco's default collapses to inline below ~900px and makes the toggle
     // look broken (issue #109 smoke).
@@ -81,12 +86,70 @@ export function diffEditorInitFailureMessage(label: string, detail: string): str
   return `Couldn't load ${label}: ${detail}`;
 }
 
+/**
+ * Anything the browser focuses on its own — a Monaco widget's field, the find
+ * box, a link. A press on one of these is not ours to redirect.
+ */
+const NATIVELY_FOCUSABLE = 'input, textarea, select, button, a[href], [contenteditable="true"]';
+
+/**
+ * Which side of the diff a pointer press must be given focus on, or `null` to
+ * leave the press entirely alone (VC-148).
+ *
+ * WHAT WAS ACTUALLY WRONG, measured against the built app rather than guessed:
+ * a click on a real, visible line in the Changes diff left
+ * `document.activeElement` as `BODY`, so ⌘S — an action on the modified editor,
+ * live only while that editor holds focus — and every keyboard scroll were
+ * unreachable from a mouse. Monaco's `MouseHandler` focuses and calls
+ * `preventDefault()` only when its own hit-test resolves the point to editor
+ * TEXT; in the inline diff the modified editor also carries Monaco's
+ * deleted-line view zones, the hit-test comes back as something it does not
+ * handle, and nothing calls `preventDefault()`. Chromium's default mousedown
+ * action then focuses the nearest focusable ancestor of the hit node — there is
+ * none — and so CLEARS focus to the body. A file tab has no view zones, which is
+ * why the same click focuses it normally.
+ *
+ * That is why the caller must `preventDefault()` alongside focusing: an earlier
+ * attempt at this focused the editor and watched the browser's own default undo
+ * it microseconds later, inside the same press.
+ *
+ * CAPTURE PHASE, for a second measured reason: Monaco stops the press
+ * propagating, so a bubble-phase listener on the host never hears the one
+ * gesture that matters. Running first also means `activeElement` is whatever the
+ * PREVIOUS interaction left — hence the null case is "the user is already in
+ * this side", the ordinary second click, which must not be re-focused mid-drag.
+ *
+ * The press lands on the side it landed on rather than always on the modified
+ * one: the base side is text a person reads and copies, and dragging a selection
+ * across it must not throw the caret into the other pane.
+ */
+export function diffFocusTarget(input: {
+  originalDom: Element | null;
+  modifiedDom: Element | null;
+  target: Element | null;
+  activeElement: Node | null;
+}): "original" | "modified" | null {
+  const { target } = input;
+  if (target === null || target.closest(NATIVELY_FOCUSABLE) !== null) return null;
+  const side =
+    input.modifiedDom?.contains(target) === true
+      ? "modified"
+      : input.originalDom?.contains(target) === true
+        ? "original"
+        : null;
+  if (side === null) return null;
+  const dom = side === "modified" ? input.modifiedDom : input.originalDom;
+  return input.activeElement !== null && dom?.contains(input.activeElement) === true ? null : side;
+}
+
 export interface MonacoDiffEditorProps {
   /** Registry lease for the immutable base side (`diff-base` identity). */
   originalLease: MonacoLease;
   /** Registry lease for the live modified side (ticket `file` identity). */
   modifiedLease: MonacoLease;
   presentation: DiffPresentation;
+  /** Wrap long lines? The app-wide preference (stores/ui), applied to both sides. */
+  wordWrap: boolean;
   /** Modified side editable? Deleted / stub paths pass false. */
   modifiedReadOnly: boolean;
   ariaLabel: string;
@@ -117,6 +180,7 @@ export function MonacoDiffEditor({
   originalLease,
   modifiedLease,
   presentation,
+  wordWrap,
   modifiedReadOnly,
   ariaLabel,
   onSave,
@@ -136,6 +200,7 @@ export function MonacoDiffEditor({
     ariaLabel,
     onSave,
     presentation,
+    wordWrap,
     initialViewState,
     onViewStateChange,
     onInitFailed,
@@ -145,6 +210,7 @@ export function MonacoDiffEditor({
     ariaLabel,
     onSave,
     presentation,
+    wordWrap,
     initialViewState,
     onViewStateChange,
     onInitFailed,
@@ -192,6 +258,7 @@ export function MonacoDiffEditor({
     let cancelled = false;
     let diffEditor: editor.IStandaloneDiffEditor | null = null;
     let changeSubscription: { dispose(): void } | null = null;
+    let goToLine: { dispose(): void } | null = null;
     host.dataset.monacoDiffStatus = "loading";
 
     void loadMonacoRuntime()
@@ -208,7 +275,10 @@ export function MonacoDiffEditor({
 
         diffEditor = runtime.monaco.editor.createDiffEditor(
           host,
-          diffEditorConstructionOptions({ presentation: liveRef.current.presentation }),
+          diffEditorConstructionOptions({
+            presentation: liveRef.current.presentation,
+            wordWrap: liveRef.current.wordWrap,
+          }),
         );
         attachDiffModels(diffEditor, {
           original: originalLease.model,
@@ -231,6 +301,11 @@ export function MonacoDiffEditor({
             void runSaveRef.current();
           },
         });
+        // ⌃G on the side that can be edited and saved (editor/go-to-line.ts).
+        goToLine = surfaceGoToLine(
+          modifiedEditor,
+          runtime.monaco.KeyMod.WinCtrl | runtime.monaco.KeyCode.KeyG,
+        );
 
         const restored = modifiedLease.restoreViewState();
         const fallbackViewState = liveRef.current.initialViewState as
@@ -248,6 +323,8 @@ export function MonacoDiffEditor({
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        goToLine?.dispose();
+        goToLine = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         diffEditor?.dispose();
@@ -266,6 +343,7 @@ export function MonacoDiffEditor({
 
     return () => {
       cancelled = true;
+      goToLine?.dispose();
       changeSubscription?.dispose();
       diffEditorRef.current = null;
       if (diffEditor !== null) {
@@ -292,6 +370,12 @@ export function MonacoDiffEditor({
     });
   }, [modifiedReadOnly]);
 
+  // Word wrap arrives from the band above this editor; like the presentation
+  // toggle it restyles the SAME DiffEditor rather than making a second one.
+  React.useEffect(() => {
+    diffEditorRef.current?.updateOptions({ wordWrap: wordWrapOption(wordWrap) });
+  }, [wordWrap]);
+
   React.useEffect(() => {
     if (emittedDirtyRef.current === dirty) return;
     emittedDirtyRef.current = dirty;
@@ -305,7 +389,32 @@ export function MonacoDiffEditor({
     host.dataset.monacoDiffSaving = saving ? "true" : "false";
     host.dataset.monacoDiffReadOnly = modifiedReadOnly ? "true" : "false";
     host.dataset.monacoDiffPresentation = presentation;
-  }, [dirty, saving, modifiedReadOnly, presentation]);
+    host.dataset.monacoDiffWordWrap = wordWrap ? "true" : "false";
+  }, [dirty, saving, modifiedReadOnly, presentation, wordWrap]);
+
+  /**
+   * VC-148: a press inside the diff lands focus in it. Capture phase — Monaco
+   * stops the press propagating, so a bubble-phase handler here is never called
+   * for the one gesture that matters (measured against the built app with
+   * `e2e/monaco-reconciliation-smoke.mjs`, whose 2c check now guards it).
+   */
+  const focusPressedSide = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const diffEditor = diffEditorRef.current;
+    if (diffEditor === null) return;
+    const original = diffEditor.getOriginalEditor();
+    const modified = diffEditor.getModifiedEditor();
+    const side = diffFocusTarget({
+      originalDom: original.getDomNode(),
+      modifiedDom: modified.getDomNode(),
+      target: event.target instanceof Element ? event.target : null,
+      activeElement: document.activeElement,
+    });
+    if (side === null) return;
+    // Both halves, or neither: see {@link diffFocusTarget}. The browser's own
+    // default action is what was clearing focus, so taking it is the fix.
+    event.preventDefault();
+    (side === "original" ? original : modified).focus();
+  }, []);
 
   return (
     // `volli-source-mode`: same furniture stylesheet as the file editor, so a
@@ -314,6 +423,7 @@ export function MonacoDiffEditor({
       ref={hostRef}
       role="group"
       aria-label={ariaLabel}
+      onMouseDownCapture={focusPressedSide}
       className="volli-source-mode min-h-0 w-full flex-1 overflow-hidden"
     />
   );

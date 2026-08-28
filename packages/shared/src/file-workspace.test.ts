@@ -5,9 +5,12 @@ import {
   EMPTY_FILE_WORKSPACE,
   isPreviewTab,
   markFileEdited,
+  moveFile,
   pinFile,
   previewFile,
+  renameFile,
   sanitizeFileWorkspace,
+  substitutedPath,
   type FileWorkspaceState,
   type FileWorkspaceTab,
 } from "./file-workspace";
@@ -176,6 +179,67 @@ describe("closeFile", () => {
   });
 });
 
+describe("renameFile", () => {
+  const three = workspace(
+    [
+      { relPath: "a.ts", pinned: true },
+      { relPath: "b.ts", pinned: true },
+      { relPath: "c.ts", pinned: false },
+    ],
+    "b.ts",
+  );
+
+  it("keeps the tab in its slot, with its pin, and follows the focus", () => {
+    const next = renameFile(three, "b.ts", "renamed.ts");
+    expect(next.tabs).toEqual([
+      { relPath: "a.ts", pinned: true },
+      { relPath: "renamed.ts", pinned: true },
+      { relPath: "c.ts", pinned: false },
+    ]);
+    expect(next.activeRelPath).toBe("renamed.ts");
+  });
+
+  it("leaves the focus where it was when some other tab is renamed", () => {
+    expect(renameFile(three, "a.ts", "renamed.ts").activeRelPath).toBe("b.ts");
+  });
+
+  it("keeps a preview tab replaceable", () => {
+    const next = renameFile(three, "c.ts", "renamed.ts");
+    expect(isPreviewTab(next, "renamed.ts")).toBe(true);
+  });
+
+  it("is a no-op for a file that is not open, and for a rename onto itself", () => {
+    expect(renameFile(three, "zzz.ts", "other.ts")).toEqual(three);
+    expect(renameFile(three, "b.ts", "b.ts")).toEqual(three);
+  });
+
+  it("absorbs a stale tab already holding the destination path, keeping the pin", () => {
+    const stale = workspace(
+      [
+        { relPath: "a.ts", pinned: false },
+        { relPath: "b.ts", pinned: true },
+      ],
+      "a.ts",
+    );
+    const next = renameFile(stale, "a.ts", "b.ts");
+    expect(next.tabs).toEqual([{ relPath: "b.ts", pinned: true }]);
+    expect(next.activeRelPath).toBe("b.ts");
+  });
+
+  it("brings focus onto the surviving tab when the stale destination held it", () => {
+    const stale = workspace(
+      [
+        { relPath: "a.ts", pinned: true },
+        { relPath: "b.ts", pinned: false },
+      ],
+      "b.ts",
+    );
+    const next = renameFile(stale, "a.ts", "b.ts");
+    expect(next.tabs).toEqual([{ relPath: "b.ts", pinned: true }]);
+    expect(next.activeRelPath).toBe("b.ts");
+  });
+});
+
 describe("purity", () => {
   it("never mutates the state it is handed", () => {
     const tabs: FileWorkspaceTab[] = [
@@ -190,6 +254,7 @@ describe("purity", () => {
     markFileEdited(state, "b.ts");
     activateFile(state, "a.ts");
     closeFile(state, "a.ts");
+    renameFile(state, "a.ts", "renamed.ts");
 
     expect({ tabs, activeRelPath: state.activeRelPath }).toEqual(snapshot);
   });
@@ -299,6 +364,99 @@ describe("sanitizeFileWorkspace preview invariant", () => {
       activeRelPath: "b.ts",
     });
     expect(sanitizeFileWorkspace(once)).toEqual(once);
+  });
+});
+
+describe("moveFile", () => {
+  const three = workspace(
+    [
+      { relPath: "a.ts", pinned: true },
+      { relPath: "b.ts", pinned: true },
+      { relPath: "c.ts", pinned: true },
+    ],
+    "a.ts",
+  );
+
+  it("moves a tab to the given index, leaving the others in order", () => {
+    expect(moveFile(three, "c.ts", 0).tabs).toEqual([
+      { relPath: "c.ts", pinned: true },
+      { relPath: "a.ts", pinned: true },
+      { relPath: "b.ts", pinned: true },
+    ]);
+    expect(moveFile(three, "a.ts", 1).tabs).toEqual([
+      { relPath: "b.ts", pinned: true },
+      { relPath: "a.ts", pinned: true },
+      { relPath: "c.ts", pinned: true },
+    ]);
+  });
+
+  it("pins the tab it moves, so an arranged preview is never replaced", () => {
+    const state = workspace(
+      [
+        { relPath: "a.ts", pinned: true },
+        { relPath: "glance.ts", pinned: false },
+      ],
+      "glance.ts",
+    );
+    const moved = moveFile(state, "glance.ts", 0);
+    expect(moved.tabs).toEqual([
+      { relPath: "glance.ts", pinned: true },
+      { relPath: "a.ts", pinned: true },
+    ]);
+    expect(isPreviewTab(moved, "glance.ts")).toBe(false);
+    // The next glance therefore opens its own tab instead of taking this slot.
+    expect(previewFile(moved, "next.ts").tabs).toHaveLength(3);
+  });
+
+  it("pins a preview tab dropped back on its own slot", () => {
+    const state = workspace([{ relPath: "glance.ts", pinned: false }], "glance.ts");
+    expect(moveFile(state, "glance.ts", 0).tabs).toEqual([{ relPath: "glance.ts", pinned: true }]);
+  });
+
+  it("clamps an index past either end of the strip", () => {
+    expect(moveFile(three, "a.ts", 99).tabs.at(-1)).toEqual({ relPath: "a.ts", pinned: true });
+    expect(moveFile(three, "c.ts", -4).tabs[0]).toEqual({ relPath: "c.ts", pinned: true });
+  });
+
+  it("never moves the focus — arranging a tab is not selecting it", () => {
+    expect(moveFile(three, "c.ts", 0).activeRelPath).toBe("a.ts");
+  });
+
+  it("returns by identity for a file that is not open and for a pinned no-op move", () => {
+    expect(moveFile(three, "missing.ts", 0)).toBe(three);
+    expect(moveFile(three, "b.ts", 1)).toBe(three);
+  });
+});
+
+describe("substitutedPath", () => {
+  const open = workspace(
+    [
+      { relPath: "glance.ts", pinned: false },
+      { relPath: "b.ts", pinned: true },
+    ],
+    "glance.ts",
+  );
+
+  it("reports the swap a preview replacement made in place", () => {
+    const after = previewFile(open, "next.ts");
+    expect(substitutedPath(open.tabs, after.tabs)).toEqual({ from: "glance.ts", to: "next.ts" });
+  });
+
+  it("reports the swap a rename made in place", () => {
+    const after = renameFile(open, "b.ts", "renamed.ts");
+    expect(substitutedPath(open.tabs, after.tabs)).toEqual({ from: "b.ts", to: "renamed.ts" });
+  });
+
+  it("reports nothing for a transition that did not swap one tab's path", () => {
+    // Opening and closing change the LENGTH; pinning changes no path at all.
+    expect(substitutedPath(open.tabs, pinFile(open, "c.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, closeFile(open, "b.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, pinFile(open, "glance.ts").tabs)).toBeNull();
+    expect(substitutedPath(open.tabs, open.tabs)).toBeNull();
+  });
+
+  it("reports nothing for a move, which disagrees at two indices at the least", () => {
+    expect(substitutedPath(open.tabs, moveFile(open, "b.ts", 0).tabs)).toBeNull();
   });
 });
 

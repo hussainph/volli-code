@@ -20,6 +20,7 @@ import {
 } from "./projects-repo";
 import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
+import { createTicketSessionDelegationStore } from "../session-runtime/delegation-store";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { archiveTicket, insertTicket } from "./tickets-repo";
@@ -83,6 +84,9 @@ describe("buildExportDocument — empty db", () => {
     expect(document.sessionEvents).toEqual([]);
     expect(document.sessionCommands).toEqual([]);
     expect(document.sessionCommandReceipts).toEqual([]);
+    expect(document.sessionDelegations).toEqual([]);
+    expect(document.sessionVerbGrants).toEqual([]);
+    expect(document.sessionDelegationClaims).toEqual([]);
     expect(document.ticketComments).toEqual([]);
     expect(document.appState).toEqual([]);
     expect(document.automations).toEqual([]);
@@ -584,6 +588,58 @@ describe("buildExportDocument — populated db", () => {
     expect(document.sessionCommands.find(({ id }) => id === "message-command")?.route).toEqual({
       adapterId: "terminal",
       attachmentId: `test-terminal:${session.id}`,
+    });
+  });
+
+  it("exports durable Ticket Session grants, ancestry, and their fan-out claim", async () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "delegation-project" });
+    const ticket = testTicket(project.id, { id: "delegation-ticket" });
+    const root = testSession(project.id, ticket.id, { id: "delegation-root" });
+    const child = testSession(project.id, ticket.id, { id: "delegation-child" });
+    insertProject(ctx.db, project);
+    insertTicket(ctx.db, ticket);
+    insertSession(ctx.db, root);
+    const store = createTicketSessionDelegationStore(ctx.db);
+    store.recordBirth(root.id, store.resolveBirth({ role: "ticket", ticketId: ticket.id }));
+    const claim = store.claimStart({
+      parentSessionId: root.id,
+      ticketId: ticket.id,
+      toolCallId: "tool-call-1",
+      createCommandId: `${root.id}:tool-call-1:create`,
+    });
+    if (!claim.ok) throw new Error("Expected the root Session to claim one child");
+    insertSession(ctx.db, child);
+    store.recordBirth(
+      child.id,
+      store.resolveBirth({ role: "ticket", ticketId: ticket.id, delegation: claim.delegation }),
+    );
+
+    const document = buildExportDocument(ctx.db, { appVersion: "1.2.3", now: 0 });
+
+    expect(document).toMatchObject({
+      sessionDelegations: [
+        { sessionId: child.id, ticketId: ticket.id, parentSessionId: root.id, depth: 1 },
+        { sessionId: root.id, ticketId: ticket.id, parentSessionId: null, depth: 0 },
+      ],
+      sessionVerbGrants: [
+        {
+          sessionId: root.id,
+          verb: "session.start",
+          scope: "own-ticket",
+          maxDepth: 1,
+          maxChildren: 3,
+        },
+      ],
+      sessionDelegationClaims: [
+        {
+          parentSessionId: root.id,
+          toolCallId: "tool-call-1",
+          ticketId: ticket.id,
+          createCommandId: `${root.id}:tool-call-1:create`,
+          childSessionId: child.id,
+        },
+      ],
     });
   });
 

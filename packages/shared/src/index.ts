@@ -1,6 +1,7 @@
 export * from "./file-ref";
 export * from "./file-save-policy";
 export * from "./file-workspace";
+export * from "./tab-order";
 export * from "./board";
 export * from "./ticket";
 export * from "./doctor";
@@ -29,7 +30,9 @@ export * from "./ticket-comment";
 export * from "./blob";
 export * from "./ticket-events";
 export * from "./ticket-await";
+export * from "./untrusted-content";
 export * from "./change-set";
+export * from "./worktree-collisions";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";

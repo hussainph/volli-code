@@ -409,9 +409,16 @@ export interface RetentionTtlSetInput {
 
 // ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
 
-/** The whole-project file index is always read from the project's MAIN checkout. */
+/**
+ * The scope pair the index is listed for — the same `{ projectId, ticketId }`
+ * shape read/reveal/watch already take (see {@link FilePathInput}), resolved
+ * through the same seam: with no `ticketId`, the project's MAIN checkout; with
+ * one, that ticket's live worktree, while `.volli/artifacts/**` still comes
+ * from Main (decision #6, the rule the index and a read cannot disagree on).
+ */
 export interface FileIndexInput {
   projectId: string;
+  ticketId?: string;
 }
 
 /**
@@ -424,6 +431,20 @@ export interface FilePathInput {
   projectId: string;
   ticketId?: string;
   relPath: string;
+}
+
+/**
+ * One find-across-files request (plan §4.7): the same `{ projectId, ticketId }`
+ * scope pair a read takes, plus the literal text to look for.
+ *
+ * `query` is a LITERAL, not a pattern — v1 is find-only and never interprets
+ * what was typed as a regex, so a search for `foo(bar)` finds `foo(bar)`. Main
+ * trims it and refuses an empty one rather than listing the whole checkout.
+ */
+export interface FileSearchInput {
+  projectId: string;
+  ticketId?: string;
+  query: string;
 }
 
 /** A known macOS app that can open a safely resolved Files target. */
@@ -473,6 +494,25 @@ export interface FileWriteInput extends FilePathInput {
   content: string;
   expectedMtime?: number;
 }
+
+/**
+ * `rename`'s destination — a second project-relative path, resolved through the
+ * SAME scope as `relPath` (plan §4.5). A destination that would resolve against
+ * a different root than the source (`.volli/**` always resolves to Main, the
+ * repo half follows the ticket's worktree) is refused rather than silently
+ * moving a file across checkouts.
+ */
+export interface FileRenameInput extends FilePathInput {
+  toRelPath: string;
+}
+
+/**
+ * What the create/rename/duplicate track resolves with: the project-relative
+ * path the entry now has (plan §4.5). Named rather than echoed back from the
+ * request because the caller does not always know it — `duplicate` derives a
+ * free name in main, and the renderer opens exactly what was created.
+ */
+export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
 
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
@@ -692,12 +732,32 @@ export type DataIpcChannel = keyof VolliDataIpcContract;
  * surface — the file channels `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
-  /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+  /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
   "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
   /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
+  /**
+   * Find across files (plan §4.7), through the same `{ projectId, ticketId }`
+   * seam a read resolves through: literal text, gitignore-respecting, capped in
+   * both matches and time, with the cap that ended it reported.
+   */
+  "volli:search": { args: [input: FileSearchInput]; result: FileSearchResult };
   /** Writes utf8 text to an existing file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
+  /**
+   * The sanctioned creation track (plan §4.5), through the same two-layer path
+   * safety and `{ projectId, ticketId }` worktree resolution every read uses.
+   * Creates an EMPTY file; refuses rather than overwriting whatever is there.
+   */
+  "volli:file-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Creates one directory (missing parents included); refuses an occupied name. */
+  "volli:dir-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Renames/moves a file or directory within one checkout; refuses to clobber an occupied destination. */
+  "volli:file-rename": { args: [input: FileRenameInput]; result: FileMutationResult };
+  /** Copies a file to the first free `… copy` name beside it, and resolves with that name. */
+  "volli:file-duplicate": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Moves a file or directory to the TRASH (`shell.trashItem`) — never an in-place `rm`. */
+  "volli:file-delete": { args: [input: FilePathInput]; result: Result };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
   /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
@@ -2068,10 +2128,10 @@ export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 
 /**
- * The whole-project file index the `@` picker ranks over — returned by
+ * The file index the `@` picker and quick-open rank over — returned by
  * `volli:file-index`. Built fresh on each picker open from `git ls-files`
- * (gitignore-respecting) plus a walk of `.volli/artifacts/`; `truncated` is set
- * when the ~20k entry cap was hit.
+ * (gitignore-respecting) in the scope's checkout, plus a walk of Main's
+ * `.volli/artifacts/`; `truncated` is set when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
 
@@ -2153,6 +2213,54 @@ export type FileReadResult = Result<{
 
 /** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
 export type FileWriteResult = Result<{ mtime: number }>;
+
+// ---- find across files (plan §4.7) ----------------------------------------
+
+/**
+ * One matched line, as the Search page draws it and opens it.
+ *
+ * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
+ * the file hands them straight to `revealLineInCenter`/`setPosition` without a
+ * translation step nobody would think to test. `preview` is the matched line,
+ * possibly windowed around the match (a minified bundle's single 400 KB line is
+ * not a preview), and `start`/`end` are the match's offsets INSIDE that
+ * preview — never into the original line, which the renderer never sees.
+ */
+export interface FileSearchMatch {
+  line: number;
+  column: number;
+  preview: string;
+  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
+  start: number;
+  end: number;
+}
+
+/** Every match in one file, in file order — the Search page's group. */
+export interface FileSearchFile {
+  relPath: string;
+  matches: readonly FileSearchMatch[];
+}
+
+/**
+ * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
+ * `truncated` flag, saying WHICH bound was hit rather than only that one was:
+ *
+ *  - `none`    — ripgrep ran to completion; this is everything there is.
+ *  - `matches` — the match cap was reached and the search was stopped there.
+ *  - `time`    — the time budget ran out; what is here is what had arrived.
+ */
+export type FileSearchLimit = "none" | "matches" | "time";
+
+/**
+ * A completed search — returned by `volli:search`. `matches` counts what is
+ * carried in `files` (not what exists on disk, which a capped search cannot
+ * know), and `limit` is why counting stopped.
+ */
+export type FileSearchResult = Result<{
+  files: readonly FileSearchFile[];
+  matches: number;
+  limit: FileSearchLimit;
+}>;
 
 /**
  * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
@@ -2393,13 +2501,36 @@ export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
 // imported above.
 
 /**
+ * One PR check, normalized off the two shapes GitHub's rollup mixes together
+ * (VC-182): a GitHub Actions `CheckRun` and a legacy `StatusContext`.
+ *
+ * FOUR states, not gh's nine conclusions crossed with its five status values.
+ * The reader's question is "can I merge this?", and the answer has exactly four
+ * shapes — it failed, it is still going, it passed, it did not run. Collapsing
+ * happens ONCE, in `ghPrStatus`, so every surface reads the same verdict rather
+ * than each re-deciding what `NEUTRAL` means.
+ */
+export type PrCheckState = "passing" | "failing" | "pending" | "skipped";
+
+/** One row of the PR's check rollup, as the rail draws it. */
+export interface PrCheck {
+  /** Display name — a job name ("Check + Test") or a status context ("ci/legacy"). */
+  name: string;
+  /** The Actions workflow the job belongs to; `null` for a legacy commit status. */
+  workflow: string | null;
+  state: PrCheckState;
+  /** The run's log page, or `null` when the provider published no link. */
+  url: string | null;
+}
+
+/**
  * The composed retention state for ONE ticket, returned by
  * `volli:retention-state`. Everything but `keep` is TRANSIENT (decision #42:
  * persist identity, compute state) — recomputed from the merge-watch's last
  * poll plus the live Done-TTL clock, never stored. `keep` is the durable pin
- * (migration 010). `hasConflicts`/`failingChecks` are surfacing-only (the
- * #44/#45 button-never-gate rule): they explain why a PR can't merge yet, they
- * do not block the wrap-up prompt.
+ * (migration 010). `hasConflicts`/`checks` are surfacing-only (the #44/#45
+ * button-never-gate rule): they explain why a PR can't merge yet, they do not
+ * block the wrap-up prompt.
  */
 export interface TicketRetentionState {
   ticketId: string;
@@ -2409,8 +2540,12 @@ export interface TicketRetentionState {
   prState: "open" | "merged" | "closed" | null;
   /** The PR's base branch conflicts with it (`mergeStateStatus` DIRTY). */
   hasConflicts: boolean;
-  /** Display names of the PR's failing/errored checks (may be empty). */
-  failingChecks: string[];
+  /**
+   * The PR's whole check rollup (VC-182), empty when the PR has no checks —
+   * which is also how a project with no GitHub Actions pipeline reads, and is
+   * what makes the rail's checks row self-detecting rather than a setting.
+   */
+  checks: PrCheck[];
   /** Whether the Archive & clean prompt should be offered right now. */
   archiveReady: boolean;
   /** The condition behind `archiveReady` (still set when suppressed by dismissal). */

@@ -52,10 +52,10 @@ describe("CanvasEditor", () => {
   it("refuses to remove the last colour, and to add past the engine's ceiling", () => {
     const one = render(DEFAULT_CANVAS, "dark");
     expect(one).toContain('aria-label="Remove a colour"');
-    expect(one).toContain("A canvas needs at least one colour");
+    expect(one).toContain("You need at least one colour");
 
     const three = render(THREE_STOPS, "dark");
-    expect(three).toContain("A canvas carries at most 3 colours");
+    expect(three).toContain("A canvas can have at most 3 colours");
   });
 
   it("opens the swatch row on the page the primary lives on", () => {

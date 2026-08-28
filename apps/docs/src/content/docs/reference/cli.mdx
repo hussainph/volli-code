@@ -207,6 +207,41 @@ instead.
 
 Both commands are read-only.
 
+### volli worktree sync
+
+```sh
+volli worktree sync [<id>] [--abort]
+```
+
+Merges the ticket's base branch into its worktree branch and reports what
+happened. This is the one worktree command that writes, and it needs an
+authenticated Session.
+
+It merges the base ref the checkout already has — `origin/<base>` when a fetch
+has landed one, the local base branch otherwise — so it contacts no remote and
+uses no credential. It never waits on a gate, a check, or CI: it merges,
+reports, and returns.
+
+A conflict is an outcome rather than an error. `status` reads `conflicted`,
+every conflicted path is listed, and the worktree is left conflicted for you to
+resolve and commit. Branch on `status`, not on the exit code. `--abort` undoes a
+merge left in flight; nothing else cleans up after one.
+
+### volli conflicts
+
+```sh
+volli conflicts [--project <name>]
+```
+
+The file-collision radar: which active ticket worktrees touch the same paths.
+It prints how much was compared, then one block per pair of tickets that will
+collide, worst pair first — so overlapping work is scheduled around rather than
+discovered at merge time.
+
+Shared paths, not predicted merge failures: two tickets editing opposite ends of
+one file still merge cleanly. No overlap is the healthy answer and prints as
+one. Read-only, for any caller.
+
 ## Sessions
 
 ### volli session list

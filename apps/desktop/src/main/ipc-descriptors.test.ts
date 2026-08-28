@@ -1672,8 +1672,24 @@ describe("FILE_IPC descriptor table", () => {
   describe("volli:file-index", () => {
     const { guard, invalidError } = FILE_IPC["volli:file-index"];
 
-    it("accepts a valid { projectId } payload", () => {
+    it("accepts a valid { projectId } payload — the main checkout", () => {
       expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("accepts the { projectId, ticketId } scope pair — a ticket's worktree (VC-190)", () => {
+      expect(guard([{ projectId: "p1", ticketId: "t1" }])).toBe(true);
+    });
+
+    it("accepts an explicitly undefined ticketId", () => {
+      expect(guard([{ projectId: "p1", ticketId: undefined }])).toBe(true);
+    });
+
+    it("rejects a non-string ticketId", () => {
+      expect(guard([{ projectId: "p1", ticketId: 7 }])).toBe(false);
+    });
+
+    it("rejects a null ticketId — absent means Main, null means malformed", () => {
+      expect(guard([{ projectId: "p1", ticketId: null }])).toBe(false);
     });
 
     it("rejects a non-object payload", () => {
@@ -1682,6 +1698,50 @@ describe("FILE_IPC descriptor table", () => {
 
     it("rejects a non-string projectId", () => {
       expect(guard([{ projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:search", () => {
+    const { guard, invalidError } = FILE_IPC["volli:search"];
+    const valid = { projectId: "p1", query: "resolveFileScope" };
+
+    it("accepts a query scoped to the main checkout", () => {
+      expect(guard([valid])).toBe(true);
+    });
+
+    it("accepts the { projectId, ticketId } scope pair — a ticket's worktree", () => {
+      expect(guard([{ ...valid, ticketId: "t1" }])).toBe(true);
+    });
+
+    // An empty box is what a Search page holds every time it opens, so the
+    // boundary must not call it malformed — main answers it with an empty
+    // result instead.
+    it("accepts an empty query rather than refusing it as a bad shape", () => {
+      expect(guard([{ ...valid, query: "" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a missing query", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a ticketId of the wrong type", () => {
+      expect(guard([{ ...valid, ticketId: 1 }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1868,6 +1928,79 @@ describe("FILE_IPC descriptor table", () => {
     });
   });
 
+  describe("the creation track's scoped-path channels (VC-191)", () => {
+    const channels = [
+      "volli:file-create",
+      "volli:dir-create",
+      "volli:file-duplicate",
+      "volli:file-delete",
+    ] as const;
+
+    for (const channel of channels) {
+      describe(channel, () => {
+        const { guard, invalidError } = FILE_IPC[channel];
+        const valid = { projectId: "p1", relPath: "src/new.ts" };
+
+        it("accepts the scoped path shape, with and without a ticketId", () => {
+          expect(guard([valid])).toBe(true);
+          expect(guard([{ ...valid, ticketId: "t1" }])).toBe(true);
+        });
+
+        it("rejects a non-object payload", () => {
+          expect(guard([null])).toBe(false);
+        });
+
+        it("rejects a non-string relPath", () => {
+          expect(guard([{ ...valid, relPath: 1 }])).toBe(false);
+        });
+
+        it("rejects a non-string projectId", () => {
+          expect(guard([{ ...valid, projectId: 1 }])).toBe(false);
+        });
+
+        it("rejects a ticketId of the wrong type", () => {
+          expect(guard([{ ...valid, ticketId: 1 }])).toBe(false);
+        });
+
+        it("rejects a wrong arity", () => {
+          expect(guard([])).toBe(false);
+        });
+
+        it("carries the handler's exact invalid-input message", () => {
+          expect(invalidError).toBe("Invalid request");
+        });
+      });
+    }
+  });
+
+  describe("volli:file-rename", () => {
+    const { guard, invalidError } = FILE_IPC["volli:file-rename"];
+    const valid = { projectId: "p1", relPath: "src/a.ts", toRelPath: "src/b.ts" };
+
+    it("accepts a valid payload, with and without a ticketId", () => {
+      expect(guard([valid])).toBe(true);
+      expect(guard([{ ...valid, ticketId: "t1" }])).toBe(true);
+    });
+
+    it("rejects a missing or non-string destination", () => {
+      expect(guard([{ projectId: "p1", relPath: "src/a.ts" }])).toBe(false);
+      expect(guard([{ ...valid, toRelPath: 1 }])).toBe(false);
+    });
+
+    it("rejects an invalid base FilePathInput shape", () => {
+      expect(guard([{ relPath: "src/a.ts", toRelPath: "src/b.ts" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid request");
+    });
+  });
+
   describe("volli:artifact-create", () => {
     const { guard, invalidError } = FILE_IPC["volli:artifact-create"];
 
@@ -1969,8 +2102,14 @@ describe("FILE_IPC descriptor table", () => {
       expect(FILE_CHANNELS).toEqual(Object.keys(FILE_IPC));
     });
 
-    it("covers all 15 file channels", () => {
-      expect(FILE_CHANNELS).toHaveLength(15);
+    it("covers all 21 file channels", () => {
+      expect(FILE_CHANNELS).toHaveLength(21);
+      expect(FILE_CHANNELS).toContain("volli:search");
+      expect(FILE_CHANNELS).toContain("volli:file-create");
+      expect(FILE_CHANNELS).toContain("volli:dir-create");
+      expect(FILE_CHANNELS).toContain("volli:file-rename");
+      expect(FILE_CHANNELS).toContain("volli:file-duplicate");
+      expect(FILE_CHANNELS).toContain("volli:file-delete");
       expect(FILE_CHANNELS).toContain("volli:prompt-templates");
       expect(FILE_CHANNELS).toContain("volli:file-index");
       expect(FILE_CHANNELS).toContain("volli:file-unwatch");

@@ -102,9 +102,15 @@ describe("the preload policy each entry declares", () => {
    * ternary listed — this is the same policy, moved beside the handlers it
    * governs rather than restated — and `ticket.signal` (VC-85) joined them by
    * being the same shape: it needs a signer's identity, never a terminal.
+   *
+   * `conflicts` (VC-185) joined for a different reason and is worth naming: it
+   * reads Tickets and worktree diffs and no Session anywhere, so the fold would
+   * be pure cost on the one verb whose design claim is that it is cheap enough
+   * to run in a bash pipeline.
    */
   const NO_PROJECTIONS = [
     "model.list",
+    "conflicts",
     "ticket.signal",
     "session.done",
     "session.blocked",

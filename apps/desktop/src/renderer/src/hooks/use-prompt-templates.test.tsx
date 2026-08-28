@@ -27,11 +27,21 @@ const WAIT_WHAT: SkillReference = {
   name: "wait-what",
   description: "Re-pitch the last message",
   body: "Give me a little context.",
-  userInvokeOnly: true,
+  authorPolicy: { modelDiscoverable: false, userInvokable: true },
+  effectivePolicy: { modelDiscoverable: false, userInvokable: true },
+  policyDiagnostic: null,
   root: "/home/.agents/skills/wait-what",
 };
 
 let root: Root | null = null;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 afterEach(async () => {
   await act(async () => {
@@ -67,6 +77,57 @@ describe("promptSupplyKey", () => {
 });
 
 describe("usePromptTemplates", () => {
+  it("never exposes an old-policy response while its replacement read is in flight", async () => {
+    const dom = new JSDOM("<div id=app></div>");
+    vi.stubGlobal("window", dom.window);
+    vi.stubGlobal("document", dom.window.document);
+    vi.stubGlobal("navigator", dom.window.navigator);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+
+    const oldRead = deferred<{
+      ok: true;
+      templates: [];
+      skills: SkillReference[];
+    }>();
+    const replacement = deferred<{ ok: true; templates: []; skills: [] }>();
+    const promptTemplates = vi
+      .fn()
+      .mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(replacement.promise);
+    Object.defineProperty(dom.window, "api", {
+      configurable: true,
+      value: { files: { promptTemplates } },
+    });
+    useProjectsStore.setState({ projects: [project({ "wait-what": "manual" })] });
+
+    let offered: readonly string[] = [];
+    function Probe() {
+      offered = usePromptTemplates("project-1").skills.map((skill) => skill.name);
+      return null;
+    }
+
+    const container = dom.window.document.querySelector("#app");
+    if (container === null) throw new Error("missing test container");
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(<Probe />);
+    });
+
+    await act(async () => {
+      useProjectsStore.getState().adoptProject(project({ "wait-what": "off" }));
+    });
+    expect(offered).toEqual([]);
+
+    // The superseded read lands with a row the current Off policy forbids. Its
+    // answer is ignored rather than flashing while the replacement is pending.
+    await act(async () => oldRead.resolve({ ok: true, templates: [], skills: [WAIT_WHAT] }));
+    expect(offered).toEqual([]);
+
+    await act(async () => replacement.resolve({ ok: true, templates: [], skills: [] }));
+    expect(offered).toEqual([]);
+    expect(promptTemplates).toHaveBeenCalledTimes(2);
+  });
+
   it("re-reads an already-mounted composer's supply when an Off skill becomes Manual", async () => {
     const dom = new JSDOM("<div id=app></div>");
     vi.stubGlobal("window", dom.window);

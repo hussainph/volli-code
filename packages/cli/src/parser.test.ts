@@ -678,6 +678,8 @@ describe("parseCliArgs", () => {
       ["ticket", "update", "VC-1", "--dry-run"],
       ["ticket", "move", "VC-1", "--to", "doing", "--dry-run"],
       ["ticket", "comment", "VC-1", "-m", "note", "--dry-run"],
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
+      ["worktree", "sync", "VC-1", "--dry-run"],
       ["session", "done", "--dry-run"],
       ["session", "blocked", "--dry-run"],
       ["session", "link", "native-id", "--dry-run"],
@@ -923,9 +925,11 @@ describe("registry ↔ argv mechanics", () => {
   });
 
   // `hook` bypasses the walker, `help` has its own command-path grammar,
-  // ticket.archive is app-only, ticket.await is the blocking control-tier
-  // tool a CLI must never execute, and the agent-control family — start,
-  // stop, send — is tool-only (VC-163, VC-86).
+  // ticket.archive is app-only, ticket.await is the blocking control-tier tool
+  // a CLI must never execute, automation.run is the orchestrator's
+  // control-tier tool (VC-134), and the agent-control family — start, stop,
+  // send — is tool-only (VC-163, VC-86). A shell door for any of them would be
+  // the socket door VC-92 §6 refuses.
   it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
@@ -936,6 +940,7 @@ describe("registry ↔ argv mechanics", () => {
       "hook",
       "help",
       "ticket.await",
+      "automation.run",
       "session.stop",
       "session.send",
     ]);

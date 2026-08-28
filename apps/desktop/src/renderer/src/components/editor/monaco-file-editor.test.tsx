@@ -17,6 +17,7 @@ import {
   type MonacoEditorContext,
   planExplicitSave,
   saveFailureMessage,
+  wordWrapOption,
 } from "./monaco-file-editor";
 
 afterEach(() => {
@@ -160,6 +161,49 @@ describe("fileEditorConstructionOptions", () => {
   it("uses the active Vitesse half so remounts do not clobber Appearance", () => {
     refreshMonacoEditorTheme("vitesse-light");
     expect(fileEditorConstructionOptions(base)).toMatchObject({ theme: "vitesse-light" });
+  });
+
+  it("takes the user's word-wrap choice over the source-mode default", () => {
+    expect(fileEditorConstructionOptions({ ...base, wordWrap: false })).toMatchObject({
+      wordWrap: "off",
+    });
+    expect(fileEditorConstructionOptions({ ...base, wordWrap: true })).toMatchObject({
+      wordWrap: "on",
+    });
+  });
+
+  it("draws the DOCUMENT surface for markdown that still saves explicitly", () => {
+    // VC-192: the same editor, the same model, the same ⌘S — a different look.
+    // Everything Source Mode puts in the margin is gone, and the measure is the
+    // app's own sans face rather than the mono one.
+    expect(fileEditorConstructionOptions({ ...base, surface: "document" })).toMatchObject({
+      lineNumbers: "off",
+      glyphMargin: false,
+      folding: false,
+      fontFamily: "var(--font-sans)",
+      wordWrap: "on",
+      theme: "vitesse-dark",
+      ariaLabel: "notes.md",
+    });
+    // And the source look is what an unnamed surface still gets.
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ lineNumbers: "on" });
+  });
+
+  it("wraps when nobody asked — Document Mode's prose has no toggle to obey", () => {
+    // Omitted rather than defaulted here: `SOURCE_MODE_OPTIONS` already wraps,
+    // and a host that restyles the document (Document Mode) must keep its own
+    // answer instead of inheriting the file editor's preference.
+    expect(fileEditorConstructionOptions(base)).toMatchObject({ wordWrap: "on" });
+    expect(
+      fileEditorConstructionOptions({ ...base, overrides: { wordWrap: "bounded" } }),
+    ).toMatchObject({ wordWrap: "bounded" });
+  });
+});
+
+describe("wordWrapOption", () => {
+  it("speaks Monaco's own spelling of the preference", () => {
+    expect(wordWrapOption(true)).toBe("on");
+    expect(wordWrapOption(false)).toBe("off");
   });
 });
 

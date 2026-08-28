@@ -2,11 +2,12 @@
  * The Now page's repository card — the Calm Stack's one worktree surface
  * (the retired ticket-right-sidebar lab scratch's `EnvironmentSummary`).
  *
- * Three stacked rows inside one framed card, in the order a person asks about
- * them: what changed (and a way into the Diffs page), which branch it is on
- * (and, behind it, the worktree identity), and what to do about it — the
- * done-flow split button (decision #45) balanced against the outward-facing
- * pull-request link.
+ * Stacked rows inside one framed card, in the order a person asks about them:
+ * what changed (and a way into the Diffs page), which branch it is on (and,
+ * behind it, the worktree identity), whether CI is happy with it (VC-182 — a
+ * row that draws itself only when the PR has a rollup, and lives in
+ * `pr-checks-row.tsx`), and what to do about it — the done-flow split button
+ * (decision #45) balanced against the outward-facing pull-request link.
  *
  * It replaces the pinned Environment/Sources inspector the icon-mode rail used
  * to stack above every navigator: the Sources half was always a subset of the
@@ -92,9 +93,11 @@ import {
   UNKEEP_LABEL,
   type RetentionNotice,
 } from "@renderer/components/ticket/worktree-retention-model";
+import { PrChecksRow } from "@renderer/components/ticket/pr-checks-row";
 import {
   DiffTotals,
   RailFaultBanner,
+  RAIL_CARD_ROW,
   RAIL_PANEL_INSET,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
@@ -130,22 +133,6 @@ import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 import { ticketScope } from "@renderer/stores/sessions";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
-
-/**
- * One card row's shared frame: full-width, quiet hover, seam above every row but
- * the first.
- *
- * NOT `ui/list-row.tsx`, and the difference is the card. These two are edge-to-
- * edge rows inside a framed surface, separated by seams and inset to the card's
- * own 16 — a list row is a floating 12px-radius object inset to its list's 8,
- * and one drawn in here would sit a rounded rectangle inside a rounded
- * rectangle with two different insets. What they DID share was the omission:
- * both were `<button>`s with no `focus-visible` treatment at all, which is a
- * keyboard user with no idea which of the card's rows they are on. That is the
- * primitive's recipe, spelled here because the row is not.
- */
-const ROW =
-  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 
 /**
  * A commit press waiting on the gate. `flow` is which road it came from — the
@@ -653,23 +640,21 @@ function toastPushResult(isUpdate: boolean, existing: boolean) {
 
 /**
  * One non-gating retention notice (issue #76, decision #44 "button-never-gate"):
- * a muted line surfacing a merge conflict or failing checks. It explains why a
- * PR can't merge yet; it disables nothing. When the notice carries `detail`
- * (the failing checks' names) the line becomes a tooltip trigger listing them.
+ * a muted line surfacing a merge conflict. It explains why a PR can't merge
+ * yet; it disables nothing.
+ *
+ * It used to carry a failing-checks line too, with a tooltip listing their
+ * names. The CI row above owns that subject now (VC-182) and says it in more
+ * detail, so the notice would have been the card's second sentence about the
+ * same suite — which is the duplication this file's header spends a paragraph
+ * refusing elsewhere.
  */
 function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
-  const line = (
+  return (
     <span className="flex w-fit items-center gap-1 text-ui text-muted-foreground">
       <WarningIcon />
       {notice.text}
     </span>
-  );
-  if (!notice.detail) return line;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{line}</TooltipTrigger>
-      <TooltipContent>{notice.detail}</TooltipContent>
-    </Tooltip>
   );
 }
 
@@ -1084,14 +1069,14 @@ export function TicketRepositorySummary({
             variant="outline"
             size="sm"
             className="shrink-0 border-sidebar-border bg-background/30 px-2 text-ui shadow-raised"
-            aria-label="Open the pull request on GitHub"
+            aria-label="Open pull request in GitHub"
             onClick={openPr}
           >
             <GithubLogoIcon weight="fill" />
             PR
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top">Open the pull request on GitHub</TooltipContent>
+        <TooltipContent side="top">Open pull request in GitHub</TooltipContent>
       </Tooltip>
     ) : null;
 
@@ -1115,7 +1100,7 @@ export function TicketRepositorySummary({
         title={changeSetSummary ?? undefined}
         aria-busy={loadingChanges || undefined}
         aria-label={`${loadingChanges ? "Reading changes" : changesLabel}, show Diffs`}
-        className={cn(ROW, "pt-4 pb-2 hover:bg-accent/50")}
+        className={cn(RAIL_CARD_ROW, "pt-4 pb-2 hover:bg-accent/50")}
       >
         <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
         {/* One flex child either way, so the label lands where the bar was
@@ -1150,7 +1135,10 @@ export function TicketRepositorySummary({
                 ? "Worktree identity"
                 : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
             }
-            className={cn(ROW, "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50")}
+            className={cn(
+              RAIL_CARD_ROW,
+              "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50",
+            )}
           >
             <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
             {ticket.baseBranch !== null && ticket.branch !== null ? (
@@ -1169,6 +1157,12 @@ export function TicketRepositorySummary({
         </PopoverTrigger>
         <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
       </Popover>
+
+      {/* Between the branch and the buttons, which is where the question sits:
+          the row above says what is being published, this one says whether it
+          builds, and the block below is what publishes it. Draws nothing until
+          there is a PR with a rollup — see `pr-checks-row.tsx`. */}
+      <PrChecksRow retention={retention} />
 
       {hasWorktree ? (
         <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-4 py-2">

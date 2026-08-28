@@ -68,7 +68,15 @@ const packedElectronDeps = {
   // electron-builder.yml whitelists its tree.
   // sharp loads its platform binary and libvips files relative to its package;
   // keep it external just like jsdom, then ship/unpack that tree explicitly.
-  neverBundle: ["electron", "jsdom", "sharp"],
+  //
+  // @vscode/ripgrep (VC-193) is the same shape as jsdom for the same reason:
+  // its entire body is a `require.resolve("@vscode/ripgrep-<platform>-<arch>/
+  // bin/rg")` that answers relative to ITS OWN package directory. Inlined into
+  // dist-electron/main.cjs that lookup runs from dist-electron instead, where
+  // pnpm's strict layout has no such package to find — search would be broken
+  // in development and in the packaged app alike. Keep it a runtime import of
+  // the real package, then ship and unpack the tree (electron-builder.yml).
+  neverBundle: ["electron", "jsdom", "sharp", "@vscode/ripgrep"],
 };
 
 export default defineConfig(({ mode }) => ({
@@ -157,6 +165,24 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
+        // what a query matches, and whether an invocation previews or pins.
+        // Pure `.ts` beside the overlay for the gate's sake — a scope that
+        // silently answered "Main" inside a Ticket workspace would open the
+        // wrong file with no error anywhere.
+        "src/components/files/quick-open-model.ts",
+        // Search's own decisions (VC-193): the scope pair a query is sent
+        // under, and what the page says when a cap ended the search. Enrolled
+        // for the second one especially — a truncated result presented as the
+        // whole answer is a lie no view test would catch.
+        "src/components/files/search-model.ts",
+        // What the navigators' inline field is allowed to mean (VC-191). Pure
+        // `.ts` beside the panels for the gate's sake: this is the last place a
+        // typed name is judged before it becomes a path main creates, renames
+        // or moves — a branch missed here is a file made somewhere nobody
+        // looked, and the two-layer safety in main would have refused it with a
+        // sentence written for a channel rather than for a person.
+        "src/components/files/navigator-mutations.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
@@ -214,6 +240,10 @@ export default defineConfig(({ mode }) => ({
         // component installs the listener, but this module owns when it may
         // remap the gesture into horizontal travel.
         "src/components/ui/tab-scroll.ts",
+        // And what a DROP on the strip means (VC-189). dnd-kit owns the
+        // gesture; which tab ended up where is arithmetic, and an off-by-one
+        // in it is a tab that lands one slot from where it was let go.
+        "src/components/ui/tab-reorder.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
@@ -239,8 +269,23 @@ export default defineConfig(({ mode }) => ({
         "src/editor/document-identity.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
+        // Which repository Markdown may open as a document, and what a file
+        // that may not is told (VC-192). In the gate because this is the one
+        // place a rendered surface is allowed to disagree with the bytes: a
+        // branch missed here shows frontmatter as a heading, and the person
+        // editing it would have no way to know.
+        "src/editor/document-view-policy.ts",
         "src/editor/emphasis-wrap.ts",
         "src/editor/file-refs.ts",
+        // Which editor an outside-Monaco Go to Line lands in (VC-187), and
+        // whether there is one at all — a pure `.ts` beside the two editor
+        // components precisely so the gate can reach it.
+        "src/editor/go-to-line.ts",
+        // And where a search result lands (VC-193). Module state with a single
+        // pending slot: the failure it guards against — an unclaimed request
+        // resurfacing as a jump in a file opened for another reason — is
+        // invisible except in a test that can reach the slot.
+        "src/editor/reveal-line.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-runtime.ts",

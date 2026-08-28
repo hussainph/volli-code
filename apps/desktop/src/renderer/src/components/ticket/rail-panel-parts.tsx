@@ -15,6 +15,7 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOu
 import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
@@ -44,6 +45,28 @@ export const RAIL_PANEL_INSET = "px-4 group-data-[narrow=true]/rail:px-3";
 
 /** The same inset expressed as a horizontal MARGIN, for blocks that float inside a page. */
 export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
+
+/**
+ * One repository-card row's shared frame: full-width, quiet hover, seam above
+ * every row but the first.
+ *
+ * NOT `ui/list-row.tsx`, and the difference is the card. These are edge-to-edge
+ * rows inside a framed surface, separated by seams and inset to the card's own
+ * 16 — a list row is a floating 12px-radius object inset to its list's 8, and
+ * one drawn in here would sit a rounded rectangle inside a rounded rectangle
+ * with two different insets. What they DID share was the omission: both were
+ * `<button>`s with no `focus-visible` treatment at all, which is a keyboard
+ * user with no idea which of the card's rows they are on. That is the
+ * primitive's recipe, spelled here because the row is not.
+ *
+ * It lives out here, with the rail's other shared pieces, because the card is
+ * no longer one file: the CI row (`pr-checks-row.tsx`) is a peer of the changes
+ * and branch rows and has to be indistinguishable from them, and a second copy
+ * of this string is how one row silently keeps an old hover after its
+ * neighbours are fixed.
+ */
+export const RAIL_CARD_ROW =
+  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the
@@ -317,6 +340,30 @@ export function RailNavigatorHeader({
         />
       ) : null}
     </header>
+  );
+}
+
+/**
+ * New File, in the navigator header, at BOTH scopes (VC-191).
+ *
+ * Beside Filter rather than on a row, for the reason Attach is there: it acts
+ * on the FOLDER the navigator is standing in, not on whatever is under the
+ * cursor — and it is the only door to creating a file in an EMPTY folder, where
+ * there is no row to right-click. New Folder… deliberately has no twin here:
+ * the header is a place for the one gesture a person reaches for constantly,
+ * the row menu carries the rest, and two adjacent plus-glyphs read as one
+ * control that someone drew twice.
+ */
+export function NewFileRailAction({ onNewFile }: { onNewFile(): void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button size="icon-sm" variant="ghost" aria-label="New file" onClick={onNewFile}>
+          <FilePlusIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">New file</TooltipContent>
+    </Tooltip>
   );
 }
 
