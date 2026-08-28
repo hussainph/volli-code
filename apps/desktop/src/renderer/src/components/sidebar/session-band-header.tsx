@@ -17,10 +17,13 @@ import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindo
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 
 import type {
-  SessionListingFilter,
   SessionRowKind,
   SessionRowScope,
 } from "@renderer/components/sidebar/active-session-listing";
+import {
+  isSessionBandFilterNarrowed,
+  type SessionBandFilter,
+} from "@renderer/components/sidebar/session-band-filter";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -30,63 +33,6 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
-
-/**
- * What the Previous band is currently showing.
- *
- * A checkbox per member rather than the model's `Set | null`, because that is
- * what a menu of checkboxes is: every box has a state whether or not the axis
- * is narrowed, and "all checked" has to survive a round trip through the
- * control. {@link sessionListingFilter} is where the two shapes meet.
- */
-export interface SessionBandFilter {
-  kinds: Record<SessionRowKind, boolean>;
-  scopes: Record<SessionRowScope, boolean>;
-  showCleaned: boolean;
-}
-
-export const DEFAULT_SESSION_BAND_FILTER: SessionBandFilter = {
-  kinds: { chat: true, terminal: true },
-  scopes: { project: true, ticket: true },
-  showCleaned: false,
-};
-
-const SESSION_ROW_KINDS = ["chat", "terminal"] as const satisfies readonly SessionRowKind[];
-const SESSION_ROW_SCOPES = ["project", "ticket"] as const satisfies readonly SessionRowScope[];
-
-/**
- * One axis of checkboxes as the model's `Set | null`. Everything checked
- * converts to `null` rather than to a full set: they filter the same rows, but
- * only `null` says "not narrowed" to a reader of the model, and it is the value
- * the model's own default carries. Nothing checked converts to an EMPTY set,
- * not to `null` — a reader who unchecked every box asked for nothing, and
- * handing the full band back would read as the control being broken.
- */
-function narrowedAxis<T extends string>(
-  members: readonly T[],
-  checked: Record<T, boolean>,
-): ReadonlySet<T> | null {
-  const on = members.filter((member) => checked[member]);
-  return on.length === members.length ? null : new Set(on);
-}
-
-/**
- * The menu's checkboxes as the listing model's filter.
- *
- * Lives here, with the checkbox shape, and is called by every surface that
- * builds a listing from this menu — the sidebar band and the lab scratch that
- * prototypes it. Both used to write the same conversion out by hand, which is
- * one copy per surface of a rule that has to be identical on all of them: an
- * axis added on one side and forgotten on the other is a control that silently
- * does nothing.
- */
-export function sessionListingFilter(filter: SessionBandFilter): SessionListingFilter {
-  return {
-    kinds: narrowedAxis(SESSION_ROW_KINDS, filter.kinds),
-    scopes: narrowedAxis(SESSION_ROW_SCOPES, filter.scopes),
-    showCleaned: filter.showCleaned,
-  };
-}
 
 /** The sidebar's small-glyph tier, and the hit box this header draws around it. */
 const GLYPH_PX = 12;
@@ -157,12 +103,7 @@ export function SessionBandFilterMenu({
   filter: SessionBandFilter;
   onChange(next: SessionBandFilter): void;
 }) {
-  const narrowed =
-    !filter.kinds.chat ||
-    !filter.kinds.terminal ||
-    !filter.scopes.project ||
-    !filter.scopes.ticket ||
-    filter.showCleaned;
+  const narrowed = isSessionBandFilterNarrowed(filter);
   const toggleKind = (kind: SessionRowKind): void =>
     onChange({ ...filter, kinds: { ...filter.kinds, [kind]: !filter.kinds[kind] } });
   const toggleScope = (scope: SessionRowScope): void =>
@@ -213,9 +154,7 @@ export function SessionBandFilterMenu({
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
-        {/* The globe is the same mark `RowIdentity` puts in a ticketless row's
-            id lane, which is what makes this box legible without a sentence
-            under it: the reader is checking the glyph they are looking for. */}
+        {/* The globe is the mark Project Sessions use in the row identity lane. */}
         <DropdownMenuCheckboxItem
           checked={filter.scopes.project}
           onSelect={(event) => event.preventDefault()}

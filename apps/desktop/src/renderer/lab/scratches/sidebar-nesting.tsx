@@ -71,9 +71,11 @@ import {
 import {
   DEFAULT_SESSION_BAND_FILTER,
   sessionListingFilter,
+  type SessionBandFilter,
+} from "@renderer/components/sidebar/session-band-filter";
+import {
   SessionBandFilterMenu,
   SessionBandHeader,
-  type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-header";
 import {
   ActiveBandRow,

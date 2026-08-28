@@ -1528,9 +1528,9 @@ describe("buildActiveSessionListing — the Previous filter", () => {
 });
 
 describe("sessionRowScope", () => {
-  it("reads the scope off the ticket the row draws, not off where it was born", () => {
-    expect(sessionRowScope({ ticket: null })).toBe("project");
-    expect(sessionRowScope({ ticket: ticket({ id: "t1", status: "doing" }) })).toBe("ticket");
+  it("reads the immutable creation scope even after a ticket is gone", () => {
+    expect(sessionRowScope({ bornTicketless: true })).toBe("project");
+    expect(sessionRowScope({ bornTicketless: false })).toBe("ticket");
   });
 });
 
@@ -1631,16 +1631,15 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
     expect(titles(result.previous)).toEqual(["Project shell", "Project chat"]);
   });
 
-  it("files an orphaned Session under `project`, the globe its row actually draws", () => {
-    const shown = buildActiveSessionListing({
+  it("keeps an orphaned Ticket Session in ticket scope", () => {
+    const projectRows = buildActiveSessionListing({
       ...input,
       filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: true },
     });
 
-    // Its ticket has left the board, so it was not BORN ticketless — but the
-    // row has no id to show and no ticket surface to be found through, which is
-    // the whole thing this axis sorts on.
-    expect(titles(shown.previous)).toEqual(["Orphaned", "Project shell", "Project chat"]);
+    // Losing the current ticket reference changes the row identity, not the
+    // immutable Session scope recorded when it was created.
+    expect(titles(projectRows.previous)).toEqual(["Project shell", "Project chat"]);
     expect(
       titles(
         buildActiveSessionListing({
@@ -1648,7 +1647,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
           filter: { kinds: null, scopes: new Set(["ticket" as const]), showCleaned: true },
         }).previous,
       ),
-    ).toEqual(["Ticket shell", "Ticket chat"]);
+    ).toEqual(["Orphaned", "Ticket shell", "Ticket chat"]);
   });
 });
 

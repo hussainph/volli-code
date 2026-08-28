@@ -1,21 +1,16 @@
 /**
- * The one decision the filter menu owns rather than draws: how a row of
- * checkboxes becomes the listing model's filter.
- *
- * Worth a test of its own because the two shapes disagree on purpose. The menu
- * needs a state per box whether or not the axis is narrowed; the model wants
- * `null` for "not narrowed", which is what its own default carries and what a
- * reader of `SessionListingFilter` checks against. A full set and `null` filter
- * the same rows, so nothing downstream would ever fail if this drifted — the
- * assertion has to be made here or not at all.
+ * How the menu's checkbox state becomes the listing model's filter and the
+ * trigger's narrowed signal. The two shapes disagree on purpose: the menu needs
+ * a state per box, while the model uses `null` for an untouched axis.
  */
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_SESSION_BAND_FILTER,
+  isSessionBandFilterNarrowed,
   sessionListingFilter,
   type SessionBandFilter,
-} from "./session-band-header";
+} from "./session-band-filter";
 
 const bandFilter = (overrides: Partial<SessionBandFilter> = {}): SessionBandFilter => ({
   ...DEFAULT_SESSION_BAND_FILTER,
@@ -65,5 +60,18 @@ describe("sessionListingFilter", () => {
     expect(sessionListingFilter(bandFilter({ scopes: { project: false, ticket: false } }))).toEqual(
       { kinds: null, scopes: new Set(), showCleaned: false },
     );
+  });
+});
+
+describe("isSessionBandFilterNarrowed", () => {
+  it("tracks every way the band can differ from the default", () => {
+    expect(isSessionBandFilterNarrowed(DEFAULT_SESSION_BAND_FILTER)).toBe(false);
+    expect(
+      isSessionBandFilterNarrowed(bandFilter({ kinds: { chat: false, terminal: true } })),
+    ).toBe(true);
+    expect(
+      isSessionBandFilterNarrowed(bandFilter({ scopes: { project: true, ticket: false } })),
+    ).toBe(true);
+    expect(isSessionBandFilterNarrowed(bandFilter({ showCleaned: true }))).toBe(true);
   });
 });
