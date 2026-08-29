@@ -68,7 +68,7 @@ function fakeHost(initial: BrowserTabState[]): {
       list: (scope) =>
         [...tabs.values()]
           .filter((one) => one.projectId === scope.projectId)
-          .map((one) => ({ ...one })),
+          .map((one) => structuredClone(one)),
       open: (input) => {
         opened.push(input);
         openCount += 1;

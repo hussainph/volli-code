@@ -357,6 +357,24 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
   return null;
 }
 
+/**
+ * Membership only, exactly like the ask placeholder tool-surface resolution
+ * wires beside it: resolution names the tools a new Session records, and no
+ * method here is ever called. The adapter binds the real scoped port at
+ * attach.
+ */
+const membershipUnresolved = async (): Promise<never> => {
+  throw new Error("Tool-surface resolution cannot reach a Browser Tab.");
+};
+const browserMembership: RuntimeBrowserPort = {
+  tabs: membershipUnresolved,
+  navigate: membershipUnresolved,
+  snapshot: membershipUnresolved,
+  act: membershipUnresolved,
+  screenshot: membershipUnresolved,
+  console: membershipUnresolved,
+};
+
 function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
   if (input.kind !== "tool-surface") {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
@@ -785,22 +803,6 @@ app.whenReady().then(async () => {
   // attach-time browser-port resolver reads it lazily, long after boot — the
   // same bargain ptyManagerRef strikes with the worktree guards.
   let browserTabsRef: BrowserTabHost | null = null;
-  // Membership only, exactly like the ask placeholder beside it: resolution
-  // names the tools a new Session records, and no method here is ever called.
-  // The adapter binds the real scoped port at attach.
-  const browserMembership: RuntimeBrowserPort = (() => {
-    const unresolved = async (): Promise<never> => {
-      throw new Error("Tool-surface resolution cannot reach a Browser Tab.");
-    };
-    return {
-      tabs: unresolved,
-      navigate: unresolved,
-      snapshot: unresolved,
-      act: unresolved,
-      screenshot: unresolved,
-      console: unresolved,
-    };
-  })();
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null
       ? {
