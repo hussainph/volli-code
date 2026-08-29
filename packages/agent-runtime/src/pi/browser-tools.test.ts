@@ -321,20 +321,20 @@ describe("browser tools", () => {
   it("withdraws a parked call when the attachment ends, and stops watching once settled", async () => {
     const attachment = new AbortController();
     const held = Promise.withResolvers<never>();
-    let observed: AbortSignal | null = null;
+    const observed: AbortSignal[] = [];
     const port = unusedPort();
     port.snapshot = async (input) => {
-      observed = input.signal;
+      observed.push(input.signal);
       return held.promise;
     };
     const tool = createBrowserTool("browser_snapshot", port, attachment.signal);
 
     const call = tool.execute("call-18", { tabId: "tab-1" });
     await Promise.resolve();
-    expect(observed?.aborted).toBe(false);
+    expect(observed[0]?.aborted).toBe(false);
 
     attachment.abort();
-    expect(observed?.aborted).toBe(true);
+    expect(observed[0]?.aborted).toBe(true);
 
     held.reject(new Error("the host abandoned the read"));
     await expect(call).rejects.toThrow("abandoned");

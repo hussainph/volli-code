@@ -1,6 +1,13 @@
 # Browser tooling for Volli (VC-110)
 
-**Status:** research recommendation; no browser implementation or dependency was added.
+**Status:** adopted and implemented on VC-110's branch with one amendment: the
+agent control path is the native `webContents.debugger` controller speaking the
+Playwright-MCP snapshot/ref dialect as a format spec (no vendored code, no
+second browser, no remote debugging port), and **Playwright (npm) replaces
+`agent-browser` as the leading Phase 4 QA-runner candidate** — agent-browser's
+advantages (CLI ergonomics, daemon state, Rust startup) do not survive an
+in-process host. See the VC-110 decision comment for the settled product
+choices and `apps/desktop/src/main/browser/` for the implementation.
 **Research date:** 2026-08-24
 **Question:** Can Volli offer a user-visible, sandboxed browser that its Agent
 Runtime can use for previewing, testing, artifacts, and chat references—and is
