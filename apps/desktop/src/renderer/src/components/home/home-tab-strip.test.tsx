@@ -20,6 +20,7 @@ function draw(tabs: readonly HomeTabDescriptor[], activeTabId: string): string {
         onCloseOtherFiles={noop}
         onNewSession={noop}
         onNewChat={noop}
+        onNewBrowser={noop}
         creating={false}
         railCollapsed={false}
         railTogglable
@@ -28,6 +29,25 @@ function draw(tabs: readonly HomeTabDescriptor[], activeTabId: string): string {
     </TooltipProvider>,
   );
 }
+
+describe("HomeTabStrip Browser Tabs", () => {
+  it("draws a live-titled closable tab and a strip entry point", () => {
+    const browser: HomeTabDescriptor = {
+      kind: "browser",
+      id: "browser:tab-7",
+      tabId: "tab-7",
+      title: "Volli docs",
+      loading: true,
+    };
+
+    const html = draw([HOME_BOARD_TAB, browser], browser.id);
+
+    expect(html).toContain('data-testid="home-browser-tab"');
+    expect(html).toContain("Volli docs");
+    expect(html).toContain('aria-label="Close Volli docs"');
+    expect(html).toContain('aria-label="New Browser Tab"');
+  });
+});
 
 describe("HomeTabStrip file tabs", () => {
   const file: HomeTabDescriptor = {

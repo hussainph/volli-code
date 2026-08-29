@@ -4,8 +4,9 @@
  *
  * Home is the ticket workspace's own grammar one level up: a permanent first
  * tab that cannot be closed (the Board, exactly as a ticket's Body tab), with
- * the project's own Sessions and Main-checkout Files beside it. Two surfaces need the same
- * answer and cannot read it the same way — `home-surface.tsx` renders off it,
+ * the project's Sessions, Project Files, and Browser Tabs beside it. Two
+ * surfaces need the same answer and cannot read it the same way —
+ * `home-surface.tsx` renders off it,
  * `sessions-layer.tsx` gates its panes on it — so the decision lives here once,
  * pure, and both callers hand it their store reads.
  *
@@ -26,6 +27,24 @@ import { resolveChatRelaunch } from "@renderer/components/ticket/ticket-chat-tab
  * collide with it.
  */
 export const HOME_BOARD_TAB_ID = "board";
+
+/**
+ * Browser Tabs share the strip's one string identity with terminals, chats, and
+ * files. Prefixing main's opaque id keeps those independent id spaces from
+ * colliding without teaching the BrowserTabHost about renderer tab grammar.
+ */
+const BROWSER_TAB_PREFIX = "browser:";
+
+export function browserTabId(tabId: string): string {
+  return `${BROWSER_TAB_PREFIX}${tabId}`;
+}
+
+/** Main's opaque Browser Tab id, or null when another workspace-tab kind was named. */
+export function parseBrowserTabId(tabId: string): string | null {
+  if (!tabId.startsWith(BROWSER_TAB_PREFIX)) return null;
+  const opaqueId = tabId.slice(BROWSER_TAB_PREFIX.length);
+  return opaqueId.length > 0 ? opaqueId : null;
+}
 
 /** Whether `tabId` names the permanent Board tab. */
 export function isHomeBoardTab(tabId: string): boolean {
@@ -112,6 +131,12 @@ export interface HomeTabsInput {
    */
   durableChatIds: readonly string[] | undefined;
   /**
+   * Whether main's live Browser Tab registry has answered for this project.
+   * Unlike a terminal, a Browser Tab survives renderer remounts, so a recorded
+   * browser id cannot be called stale while that registry is still in flight.
+   */
+  browserTabsHydrated: boolean;
+  /**
    * Whether this project's strip has already been resolved once in this app
    * run. Restoration is a boot-time act: after it, a recorded id that names
    * nothing is a tab that CLOSED, and adopting it back would reopen the tab the
@@ -143,7 +168,8 @@ export interface HomeTabsInput {
  * by definition and `resolveChatRelaunch` says so without asking.
  */
 export function resolveHomeTabs(input: HomeTabsInput): HomeTabResolution {
-  const { tabIds, recorded, containerActive, durableChatIds, hydrated } = input;
+  const { tabIds, recorded, containerActive, durableChatIds, browserTabsHydrated, hydrated } =
+    input;
   if (isHomeBoardTab(recorded)) return { active: HOME_BOARD_TAB_ID, restore: { kind: "settled" } };
   if (tabIds.includes(recorded)) return { active: recorded, restore: { kind: "settled" } };
 
@@ -151,6 +177,9 @@ export function resolveHomeTabs(input: HomeTabsInput): HomeTabResolution {
     containerActive !== null && tabIds.includes(containerActive)
       ? containerActive
       : (tabIds[0] ?? HOME_BOARD_TAB_ID);
+  if (parseBrowserTabId(recorded) !== null && !browserTabsHydrated) {
+    return { active, restore: { kind: "pending" } };
+  }
   if (hydrated) return { active, restore: { kind: "settled" } };
 
   const relaunch = resolveChatRelaunch(recorded, durableChatIds);

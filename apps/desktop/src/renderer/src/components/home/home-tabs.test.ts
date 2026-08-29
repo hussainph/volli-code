@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
   HOME_BOARD_TAB_ID,
+  browserTabId,
   closeHomeTabHistory,
   resolveHomeTabs,
   sanitizeHomeActiveTab,
@@ -16,6 +17,7 @@ function input(over: Partial<Parameters<typeof resolveHomeTabs>[0]> = {}) {
     recorded: HOME_BOARD_TAB_ID,
     containerActive: null,
     durableChatIds: [] as readonly string[] | undefined,
+    browserTabsHydrated: true,
     hydrated: true,
     ...over,
   };
@@ -120,6 +122,18 @@ describe("resolveHomeTabs — restoring the Session that was in front on relaunc
     ).toEqual({ active: HOME_BOARD_TAB_ID, restore: SETTLED });
   });
 
+  it("waits for Browser Tabs to hydrate before discarding a recorded browser tab", () => {
+    expect(
+      resolveHomeTabs(
+        input({
+          recorded: browserTabId("tab-9"),
+          browserTabsHydrated: false,
+          hydrated: false,
+        }),
+      ),
+    ).toEqual({ active: HOME_BOARD_TAB_ID, restore: { kind: "pending" } });
+  });
+
   it("needs no durable Session lookup when a restored File tab is already open", () => {
     expect(
       resolveHomeTabs(
@@ -151,6 +165,23 @@ describe("resolveHomeTabs — restoring the Session that was in front on relaunc
 });
 
 describe("Home tab visit history", () => {
+  it("visits and closes Browser Tabs by their prefixed opaque ids", () => {
+    const browser = browserTabId("tab-7");
+    const history = visitHomeTab([HOME_BOARD_TAB_ID, "file:a.ts"], browser);
+
+    expect(history).toEqual([HOME_BOARD_TAB_ID, "file:a.ts", browser]);
+    expect(
+      closeHomeTabHistory({
+        history,
+        closedTabId: browser,
+        openTabIds: [HOME_BOARD_TAB_ID, "file:a.ts"],
+      }),
+    ).toEqual({
+      active: "file:a.ts",
+      history: [HOME_BOARD_TAB_ID, "file:a.ts"],
+    });
+  });
+
   it("keeps tabs in most-recently-visited order without duplicates", () => {
     const history = visitHomeTab(
       visitHomeTab(visitHomeTab([], HOME_BOARD_TAB_ID), "chat:one"),

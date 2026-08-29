@@ -23,6 +23,7 @@ function strip(creating: boolean, railCollapsed = false): string {
       onRenameSessionTab={noop}
       onNewSession={noop}
       onNewChat={noop}
+      onNewBrowser={noop}
       railCollapsed={railCollapsed}
       onToggleRail={noop}
     />,
@@ -37,6 +38,43 @@ describe("TicketTabStrip", () => {
     expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
     expect(buttonTag(html, "Other session kinds")).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('aria-label="New session"');
+  });
+
+  it("offers a Browser Tab from the same trailing cluster", () => {
+    expect(strip(false)).toContain('aria-label="New Browser Tab"');
+  });
+
+  it("draws a live-titled, closable Browser Tab", () => {
+    const html = renderToStaticMarkup(
+      <TicketTabStrip
+        projectId="project-1"
+        ticketId="ticket-1"
+        tabs={[
+          { id: "doc", kind: "body", label: "VC-6" },
+          {
+            id: "browser:tab-7",
+            kind: "browser",
+            label: "Volli docs",
+            browserTabId: "tab-7",
+            loading: true,
+          },
+        ]}
+        activeTabId="browser:tab-7"
+        creating={false}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onRenameSessionTab={noop}
+        onNewSession={noop}
+        onNewChat={noop}
+        onNewBrowser={noop}
+        railCollapsed={false}
+        onToggleRail={noop}
+      />,
+    );
+
+    expect(html).toContain('data-testid="ticket-browser-tab"');
+    expect(html).toContain("Volli docs");
+    expect(html).toContain('aria-label="Close Volli docs"');
   });
 
   it("puts creation in the trailing action cluster, out of the tab scroller", () => {

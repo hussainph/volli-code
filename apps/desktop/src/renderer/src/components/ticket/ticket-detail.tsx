@@ -10,6 +10,7 @@ import {
 } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
+import { BrowserPane } from "@renderer/components/browser/browser-pane";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import {
   planTabClose,
@@ -48,6 +49,7 @@ import {
   type TicketRecencyWatchOwner,
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
+import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-tabs";
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
@@ -65,6 +67,7 @@ import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { browserTabDisplayTitle, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -159,6 +162,15 @@ export function TicketDetail({
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
   );
+  const browserApi = window.api.browser;
+  const browserTabs = useBrowserTabsStore(
+    useShallow((state) =>
+      Object.values(state.byId).filter(
+        (tab) => tab.projectId === projectId && tab.ticketId === ticket.id,
+      ),
+    ),
+  );
+  const browserTabsHydrated = useBrowserTabsStore((state) => state.hydratedProjects.has(projectId));
   const ticketDiffViewStates = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketDiffViewStates?.[ticket.id],
   );
@@ -792,6 +804,15 @@ export function TicketDetail({
         status: chatStatuses[index],
       }),
     ),
+    ...browserTabs.map(
+      (tab): TicketTabDescriptor => ({
+        id: browserTabId(tab.tabId),
+        kind: "browser",
+        label: browserTabDisplayTitle(tab),
+        browserTabId: tab.tabId,
+        loading: tab.loading,
+      }),
+    ),
   ];
   // A closed session tab, or a persisted active id with no live tab, falls back to Doc.
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0]!;
@@ -801,6 +822,11 @@ export function TicketDetail({
       ? sessionTabs?.find((candidate) => candidate.sessionId === activeTab.id)
       : undefined;
   const activeChatSessionId = activeTab.kind === "chat" ? parseChatTabId(activeTab.id) : null;
+  const activeBrowserTabId = activeTab.kind === "browser" ? parseBrowserTabId(activeTab.id) : null;
+  const activeBrowserTab =
+    activeBrowserTabId === null
+      ? undefined
+      : browserTabs.find((tab) => tab.tabId === activeBrowserTabId);
   const terminalFocused =
     terminalFocusTarget?.projectId === projectId &&
     terminalFocusTarget.ticketId === ticket.id &&
@@ -850,6 +876,7 @@ export function TicketDetail({
   // falls back because it is genuinely gone.
   React.useEffect(() => {
     if (creating || activeTabIsRenderable) return;
+    if (parseBrowserTabId(activeTabId) !== null && !browserTabsHydrated) return;
     const relaunch = resolveChatRelaunch(activeTabId, durableChatIds);
     if (relaunch.kind === "wait") return;
     if (relaunch.kind === "adopt") {
@@ -862,6 +889,7 @@ export function TicketDetail({
   }, [
     activeTabId,
     activeTabIsRenderable,
+    browserTabsHydrated,
     creating,
     durableChatIds,
     projectId,
@@ -921,6 +949,23 @@ export function TicketDetail({
     const sessionId = await createTerminalSession(ticketScope(projectId, ticket.id));
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
+
+  const createBrowser = React.useCallback(async () => {
+    const requested = window.prompt("Open Browser Tab", "http://localhost:3000");
+    const url = requested?.trim() ?? "";
+    if (url.length === 0) return;
+    try {
+      const result = await browserApi.open({ projectId, ticketId: ticket.id, url });
+      if (!result.ok) {
+        toastError(`Could not open Browser Tab: ${result.error}`);
+        return;
+      }
+      useBrowserTabsStore.getState().receive(result.tab);
+      setActiveTab(browserTabId(result.tab.tabId));
+    } catch (reason) {
+      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
+    }
+  }, [browserApi, projectId, setActiveTab, ticket.id]);
 
   // The project's skills, for the session-start control's "Chat with skill"
   // submenu — the attach-time injection route, chosen at the moment of
@@ -1015,6 +1060,26 @@ export function TicketDetail({
                 requestCloseDiffTab(tab.relPath);
                 return;
               }
+              if (tab.kind === "browser" && tab.browserTabId !== undefined) {
+                const opaqueId = tab.browserTabId;
+                void browserApi
+                  .close({ tabId: opaqueId })
+                  .then((result) => {
+                    if (!result.ok) {
+                      toastError(`Could not close Browser Tab: ${result.error}`);
+                      return;
+                    }
+                    useBrowserTabsStore.getState().remove(opaqueId);
+                    const active =
+                      useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]
+                        ?.active ?? BODY_TAB_ID;
+                    if (active === tab.id) setActiveTab(BODY_TAB_ID);
+                  })
+                  .catch((reason: unknown) => {
+                    toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
+                  });
+                return;
+              }
               if (tab.kind === "chat") {
                 const chatId = parseChatTabId(tab.id);
                 if (chatId === null) return;
@@ -1052,6 +1117,7 @@ export function TicketDetail({
             }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
+            onNewBrowser={() => void createBrowser()}
             skills={skills}
             onNewChatWithSkill={(name) => void createChat([name])}
             railCollapsed={railCollapsed}
@@ -1131,6 +1197,15 @@ export function TicketDetail({
                   exists so a GPU-owning terminal is never unmounted, and a chat
                   needs nothing of the sort — its stream, fold and queue live in
                   the registry client, which outlives this view either way. */}
+              {activeBrowserTab !== undefined ? (
+                <BrowserPane
+                  key={activeBrowserTab.tabId}
+                  tab={activeBrowserTab}
+                  visible
+                  api={browserApi}
+                  onTabState={useBrowserTabsStore.getState().receive}
+                />
+              ) : null}
               {activeChatSessionId !== null ? (
                 <ChatPlane
                   key={activeChatSessionId}

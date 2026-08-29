@@ -1,8 +1,10 @@
 import * as React from "react";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
@@ -43,14 +45,16 @@ import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
  * A terminal tab carries its whole store record — park state, panes and exit
  * codes are all read off it — while a chat tab carries the two facts a chat has
  * on a strip: its title and its liveness. A File tab carries the Main-checkout
- * path plus preview/dirty presentation. `id` is the identity in the merged
- * strip and in `homeActiveTab`; chat and File ids are prefixed, terminal ids are
- * UUIDs, and the Board is a bare word, so the four spaces never collide.
+ * path plus preview/dirty presentation, and a Browser Tab carries main's opaque
+ * id plus its live title/loading state. `id` is the identity in the merged strip
+ * and in `homeActiveTab`; chat, File, and Browser ids are prefixed, terminal ids
+ * are UUIDs, and the Board is a bare word, so the five spaces never collide.
  */
 export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
   | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
+  | { kind: "browser"; id: string; tabId: string; title: string; loading: boolean }
   | {
       kind: "file";
       id: string;
@@ -78,6 +82,7 @@ interface HomeTabStripProps {
   onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
+  onNewBrowser(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
   skills?: readonly SkillReference[];
   /** Mints a chat Session with one named skill injected at attach time. */
@@ -106,8 +111,9 @@ interface HomeTabStripProps {
  * where it floated above a surface it did not own. It owns this one.)
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
- * without a ticket — terminals first and chats after — then Main-checkout File
- * tabs in their reducer order. A trailing split control starts either Session;
+ * without a ticket — terminals first and chats after — then Project File tabs
+ * in reducer order and live Browser Tabs. Trailing controls open a Browser Tab
+ * or start either Session;
  * every tab but the Board carries a hover-revealed close and a right-click
  * menu. Session tabs rename on double-click; preview File tabs pin.
  *
@@ -125,6 +131,7 @@ export function HomeTabStrip({
   onCloseOtherFiles,
   onNewSession,
   onNewChat,
+  onNewBrowser,
   skills,
   onNewChatWithSkill,
   creating,
@@ -149,7 +156,17 @@ export function HomeTabStrip({
               ticketless Sessions — exactly what this control mints, from the Board
               tab as well as from a Session tab. `align="end"` so the menu hangs
               back into the window rather than off its edge. */}
-          <div className="flex items-center">
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="New Browser Tab"
+              onClick={onNewBrowser}
+            >
+              <PlusIcon />
+              Browser
+            </Button>
             <NewSessionControl
               disabled={creating}
               placement="strip"
@@ -194,6 +211,28 @@ export function HomeTabStrip({
               active={active}
               tabStop={tabStop}
               onSelect={() => onSelect(descriptor)}
+            />
+          );
+        }
+        if (descriptor.kind === "browser") {
+          return (
+            <Tab
+              key={descriptor.id}
+              data-testid="home-browser-tab"
+              label={descriptor.title}
+              title={descriptor.title}
+              active={active}
+              tabStop={tabStop}
+              status={descriptor.loading ? "working" : undefined}
+              leading={
+                <BrowserIcon
+                  aria-hidden
+                  weight="bold"
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
+              }
+              onActivate={() => onSelect(descriptor)}
+              onClose={() => onClose(descriptor)}
             />
           );
         }

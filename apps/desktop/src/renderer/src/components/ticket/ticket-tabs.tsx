@@ -8,14 +8,17 @@
  * Data-driven by design: `TicketTabDescriptor` is the one shape a tab needs, so
  * ticket-detail.tsx appends one `"file"`-kind descriptor per open `@file` ref,
  * one `"diff"`-kind descriptor per open Change Set diff, one `"session"`-kind
- * descriptor per linked terminal, and one `"chat"`-kind descriptor per open
- * chat Session. Content routing stays with the caller, keyed off each tab's
- * `kind`; file, diff, session, and chat tabs are closable, and the two Session
- * kinds — session and chat — are renamable.
+ * descriptor per linked terminal, one `"chat"`-kind descriptor per open chat
+ * Session, and one `"browser"` descriptor per main-owned Browser Tab. Content
+ * routing stays with the caller, keyed off each tab's `kind`; every tab after
+ * the Body is closable, and the two Session kinds — session and chat — are
+ * renamable.
  */
 import * as React from "react";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
@@ -43,7 +46,7 @@ import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
-export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat";
+export type TicketTabKind = "body" | "session" | "file" | "diff" | "chat" | "browser";
 
 /**
  * A session tab's liveness. It rides the tab because the tab already names the
@@ -60,7 +63,13 @@ export type TicketTabStatus = "idle" | "starting" | "ready" | "working" | "waiti
 
 /** Whether a ticket-strip tab of this kind shows a close affordance. */
 export function isClosableTicketTab(kind: TicketTabKind): boolean {
-  return kind === "session" || kind === "file" || kind === "diff" || kind === "chat";
+  return (
+    kind === "session" ||
+    kind === "file" ||
+    kind === "diff" ||
+    kind === "chat" ||
+    kind === "browser"
+  );
 }
 
 /**
@@ -90,9 +99,9 @@ function useTerminalTabState(sessionId: string | null): TerminalTabState | null 
 
 export interface TicketTabDescriptor {
   /**
-   * Stable tab identity — session id, `file:<relPath>`, `diff:<relPath>`, or
-   * `chat:<sessionId>`. A chat tab's id is prefixed and a terminal tab's is
-   * not, so the two never collide in one strip.
+   * Stable tab identity — session id, `file:<relPath>`, `diff:<relPath>`,
+   * `chat:<sessionId>`, or `browser:<opaqueId>`. Every non-terminal identity
+   * is prefixed, so main's opaque Browser id never collides with a Session.
    */
   id: string;
   kind: TicketTabKind;
@@ -108,6 +117,10 @@ export interface TicketTabDescriptor {
   badge?: "worktree";
   /** Session and chat tabs: a leading liveness dot. Absent renders no dot. */
   status?: TicketTabStatus;
+  /** Main's opaque identity for a `"browser"` tab. */
+  browserTabId?: string;
+  /** A `"browser"` tab's pushed loading state. */
+  loading?: boolean;
   /**
    * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
    * are always persistent and never set this. Preview labels render italic.
@@ -148,6 +161,8 @@ interface TicketTabStripProps {
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
   onNewChat(): void;
+  /** Opens a user-owned Browser Tab in this Ticket workspace. */
+  onNewBrowser(): void;
   /** The project's skills — the "Chat with skill" submenu's rows. */
   skills?: readonly SkillReference[];
   /** Mints a chat Session with one named skill injected at attach time. */
@@ -228,6 +243,7 @@ function TicketTab({
 
   const inner = (
     <Tab
+      data-testid={tab.kind === "browser" ? "ticket-browser-tab" : undefined}
       data-preview={preview ? "true" : undefined}
       label={tab.label}
       active={active}
@@ -256,9 +272,18 @@ function TicketTab({
       // A landing auto-title reveals here word by word (VC-81); file and
       // terminal tabs stay static.
       revealLabel={tab.kind === "chat"}
-      status={tab.status ?? terminalDot ?? undefined}
+      status={
+        tab.status ??
+        (tab.kind === "browser" && tab.loading ? "working" : (terminalDot ?? undefined))
+      }
       leading={
-        terminalDot === null && terminal !== null ? (
+        tab.kind === "browser" ? (
+          <BrowserIcon
+            aria-hidden
+            weight="bold"
+            className="size-3 shrink-0 text-muted-foreground"
+          />
+        ) : terminalDot === null && terminal !== null ? (
           <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
         ) : null
       }
@@ -376,6 +401,7 @@ export function TicketTabStrip({
   onRenameSessionTab,
   onNewSession,
   onNewChat,
+  onNewBrowser,
   skills,
   onNewChatWithSkill,
   railCollapsed,
@@ -392,7 +418,17 @@ export function TicketTabStrip({
       label="Ticket tabs"
       actions={
         <>
-          <div className="flex items-center">
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="New Browser Tab"
+              onClick={onNewBrowser}
+            >
+              <PlusIcon />
+              Browser
+            </Button>
             {/* The chord hint belongs here: ⌘T / ⌥⌘T resolve against the
                 surface in front (`lib/new-session-shortcut.ts`), so inside a
                 ticket they start exactly what this control starts.

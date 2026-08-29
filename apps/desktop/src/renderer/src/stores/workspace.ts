@@ -193,9 +193,9 @@ export interface WorkspaceUiState {
   projectFileViewStates: Record<string, unknown>;
   /**
    * Which tab is in front on Home. {@link HOME_BOARD_TAB_ID} for the permanent
-   * Board tab, a terminal session id, a `chat:<sessionId>` id, or a
-   * `file:<relPath>` id. Prefixes separate chat/File identity from UUID-shaped
-   * terminals and from the bare permanent word.
+   * Board tab, a terminal session id, a `chat:<sessionId>` id, a
+   * `file:<relPath>` id, or a `browser:<opaqueId>` id. Prefixes separate those
+   * identities from UUID-shaped terminals and from the bare permanent word.
    *
    * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
    * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
@@ -403,6 +403,11 @@ interface WorkspaceState {
    * considering `openSessionTabIds` as the live non-file tabs in the strip.
    */
   closeHomeFile(projectId: string, relPath: string, openSessionTabIds: readonly string[]): void;
+  /**
+   * Removes one main-owned Browser Tab from Home's session-local navigation
+   * memory. `openTabIds` is the live strip after main accepted the close.
+   */
+  closeHomeBrowserTab(projectId: string, tabId: string, openTabIds: readonly string[]): void;
   /**
    * THE seam for "Home is now in front", optionally bringing `tabId` forward.
    *
@@ -970,6 +975,26 @@ export function createWorkspaceStore(storage?: StateStorage) {
               projectFiles:
                 activeFile === null ? projectFiles : activateFile(projectFiles, activeFile),
               projectFileViewStates,
+              homeActiveTab: close.active,
+              homeTabHistory: close.history,
+            });
+          });
+        },
+
+        closeHomeBrowserTab(projectId, tabId, openTabIds) {
+          set((state) => {
+            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            if (current.homeActiveTab !== tabId) {
+              return patchWorkspace(state, projectId, {
+                homeTabHistory: current.homeTabHistory.filter((candidate) => candidate !== tabId),
+              });
+            }
+            const close = closeHomeTabHistory({
+              history: current.homeTabHistory,
+              closedTabId: tabId,
+              openTabIds,
+            });
+            return patchWorkspace(state, projectId, {
               homeActiveTab: close.active,
               homeTabHistory: close.history,
             });
