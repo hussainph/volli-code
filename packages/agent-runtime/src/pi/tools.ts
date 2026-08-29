@@ -47,6 +47,7 @@ import {
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
+import { createBrowserTool } from "./browser-tools";
 import { sessionToolBindings } from "@volli/shared";
 import type {
   CodingToolId,
@@ -125,6 +126,16 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         return createWebFetchTool(binding.port, spec.signal);
       case "web_search":
         return createWebSearchTool(binding.port, spec.signal);
+      case "browser_tabs":
+      case "browser_navigate":
+      case "browser_snapshot":
+      case "browser_act":
+      case "browser_screenshot":
+      case "browser_console":
+        // Six names, one port, one factory: the binding arms all carry the
+        // whole RuntimeBrowserPort, and the factory picks the method the name
+        // stands for. See ./browser-tools.ts for why the grain is six.
+        return createBrowserTool(binding.tool, binding.port, spec.signal);
     }
   });
 }

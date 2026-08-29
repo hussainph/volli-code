@@ -76,6 +76,24 @@ export const NON_CODING_TOOL_IDS = [
   "web_fetch",
   /** Asking the configured search provider for references, through Volli's own search boundary. */
   "web_search",
+  // The six names below are one capability — the Browser port — split only for
+  // the model's sake: a tool per intent keeps each schema small and each call
+  // legible in the ledger, while membership stays all-or-nothing because one
+  // port answers them all. Appended after the names that shipped before them
+  // and never reordered: the Cache Prefix is computed over the serialized tool
+  // array, and a durable Snapshot that recorded the old order must stay valid.
+  /** Listing the Browser Tabs this Session may see. */
+  "browser_tabs",
+  /** Opening or steering a Browser Tab: a URL, back, forward, or reload. */
+  "browser_navigate",
+  /** Reading a Browser Tab as an accessibility snapshot with actionable refs. */
+  "browser_snapshot",
+  /** Acting on a snapshot ref: click, type, press, select, hover, scroll, wait. */
+  "browser_act",
+  /** Capturing a Browser Tab as an image for the model and the person both. */
+  "browser_screenshot",
+  /** Reading a Browser Tab's console messages and page errors, bounded. */
+  "browser_console",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

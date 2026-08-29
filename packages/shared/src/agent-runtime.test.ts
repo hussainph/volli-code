@@ -6,6 +6,7 @@ import {
   REASONING_LEVELS,
   sessionToolIds,
   type RuntimeAskRequest,
+  type RuntimeBrowserPort,
 } from "./agent-runtime";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import {
@@ -141,6 +142,21 @@ const port = async () => {
 };
 
 /**
+ * Stands in for a wired Browser port. Never called, for {@link port}'s reason:
+ * membership reads presence, and the six browser tools ride this one port
+ * together — a Session with somewhere to send a browser action has all of
+ * them, and one with nowhere has none.
+ */
+const browserPort: RuntimeBrowserPort = {
+  tabs: port,
+  navigate: port,
+  snapshot: port,
+  act: port,
+  screenshot: port,
+  console: port,
+};
+
+/**
  * The one derivation of a Session's Agent Tool Surface.
  *
  * These are not tests of a list-builder. They are the tests that stand in for a
@@ -161,6 +177,21 @@ describe("sessionToolIds", () => {
     expect(sessionToolIds({ tools: { tools: [] }, askUser: port })).toEqual(["ask_user"]);
     expect(sessionToolIds({ tools: { tools: [] }, webFetch: port })).toEqual(["web_fetch"]);
     expect(sessionToolIds({ tools: { tools: [] }, webSearch: port })).toEqual(["web_search"]);
+  });
+
+  it("offers all six browser tools together exactly when the one Browser port is wired", () => {
+    // One port, six names: listing, navigating, snapshotting, acting, shooting
+    // and reading the console are one capability with one answerer, so a spec
+    // cannot offer a Session the ability to look without the ability to act —
+    // that split is a later grant design, not a port shape.
+    expect(sessionToolIds({ tools: { tools: [] }, browser: browserPort })).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+    ]);
   });
 
   it("puts the bundle first and the ports in vocabulary order, because the Cache Prefix is computed over it", () => {
@@ -186,9 +217,10 @@ describe("sessionToolIds", () => {
       askUser: port,
       webFetch: port,
       webSearch: port,
+      browser: browserPort,
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
-    expect(everything).toHaveLength(7);
+    expect(everything).toHaveLength(13);
   });
 });
