@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   dialog,
   ipcMain,
   nativeTheme,
@@ -46,7 +47,12 @@ import type {
   SessionToolId,
 } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
-import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
+import type {
+  BrowserTabStateEvent,
+  FirstPaintHint,
+  VolliIpcChannel,
+  VolliIpcEvent,
+} from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
@@ -205,6 +211,8 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
+import { BrowserTabHost } from "./browser/tab-host";
+import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -1647,6 +1655,23 @@ app.whenReady().then(async () => {
 
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    publishState: (tab) => {
+      const event = { tab } satisfies BrowserTabStateEvent;
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed()) continue;
+        window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
+      }
+    },
+  });
+  registerBrowserTabIpcHandlers(browserTabs);
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
