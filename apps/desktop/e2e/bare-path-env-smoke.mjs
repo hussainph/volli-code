@@ -65,7 +65,7 @@ const WAIT_TIMEOUT_MS = 12_000;
  * Where a FAILING run leaves its evidence — screenshot, the main process's own
  * stdout/stderr, the renderer console. Overridable by first argument, the same
  * way every other capturing probe here takes one (`docs-shots.mjs`,
- * `design-language-shots.mjs`, `button-shape-shots.mjs`), and otherwise derived
+ * `ticket-rail-shots.mjs`, `tab-strip-shots.mjs`), and otherwise derived
  * at runtime. A literal path is the one thing this must never be: pinned to the
  * machine the probe was written on it cannot exist anywhere else, so the single
  * artifact the failure path exists to produce lands nowhere useful — or the

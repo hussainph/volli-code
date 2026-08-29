@@ -233,9 +233,25 @@ async function openTicketViaCard(page) {
 async function pickCompletion(page, query, label) {
   await page.keyboard.type(query);
   const widget = page.locator(".suggest-widget.visible");
-  await waitUntil(`completion popup for ${query}`, async () => (await widget.count()) === 1, {
-    timeout: 8000,
-  });
+  // Monaco's suggest widget appears only once its completion provider has
+  // answered. 8s was measured against a warm dev Mac and was not enough on CI.
+  //
+  // Waiting longer is not sufficient on its own: for a query that matches no
+  // existing artifact (`@newnote`), Monaco can CLOSE the popup when the
+  // synchronous pass yields nothing, and the `Create artifact "…"` row only
+  // arrives when the provider resolves. A closed popup never reopens by
+  // itself, so the probe re-triggers suggestions while it waits — which is
+  // exactly what a user does. `@probe`, which matches a seeded file, passed on
+  // CI throughout; only the create-a-new-one path failed.
+  await waitUntil(
+    `completion popup for ${query}`,
+    async () => {
+      if ((await widget.count()) === 1) return true;
+      await page.keyboard.press("Control+Space");
+      return null;
+    },
+    { timeout: 25_000, interval: 500 },
+  );
   const exact = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
   const option = widget
     .locator(".monaco-list-row")
@@ -607,12 +623,19 @@ async function main() {
           timeout: 20000,
         });
         const probeTab = fileTab(page, ARTIFACT_NAME);
-        const tabsRestored = await waitUntil("file tabs restored", async () => {
-          const probe = (await probeTab.count()) === 1;
-          const created = (await fileTab(page, `${CREATED_NAME}.md`).count()) === 1;
-          const repo = (await fileTab(page, REPO_FILE_NAME).count()) === 1;
-          return probe && created && repo;
-        });
+        // Restoring three file tabs from persisted state after a real relaunch
+        // is slower than waitUntil's 12s default allows on a CI runner, where
+        // this timed out with last value false.
+        const tabsRestored = await waitUntil(
+          "file tabs restored",
+          async () => {
+            const probe = (await probeTab.count()) === 1;
+            const created = (await fileTab(page, `${CREATED_NAME}.md`).count()) === 1;
+            const repo = (await fileTab(page, REPO_FILE_NAME).count()) === 1;
+            return probe && created && repo;
+          },
+          { timeout: 30_000 },
+        );
         const activeRestored = await waitUntil(
           "probe.md active after restart",
           async () => (await probeTab.getAttribute("aria-selected")) === "true",

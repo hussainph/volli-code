@@ -53,6 +53,22 @@ import {
 const { scratch, userDataDir, dbPath, cleanup } = await makeShortScratch("pty");
 const { attempt, summarize } = createRunner();
 
+/**
+ * Whether `shellPath` is a zsh, and so whether the PATH-restoring chain applies.
+ *
+ * Mirrors `isZshShell` in packages/shared/src/harness/shell-init.ts, which is
+ * the source of truth. Restated here rather than imported because these probes
+ * are plain .mjs run straight from node and none of them pulls in a workspace
+ * package. Matched on the basename, so `/bin/zsh`, `/opt/homebrew/bin/zsh` and
+ * a versioned `zsh-5.9` all count while `/bin/bash` does not.
+ */
+function isZshShell(shellPath) {
+  // `ps -o comm=` reports a LOGIN shell as "-zsh", so the leading dash goes
+  // before the basename is matched.
+  const base = shellPath.slice(shellPath.lastIndexOf("/") + 1).replace(/^-/, "");
+  return base === "zsh" || base.startsWith("zsh-");
+}
+
 /** Strip ANSI escape sequences and normalize CR so we can grep clean lines. */
 function clean(text) {
   // eslint-disable-next-line no-control-regex
@@ -131,6 +147,16 @@ async function main() {
         'echo "SOCK=$VOLLI_SOCKET"; echo "TICK=$VOLLI_TICKET"; ' +
         'echo "SESS=$VOLLI_SESSION"; echo "VOLLI=$(command -v volli)"; ' +
         'echo "SHELLPATH=$PATH"; ' +
+        // Which shell actually runs the session. The chain that puts binDir
+        // back in FRONT after macOS `path_helper` reorders it is zsh-only
+        // (main/shell-init.ts), so the position guarantee below is only a
+        // guarantee where this says zsh.
+        //
+        // Read from the PROCESS, not from $SHELL: $SHELL is the user's login
+        // shell preference and is not exported into this PTY at all (it read
+        // back as "" here, which silently disabled the position assertion — a
+        // check that skips itself is worse than one that fails).
+        'echo "SHELLBIN=$(ps -o comm= -p $$)"; ' +
         'echo "SHIM=$(test -x "$(dirname "$VOLLI_SOCKET")/bin/volli" && echo ok)"; ' +
         'if [ -r /proc/$$/environ ]; then echo "SPAWN$(tr "\\0" "\\n" < /proc/$$/environ | grep "^PATH=")"; fi; ' +
         "echo PTY_PROBE_DONE\n";
@@ -211,10 +237,28 @@ async function main() {
         const entries = shellPath === null ? [] : shellPath.split(":");
         const index = entries.indexOf(binDir);
         const resolved = value("VOLLI");
-        const ok = shimOk && index === 0 && resolved === shimPath;
+        const shellBin = value("SHELLBIN") ?? "";
+
+        // What must hold everywhere: the shim exists, is executable, and is
+        // the `volli` this session resolves. That pair is the property the
+        // outage actually violated — binDir was a MEMBER of PATH the whole
+        // time while a different `volli` won `command -v`.
+        //
+        // Position 0 is the stronger claim, and it is only available where the
+        // zsh chain runs: `path_helper` rebuilds PATH in every macOS login
+        // shell, and main/shell-init.ts puts binDir back in front afterwards
+        // for zsh ONLY. On a non-zsh login shell there is no such hook, so
+        // binDir keeps whatever position path_helper left it in — position 26
+        // of 32 on a CI runner, with the correct shim still winning. Asserting
+        // it there would fail a machine whose behaviour is correct.
+        const chainApplies = isZshShell(shellBin);
+        const ok = shimOk && resolved === shimPath && (!chainApplies || index === 0);
         return {
           ok,
-          detail: `shim=${shimOk} binDirPosition=${index === -1 ? "absent" : `${index + 1} of ${entries.length}`} resolved=${JSON.stringify(resolved)} want=${JSON.stringify(shimPath)}`,
+          detail:
+            `shim=${shimOk} shell=${JSON.stringify(shellBin)} chainApplies=${chainApplies} ` +
+            `binDirPosition=${index === -1 ? "absent" : `${index + 1} of ${entries.length}`} ` +
+            `resolved=${JSON.stringify(resolved)} want=${JSON.stringify(shimPath)}`,
         };
       },
     );

@@ -175,10 +175,27 @@ async function main() {
       return { ok: after < before, detail: `scrollTop ${before} -> ${after}` };
     });
 
-    await page.keyboard.press("Escape");
-    await sleep(200);
-    await page.keyboard.press("Escape");
-    await sleep(300);
+    // Close the composer, and PROVE it closed.
+    //
+    // The next section double-clicks a card on the board underneath, and its
+    // header promises "NO dialog underneath". Two Escapes and a 300ms sleep did
+    // not deliver that on CI: the dialog was still data-state="open" and
+    // Playwright reported it intercepting the dblclick while the card sat there
+    // visible, enabled and stable. One Escape is also not reliably enough —
+    // the caret can be inside the composer's Monaco description, which consumes
+    // the first press itself.
+    //
+    // So press until the dialog is actually gone, and throw if it never goes.
+    // Failing here names the real problem; falling through produced a 30s
+    // dblclick timeout that blamed the card.
+    const composer = page.locator('[data-testid="new-ticket-composer"]');
+    let composerClosed = false;
+    for (let attemptIndex = 0; attemptIndex < 10 && !composerClosed; attemptIndex += 1) {
+      await page.keyboard.press("Escape");
+      await sleep(300);
+      composerClosed = (await composer.count()) === 0;
+    }
+    if (!composerClosed) throw new Error("New-ticket composer never closed after 10 Escapes");
 
     // === 3. The rail's label picker, with NO dialog underneath =============
     await page.locator("article").first().dblclick();
