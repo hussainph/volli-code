@@ -177,6 +177,15 @@ export class BrowserTabController {
     this.#generation += 1;
   }
 
+  /**
+   * Adopt the generation the host counted off the webContents' own events.
+   * Monotonic by construction — the larger count wins and a smaller one is a
+   * late echo, never a reason to resurrect refs that already staled.
+   */
+  syncGeneration(generation: number): void {
+    this.#generation = Math.max(this.#generation, generation);
+  }
+
   get generation(): number {
     return this.#generation;
   }

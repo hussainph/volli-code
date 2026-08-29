@@ -287,6 +287,16 @@ export class BrowserTabHost {
     this.attached = null;
   }
 
+  /**
+   * The one seam the agent port drives a tab's engine through: the live
+   * webContents, whose app-private `debugger` is the CDP wire. Handed out for
+   * exactly that composition — nothing else in the app reaches a remote
+   * page's contents, and the renderer never can.
+   */
+  webContentsOf(tabId: string): WebContentsView["webContents"] {
+    return this.requireTab(tabId).view.webContents;
+  }
+
   /** Lists only the caller's product scope, never Chromium's positional view order. */
   list(scope: { projectId: string; ticketId?: string }): BrowserTabState[] {
     const result: BrowserTabState[] = [];

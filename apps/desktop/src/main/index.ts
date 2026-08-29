@@ -41,6 +41,7 @@ import {
 } from "@volli/shared";
 import type {
   PromptResource,
+  RuntimeBrowserPort,
   SessionEnvRepair,
   SessionEvent,
   SessionInput,
@@ -213,6 +214,7 @@ import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
+import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -779,6 +781,26 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  // Assigned once the BrowserTabHost is built inside the ready path below; the
+  // attach-time browser-port resolver reads it lazily, long after boot — the
+  // same bargain ptyManagerRef strikes with the worktree guards.
+  let browserTabsRef: BrowserTabHost | null = null;
+  // Membership only, exactly like the ask placeholder beside it: resolution
+  // names the tools a new Session records, and no method here is ever called.
+  // The adapter binds the real scoped port at attach.
+  const browserMembership: RuntimeBrowserPort = (() => {
+    const unresolved = async (): Promise<never> => {
+      throw new Error("Tool-surface resolution cannot reach a Browser Tab.");
+    };
+    return {
+      tabs: unresolved,
+      navigate: unresolved,
+      snapshot: unresolved,
+      act: unresolved,
+      screenshot: unresolved,
+      console: unresolved,
+    };
+  })();
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null
       ? {
@@ -795,6 +817,11 @@ app.whenReady().then(async () => {
                 throw new Error("Tool-surface resolution cannot ask a question.");
               },
               ...web,
+              // The desktop always carries the Browser host, so every new
+              // Session records the six browser tools. Recorded surfaces from
+              // builds without them keep their shorter list and are bound
+              // without a port — the adapter's wants-check honours the record.
+              browser: browserMembership,
             });
           },
           record: async (sessionId, tools) => {
@@ -878,6 +905,21 @@ app.whenReady().then(async () => {
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          // The Session's Browser capability, composed at attach over the one
+          // host: the registry decides which tabs the scope may see, and the
+          // CDP wire is each tab's app-private debugger — never a debug port.
+          resolveBrowserPort: (scope) => {
+            const host = browserTabsRef;
+            if (host === null) {
+              throw new Error("The Browser host is not ready; retry the attachment.");
+            }
+            return createAgentBrowserPort({
+              host,
+              scope,
+              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
+              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+            });
+          },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
           // recorded once before the first runtime construction; every later
@@ -1671,6 +1713,7 @@ app.whenReady().then(async () => {
       }
     },
   });
+  browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
   const mainWindow = createWindow(ptyManager, currentFirstPaint());
   mainWindow.webContents.once("did-finish-load", () => {

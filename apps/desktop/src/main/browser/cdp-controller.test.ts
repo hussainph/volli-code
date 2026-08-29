@@ -108,6 +108,22 @@ describe("BrowserTabController", () => {
     expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
   });
 
+  it("adopts the host's generation so navigation observed elsewhere stales refs here", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    // The host watched the webContents navigate twice; the controller adopts
+    // the larger count and never moves backward on a smaller one.
+    controller.syncGeneration(3);
+    controller.syncGeneration(2);
+
+    expect(controller.generation).toBe(3);
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+    ).rejects.toThrow(BrowserRefusal);
+  });
+
   it("refuses a ref no snapshot minted, naming the rule", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
     const controller = new BrowserTabController(page.transport);

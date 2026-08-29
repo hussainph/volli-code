@@ -496,6 +496,91 @@ describe("Pi native adapter attach", () => {
     expect(asked).toEqual([{ fetch: "https://example.com/" }, { search: "electron safeStorage" }]);
   });
 
+  it("offers no browser tool to a Session whose host wired none", async () => {
+    const { runtime } = await attached();
+
+    // Absent rather than present-and-refusing, on web access's terms: a spec
+    // that carries no port offers no tool, and the model is not told the
+    // Browser exists.
+    expect("browser" in runtime.spec).toBe(false);
+  });
+
+  it("hands the desktop's Browser port to a recorded surface, scoped to the Session's own Ticket", async () => {
+    const scopes: unknown[] = [];
+    const listed: unknown[] = [];
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "browser_tabs",
+          "browser_navigate",
+          "browser_snapshot",
+          "browser_act",
+          "browser_screenshot",
+          "browser_console",
+        ],
+      }),
+      resolveBrowserPort: (scope) => {
+        scopes.push(scope);
+        return {
+          tabs: async (input) => {
+            listed.push(input.signal.aborted);
+            return { tabs: [] };
+          },
+          navigate: async () => {
+            throw new Error("unused");
+          },
+          snapshot: async () => {
+            throw new Error("unused");
+          },
+          act: async () => {
+            throw new Error("unused");
+          },
+          screenshot: async () => {
+            throw new Error("unused");
+          },
+          console: async () => {
+            throw new Error("unused");
+          },
+        };
+      },
+    });
+
+    // The scope is the adapter's word, from the Session's own context — never
+    // a value the model or the port could invent.
+    expect(scopes).toEqual([{ projectId: "project-1", ticketId: "ticket-1" }]);
+    await runtime.spec.browser?.tabs({ signal: new AbortController().signal });
+    expect(listed).toEqual([false]);
+  });
+
+  it("refuses attachment rather than binding a frozen browser surface the host cannot answer", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "browser_tabs",
+          "browser_navigate",
+          "browser_snapshot",
+          "browser_act",
+          "browser_screenshot",
+          "browser_console",
+        ],
+      }),
+    });
+
+    // The frozen surface is a promise about the provider tool array; a build
+    // that cannot keep it must fail the attachment, not shrink the surface.
+    await expect(attempt).rejects.toThrow(/Browser/);
+  });
+
   it("resolves the ports once per attachment rather than per turn", async () => {
     let resolutions = 0;
     const { runtime } = await attached({
