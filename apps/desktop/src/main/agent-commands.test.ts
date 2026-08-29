@@ -4924,6 +4924,45 @@ describe("identify env block (VC-94)", () => {
     ]);
   });
 
+  // A worktree is not under the main checkout, so the checkout cannot be the
+  // boundary for a caller standing in one. The most specific stamped worktree
+  // containing the cwd is, whether or not the asking Session owns that ticket.
+  it("bounds a caller standing in a ticket worktree at that worktree", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-1", worktreePath: "/wt/VC-1" }));
+    const askedScopes: Array<{ cwd: string; projectRoot: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      sessionEnv: async (cwd, projectRoot) => {
+        askedScopes.push({ cwd, projectRoot });
+        return report;
+      },
+    });
+
+    await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: {
+        cwd: "/wt/VC-1/packages/shared",
+        env: { socket: "/tmp/volli.sock" },
+      },
+    });
+
+    expect(askedScopes).toEqual([{ cwd: "/wt/VC-1/packages/shared", projectRoot: "/wt/VC-1" }]);
+  });
+
   it("omits the env block rather than inventing one when main has no env facts", async () => {
     ctx = openTestDb();
     insertProject(

@@ -16,6 +16,8 @@
  * unit-testable and the seams stay visible.
  */
 
+import { pathContains } from "./agent-surface";
+
 /**
  * The tools a session's PATH is MEASURED for — what `volli identify` reports
  * and `volli doctor` looks up, not what a project needs. Measuring is cheap
@@ -203,12 +205,6 @@ function normalizeDirectory(path: string): string {
   return normalized;
 }
 
-/** Whether `path` is `root` itself or a directory below it. */
-function isWithinDirectory(root: string, path: string): boolean {
-  if (path === root) return true;
-  return root === "/" ? path.startsWith("/") : path.startsWith(`${root}/`);
-}
-
 /** The directory above an absolute `path`. */
 function parentDirectory(path: string): string {
   const cut = path.lastIndexOf("/");
@@ -246,13 +242,43 @@ function* workspaceAncestors(
 ): Generator<WorkspaceAncestor> {
   const root = normalizeDirectory(projectRoot);
   const start = normalizeDirectory(cwd);
-  let directory = isWithinDirectory(root, start) ? start : root;
+  let directory = pathContains(root, start) ? start : root;
   for (;;) {
     const isRepositoryRoot = pathExists(joinPath(directory, ".git"));
     yield { directory, isRepositoryRoot };
     if (isRepositoryRoot || directory === root) return;
     directory = parentDirectory(directory);
   }
+}
+
+/**
+ * The outer boundary a caller adopts when nothing registered one for it.
+ *
+ * Main always knows the project a measurement is scoped to and passes that
+ * root itself. The CLI does not: `volli doctor` and the degraded `identify`
+ * measure the directory this process happens to stand in, and the app that
+ * could name its project may not even be running. Bounding those at the cwd
+ * would answer a different question than the one asked — a session in
+ * `packages/shared` of a pnpm monorepo would stop before the root that holds
+ * the lockfile and the `node_modules`, and report npm and a missing install
+ * for a workspace that has neither problem.
+ *
+ * So the marker decides: the enclosing repository root when `cwd` is inside a
+ * checkout, `cwd` itself when no repository encloses it. `.git` keeps doing
+ * the work it always did for a package subdirectory, and the folder the
+ * unbounded walk used to escape — the one no repository encloses — now
+ * answers only for itself instead of walking to `/`.
+ *
+ * A home directory that is itself a checkout still bounds the folders beneath
+ * it, exactly as it did before this boundary existed. That is the residual
+ * case a search for a marker cannot close and a registered root can, which is
+ * why every caller that HAS a root passes it instead of calling this.
+ */
+export function enclosingWorkspaceRoot(cwd: string, pathExists: (path: string) => boolean): string {
+  for (const { directory, isRepositoryRoot } of workspaceAncestors(cwd, "/", pathExists)) {
+    if (isRepositoryRoot) return directory;
+  }
+  return normalizeDirectory(cwd);
 }
 
 /**

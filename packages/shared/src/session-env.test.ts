@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  enclosingWorkspaceRoot,
   memoizedPathExists,
   REQUIRABLE_SESSION_ENV_TOOLS,
   requiredSessionEnvTools,
@@ -504,5 +505,67 @@ describe("requiredSessionEnvTools", () => {
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/package-lock.json"]).exists,
       ),
     ).toEqual(["git", "node", "npm"]);
+  });
+});
+
+// The boundary a caller finds for itself, for the CLI: main is told its
+// project root, `volli doctor` has to look for one.
+describe("enclosingWorkspaceRoot", () => {
+  it("is the checkout a package subdirectory belongs to", () => {
+    expect(
+      enclosingWorkspaceRoot(
+        "/work/volli/packages/shared",
+        resolver([], ["/work/volli/.git"]).exists,
+      ),
+    ).toBe("/work/volli");
+  });
+
+  // The linked worktree's `.git` FILE, same as everywhere else in this module.
+  it("stops at a linked worktree's marker rather than the checkout above it", () => {
+    expect(
+      enclosingWorkspaceRoot(
+        "/wt/VC-1/packages/a",
+        resolver([], ["/wt/VC-1/.git", "/wt/.git"]).exists,
+      ),
+    ).toBe("/wt/VC-1");
+  });
+
+  // The bug this whole boundary exists for: with no marker anywhere above it,
+  // the folder answers for itself instead of reaching `~` or `/`.
+  it("is the cwd itself when no repository encloses it", () => {
+    expect(enclosingWorkspaceRoot("/Users/me/projects/empty", resolver().exists)).toBe(
+      "/Users/me/projects/empty",
+    );
+  });
+
+  it("answers for the filesystem root without looping", () => {
+    expect(enclosingWorkspaceRoot("/", resolver().exists)).toBe("/");
+  });
+
+  it("reads a trailing slash as the same directory", () => {
+    expect(enclosingWorkspaceRoot("/Users/me/notes/", resolver().exists)).toBe("/Users/me/notes");
+  });
+
+  // What a caller does with it: the pair below is what `volli doctor` asks,
+  // and the root it found is what keeps the monorepo's answer whole.
+  it("carries a package subdirectory to the root's own manager and install", () => {
+    const exists = memoizedPathExists(
+      resolver(
+        [],
+        [
+          "/work/.git",
+          "/work/package.json",
+          "/work/pnpm-lock.yaml",
+          "/work/node_modules",
+          "/work/packages/a/package.json",
+        ],
+      ).exists,
+    );
+    const cwd = "/work/packages/a";
+    const root = enclosingWorkspaceRoot(cwd, exists);
+
+    expect(requiredSessionEnvTools(cwd, root, exists)).toEqual(["git", "node", "pnpm"]);
+    expect(workspaceDependenciesStatus(cwd, root, exists)).toBe("installed");
+    expect(workspaceInstallCommand(cwd, root, exists)).toBe("pnpm install");
   });
 });

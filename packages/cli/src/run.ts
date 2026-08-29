@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 
 import {
   declaredPreviewContract,
+  enclosingWorkspaceRoot,
   errorMessage,
   isAgentMutationPlan,
   makeAgentError,
@@ -81,8 +82,10 @@ async function writeDegradedIdentify(
     tools[tool] = typeof resolved === "string" ? resolved : null;
   }
   // Both workspace questions below walk the same ancestors; one memo makes
-  // that one stat per path and one consistent moment.
+  // that one stat per path and one consistent moment. No app answered, so no
+  // registered project scopes the walk: the enclosing checkout bounds it.
   const pathExists = memoizedPathExists(dependencies.pathExists ?? existsSync);
+  const projectRoot = enclosingWorkspaceRoot(dependencies.cwd, pathExists);
   dependencies.stdout(
     renderCliSuccess(
       "identify",
@@ -100,8 +103,8 @@ async function writeDegradedIdentify(
           tools,
           // Which of them this workspace actually implies — a disk question,
           // so the degraded block answers it as confidently as main does.
-          requiredTools: requiredSessionEnvTools(dependencies.cwd, dependencies.cwd, pathExists),
-          dependencies: workspaceDependenciesStatus(dependencies.cwd, dependencies.cwd, pathExists),
+          requiredTools: requiredSessionEnvTools(dependencies.cwd, projectRoot, pathExists),
+          dependencies: workspaceDependenciesStatus(dependencies.cwd, projectRoot, pathExists),
         },
         degraded: true,
       },
@@ -121,12 +124,17 @@ async function writeDegradedIdentify(
 async function doctorObservation(
   dependencies: RunCliDependencies,
 ): Promise<Record<string, unknown>> {
+  // Nothing here registered a project root, so the enclosing checkout is the
+  // boundary: an audit run from a package subdirectory still reads the
+  // workspace root that names the manager, and one run in a folder no
+  // repository encloses stops there instead of at `/`.
+  const pathExists = memoizedPathExists(dependencies.pathExists ?? existsSync);
   return {
     ...(await dependencies.observe()),
     requiredTools: requiredSessionEnvTools(
       dependencies.cwd,
-      dependencies.cwd,
-      memoizedPathExists(dependencies.pathExists ?? existsSync),
+      enclosingWorkspaceRoot(dependencies.cwd, pathExists),
+      pathExists,
     ),
   };
 }
