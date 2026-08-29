@@ -1,10 +1,31 @@
 name: Release
 
-# Tag-driven release lane (VC-25): pushing a `v*` tag produces a Developer
-# ID-signed, notarized, stapled build published to GitHub Releases, where the
-# in-app updater (VC-24, electron-updater) picks it up. Releasing is:
+# Release lane (VC-25): a `v*` tag produces a Developer ID-signed, notarized,
+# stapled build published to GitHub Releases, where the in-app updater (VC-24,
+# electron-updater) picks it up.
 #
-#   git tag v0.x.y && git push origin v0.x.y
+# There are two doors into this workflow, and they end in the same place:
+#
+#   1. BUTTON (workflow_dispatch) — the default. Actions -> Release -> Run
+#      workflow, pick patch/minor/major, or `gh workflow run release.yml -f
+#      bump=patch`. The `prepare` job bumps both package.json files on a
+#      runner, commits, tags and pushes, then hands off to the build job.
+#      Nothing is built, tested or tagged on a developer machine.
+#
+#   2. TAG PUSH — the original path, still supported for a hand-made tag:
+#      git tag v0.x.y && git push origin v0.x.y
+#      This skips `prepare` entirely and goes straight to the build job, so
+#      the version bump has to already be committed.
+#
+# Why the button does the bump AND the build in ONE run, rather than pushing a
+# tag and letting door 2 catch it: a tag pushed with GITHUB_TOKEN does not
+# trigger further workflow runs (GitHub's loop-prevention rule). A `prepare`
+# job that only tagged would therefore sit there having released nothing. The
+# same rule is what stops this workflow from re-entering itself, so exactly
+# one release happens per press. IF ANYONE EVER SWAPS THE PUSH TO A PAT OR A
+# DEPLOY KEY, door 2 starts firing on the pushed tag and every button press
+# produces TWO release runs racing for the same release — see the header of
+# the pre-create step for what that race does.
 #
 # All signing/notarization/publish mechanics live in
 # apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
@@ -62,17 +83,151 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version to increment"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: "Exact version instead, e.g. 0.2.0 or 0.2.0-canary.1 (overrides bump)"
+        type: string
+        default: ""
+      require_green:
+        description: "Refuse to release unless CI passed on the commit being released"
+        type: boolean
+        default: true
 
 permissions:
   # electron-builder creates the GitHub Release and uploads dmg + zip +
-  # latest-mac.yml using GH_TOKEN.
+  # latest-mac.yml using GH_TOKEN. `prepare` additionally pushes the release
+  # commit and tag to main with it.
   contents: write
 
 jobs:
+  # Door 1 only. Cheap ubuntu runner: everything here is a guard, and a guard
+  # that fails should not have cost a macOS runner first.
+  prepare:
+    name: Bump, tag, push
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # persist-credentials stays TRUE here, unlike every other checkout in
+      # this repo: this job's whole purpose is to push back to main.
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # Refuse to release a red or unproven commit. This is the guard that
+      # replaces "build it locally first": the evidence is the CI run that
+      # already went over this exact SHA, not a developer's machine.
+      - name: "Guard: CI is green on this commit"
+        if: inputs.require_green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "releasing $sha"
+          conclusions=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed" \
+            -q '.workflow_runs[].conclusion' || true)
+          if [ -z "$conclusions" ]; then
+            echo "::error::No completed CI run for $sha. Wait for CI to finish on main, or re-run with require_green=false if you know why it is missing."
+            exit 1
+          fi
+          if ! grep -qx success <<<"$conclusions"; then
+            echo "::error::CI did not succeed on $sha (saw: $(tr '\n' ' ' <<<"$conclusions")). Fix main before releasing."
+            exit 1
+          fi
+          echo "CI is green on $sha"
+
+      - name: Resolve version
+        id: resolve
+        env:
+          IN_VERSION: ${{ inputs.version }}
+          IN_BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          current="$(jq -r .version apps/desktop/package.json)"
+          if [ -n "$IN_VERSION" ]; then
+            version="$IN_VERSION"
+          else
+            # Bump the release core only; any prerelease suffix is dropped,
+            # so patch-bumping 0.2.0-canary.1 yields 0.2.1, not 0.2.1-canary.1.
+            IFS=. read -r maj min pat <<<"${current%%-*}"
+            case "$IN_BUMP" in
+              major) version="$((maj + 1)).0.0" ;;
+              minor) version="${maj}.$((min + 1)).0" ;;
+              patch) version="${maj}.${min}.$((pat + 1))" ;;
+              *) echo "::error::unknown bump '$IN_BUMP'"; exit 1 ;;
+            esac
+          fi
+          # Same shape electron-builder and the updater feed expect. Rejecting
+          # a leading 'v' here is deliberate: these are package.json versions,
+          # and 'vv0.1.3' is the tag that would otherwise result.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a valid version (expected 0.1.3 or 0.2.0-canary.1, with no leading v)"
+            exit 1
+          fi
+          if [ "$version" = "$current" ]; then
+            echo "::error::apps/desktop/package.json is already $version — nothing to bump."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::tag v$version already exists."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "$current -> $version"
+
+      # Both files move together, so the drift that left root stuck at 0.1.0
+      # through two releases cannot recur. --indent 2 reproduces these files
+      # byte-for-byte apart from the value, so the diff stays one line each.
+      - name: Bump versions, commit, tag, push
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for f in package.json apps/desktop/package.json; do
+            tmp="$(mktemp)"
+            jq --indent 2 --arg v "$VERSION" '.version = $v' "$f" > "$tmp"
+            mv "$tmp" "$f"
+          done
+          git diff --stat
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json apps/desktop/package.json
+          git commit -m "chore(release): $VERSION"
+          git tag "$TAG"
+          # Push the branch first: if main moved while this job ran, this is a
+          # non-fast-forward and the ruleset rejects it, so the run fails here
+          # having pushed no tag and released nothing. Re-run to pick up the
+          # new head.
+          git push origin HEAD:main
+          git push origin "$TAG"
+
   release:
     name: Sign, notarize, publish
+    # Door 1 arrives via prepare; door 2 skips it. `always()` is what lets a
+    # skipped dependency still run this job, so the two results are
+    # distinguished explicitly rather than by truthiness.
+    needs: [prepare]
+    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     # arm64, matching the arm64-only target list in electron-builder.yml.
     runs-on: macos-latest
+    env:
+      # The tag this run is releasing, whichever door it came through.
+      REF_NAME: ${{ github.event_name == 'workflow_dispatch' && needs.prepare.outputs.tag || github.ref_name }}
     # Two notarytool --wait submissions (.app during pack, dmg in the staple
     # hook) dominate; usually well under this, but Apple occasionally queues.
     timeout-minutes: 60
@@ -80,19 +235,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          # Door 1's tag was created minutes ago by the prepare job, so this
+          # cannot rely on the ref that triggered the run.
+          ref: ${{ github.event_name == 'workflow_dispatch' && needs.prepare.outputs.tag || github.ref }}
+          # Full history: the "tag is on main" guard below runs merge-base,
+          # which silently cannot answer on the default shallow clone.
+          fetch-depth: 0
           persist-credentials: false
 
       # Fail before the expensive install if the tag cannot produce a coherent
       # release. Exact string match, so prerelease tags (v0.1.0-canary.3) must
       # match package.json exactly too. apps/desktop/package.json is the
       # version electron-builder reads — it names the artifacts and feeds
-      # latest-mac.yml.
+      # latest-mac.yml; root package.json ships nothing (the whole workspace is
+      # private) but is checked so the two cannot silently drift apart, which
+      # is exactly what left root on 0.1.0 while the app shipped 0.1.2.
       - name: "Guard: tag matches app version"
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${REF_NAME#v}"
           pkg="$(jq -r .version apps/desktop/package.json)"
           if [ "$version" != "$pkg" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            echo "::error::Tag $REF_NAME does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+          root="$(jq -r .version package.json)"
+          if [ "$root" != "$pkg" ]; then
+            echo "::error::root package.json is $root but apps/desktop/package.json is $pkg — bump both together."
             exit 1
           fi
           # Channel routing (see header): hyphenated = prerelease tag, goes
@@ -102,6 +270,14 @@ jobs:
             echo "prerelease tag — will publish live as a GitHub pre-release"
           else
             echo "bare tag — will be created as a draft (edit notes, then publish)"
+          fi
+
+      - name: "Guard: tag is on main"
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$REF_NAME is not an ancestor of origin/main — releasing a commit that is not on the mainline."
+            exit 1
           fi
 
       - name: "Guard: release secrets present"
@@ -144,19 +320,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${REF_NAME#v}"
           existing=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
-            jq -r --arg t "$GITHUB_REF_NAME" '[.[] | select(.tag_name == $t)] | length')
+            jq -r --arg t "$REF_NAME" '[.[] | select(.tag_name == $t)] | length')
           if [ "$existing" -gt 0 ]; then
-            echo "release for $GITHUB_REF_NAME already exists — electron-builder will upload into it"
+            echo "release for $REF_NAME already exists — electron-builder will upload into it"
             exit 0
           fi
           if [[ "$version" == *-* ]]; then draft=false; prerelease=true; else draft=true; prerelease=false; fi
           curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
-            -d "{\"tag_name\":\"$GITHUB_REF_NAME\",\"name\":\"$version\",\"draft\":$draft,\"prerelease\":$prerelease}" \
+            -d "{\"tag_name\":\"$REF_NAME\",\"name\":\"$version\",\"draft\":$draft,\"prerelease\":$prerelease}" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" > /dev/null
-          echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $GITHUB_REF_NAME"
+          echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $REF_NAME"
 
       # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
       # (rebuild:native + cache:node-sqlite) — proven to survive on the macOS
