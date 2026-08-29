@@ -28,6 +28,7 @@ import {
 import { isExternalAppId } from "./external-apps";
 import type {
   AgentObservabilityIpcChannel,
+  BrowserIpcChannel,
   CliIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
@@ -156,6 +157,97 @@ function isCommitMessage(value: unknown): boolean {
   }
   return true;
 }
+
+/** The one opaque product id carried by every single-tab Browser command. */
+function isBrowserTabIdArgs(args: unknown[]): args is [{ tabId: string }] {
+  return args.length === 1 && isRecord(args[0]) && typeof args[0]["tabId"] === "string";
+}
+
+// ---- Browser Tab descriptor table ----------------------------------------
+// The Browser workspace's one native-view command surface. URL admission is a
+// host policy rather than a shape decision; these guards only decide whether a
+// renderer supplied every field with the contract's wire type.
+
+export const BROWSER_IPC: {
+  readonly [C in BrowserIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:browser-open": {
+    guard: (args): args is IpcArgs<"volli:browser-open"> => {
+      if (args.length !== 1 || !isRecord(args[0])) return false;
+      return (
+        typeof args[0]["projectId"] === "string" &&
+        isOptionalString(args[0], "ticketId") &&
+        typeof args[0]["url"] === "string"
+      );
+    },
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-close": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-list": {
+    guard: (args): args is IpcArgs<"volli:browser-list"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isOptionalString(args[0], "ticketId"),
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-navigate": {
+    guard: (args): args is IpcArgs<"volli:browser-navigate"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["tabId"] === "string" &&
+      typeof args[0]["url"] === "string",
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-back": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-forward": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-reload": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-set-bounds": {
+    guard: (args): args is IpcArgs<"volli:browser-set-bounds"> => {
+      if (
+        args.length !== 1 ||
+        !isRecord(args[0]) ||
+        typeof args[0]["tabId"] !== "string" ||
+        !isRecord(args[0]["bounds"])
+      ) {
+        return false;
+      }
+      const bounds = args[0]["bounds"];
+      return ["x", "y", "width", "height"].every(
+        (field) =>
+          typeof bounds[field] === "number" && Number.isFinite(bounds[field]) && bounds[field] >= 0,
+      );
+    },
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-show": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-hide": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-open-devtools": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+};
+
+/** Every Browser Tab command, derived so handler registration cannot omit one. */
+export const BROWSER_CHANNELS = Object.keys(BROWSER_IPC) as readonly BrowserIpcChannel[];
 
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
