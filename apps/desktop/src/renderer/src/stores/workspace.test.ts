@@ -1,4 +1,12 @@
-import { DEFAULT_TICKET_SORT, EMPTY_FILE_WORKSPACE } from "@volli/shared";
+import {
+  DEFAULT_TICKET_SORT,
+  EMPTY_FILE_WORKSPACE,
+  splitViewPanes,
+  SPLIT_VIEW_MIN_RATIO,
+  SPLIT_VIEW_ROOT_PANE_ID,
+  type SplitViewBranch,
+  type SplitViewState,
+} from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
@@ -2454,6 +2462,923 @@ describe("tab arrangement — the ticket workspace (VC-189)", () => {
     const tabs = store.getState().byProject["project-a"]?.ticketTabs;
     expect(tabs?.["ticket-1"]?.tabOrder).toEqual(["chat:c1"]);
     expect(tabs?.["ticket-2"]).toBeUndefined();
+  });
+});
+
+/** Deterministic pane ids: "n1", "n2", … in mint order (a pane, then its branch). */
+function paneMinter(): () => string {
+  let minted = 0;
+  return () => {
+    minted += 1;
+    return `n${minted}`;
+  };
+}
+
+function splitStore() {
+  return createWorkspaceStore(createMemoryStorage(), paneMinter());
+}
+
+type Store = ReturnType<typeof createWorkspaceStore>;
+
+const homeSplit = (store: Store, projectId = "project-a"): SplitViewState | null =>
+  store.getState().byProject[projectId]?.homeSplitView ?? null;
+
+const ticketSplit = (store: Store, ticketId = "ticket-1"): SplitViewState | null =>
+  store.getState().byProject["project-a"]?.ticketTabs[ticketId]?.splitView ?? null;
+
+/** The root branch of a split that is known to have one. */
+const rootBranch = (split: SplitViewState | null): SplitViewBranch =>
+  (split as SplitViewState).root as SplitViewBranch;
+
+/** `[id, tabIds, activeTabId]` per pane, in reading order. */
+function panesOf(split: SplitViewState | null): unknown[] {
+  return splitViewPanes(split!).map((leaf) => [leaf.id, [...leaf.tabIds], leaf.activeTabId]);
+}
+
+/**
+ * Home's split view (VC-202). The surface keeps its one strip and its one
+ * active tab; what changes is which PANE each tab is drawn in, and that the
+ * active tab now tracks the focused pane.
+ */
+describe("split view — Home (VC-202)", () => {
+  afterEach(() => {
+    useBoardStore.setState({ selectedByProject: {} });
+  });
+
+  it("splits the surface's one pane, claiming the strip it was handed", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    expect(homeSplit(store)).toEqual({
+      root: {
+        kind: "split",
+        // The pane's id is minted before its branch's.
+        id: "n2",
+        direction: "row",
+        ratio: 0.5,
+        first: {
+          kind: "pane",
+          id: SPLIT_VIEW_ROOT_PANE_ID,
+          // The permanent tab leads the primary pane's claim: it lives there
+          // and nowhere else.
+          tabIds: [HOME_BOARD_TAB_ID, "terminal-1", "chat:c1"],
+          activeTabId: "chat:c1",
+        },
+        second: { kind: "pane", id: "n1", tabIds: [], activeTabId: null },
+      },
+      focusedPaneId: "n1",
+    });
+  });
+
+  it("claims the arrangement when the caller hands no strip", () => {
+    const store = splitStore();
+    store.getState().moveHomeTab("project-a", "chat:c1", ["chat:c1", "terminal-1"]);
+
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "down");
+
+    expect(panesOf(homeSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID, "chat:c1", "terminal-1"], HOME_BOARD_TAB_ID],
+      ["n1", [], null],
+    ]);
+    expect(rootBranch(homeSplit(store)).direction).toBe("column");
+  });
+
+  it("materializes nothing when the split did not happen", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", "not-a-pane", "right");
+
+    expect(store.getState().byProject["project-a"]).toBeUndefined();
+  });
+
+  it("leaves the surface's active tab alone when the new pane is empty", () => {
+    // ⌘\ with a ticket open must not hand Home back to the Board tab — that
+    // would take the whole page over for a pane the person just opened.
+    const store = splitStore();
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "chat:c1",
+      openTicketId: "ticket-1",
+    });
+  });
+
+  it("moves the dragged tab into the new pane and brings it forward", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "terminal-1");
+
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    expect(panesOf(homeSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID, "terminal-1"], "terminal-1"],
+      ["n1", ["chat:c1"], "chat:c1"],
+    ]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
+  });
+
+  it("follows the tab: activating one focuses the pane that holds it", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().setHomeActiveTab("project-a", "terminal-1");
+
+    expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("terminal-1");
+  });
+
+  it("brings the focus back to the pane of the tab already in front", () => {
+    // The no-op guard's second half: with an empty pane focused, the tab in
+    // front lives elsewhere, so selecting it again is a real act.
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["chat:c1"],
+    });
+
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+
+    expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+
+    const before = store.getState().byProject;
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("opens a tab nothing claims into the focused pane — which is the menu's whole trick", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    store.getState().previewHomeFile("project-a", "src/a.ts");
+
+    expect(panesOf(homeSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
+      ["n1", ["file:src/a.ts"], "file:src/a.ts"],
+    ]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:src/a.ts");
+  });
+
+  it("keeps a preview tab in its pane when a glance replaces it in place", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().previewHomeFile("project-a", "src/a.ts");
+    store.getState().focusHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID);
+
+    // The glance replaces the slot from the OTHER pane's point of view: without
+    // the substitution the tab would be treated as new and land here.
+    store.getState().previewHomeFile("project-a", "src/b.ts");
+
+    expect(panesOf(homeSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
+      ["n1", ["file:src/b.ts"], "file:src/b.ts"],
+    ]);
+    expect(homeSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
+  it("mints a pane id of its own when nobody injected one", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    const opened = splitViewPanes(homeSplit(store)!)[1];
+    expect(opened?.id).not.toBe(SPLIT_VIEW_ROOT_PANE_ID);
+    expect(opened?.id.length).toBeGreaterThan(0);
+  });
+
+  it("keeps a renamed tab in its pane, as it keeps its slot", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().pinHomeFile("project-a", "a.ts");
+
+    store.getState().renameHomeFile("project-a", "a.ts", "renamed.ts");
+
+    expect(panesOf(homeSplit(store))[1]).toEqual(["n1", ["file:renamed.ts"], "file:renamed.ts"]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:renamed.ts");
+  });
+
+  it("leaves the panes alone when the renamed file is in no pane and not in front", () => {
+    const store = splitStore();
+    store.getState().pinHomeFile("project-a", "a.ts");
+    store.getState().pinHomeFile("project-a", "z.ts");
+    // The caller's strip named only a.ts, so z.ts is a tab no pane claims — it
+    // renders in the primary pane and nothing here has to be told about it.
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["file:a.ts"],
+    });
+    store.getState().setHomeActiveTab("project-a", "file:a.ts");
+    const before = homeSplit(store);
+
+    store.getState().renameHomeFile("project-a", "z.ts", "zz.ts");
+
+    expect(homeSplit(store)).toBe(before);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("file:a.ts");
+  });
+
+  it("follows a renamed file that was not the tab in front", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().pinHomeFile("project-a", "a.ts");
+    store.getState().pinHomeFile("project-a", "b.ts");
+
+    store.getState().renameHomeFile("project-a", "a.ts", "renamed.ts");
+
+    expect(panesOf(homeSplit(store))[1]).toEqual([
+      "n1",
+      ["file:renamed.ts", "file:b.ts"],
+      "file:b.ts",
+    ]);
+  });
+
+  it("lands on the Board when the pane in focus has nothing to show", () => {
+    // Closing a file from the navigator while an empty pane is focused: the
+    // focused pane has no context, so the surface falls back to its permanent
+    // tab exactly as it does unsplit.
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().focusHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID);
+    store.getState().pinHomeFile("project-a", "a.ts");
+    store.getState().focusHomePane("project-a", "n1");
+
+    store.getState().closeHomeFile("project-a", "a.ts", []);
+
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+
+  it("puts the Board in the primary pane, wherever the focus was", () => {
+    const store = splitStore();
+    store.getState().openTicket("project-a", "ticket-1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().openHomeBoard("project-a");
+
+    expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: HOME_BOARD_TAB_ID,
+      openTicketId: null,
+    });
+  });
+
+  it("returns to the ticket's own pane grammar through openTicket and openHome", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().openTicket("project-a", "ticket-1");
+    expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+
+    store.getState().openHome("project-a", "chat:c1");
+    expect(homeSplit(store)?.focusedPaneId).toBe("n1");
+
+    store.getState().openTicketWorkspace("project-a", "ticket-1");
+    expect(homeSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+  });
+
+  it("closes a file back onto its pane's successor, not the MRU history", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().pinHomeFile("project-a", "a.ts");
+    store.getState().pinHomeFile("project-a", "b.ts");
+    // The MRU would return to a.ts's neighbour by VISIT order; the pane returns
+    // by strip order, which is the pane the eye is in.
+    store.getState().setHomeActiveTab("project-a", "file:a.ts");
+    store.getState().setHomeActiveTab("project-a", "file:b.ts");
+
+    store.getState().closeHomeFile("project-a", "b.ts", []);
+
+    expect(panesOf(homeSplit(store))[1]).toEqual(["n1", ["file:a.ts"], "file:a.ts"]);
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "file:a.ts",
+      projectFiles: { activeRelPath: "a.ts" },
+    });
+  });
+
+  it("collapses the pane a close emptied, and the split with it", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["chat:c1"],
+    });
+    store.getState().previewHomeFile("project-a", "a.ts");
+
+    store.getState().closeHomeFile("project-a", "a.ts", ["chat:c1"]);
+
+    expect(homeSplit(store)).toBeNull();
+    // The surviving pane's order becomes the strip's, and the tab it was
+    // showing is the tab in front.
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeTabOrder: ["chat:c1"],
+      homeActiveTab: "chat:c1",
+    });
+  });
+
+  it("drops a tab this store does not own from its pane", () => {
+    // Chat and terminal tabs close through their own stores; this is the split
+    // view's half of that.
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+    store.getState().moveHomeTabToPane("project-a", "terminal-1", "n1");
+
+    store.getState().removeHomeTabFromSplit("project-a", "terminal-1");
+
+    expect(panesOf(homeSplit(store))[1]).toEqual(["n1", ["chat:c1"], "chat:c1"]);
+    expect(store.getState().byProject["project-a"]?.homeTabHistory).not.toContain("terminal-1");
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
+
+    // Closing the last tab of the primary pane leaves the Board in front.
+    store.getState().removeHomeTabFromSplit("project-a", "chat:c1");
+    expect(homeSplit(store)).toBeNull();
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+  });
+
+  it("lands on the Board when a tab closes elsewhere and the focused pane is empty", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["chat:c1"],
+    });
+
+    store.getState().removeHomeTabFromSplit("project-a", "chat:c1");
+
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
+    expect(homeSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
+  it("moves a tab into another pane, focusing it and bringing it forward", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().moveHomeTabToPane("project-a", "terminal-1", "n1");
+
+    expect(panesOf(homeSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID], HOME_BOARD_TAB_ID],
+      ["n1", ["chat:c1", "terminal-1"], "terminal-1"],
+    ]);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("terminal-1");
+  });
+
+  it("walks the focus between panes, and the active tab follows", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "terminal-1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().focusAdjacentHomePane("project-a", "left");
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "terminal-1",
+    });
+
+    store.getState().focusHomePane("project-a", "n1");
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
+
+    // An outer edge is not a move.
+    const before = store.getState().byProject;
+    store.getState().focusAdjacentHomePane("project-a", "right");
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("resizes a divider, clamped", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    store.getState().setHomeSplitRatio("project-a", "n2", 0.02);
+
+    expect(rootBranch(homeSplit(store)).ratio).toBe(SPLIT_VIEW_MIN_RATIO);
+  });
+
+  it("closes a pane, keeping its tabs and carrying the merged order into the strip", () => {
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "terminal-1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().closeHomePane("project-a", "n1");
+
+    expect(homeSplit(store)).toBeNull();
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeTabOrder: ["terminal-1", "chat:c1"],
+      homeActiveTab: "terminal-1",
+    });
+  });
+
+  it("never carries the permanent tab into an arrangement", () => {
+    // The Board is the fixed leading tab both strips slice off before sorting,
+    // so it is not part of an arrangement even after it has been in a pane.
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+    store.getState().openHomeBoard("project-a");
+
+    store.getState().closeHomePane("project-a", "n1");
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([
+      "terminal-1",
+      "chat:c1",
+    ]);
+  });
+
+  it("arranges a strip inside one pane, pinning what was dragged", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().previewHomeFile("project-a", "glance.ts");
+    store.getState().moveHomeTabToPane("project-a", "chat:c1", "n1");
+
+    store
+      .getState()
+      .moveHomeTabInPane("project-a", "n1", "file:glance.ts", [
+        "chat:c1",
+        "file:glance.ts",
+        "",
+        "chat:c1",
+      ]);
+
+    expect(panesOf(homeSplit(store))[1]).toEqual(["n1", ["chat:c1", "file:glance.ts"], "chat:c1"]);
+    // Arranging a tab is deliberate, so the next glance opens its own tab.
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "glance.ts", pinned: true },
+    ]);
+    // The SURFACE's arrangement is not what a drag inside one pane decided.
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual([]);
+  });
+
+  it("leaves the File workspace alone when the tab arranged in a pane was not one", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["chat:c1"],
+    });
+    const before = store.getState().byProject["project-a"]?.projectFiles;
+
+    store.getState().moveHomeTabInPane("project-a", "n1", "chat:c1", ["chat:c1"]);
+    expect(store.getState().byProject["project-a"]?.projectFiles).toBe(before);
+
+    // A file that is not open is not conjured into one either.
+    store.getState().moveHomeTabInPane("project-a", "n1", "file:gone.ts", ["chat:c1"]);
+    expect(store.getState().byProject["project-a"]?.projectFiles).toBe(before);
+  });
+
+  it("pins a tab dropped back on its own slot, which moved no pane order", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().previewHomeFile("project-a", "glance.ts");
+    const before = homeSplit(store);
+
+    store.getState().moveHomeTabInPane("project-a", "n1", "file:glance.ts", ["file:glance.ts"]);
+
+    expect(homeSplit(store)).toBe(before);
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "glance.ts", pinned: true },
+    ]);
+  });
+
+  it("holds the surface's active tab equal to the focused pane's, all the way through", () => {
+    // THE invariant (plan §8): the rail reads the surface active, so it is the
+    // focused pane's tab or the feature has two sources of truth.
+    const store = splitStore();
+    const focusedTab = (): string | null => {
+      const split = homeSplit(store);
+      return splitViewPanes(split!).find((p) => p.id === split?.focusedPaneId)?.activeTabId ?? null;
+    };
+    const active = (): string | undefined => store.getState().byProject["project-a"]?.homeActiveTab;
+
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+    expect(active()).toBe(focusedTab());
+
+    store.getState().previewHomeFile("project-a", "a.ts");
+    expect(active()).toBe(focusedTab());
+
+    store.getState().focusHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID);
+    expect(active()).toBe(focusedTab());
+
+    store.getState().moveHomeTabToPane("project-a", "terminal-1", "n1");
+    expect(active()).toBe(focusedTab());
+
+    store.getState().closeHomeFile("project-a", "a.ts", ["chat:c1", "terminal-1"]);
+    expect(active()).toBe(focusedTab());
+  });
+
+  it("is a no-op on every pane action while the surface is not split", () => {
+    const store = splitStore();
+    store.getState().setBoardView("project-a", "list");
+    const before = store.getState().byProject;
+
+    store.getState().focusHomePane("project-a", "n1");
+    store.getState().focusAdjacentHomePane("project-a", "right");
+    store.getState().moveHomeTabToPane("project-a", "chat:c1", "n1");
+    store.getState().setHomeSplitRatio("project-a", "n2", 0.3);
+    store.getState().closeHomePane("project-a", "n1");
+    store.getState().moveHomeTabInPane("project-a", "n1", "chat:c1", ["chat:c1"]);
+    store.getState().removeHomeTabFromSplit("project-a", "chat:c1");
+    // …and on a project with no record at all.
+    store.getState().focusHomePane("never-visited", "n1");
+    store.getState().moveHomeTabInPane("never-visited", "n1", "chat:c1", ["chat:c1"]);
+    store.getState().removeHomeTabFromSplit("never-visited", "chat:c1");
+    store.getState().moveTicketTabInPane("never-visited", "ticket-1", "n1", "x", []);
+    store.getState().removeTicketTabFromSplit("never-visited", "ticket-1", "x");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("is a no-op for a pane operation that changed nothing", () => {
+    const store = splitStore();
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["chat:c1"],
+    });
+    const before = store.getState().byProject;
+
+    store.getState().focusHomePane("project-a", "n1"); // already focused
+    store.getState().closeHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID); // the primary never closes
+    store.getState().setHomeSplitRatio("project-a", "n2", 0.5); // the ratio it has
+    store.getState().moveHomeTabInPane("project-a", "n1", "chat:c1", ["chat:c1"]);
+    store.getState().removeHomeTabFromSplit("project-a", "file:not-open.ts");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+});
+
+/** The same grammar one scope down, on a ticket's own record. */
+describe("split view — the ticket workspace (VC-202)", () => {
+  it("splits a ticket's main area, claiming the strip it was handed", () => {
+    const store = splitStore();
+    store.getState().openTicketFile("project-a", "ticket-1", "docs/plan.md");
+
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "down", {
+      surfaceTabIds: ["file:docs/plan.md"],
+    });
+
+    expect(panesOf(ticketSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [TICKET_BODY_TAB_ID, "file:docs/plan.md"], "file:docs/plan.md"],
+      ["n1", [], null],
+    ]);
+    expect(rootBranch(ticketSplit(store)).direction).toBe("column");
+  });
+
+  it("splits a ticket that has no record yet, from its Body tab", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toMatchObject({
+      files: [],
+      active: TICKET_BODY_TAB_ID,
+    });
+    expect(ticketSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
+  it("materializes nothing when the split did not happen", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", "not-a-pane", "right");
+
+    expect(store.getState().byProject["project-a"]).toBeUndefined();
+  });
+
+  it("opens files, diffs and the Body tab into the focused pane", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketDiff("project-a", "ticket-1", "b.ts");
+
+    expect(panesOf(ticketSplit(store))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [TICKET_BODY_TAB_ID], TICKET_BODY_TAB_ID],
+      ["n1", ["file:a.md", "diff:b.ts"], "diff:b.ts"],
+    ]);
+
+    // Re-selecting the tab already in front of the focused pane is nothing.
+    const settled = store.getState().byProject;
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "diff:b.ts");
+    expect(store.getState().byProject).toBe(settled);
+
+    // The Body tab belongs to the primary pane and to no other.
+    store.getState().setTicketActiveTab("project-a", "ticket-1", TICKET_BODY_TAB_ID);
+    expect(ticketSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+    expect(panesOf(ticketSplit(store))[0]).toEqual([
+      SPLIT_VIEW_ROOT_PANE_ID,
+      [TICKET_BODY_TAB_ID],
+      TICKET_BODY_TAB_ID,
+    ]);
+  });
+
+  it("keeps a preview tab and a renamed tab in the pane they were drawn in", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().previewTicketFile("project-a", "ticket-1", "a.ts");
+    store.getState().focusTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID);
+
+    store.getState().previewTicketFile("project-a", "ticket-1", "b.ts");
+    expect(panesOf(ticketSplit(store))[1]).toEqual(["n1", ["file:b.ts"], "file:b.ts"]);
+
+    store.getState().renameTicketFile("project-a", "ticket-1", "b.ts", "renamed.ts");
+    expect(panesOf(ticketSplit(store))[1]).toEqual(["n1", ["file:renamed.ts"], "file:renamed.ts"]);
+  });
+
+  it("leaves the focus alone when a transition did not change what is in front", () => {
+    // Pinning a file in another pane must not yank the eye out of the empty
+    // pane the person just opened.
+    const store = splitStore();
+    store.getState().previewTicketFile("project-a", "ticket-1", "a.ts");
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["file:a.ts"],
+    });
+
+    store.getState().pinTicketFile("project-a", "ticket-1", "a.ts");
+
+    expect(ticketSplit(store)?.focusedPaneId).toBe("n1");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      "file:a.ts",
+    );
+  });
+
+  it("closes a file and a diff back onto the pane's own successor", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketDiff("project-a", "ticket-1", "b.ts");
+
+    store.getState().closeTicketDiff("project-a", "ticket-1", "b.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      "file:a.md",
+    );
+
+    store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
+    // The pane emptied, so it collapsed — and with it the whole split.
+    expect(ticketSplit(store)).toBeNull();
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+  });
+
+  it("falls back to the Body tab when the pane in focus has nothing to show", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().focusTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID);
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    store.getState().openTicketDiff("project-a", "ticket-1", "b.ts");
+    store.getState().focusTicketPane("project-a", "ticket-1", "n1");
+
+    store.getState().closeTicketDiff("project-a", "ticket-1", "b.ts");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      TICKET_BODY_TAB_ID,
+    );
+
+    store.getState().closeTicketFile("project-a", "ticket-1", "a.md");
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      TICKET_BODY_TAB_ID,
+    );
+  });
+
+  it("drops a session tab this store does not own from its pane", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["session-9"],
+    });
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
+
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "session-9");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      TICKET_BODY_TAB_ID,
+    );
+    expect(panesOf(ticketSplit(store))[0]).toEqual([
+      SPLIT_VIEW_ROOT_PANE_ID,
+      [TICKET_BODY_TAB_ID],
+      TICKET_BODY_TAB_ID,
+    ]);
+  });
+
+  it("falls back to the Body tab when a session closes and the focused pane is empty", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["session-9"],
+    });
+
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "session-9");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      TICKET_BODY_TAB_ID,
+    );
+    expect(ticketSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
+  it("moves, focuses, resizes and closes panes, carrying the order back on collapse", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "session-9",
+      surfaceTabIds: ["session-9", "chat:c1"],
+    });
+
+    store.getState().moveTicketTabToPane("project-a", "ticket-1", "chat:c1", "n1");
+    expect(panesOf(ticketSplit(store))[1]).toEqual(["n1", ["session-9", "chat:c1"], "chat:c1"]);
+
+    store.getState().focusAdjacentTicketPane("project-a", "ticket-1", "left");
+    expect(ticketSplit(store)?.focusedPaneId).toBe(SPLIT_VIEW_ROOT_PANE_ID);
+
+    store.getState().setTicketSplitRatio("project-a", "ticket-1", "n2", 0.7);
+    expect(rootBranch(ticketSplit(store)).ratio).toBe(0.7);
+
+    store.getState().closeTicketPane("project-a", "ticket-1", "n1");
+    expect(ticketSplit(store)).toBeNull();
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.tabOrder).toEqual([
+      "session-9",
+      "chat:c1",
+    ]);
+  });
+
+  it("arranges a strip inside one pane, pinning the file that was dragged", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().previewTicketFile("project-a", "ticket-1", "glance.ts");
+    store.getState().moveTicketTabToPane("project-a", "ticket-1", "session-9", "n1");
+
+    store
+      .getState()
+      .moveTicketTabInPane("project-a", "ticket-1", "n1", "file:glance.ts", [
+        "session-9",
+        "file:glance.ts",
+      ]);
+    // A dragged Session tab costs the File workspace nothing.
+    store
+      .getState()
+      .moveTicketTabInPane("project-a", "ticket-1", "n1", "session-9", [
+        "file:glance.ts",
+        "session-9",
+      ]);
+
+    const tabs = store.getState().byProject["project-a"]?.ticketTabs["ticket-1"];
+    expect(panesOf(ticketSplit(store))[1]).toEqual([
+      "n1",
+      ["file:glance.ts", "session-9"],
+      "session-9",
+    ]);
+    expect(tabs?.files).toEqual([{ relPath: "glance.ts", pinned: true }]);
+    expect(tabs?.tabOrder).toEqual([]);
+  });
+
+  it("is a no-op on every pane action while the ticket is not split", () => {
+    const store = splitStore();
+    store.getState().openTicketFile("project-a", "ticket-1", "a.md");
+    const before = store.getState().byProject;
+
+    store.getState().focusTicketPane("project-a", "ticket-1", "n1");
+    store.getState().focusAdjacentTicketPane("project-a", "ticket-1", "right");
+    store.getState().moveTicketTabToPane("project-a", "ticket-1", "file:a.md", "n1");
+    store.getState().setTicketSplitRatio("project-a", "ticket-1", "n2", 0.3);
+    store.getState().closeTicketPane("project-a", "ticket-1", "n1");
+    store.getState().moveTicketTabInPane("project-a", "ticket-1", "n1", "file:a.md", ["file:a.md"]);
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "file:a.md");
+    // …and on a ticket with no record at all, and a project with none.
+    store.getState().focusTicketPane("project-a", "ticket-9", "n1");
+    store.getState().focusTicketPane("never-visited", "ticket-1", "n1");
+    store.getState().moveTicketTabInPane("project-a", "ticket-9", "n1", "x", []);
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-9", "x");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+
+  it("is a no-op for a pane operation that changed nothing", () => {
+    const store = splitStore();
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "session-9",
+      surfaceTabIds: ["session-9"],
+    });
+    const before = store.getState().byProject;
+
+    store.getState().focusTicketPane("project-a", "ticket-1", "n1");
+    store.getState().moveTicketTabInPane("project-a", "ticket-1", "n1", "session-9", ["session-9"]);
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "file:not-open.ts");
+
+    expect(store.getState().byProject).toBe(before);
+  });
+});
+
+describe("split view persistence (VC-202)", () => {
+  it("writes no key at all for a surface that never split", () => {
+    // The whole compatibility promise: a workspace that has not split persists
+    // exactly the blob a build before panes wrote.
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setBoardView("project-a", "list");
+
+    const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
+      state: { byProject: Record<string, Record<string, unknown>> };
+    };
+    expect("homeSplitView" in parsed.state.byProject["project-a"]!).toBe(false);
+  });
+
+  it("restores a split — a layout is a deliberate act, so it outlives the sitting", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage, paneMinter());
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      tabId: "chat:c1",
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "down", {
+      surfaceTabIds: ["session-9"],
+    });
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(panesOf(homeSplit(rehydrated))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [HOME_BOARD_TAB_ID, "terminal-1"], HOME_BOARD_TAB_ID],
+      ["n1", ["chat:c1"], "chat:c1"],
+    ]);
+    expect(panesOf(ticketSplit(rehydrated))).toEqual([
+      [SPLIT_VIEW_ROOT_PANE_ID, [TICKET_BODY_TAB_ID, "session-9"], TICKET_BODY_TAB_ID],
+      ["n3", [], null],
+    ]);
+  });
+
+  it("keeps a record whose only news is a split, at either scope", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage, paneMinter());
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right");
+    store.getState().splitTicketPane("project-b", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right");
+
+    const rehydrated = createWorkspaceStore(storage);
+    expect(homeSplit(rehydrated)).not.toBeNull();
+    expect(ticketSplit(rehydrated, "ticket-1")).toBeNull();
+    expect(
+      rehydrated.getState().byProject["project-b"]?.ticketTabs["ticket-1"]?.splitView,
+    ).not.toBeNull();
+  });
+
+  it("degrades hostile or unreadable stored JSON to no split at all", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: {
+            "project-a": {
+              homeSplitView: { root: { kind: "pane", id: "root", tabIds: ["a"] } },
+              ticketTabs: {
+                "ticket-1": { files: [], active: "doc", splitView: 7 },
+                "ticket-2": {
+                  files: [],
+                  active: "doc",
+                  splitView: {
+                    root: {
+                      kind: "split",
+                      id: "__proto__",
+                      direction: "row",
+                      ratio: null,
+                      first: { kind: "pane", id: "p1", tabIds: ["chat:c1", 7, null] },
+                      second: { kind: "pane", id: "p2", tabIds: [] },
+                    },
+                    focusedPaneId: null,
+                  },
+                },
+              },
+            },
+            "project-b": { homeSplitView: null },
+            "project-c": { homeSplitView: "split it" },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createWorkspaceStore(storage);
+    // A single pane is not a split; neither is a number, a string, or null.
+    expect(homeSplit(store)).toBeNull();
+    expect(homeSplit(store, "project-b")).toBeNull();
+    expect(homeSplit(store, "project-c")).toBeNull();
+    // A record whose split did not survive carries nothing else, so it is
+    // pruned exactly as any other empty one.
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+    // …and one that did survive keeps the tabs it named, hostile ids and all.
+    expect(panesOf(ticketSplit(store, "ticket-2"))).toEqual([
+      ["p1", ["chat:c1"], null],
+      ["p2", [], null],
+    ]);
+    expect(ticketSplit(store, "ticket-2")?.focusedPaneId).toBe("p1");
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
   });
 });
 
