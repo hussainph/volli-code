@@ -14,13 +14,21 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { parseSessionModel } from "@volli/shared";
+import {
+  isTicketStatus,
+  NO_AUTOMATION_TRIGGER,
+  parseAutomationTrigger,
+  parseSessionModel,
+} from "@volli/shared";
 import type {
   Automation,
   AutomationRun,
   AutomationRuntime,
+  AutomationTrigger,
+  ColumnArming,
   ModelSelection,
   ResolvedAutomationModel,
+  TicketStatus,
 } from "@volli/shared";
 import { prepared } from "./prepared";
 
@@ -29,10 +37,18 @@ interface AutomationRow {
   project_id: string | null;
   name: string;
   instructions: string;
+  trigger_spec: string | null;
   runtime: string | null;
   row_version: number;
   created_at: number;
   updated_at: number;
+}
+
+interface ColumnArmingRow {
+  project_id: string;
+  status: string;
+  automation_id: string;
+  armed_at: number;
 }
 
 interface AutomationRunRow {
@@ -63,12 +79,35 @@ function parseAutomationRuntime(value: string | null): AutomationRuntime {
   return parseSessionModel(raw) ?? { kind: "invalid", raw };
 }
 
+/**
+ * A stored Trigger, or "Nothing else" for SQL NULL and for anything unreadable.
+ *
+ * Note the deliberate asymmetry with the Runtime above: an unreadable Runtime
+ * becomes an explicit invalid value because coercing it to NULL would still
+ * RUN, under a policy nobody chose. An unreadable Trigger can only ever cost a
+ * Run that would have started on its own, and the Automation stays runnable by
+ * hand — so degrading is the safe direction and the shared parser owns it.
+ */
+function readTrigger(value: string | null): AutomationTrigger {
+  return value === null ? NO_AUTOMATION_TRIGGER : parseAutomationTrigger(parseJsonColumn(value));
+}
+
+/**
+ * `null` for "Nothing else", so an untriggered record stores SQL NULL rather
+ * than a shape. Exported because the ledger projects the same column and the
+ * two writers must not drift on what an absent Trigger looks like on disk.
+ */
+export function triggerColumnValue(trigger: AutomationTrigger): string | null {
+  return trigger.kind === "none" ? null : JSON.stringify(trigger);
+}
+
 function mapAutomation(row: AutomationRow): Automation {
   return {
     id: row.id,
     projectId: row.project_id,
     name: row.name,
     instructions: row.instructions,
+    trigger: readTrigger(row.trigger_spec),
     runtime: parseAutomationRuntime(row.runtime),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -120,6 +159,8 @@ export interface AutomationWrite {
   projectId: string | null;
   name: string;
   instructions: string;
+  /** Which columns offer this Automation — the record's half of VC-128. */
+  trigger: AutomationTrigger;
   runtime: ModelSelection | null;
 }
 
@@ -131,13 +172,14 @@ export function createAutomation(
   const id = randomUUID();
   prepared(
     db,
-    `INSERT INTO automations (id, project_id, name, instructions, runtime, row_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO automations (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
   ).run(
     id,
     input.projectId,
     input.name,
     input.instructions,
+    triggerColumnValue(input.trigger),
     input.runtime === null ? null : JSON.stringify(input.runtime),
     now,
     now,
@@ -155,11 +197,13 @@ export function updateAutomation(
   const changed = prepared(
     db,
     `UPDATE automations
-        SET name = ?, instructions = ?, runtime = ?, row_version = row_version + 1, updated_at = ?
+        SET name = ?, instructions = ?, trigger_spec = ?, runtime = ?,
+            row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
   ).run(
     input.name,
     input.instructions,
+    triggerColumnValue(input.trigger),
     input.runtime === null ? null : JSON.stringify(input.runtime),
     now,
     id,
@@ -251,4 +295,78 @@ export function latestRunForTicket(
     "SELECT * FROM automation_runs WHERE ticket_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
   ).get(ticketId);
   return row ? mapRun(row) : undefined;
+}
+
+/* ------------------------------------- column arming (migration 031) ------- */
+
+/**
+ * The Arming projection is read and written directly here rather than through
+ * the Automation command ledger, and that is the design rather than a shortcut.
+ *
+ * The ledger is the durable RECORD — the thing VC-112 says moves from local
+ * SQLite to an account one day. Arming must never make that trip: it is the
+ * choice one machine made about one column, and a second machine must see the
+ * Automations and fire nothing until someone turns something on there. Writing
+ * arming as a ledger command would file it in exactly the history that travels.
+ *
+ * Nothing is lost by the shortcut either. The write is a single upsert keyed by
+ * `(project_id, status)`, so it is idempotent by construction — the retry
+ * identity a command id exists to provide has no work to do here.
+ */
+function mapArming(row: ColumnArmingRow): ColumnArming | null {
+  // A status this build does not know is dropped rather than surfaced: it can
+  // only have come from a future/hand-edited row, and an arming on a column
+  // that does not exist can never fire.
+  return isTicketStatus(row.status)
+    ? {
+        projectId: row.project_id,
+        status: row.status,
+        automationId: row.automation_id,
+        armedAt: row.armed_at,
+      }
+    : null;
+}
+
+/** Every armed column in one project, board order left to the caller. */
+export function listColumnArmings(db: Database.Database, projectId: string): ColumnArming[] {
+  const rows = prepared<[string], ColumnArmingRow>(
+    db,
+    "SELECT * FROM automation_column_arming WHERE project_id = ?",
+  ).all(projectId);
+  return rows.flatMap((row) => {
+    const arming = mapArming(row);
+    return arming === null ? [] : [arming];
+  });
+}
+
+/**
+ * Arms `status` with `automationId`, replacing whatever it held.
+ *
+ * The upsert is what makes "a column arms at most one Automation" true at the
+ * storage layer: the composite primary key admits no second row, so there is no
+ * ordering of writes in which a column ends up with two.
+ */
+export function setColumnArming(
+  db: Database.Database,
+  input: { projectId: string; status: TicketStatus; automationId: string },
+  now: number,
+): void {
+  prepared(
+    db,
+    `INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at)
+       VALUES (?, ?, ?, ?)
+     ON CONFLICT (project_id, status)
+       DO UPDATE SET automation_id = excluded.automation_id, armed_at = excluded.armed_at`,
+  ).run(input.projectId, input.status, input.automationId, now);
+}
+
+/** Disarms one column. Silent when it was already unarmed — the end state is the point. */
+export function clearColumnArming(
+  db: Database.Database,
+  input: { projectId: string; status: TicketStatus },
+): void {
+  prepared(db, "DELETE FROM automation_column_arming WHERE project_id = ? AND status = ?").run(
+    input.projectId,
+    input.status,
+  );
 }

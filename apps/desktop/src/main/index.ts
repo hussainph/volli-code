@@ -71,7 +71,14 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
+import {
+  clearColumnArming,
+  getAutomation,
+  listAutomationsForProject,
+  listColumnArmings,
+  listRunsForTicket,
+  setColumnArming,
+} from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
@@ -1114,6 +1121,11 @@ app.whenReady().then(async () => {
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          // Column arming (VC-128) is a machine-local projection, so it is read
+          // and written beside the ledger rather than through it.
+          listColumnArmings: (projectId) => listColumnArmings(sessionDb, projectId),
+          setColumnArming: (input) => setColumnArming(sessionDb, input, Date.now()),
+          clearColumnArming: (input) => clearColumnArming(sessionDb, input),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),

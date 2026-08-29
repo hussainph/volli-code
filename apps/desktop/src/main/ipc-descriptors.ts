@@ -1132,11 +1132,25 @@ function isAutomationCommandId(value: unknown): value is string {
   );
 }
 
+/**
+ * A transported Trigger's shape (VC-128). Only the wire grammar is judged here
+ * — which column names are real, and whether the list collapses to "Nothing
+ * else", is the shared parser's job on the way into the record, so this guard
+ * never has to be kept in step with the board's columns.
+ */
+function isAutomationTriggerShape(value: unknown): boolean {
+  if (value === undefined) return true; // omitted is "Nothing else"
+  if (!isRecord(value)) return false;
+  if (value["kind"] === "none") return true;
+  return value["kind"] === "columns" && Array.isArray(value["columns"]);
+}
+
 /** The editable fields every automation write carries, shape-checked once. */
 function isAutomationDraftShape(value: Record<string, unknown>): boolean {
   return (
     typeof value["name"] === "string" &&
     typeof value["instructions"] === "string" &&
+    isAutomationTriggerShape(value["trigger"]) &&
     (value["runtime"] === null || isModelSelectionShape(value["runtime"]))
   );
 }
@@ -1194,6 +1208,24 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-runs-for-ticket"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
     invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-arming-list": {
+    guard: (args): args is IpcArgs<"volli:automation-arming-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation arming request",
+  },
+  "volli:automation-arm": {
+    // No command id, unlike every other automation write: arming is an upsert
+    // keyed by the column, so a repeat is the same end state. `automationId:
+    // null` is disarm, and the status is checked against the board's own
+    // vocabulary here because it is half of the row's primary key.
+    guard: (args): args is IpcArgs<"volli:automation-arm"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isTicketStatus(args[0]["status"]) &&
+      (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
+    invalidError: "Invalid automation arm request",
   },
 };
 

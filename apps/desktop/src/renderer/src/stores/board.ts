@@ -33,6 +33,7 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { noteDeliberateMove } from "@renderer/components/automations/armed-run";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -328,8 +329,28 @@ function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): v
   if (orphaned.length > 0) useChatSessionsStore.getState().dropChatTabs(orphaned);
 }
 
+/**
+ * Who hears about a Deliberate move that actually committed (VC-128).
+ *
+ * One seam rather than a call at each of the three move surfaces (the drag, the
+ * card's context menu, the ticket rail's status pill): every Deliberate move
+ * already funnels through {@link BoardState.moveTicket}, and an armed column
+ * must treat all three identically. Reporting from here also means only a move
+ * main CONFIRMED is ever heard — an optimistic position the store went on to
+ * revert never reaches an Automation.
+ */
+export type DeliberateMoveObserver = (move: {
+  projectId: string;
+  ticketId: string;
+  from: TicketStatus;
+  to: TicketStatus;
+}) => void;
+
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
-export function createBoardStore(gateway: BoardGateway = defaultGateway) {
+export function createBoardStore(
+  gateway: BoardGateway = defaultGateway,
+  onDeliberateMove: DeliberateMoveObserver = noteDeliberateMove,
+) {
   return create<BoardState>()((set, get) => {
     /**
      * Merges a change into the project's filter record (initializing from
@@ -537,8 +558,13 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       async moveTicket(projectId, ticketId, toStatus, toIndex) {
         const previous = get().ticketsByProject[projectId] ?? [];
+        // Read BEFORE the op, and folded into its own no-op guard below: the
+        // shared op only returns a new list when it found this ticket, so the
+        // two questions have exactly one answer between them.
+        const fromStatus = previous.find((ticket) => ticket.id === ticketId)?.status;
         const optimistic = moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now());
-        if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged position
+        // shared op's no-op guard: unknown id or unchanged position
+        if (optimistic === previous || fromStatus === undefined) return;
         set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
         const result = await writeThrough(
@@ -556,6 +582,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // The authoritative post-move list wins for the rows it names; a ticket
         // created concurrently and not yet in that snapshot is preserved.
         reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
+        // Only now, with the move durable and reconciled: an armed column may
+        // open its delay window against a status change that really happened.
+        onDeliberateMove({ projectId, ticketId, from: fromStatus, to: toStatus });
       },
 
       async setTicketPriority(projectId, ticketId, priority) {

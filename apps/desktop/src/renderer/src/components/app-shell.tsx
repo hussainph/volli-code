@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { ChromeBar } from "@renderer/components/chrome-bar";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
@@ -588,6 +589,11 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         />
       </div>
       <Toaster />
+      {/* The armed-column delay window (VC-128). Window-level beside the Toaster
+          rather than inside the board: a Deliberate move can be made from a
+          ticket's own status pill, and its countdown must not depend on the
+          board being the surface on screen. */}
+      <ArmedRunWindows />
       <NewTicketDialog />
       <HarnessTrustDialog />
       <UpdateInstallDialog />

@@ -2838,10 +2838,47 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-arming-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arming-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arming request");
+    });
+  });
+
+  describe("volli:automation-arm", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arm"];
+
+    it("takes a project, a real column and an Automation — or null to disarm", () => {
+      expect(guard([{ projectId: "p1", status: "doing", automationId: "a1" }])).toBe(true);
+      expect(guard([{ projectId: "p1", status: "doing", automationId: null }])).toBe(true);
+      expect(guard([{ projectId: "p1", status: "shipped", automationId: "a1" }])).toBe(false);
+      expect(guard([{ projectId: "p1", automationId: "a1" }])).toBe(false);
+      expect(guard([{ status: "doing", automationId: "a1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries no command id — arming is an upsert keyed by the column, not a ledger write", () => {
+      expect(guard([{ projectId: "p1", status: "doing", automationId: "a1" }])).toBe(true);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arm request");
+    });
+  });
+
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(6);
+      expect(AUTOMATION_CHANNELS).toHaveLength(8);
     });
   });
 });

@@ -2,6 +2,7 @@ import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationTrigger,
   ModelSelection,
   PromptResource,
   ResolvedAutomationModel,
@@ -22,6 +23,7 @@ export type AutomationCommandIntent =
       projectId: string | null;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }
   | {
@@ -29,6 +31,7 @@ export type AutomationCommandIntent =
       automationId: string;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }
   | { kind: "automation.delete"; automationId: string }
@@ -163,6 +166,7 @@ export interface AutomationEngine {
     projectId: string | null;
     name: string;
     instructions: string;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<AutomationCommandOutcome<Automation>>;
   update(input: {
@@ -170,6 +174,7 @@ export interface AutomationEngine {
     automationId: string;
     name: string;
     instructions: string;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<AutomationCommandOutcome<Automation>>;
   delete(input: {
@@ -309,6 +314,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         projectId: input.projectId,
         name: input.name,
         instructions: input.instructions,
+        trigger: input.trigger,
         runtime: input.runtime,
       };
       return ports.ledger.transaction(async (tx) => {
@@ -325,6 +331,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           projectId: input.projectId,
           name: input.name,
           instructions: input.instructions,
+          trigger: input.trigger,
           runtime: input.runtime,
           createdAt: now,
           updatedAt: now,
@@ -350,6 +357,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         automationId: input.automationId,
         name: input.name,
         instructions: input.instructions,
+        trigger: input.trigger,
         runtime: input.runtime,
       };
       return ports.ledger.transaction(async (tx) => {
@@ -378,6 +386,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           ...prior,
           name: input.name,
           instructions: input.instructions,
+          trigger: input.trigger,
           runtime: input.runtime,
           updatedAt: now,
         };

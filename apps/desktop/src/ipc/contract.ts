@@ -20,6 +20,8 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationTrigger,
+  ColumnArming,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -1399,6 +1401,11 @@ export interface AutomationCreateInput {
   projectId: string | null;
   name: string;
   instructions: string;
+  /**
+   * Which columns offer this Automation (VC-128). Omitted is "Nothing else" —
+   * the default for a new Automation and a complete answer, not an unset field.
+   */
+  trigger?: AutomationTrigger;
   /** The pinned selection, whole, or `null` to inherit. */
   runtime: ModelSelection | null;
 }
@@ -1410,7 +1417,22 @@ export interface AutomationUpdateInput {
   automationId: string;
   name: string;
   instructions: string;
+  /** Rewritten whole like every other editable field; omitted clears it. */
+  trigger?: AutomationTrigger;
   runtime: ModelSelection | null;
+}
+
+/**
+ * Arming one column, or disarming it with `automationId: null` (VC-128).
+ *
+ * No `commandId`, unlike every write above it. Arming is a machine-local upsert
+ * keyed by the column, so a repeated request is the same end state rather than
+ * a second arming — there is no duplicate for a retry identity to prevent.
+ */
+export interface AutomationArmInput {
+  projectId: string;
+  status: TicketStatus;
+  automationId: string | null;
 }
 
 export interface AutomationIdInput {
@@ -1433,6 +1455,8 @@ export type AutomationResult = Result<{
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** Every armed column in the project — the whole truth after a read or a write. */
+export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
 
 /**
  * A run's answer: the durable Run (holding the fresh Session's id and the
@@ -1473,6 +1497,13 @@ export interface VolliAutomationIpcContract {
     args: [input: TicketIdInput];
     result: AutomationRunsResult;
   };
+  /** One project's armed columns — machine-local, never listed with the record. */
+  "volli:automation-arming-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationArmingsResult;
+  };
+  /** Arms one column with one offered Automation, or disarms it. */
+  "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmingsResult };
 }
 
 export type AutomationIpcChannel = keyof VolliAutomationIpcContract;

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { expandCommandInvocation, SKILL_POLICY_DEFAULT } from "@volli/shared";
+import {
+  expandCommandInvocation,
+  NO_AUTOMATION_TRIGGER,
+  SKILL_POLICY_DEFAULT,
+} from "@volli/shared";
 import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
@@ -150,6 +154,7 @@ async function savedAutomation(
     projectId: h.projectId,
     name: "Two-opinion review",
     instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+    trigger: NO_AUTOMATION_TRIGGER,
     runtime: null,
     ...patch,
   });

@@ -21,7 +21,14 @@
  */
 import * as React from "react";
 
-import { errorMessage, type ModelSelection } from "@volli/shared";
+import {
+  NO_AUTOMATION_TRIGGER,
+  TICKET_STATUS_LABELS,
+  TICKET_STATUSES,
+  type ModelSelection,
+  type TicketStatus,
+} from "@volli/shared";
+import { errorMessage } from "@volli/shared";
 
 import {
   ComposerPickerStack,
@@ -55,6 +62,13 @@ const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
 
 type OwnershipChoice = "project" | "global";
 type RuntimeChoice = "inherit" | "pin";
+/**
+ * The Trigger control's two answers in V1 (VC-112 rules three; "On a schedule"
+ * arrives with the scheduler in VC-130). "Nothing else" is the default and a
+ * complete answer rather than an inert one — run by hand is universal, so the
+ * Trigger says only what ELSE starts this Automation.
+ */
+type TriggerChoice = "none" | "columns";
 
 /**
  * The dialog itself, mounted once beside the command palette. It renders only
@@ -79,6 +93,8 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
   const [name, setName] = React.useState("");
   const [instructions, setInstructions] = React.useState("");
   const [ownership, setOwnership] = React.useState<OwnershipChoice>("project");
+  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>("none");
+  const [columns, setColumns] = React.useState<readonly TicketStatus[]>([]);
   const [runtimeChoice, setRuntimeChoice] = React.useState<RuntimeChoice>("inherit");
   const [pin, setPin] = React.useState<ModelSelection | null>(null);
   const [problem, setProblem] = React.useState<string | null>(null);
@@ -113,6 +129,10 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
     };
   }, [inspect, hiddenModels]);
 
+  const trigger =
+    triggerChoice === "columns" && columns.length > 0
+      ? ({ kind: "columns", columns } as const)
+      : NO_AUTOMATION_TRIGGER;
   const runtime = runtimeChoice === "pin" ? pin : null;
   const pinStops =
     pin === null
@@ -124,6 +144,10 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
   const incomplete =
     name.trim().length === 0 ||
     instructions.trim().length === 0 ||
+    // A column Trigger naming no column is not a column Trigger. Blocking Save
+    // says so at the moment of the choice, rather than letting the record
+    // collapse it to "Nothing else" behind the person's back.
+    (triggerChoice === "columns" && columns.length === 0) ||
     (runtimeChoice === "pin" && pin === null);
 
   const submit = async () => {
@@ -135,6 +159,7 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
         projectId: ownership === "project" ? projectId : null,
         name,
         instructions,
+        trigger,
         runtime,
       });
       if (refusal === null) closeEditor();
@@ -187,6 +212,58 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
           >
             <InstructionsTextarea value={instructions} onValueChange={setInstructions} />
           </ComposerPickerStack>
+          {/* The Trigger reads as a sentence the second control finishes:
+              "Nothing else", or "Ticket enters" — and then which columns. The
+              columns sit on their own row rather than beside the segmented
+              pill, so the choice of ANSWER and the choice of COLUMNS are not
+              one undifferentiated strip of five-plus chips. */}
+          <div className="flex flex-col gap-2">
+            <Segmented<TriggerChoice>
+              ariaLabel="Trigger"
+              value={triggerChoice}
+              options={[
+                { key: "none", label: "Nothing else" },
+                { key: "columns", label: "Ticket enters" },
+              ]}
+              onChange={setTriggerChoice}
+            />
+            {triggerChoice === "columns" ? (
+              <div className="flex flex-wrap gap-1.5">
+                {TICKET_STATUSES.map((status) => {
+                  const named = columns.includes(status);
+                  return (
+                    <Button
+                      key={status}
+                      variant="ghost"
+                      role="checkbox"
+                      aria-checked={named}
+                      data-trigger-column={status}
+                      className={cn(
+                        "h-7 border px-2 text-ui",
+                        named
+                          ? "border-ring bg-accent text-foreground"
+                          : "border-border text-muted-foreground",
+                      )}
+                      onClick={() =>
+                        // Board order, never click order — the record stores
+                        // board order, and a form that disagrees with what it
+                        // saved is a form that has to be re-read after saving.
+                        setColumns((current) =>
+                          TICKET_STATUSES.filter((candidate) =>
+                            candidate === status
+                              ? !current.includes(status)
+                              : current.includes(candidate),
+                          ),
+                        )
+                      }
+                    >
+                      {TICKET_STATUS_LABELS[status]}
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
           <div className="flex items-center gap-2">
             <Segmented<RuntimeChoice>
               ariaLabel="Runtime"

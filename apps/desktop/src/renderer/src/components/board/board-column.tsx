@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
+import { ColumnArmingButton } from "@renderer/components/board/column-arming";
 import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
@@ -87,9 +88,14 @@ export function BoardColumn({
         animateEnter && "transition-[opacity] duration-200 ease-out starting:opacity-0",
       )}
     >
-      <div className="flex items-center gap-2 px-4 pt-2 pb-2">
+      <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <Badge variant="count">{tickets.length}</Badge>
+        <div className="flex-1" />
+        {/* Arming lives on the column because that is what it is a property of
+            (VC-112). Trailing, so an unarmed board's header reads exactly as it
+            did before this existed. */}
+        <ColumnArmingButton projectId={projectId} status={status} />
       </div>
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <div

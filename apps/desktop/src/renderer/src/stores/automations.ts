@@ -14,7 +14,13 @@
  * reads toast here, per the surface-every-failure convention.
  */
 import { create } from "zustand";
-import { errorMessage, type Automation } from "@volli/shared";
+import {
+  armedAutomationFor,
+  errorMessage,
+  type Automation,
+  type ColumnArming,
+  type TicketStatus,
+} from "@volli/shared";
 
 import type { AutomationCreateInput } from "../../../ipc/contract";
 
@@ -27,10 +33,30 @@ import { toastError } from "@renderer/lib/toast";
 interface AutomationsState {
   /** projectId → its listable Automations (own + global), name-ordered by main. */
   byProject: Record<string, readonly Automation[]>;
+  /**
+   * projectId → its armed columns (VC-128). A separate slice from
+   * {@link AutomationsState.byProject} and a separate read, because arming is a
+   * property of the column and of THIS machine: it is never a field on an
+   * Automation that could be carried along with the record.
+   */
+  armingByProject: Record<string, readonly ColumnArming[]>;
   /** The editor dialog: closed, or creating under one project. */
   editor: { projectId: string } | null;
   /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
   refresh(projectId: string): Promise<void>;
+  /** Re-fetches one project's armed columns and replaces the cache. Toasts on failure. */
+  refreshArming(projectId: string): Promise<void>;
+  /**
+   * Arms one column with one offered Automation, or disarms it with
+   * `automationId: null`. Resolves the refusal message, or `null` on success
+   * (the answer carries the project's whole new arming set, so nothing is
+   * re-fetched afterwards).
+   */
+  arm(input: {
+    projectId: string;
+    status: TicketStatus;
+    automationId: string | null;
+  }): Promise<string | null>;
   openEditor(projectId: string): void;
   closeEditor(): void;
   /**
@@ -45,6 +71,7 @@ interface AutomationsState {
 export function createAutomationsStore() {
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
+    armingByProject: {},
     editor: null,
 
     async refresh(projectId) {
@@ -57,6 +84,36 @@ export function createAutomationsStore() {
         set((state) => ({ byProject: { ...state.byProject, [projectId]: result.automations } }));
       } catch (error) {
         toastError(`Couldn't load automations: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshArming(projectId) {
+      try {
+        const result = await window.api.automations.armings({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load armed columns: ${result.error}`);
+          return;
+        }
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [projectId]: result.armings },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load armed columns: ${errorMessage(error)}`);
+      }
+    },
+
+    async arm(input) {
+      try {
+        const result = await window.api.automations.arm(input);
+        // A refusal is resolved rather than toasted, like a save's: the menu
+        // that asked is still on screen and is where the correction belongs.
+        if (!result.ok) return result.error;
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [input.projectId]: result.armings },
+        }));
+        return null;
+      } catch (error) {
+        return errorMessage(error);
       }
     },
 
@@ -93,3 +150,37 @@ export function createAutomationsStore() {
 }
 
 export const useAutomationsStore = createAutomationsStore();
+
+const NO_AUTOMATIONS: readonly Automation[] = [];
+const NO_ARMINGS: readonly ColumnArming[] = [];
+
+/** One project's listable Automations — a frozen empty array before its first read. */
+export function selectAutomations(
+  state: AutomationsState,
+  projectId: string,
+): readonly Automation[] {
+  return state.byProject[projectId] ?? NO_AUTOMATIONS;
+}
+
+/** One project's armed columns — a frozen empty array before its first read. */
+export function selectArmings(state: AutomationsState, projectId: string): readonly ColumnArming[] {
+  return state.armingByProject[projectId] ?? NO_ARMINGS;
+}
+
+/**
+ * The Automation a column fires on its own, resolved through the shared rule
+ * rather than by reading the arming row directly — a row naming a deleted
+ * Automation, or one whose Trigger no longer offers this column, is inert.
+ * Every surface that asks "is this column armed?" asks here.
+ */
+export function selectArmedAutomation(
+  state: AutomationsState,
+  projectId: string,
+  status: TicketStatus,
+): Automation | null {
+  return armedAutomationFor(
+    selectAutomations(state, projectId),
+    selectArmings(state, projectId),
+    status,
+  );
+}

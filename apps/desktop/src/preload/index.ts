@@ -52,6 +52,8 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  AutomationArmInput,
+  AutomationArmingsResult,
   AutomationCreateInput,
   AutomationDeleteResult,
   AutomationIdInput,
@@ -717,6 +719,16 @@ const api = {
     /** A Ticket's Runs, newest first. */
     runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-ticket", input),
+    /**
+     * One project's armed columns (VC-128). Machine-local and deliberately a
+     * separate read from the record's list: arming never travels with a project,
+     * so it is never a field on an Automation that could be carried along.
+     */
+    armings: (input: ProjectIdInput): Promise<AutomationArmingsResult> =>
+      invoke("volli:automation-arming-list", input),
+    /** Arms one column with one offered Automation, or disarms it with `automationId: null`. */
+    arm: (input: AutomationArmInput): Promise<AutomationArmingsResult> =>
+      invoke("volli:automation-arm", input),
   },
   /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A

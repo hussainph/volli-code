@@ -1,4 +1,4 @@
-import { USER_ACTOR } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createAutomation, recordAutomationRun } from "./automations-repo";
 import { createComment } from "./comments-repo";
@@ -204,6 +204,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         name: "Review",
         instructions: "/review go",
+        trigger: NO_AUTOMATION_TRIGGER,
         runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
       },
       70,
@@ -407,6 +408,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         name: "Review",
         instructions: "/review go",
+        triggerSpec: null,
         runtime: JSON.stringify({
           providerId: "anthropic",
           modelId: "claude-opus",

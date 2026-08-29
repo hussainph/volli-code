@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { isAutomationRuntimePin } from "@volli/shared";
 import type { Automation, AutomationRun, PromptResource } from "@volli/shared";
 
-import { getAutomation, getAutomationRun } from "../db/automations-repo";
+import { getAutomation, getAutomationRun, triggerColumnValue } from "../db/automations-repo";
 import { prepared } from "../db/prepared";
 import type {
   AutomationCommand,
@@ -158,13 +158,14 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     prepared(
       this.db,
       `INSERT INTO automations
-        (id, project_id, name, instructions, runtime, row_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     ).run(
       automation.id,
       automation.projectId,
       automation.name,
       automation.instructions,
+      triggerColumnValue(automation.trigger),
       automation.runtime === null ? null : JSON.stringify(automation.runtime),
       automation.createdAt,
       automation.updatedAt,
@@ -178,11 +179,13 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     const changed = prepared(
       this.db,
       `UPDATE automations
-          SET name = ?, instructions = ?, runtime = ?, row_version = row_version + 1, updated_at = ?
+          SET name = ?, instructions = ?, trigger_spec = ?, runtime = ?,
+              row_version = row_version + 1, updated_at = ?
         WHERE id = ?`,
     ).run(
       automation.name,
       automation.instructions,
+      triggerColumnValue(automation.trigger),
       automation.runtime === null ? null : JSON.stringify(automation.runtime),
       automation.updatedAt,
       automation.id,

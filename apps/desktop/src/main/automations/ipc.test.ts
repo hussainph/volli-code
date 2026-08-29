@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { ModelAccessSnapshot, ModelSelection } from "@volli/shared";
 import type {
+  AutomationArmingsResult,
   AutomationDeleteResult,
   AutomationResult,
   AutomationRunStartResult,
@@ -28,11 +30,14 @@ import type { AutomationRunner } from "./run";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
+  clearColumnArming,
   createAutomation,
   getAutomation,
   listAutomationsForProject,
+  listColumnArmings,
   listRunsForTicket,
   recordAutomationRun,
+  setColumnArming,
 } from "../db/automations-repo";
 import { insertProject } from "../db/projects-repo";
 import { insertSession } from "../session-control/test-support";
@@ -104,6 +109,9 @@ function setup(
     // database or repository.
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
+    listColumnArmings: (id) => listColumnArmings(ctx.db, id),
+    setColumnArming: (input) => setColumnArming(ctx.db, input, 5_000),
+    clearColumnArming: (input) => clearColumnArming(ctx.db, input),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
   });
@@ -127,6 +135,8 @@ describe("automation IPC", () => {
       "volli:automation-delete",
       "volli:automation-run",
       "volli:automation-runs-for-ticket",
+      "volli:automation-arming-list",
+      "volli:automation-arm",
     ]) {
       expect(await call<Result>(channel, {})).toEqual({
         ok: false,
@@ -143,6 +153,7 @@ describe("automation IPC", () => {
       projectId: project.id,
       name: "  Review  ",
       instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
     expect(created).toMatchObject({
@@ -157,6 +168,7 @@ describe("automation IPC", () => {
       projectId: project.id,
       name: "  Review  ",
       instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
     expect(replay).toMatchObject({ ok: true, automation: { id: created.automation.id } });
@@ -177,6 +189,7 @@ describe("automation IPC", () => {
       automationId: created.automation.id,
       name: "Renamed",
       instructions: "/tdd",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: PIN,
     });
     expect(updated).toMatchObject({ ok: true, automation: { name: "Renamed", runtime: PIN } });
@@ -200,6 +213,7 @@ describe("automation IPC", () => {
       projectId: project.id,
       name: "Pinned",
       instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: { ...PIN, reasoningLevel: "max" },
     });
     expect(unspellable).toMatchObject({
@@ -218,6 +232,7 @@ describe("automation IPC", () => {
       projectId: project.id,
       name: "Pinned",
       instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: PIN,
     };
     const created = await call<AutomationResult>("volli:automation-create", createInput);
@@ -230,6 +245,7 @@ describe("automation IPC", () => {
       automationId: created.automation.id,
       name: "Pinned, renamed",
       instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: PIN,
     };
     expect(await call<AutomationResult>("volli:automation-update", updateInput)).toMatchObject({
@@ -297,7 +313,13 @@ describe("automation IPC", () => {
     insertSession(ctx.db, session);
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Review", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       1,
     );
     recordAutomationRun(
@@ -316,8 +338,183 @@ describe("automation IPC", () => {
         projectId: project.id,
         name: "x",
         instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
         runtime: null,
       }),
     ).toEqual({ ok: false, error: "Invalid automation" });
+  });
+  /* -------------------------------------- column arming (VC-128) --------- */
+
+  it("stores a column Trigger on the record and reads it back as vocabulary", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["done", "doing"] },
+      runtime: null,
+    });
+    // Board order, not the order the caller happened to send.
+    expect(created).toMatchObject({
+      ok: true,
+      automation: { trigger: { kind: "columns", columns: ["doing", "done"] } },
+    });
+    if (!created.ok) throw new Error("refused");
+
+    const cleared = await call<AutomationResult>("volli:automation-update", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+    expect(cleared).toMatchObject({ ok: true, automation: { trigger: { kind: "none" } } });
+  });
+
+  it("arms a column with one offered Automation, replaces it, and disarms it", async () => {
+    const { project, mutations } = setup();
+    const first = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "First",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    const second = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Second",
+      instructions: "/tdd",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!first.ok || !second.ok) throw new Error("refused");
+    mutations.length = 0;
+
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: project.id,
+        status: "doing",
+        automationId: first.automation.id,
+      }),
+    ).toMatchObject({
+      ok: true,
+      armings: [{ status: "doing", automationId: first.automation.id }],
+    });
+
+    // At most one, enforced by the row's own key rather than by convention.
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: project.id,
+        status: "doing",
+        automationId: second.automation.id,
+      }),
+    ).toMatchObject({
+      ok: true,
+      armings: [{ status: "doing", automationId: second.automation.id }],
+    });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 1,
+    });
+
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arming-list", {
+        projectId: project.id,
+      }),
+    ).toMatchObject({ ok: true, armings: [{ automationId: second.automation.id }] });
+
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: project.id,
+        status: "doing",
+        automationId: null,
+      }),
+    ).toEqual({ ok: true, armings: [] });
+    // Each write reaches the renderer; none of them is a ledger command.
+    expect(mutations).toEqual([
+      { projectId: project.id },
+      { projectId: project.id },
+      { projectId: project.id },
+    ]);
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_commands").get()).toEqual({ n: 2 });
+  });
+
+  it("refuses to arm a column the Automation does not offer", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Elsewhere",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["done"] },
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: project.id,
+        status: "doing",
+        automationId: created.automation.id,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/not offered in this column/) });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
+  });
+
+  it("refuses an unknown Automation and an unknown project", async () => {
+    const { project } = setup();
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: project.id,
+        status: "doing",
+        automationId: "ghost",
+      }),
+    ).toEqual({ ok: false, error: "Unknown automation" });
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arm", {
+        projectId: "no-such-project",
+        status: "doing",
+        automationId: null,
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arming-list", {
+        projectId: "no-such-project",
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("drops a column's arming when the Automation behind it is deleted", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    await call<AutomationArmingsResult>("volli:automation-arm", {
+      projectId: project.id,
+      status: "doing",
+      automationId: created.automation.id,
+    });
+
+    await call<AutomationDeleteResult>("volli:automation-delete", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+    });
+
+    expect(
+      await call<AutomationArmingsResult>("volli:automation-arming-list", {
+        projectId: project.id,
+      }),
+    ).toEqual({ ok: true, armings: [] });
   });
 });
