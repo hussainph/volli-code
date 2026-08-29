@@ -1195,6 +1195,27 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
     invalidError: "Invalid automation runs request",
   },
+  "volli:automation-runs-for-project": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-enablement": {
+    guard: (args): args is IpcArgs<"volli:automation-enablement"> => args.length === 0,
+    invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-set-enabled": {
+    // No `commandId`, unlike every write above it: this is machine-local
+    // operating state rather than a durable command, so a repeated request is
+    // idempotent by shape (`enabled` is the value, not a toggle) and has no
+    // receipt to replay. `enablement.ts` states why it is not in the ledger.
+    guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["enabled"] === "boolean",
+    invalidError: "Invalid automation enablement request",
+  },
 };
 
 /** Every channel the automations surface owns, derived — never hand-synced. */

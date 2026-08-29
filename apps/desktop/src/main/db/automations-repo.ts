@@ -241,6 +241,32 @@ export function listRunsForTicket(db: Database.Database, ticketId: string): Auto
   return rows.map(mapRun);
 }
 
+/**
+ * Every Run on one project's Tickets, newest first — the Automations page's
+ * Run history (VC-127).
+ *
+ * The join is through the Ticket, not through the Automation, and that is the
+ * whole scoping decision: a global Automation is listable in every project,
+ * but a Run it produced happened to ONE Ticket in ONE project, and showing it
+ * in a second project's history would be a door into work done elsewhere.
+ *
+ * A Run whose Ticket was deleted (`ticket_id IS NULL`, the orphaning
+ * `sessions.ticket_id` also allows) therefore falls out of every project's
+ * history rather than landing in an arbitrary one. Its Session is still
+ * reachable everywhere Sessions are listed; what is gone is the project that
+ * would have filed it.
+ */
+export function listRunsForProject(db: Database.Database, projectId: string): AutomationRun[] {
+  const rows = prepared<[string], AutomationRunRow>(
+    db,
+    `SELECT automation_runs.* FROM automation_runs
+       JOIN tickets ON tickets.id = automation_runs.ticket_id
+      WHERE tickets.project_id = ?
+      ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
+  ).all(projectId);
+  return rows.map(mapRun);
+}
+
 /** The newest Run on a Ticket, or undefined — retained for older read-only callers. */
 export function latestRunForTicket(
   db: Database.Database,

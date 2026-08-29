@@ -1426,6 +1426,34 @@ export interface AutomationRunInput {
   ticketId: string;
 }
 
+/**
+ * Turning one Automation on or off ON THIS MACHINE (VC-127).
+ *
+ * Enablement is deliberately NOT a field on the {@link Automation} record and
+ * never rides the command ledger. VC-112 puts the shareable half of an
+ * Automation in git as a Skill and keeps the record local; enablement is one
+ * step more local still — the same tier as a column's arming, which that
+ * ruling also declares per machine. So it lives in `app_state`, beside the
+ * global runtime-preferences record that ruling cites, and a project cannot
+ * carry it anywhere.
+ *
+ * It governs what starts an Automation BESIDES a person. Running by hand is
+ * universal (VC-112), so a disabled Automation is still runnable from every
+ * surface that lists it — it simply never fires on its own.
+ */
+export interface AutomationSetEnabledInput {
+  automationId: string;
+  enabled: boolean;
+}
+
+/**
+ * The disabled set, whole, rather than one automation's boolean: absent means
+ * enabled, so a reader that only ever saw individual `false`s could not tell
+ * "on" from "never asked". Sending the whole set makes the resting state
+ * representable and keeps a stale row from outliving the record it names.
+ */
+export type AutomationEnablementResult = Result<{ disabledAutomationIds: string[] }>;
+
 export type AutomationsResult = Result<{ automations: Automation[] }>;
 export type AutomationResult = Result<{
   automation: Automation;
@@ -1472,6 +1500,23 @@ export interface VolliAutomationIpcContract {
   "volli:automation-runs-for-ticket": {
     args: [input: TicketIdInput];
     result: AutomationRunsResult;
+  };
+  /**
+   * Every Run on this project's Tickets, newest first — the Automations
+   * page's Run history (VC-127). Scoped through the Ticket rather than
+   * through the Automation because a global Automation's Runs belong to the
+   * project they were run in, not to every project that can list it.
+   */
+  "volli:automation-runs-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationRunsResult;
+  };
+  /** Which Automations are switched off on this machine. */
+  "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
+  /** Switches one Automation on or off here, and answers with the whole new set. */
+  "volli:automation-set-enabled": {
+    args: [input: AutomationSetEnabledInput];
+    result: AutomationEnablementResult;
   };
 }
 

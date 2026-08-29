@@ -10,6 +10,7 @@
  */
 import type {
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationIpcChannel,
   AutomationResult,
   AutomationRunInput,
@@ -72,6 +73,19 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
     "volli:automation-runs-for-ticket": (input): AutomationRunsResult => ({
       ok: true,
       runs: service.runsForTicket(input.ticketId),
+    }),
+
+    "volli:automation-runs-for-project": (input): AutomationRunsResult =>
+      service.runsForProject(input.projectId),
+
+    "volli:automation-enablement": (): AutomationEnablementResult => ({
+      ok: true,
+      disabledAutomationIds: service.disabledAutomationIds(),
+    }),
+
+    "volli:automation-set-enabled": (input): AutomationEnablementResult => ({
+      ok: true,
+      disabledAutomationIds: service.setEnabled(input),
     }),
   };
 

@@ -254,6 +254,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 value="new automation create automation"
                 keywords={["new", "create", "automation"]}
                 onSelect={() => {
+                  // Lands on the Automations page first, then opens the form.
+                  // Only that page authors (VC-112), so a palette entry is a
+                  // shortcut TO it rather than a second place to create one —
+                  // and the new record appears in the list behind the dialog
+                  // instead of vanishing into a surface nobody was looking at.
+                  useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
                   useAutomationsStore.getState().openEditor(selectedProjectId);
                   finishNavigation();
                 }}

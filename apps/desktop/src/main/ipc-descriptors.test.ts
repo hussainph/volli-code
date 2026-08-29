@@ -2838,10 +2838,60 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-runs-for-project", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-project"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation runs request");
+    });
+  });
+
+  describe("volli:automation-enablement", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-enablement"];
+
+    it("takes no arguments at all", () => {
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation enablement request");
+    });
+  });
+
+  describe("volli:automation-set-enabled", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-set-enabled"];
+
+    it("needs the target and a BOOLEAN, so a request is a value rather than a toggle", () => {
+      expect(guard([{ automationId: "a1", enabled: true }])).toBe(true);
+      expect(guard([{ automationId: "a1", enabled: false }])).toBe(true);
+      expect(guard([{ automationId: "a1" }])).toBe(false);
+      expect(guard([{ automationId: "a1", enabled: "yes" }])).toBe(false);
+      expect(guard([{ enabled: true }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("deliberately carries NO commandId — machine-local state mints no receipt", () => {
+      expect(guard([{ automationId: "a1", enabled: true }])).toBe(true);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation enablement request");
+    });
+  });
+
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(6);
+      expect(AUTOMATION_CHANNELS).toHaveLength(9);
     });
   });
 });

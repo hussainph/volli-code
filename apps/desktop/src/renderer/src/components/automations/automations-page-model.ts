@@ -1,0 +1,146 @@
+/**
+ * What the Automations page SAYS, kept pure beside the views that render it
+ * (VC-127) — the same shape as `cli-status-model.ts` and its neighbours, and
+ * in the coverage gate for the same reason: every decision here is one a view
+ * test would not catch going wrong.
+ *
+ * Three of them earn the module on their own:
+ *
+ *  - **A Run prints the evidence it stored, never today's catalogue.** VC-112
+ *    requires a Run to record the RESOLVED model and reasoning, precisely so
+ *    the pin/inherit decision is self-correcting. Re-labelling a historical
+ *    Run through the live Model Access snapshot would erase exactly that: a
+ *    Run of a model this profile no longer has must still print the model it
+ *    actually ran.
+ *  - **Inherit is a sentence, not a blank.** An Automation with no pin is the
+ *    default and the common case; showing an empty cell where the pinned rows
+ *    show a model would read as missing data.
+ *  - **A corrupt Runtime says so.** `InvalidAutomationRuntime` exists because
+ *    a malformed row must not be silently re-read as inheritance; the page is
+ *    where a person can see that and re-pin.
+ */
+import { automationOwnership, isAutomationRuntimePin } from "@volli/shared";
+import type { Automation, AutomationRun, AutomationRuntime } from "@volli/shared";
+
+/**
+ * The Trigger every new Automation opens on, and the only one the record can
+ * hold today (VC-112: "Nothing else — the default for a new Automation, and a
+ * complete answer rather than an inert one").
+ *
+ * A named constant rather than a literal in the editor because it is one half
+ * of a control that is about to grow: the column Trigger (VC-128) and the
+ * schedule (VC-130) add answers BESIDE this one. Running by hand is universal
+ * and is therefore never one of the answers — the Trigger says only what
+ * *else* starts an Automation.
+ */
+export const MANUAL_TRIGGER_LABEL = "Only when I run it";
+
+/**
+ * The Instructions placeholder. It names the grammar rather than describing
+ * it, and it leads with `/skill` on purpose: VC-112 asks for a placeholder
+ * that "pushes toward `/skill` rather than prose", because the reusable half
+ * of an Automation belongs in git as a Skill, where it is reviewed in a pull
+ * request and travels between machines on its own.
+ */
+export const INSTRUCTIONS_PLACEHOLDER = "/skill … — or @ a file. Keep the prose in the Skill.";
+
+/** Where an Automation is listed. The two words the Ownership control uses. */
+export function ownershipLabel(automation: Pick<Automation, "projectId">): string {
+  return automationOwnership(automation) === "global" ? "All projects" : "This project";
+}
+
+/**
+ * The Runtime, in one line.
+ *
+ * Model and reasoning travel together (VC-112), so they are printed together
+ * or not at all — there is deliberately no spelling of this that shows one
+ * without the other, because a type that could would be a type that can name
+ * a pair no model offers.
+ */
+export function runtimeLabel(runtime: AutomationRuntime): string {
+  if (runtime === null) return "Default model";
+  if (!isAutomationRuntimePin(runtime)) return "Unreadable runtime";
+  return `${runtime.modelId} · ${runtime.reasoningLevel}`;
+}
+
+/**
+ * A Run's resolved model and reasoning, printed from the Run's own row.
+ *
+ * Never resolved against the live catalogue: this is what the Session was
+ * born with, and a level a current build no longer recognizes still prints
+ * exactly as recorded rather than as today's default.
+ */
+export function runModelLabel(run: Pick<AutomationRun, "model">): string {
+  return `${run.model.modelId} · ${run.model.reasoningLevel}`;
+}
+
+/** The provider behind that model, for the row's title attribute. */
+export function runModelTitle(run: Pick<AutomationRun, "model">): string {
+  return `${run.model.providerId} / ${run.model.modelId} · ${run.model.reasoningLevel}`;
+}
+
+/**
+ * What a Run row names as its Automation. A bound Run keeps the name it was
+ * launched under even after the record is deleted — deleting an Automation
+ * deletes the record, and the history of what it did is not the record.
+ */
+export function runAutomationLabel(
+  run: Pick<AutomationRun, "automationId" | "automationName">,
+): string {
+  return run.automationName ?? "Run once";
+}
+
+/**
+ * One project's Automations, split by Ownership with its own first.
+ *
+ * The order main already returns (own, then global, name-ordered within each)
+ * is preserved rather than re-sorted: two orderings of one list is two
+ * policies wearing one name, and main's is the one the palette also shows.
+ */
+export function groupByOwnership(automations: readonly Automation[]): {
+  project: Automation[];
+  global: Automation[];
+} {
+  return {
+    project: automations.filter((automation) => automation.projectId !== null),
+    global: automations.filter((automation) => automation.projectId === null),
+  };
+}
+
+/**
+ * The name a Duplicate lands under.
+ *
+ * Duplicate exists so "same work, different Trigger" is one click rather than
+ * copy and paste (VC-112's tripwire), which means the copy has to be
+ * *distinguishable at a glance* from its source — two rows reading "Review
+ * sweep" would make the feature worse than the copy-and-paste it replaces.
+ * Suffix rather than prefix so the copy sorts beside its original, and the
+ * counter starts at 2 because the first copy is simply "(copy)".
+ *
+ * `taken` is every name already listed under this project, so duplicating the
+ * duplicate does not collide either.
+ */
+export function duplicateName(name: string, taken: readonly string[]): string {
+  const used = new Set(taken);
+  const base = `${name} (copy)`;
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${name} (copy ${n})`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * Whether a Run row is a door back to its Session, and where it opens.
+ *
+ * A Run whose Ticket was deleted keeps its Session — `automation_runs`
+ * orphans `ticket_id` exactly as `sessions.ticket_id` does — but the ticket
+ * workspace that Session lived in is gone, so the row states the Run and
+ * stops being clickable rather than navigating somewhere that no longer
+ * exists.
+ */
+export function runDoor(
+  run: Pick<AutomationRun, "sessionId" | "ticketId">,
+): { sessionId: string; ticketId: string } | null {
+  return run.ticketId === null ? null : { sessionId: run.sessionId, ticketId: run.ticketId };
+}

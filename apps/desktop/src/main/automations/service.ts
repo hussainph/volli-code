@@ -15,6 +15,10 @@ export interface AutomationServiceDeps {
   findAutomation(automationId: string): Automation | undefined;
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
+  runsForProject(projectId: string): AutomationRun[];
+  /** The machine-local disabled set; see `enablement.ts` for why it is not a record field. */
+  disabledAutomationIds(): string[];
+  setAutomationEnabled(input: { automationId: string; enabled: boolean }): string[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
 }
@@ -30,6 +34,10 @@ export type AutomationWriteOutcome =
 export type AutomationDeleteOutcome =
   | { ok: true; receipt: AutomationCommandReceipt }
   | { ok: false; error: string; receipt?: AutomationCommandReceipt };
+
+export type AutomationRunHistoryOutcome =
+  | { ok: true; runs: AutomationRun[] }
+  | { ok: false; error: string };
 
 /**
  * The host-facing Automation application service. It owns validation against
@@ -60,6 +68,31 @@ export function createAutomationService(deps: AutomationServiceDeps) {
 
     runsForTicket(ticketId: string) {
       return deps.runsForTicket(ticketId);
+    },
+
+    /**
+     * The Automations page's Run history. Project-guarded like {@link list}
+     * above and unlike `runsForTicket`: this reads a whole project's work,
+     * so an unknown id is a refusal rather than a convincing empty list.
+     */
+    runsForProject(projectId: string): AutomationRunHistoryOutcome {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, runs: deps.runsForProject(projectId) };
+    },
+
+    /**
+     * Machine-local enablement (VC-127). Deliberately not routed through the
+     * command ledger — `enablement.ts` states why — so these two are plain
+     * reads and writes of host operating state, with no receipt to mint and
+     * no `onMutation` broadcast: no other window's projection of the RECORD
+     * changed, and the page that asked already has the answer it needs.
+     */
+    disabledAutomationIds(): string[] {
+      return deps.disabledAutomationIds();
+    },
+
+    setEnabled(input: { automationId: string; enabled: boolean }): string[] {
+      return deps.setAutomationEnabled(input);
     },
 
     async create(input: {

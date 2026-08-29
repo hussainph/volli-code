@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { ModelAccessSnapshot, ModelSelection } from "@volli/shared";
 import type {
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationResult,
   AutomationRunStartResult,
   AutomationRunsResult,
@@ -24,6 +25,7 @@ vi.mock("electron", () => ({
 
 import { registerAutomationIpcHandlers } from "./ipc";
 import { createAutomationEngine } from "./engine";
+import { disabledAutomationIds, setAutomationEnabled } from "./enablement";
 import type { AutomationRunner } from "./run";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
@@ -31,6 +33,7 @@ import {
   createAutomation,
   getAutomation,
   listAutomationsForProject,
+  listRunsForProject,
   listRunsForTicket,
   recordAutomationRun,
 } from "../db/automations-repo";
@@ -74,10 +77,11 @@ const ACCESS: ModelAccessSnapshot = {
 
 const EVENT = { sender: {} } as never;
 
-async function call<T>(channel: string, input: unknown): Promise<T> {
+/** Variadic so a zero-argument channel is called with none, as the guard requires. */
+async function call<T>(channel: string, ...input: unknown[]): Promise<T> {
   const handler = handlers.get(channel);
   if (handler === undefined) throw new Error(`no handler for ${channel}`);
-  return (await (handler as (...args: unknown[]) => unknown)(EVENT, input)) as T;
+  return (await (handler as (...args: unknown[]) => unknown)(EVENT, ...input)) as T;
 }
 
 function setup(
@@ -104,6 +108,9 @@ function setup(
     // database or repository.
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
+    runsForProject: (id) => listRunsForProject(ctx.db, id),
+    disabledAutomationIds: () => disabledAutomationIds(ctx.db),
+    setAutomationEnabled: (input) => setAutomationEnabled(ctx.db, input, 5_000),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
   });
@@ -127,6 +134,9 @@ describe("automation IPC", () => {
       "volli:automation-delete",
       "volli:automation-run",
       "volli:automation-runs-for-ticket",
+      "volli:automation-runs-for-project",
+      "volli:automation-enablement",
+      "volli:automation-set-enabled",
     ]) {
       expect(await call<Result>(channel, {})).toEqual({
         ok: false,
@@ -319,5 +329,89 @@ describe("automation IPC", () => {
         runtime: null,
       }),
     ).toEqual({ ok: false, error: "Invalid automation" });
+  });
+
+  it("lists a project's Runs newest first, and refuses an unknown project", async () => {
+    const { project, ticket } = setup();
+    const session = testSession(project.id, ticket.id);
+    insertSession(ctx.db, session);
+    const automation = createAutomation(
+      ctx.db,
+      { projectId: project.id, name: "Review", instructions: "x", runtime: null },
+      1,
+    );
+    recordAutomationRun(
+      ctx.db,
+      { automationId: automation.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      1_000,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        automationName: "Sweep",
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: PIN,
+      },
+      9_000,
+    );
+
+    const runs = await call<AutomationRunsResult>("volli:automation-runs-for-project", {
+      projectId: project.id,
+    });
+    expect(runs).toMatchObject({
+      ok: true,
+      runs: [{ automationName: "Sweep" }, { automationName: "Review" }],
+    });
+
+    // Guarded, unlike the Ticket read: a whole project's history answered as a
+    // convincing empty list would look like "nothing ever ran here".
+    expect(
+      await call<AutomationRunsResult>("volli:automation-runs-for-project", {
+        projectId: "no-such-project",
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("carries machine-local enablement without minting a command or a receipt", async () => {
+    const { mutations } = setup();
+
+    expect(await call<AutomationEnablementResult>("volli:automation-enablement")).toEqual({
+      ok: true,
+      disabledAutomationIds: [],
+    });
+
+    expect(
+      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
+        automationId: "automation-2",
+        enabled: false,
+      }),
+    ).toEqual({ ok: true, disabledAutomationIds: ["automation-2"] });
+    expect(
+      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
+        automationId: "automation-1",
+        enabled: false,
+      }),
+    ).toEqual({ ok: true, disabledAutomationIds: ["automation-1", "automation-2"] });
+
+    // It survives the round trip through app_state, and switching one back on
+    // removes exactly that id.
+    expect(await call<AutomationEnablementResult>("volli:automation-enablement")).toEqual({
+      ok: true,
+      disabledAutomationIds: ["automation-1", "automation-2"],
+    });
+    expect(
+      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
+        automationId: "automation-1",
+        enabled: true,
+      }),
+    ).toEqual({ ok: true, disabledAutomationIds: ["automation-2"] });
+
+    // No `volli:data-changed` fan-out: no projection of the RECORD moved.
+    expect(mutations).toEqual([]);
+    expect(
+      await call<Result>("volli:automation-set-enabled", { automationId: "a", enabled: "yes" }),
+    ).toEqual({ ok: false, error: "Invalid automation enablement request" });
   });
 });

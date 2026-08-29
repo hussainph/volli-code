@@ -1,8 +1,18 @@
 /**
- * The Automation editor (VC-126): the tracer's one authoring surface, a
- * dialog opened from the command palette. VC-127's nav page supersedes the
- * *entry point*; the form itself — name, Ownership, Instructions, Runtime —
- * is the record's whole editable shape either way.
+ * The Automation editor: the app's ONE authoring surface (VC-112 — "only the
+ * nav page authors, every other surface just runs"), reached from the
+ * Automations page's New / Edit / Duplicate actions and from the command
+ * palette's create. The form — name, Ownership, Trigger, Instructions,
+ * Runtime — is the record's whole editable shape either way.
+ *
+ * It creates and it edits, off one field: `editor.automation` is the record
+ * being edited or `null` for a create. The alternative — a second dialog for
+ * edit — is how the one authoring surface quietly becomes two that drift.
+ *
+ * Ownership is EDITABLE ON CREATE ONLY. It decides where an Automation is
+ * listed, and main treats it as identity (`updateAutomation` takes no
+ * `projectId`): a record that could move between scopes would take its Run
+ * history somewhere those Runs never happened.
  *
  * Two reuses are the point of this file, not conveniences:
  *
@@ -21,7 +31,18 @@
  */
 import * as React from "react";
 
-import { errorMessage, type ModelSelection } from "@volli/shared";
+import {
+  errorMessage,
+  isAutomationRuntimePin,
+  type Automation,
+  type ModelSelection,
+} from "@volli/shared";
+
+import {
+  INSTRUCTIONS_PLACEHOLDER,
+  MANUAL_TRIGGER_LABEL,
+  ownershipLabel,
+} from "./automations-page-model";
 
 import {
   ComposerPickerStack,
@@ -60,27 +81,52 @@ type RuntimeChoice = "inherit" | "pin";
  * The dialog itself, mounted once beside the command palette. It renders only
  * while the store says an editor is open, and everything in it resets by
  * REMOUNT (the `key` below): a dialog dismissed mid-draft starts blank next
- * time, which for a two-field form is less surprising than a resurrected
- * draft with no visible home.
+ * time, which for a short form is less surprising than a resurrected draft
+ * with no visible home. The key names the RECORD, so switching from one
+ * Automation's Edit to another's without closing re-seeds the fields.
  */
 export function AutomationEditorDialog() {
   const editor = useAutomationsStore((state) => state.editor);
   if (editor === null) return null;
-  return <AutomationEditorForm key={editor.projectId} projectId={editor.projectId} />;
+  return (
+    <AutomationEditorForm
+      key={`${editor.projectId}:${editor.automation?.id ?? "new"}`}
+      projectId={editor.projectId}
+      automation={editor.automation}
+    />
+  );
 }
 
-function AutomationEditorForm({ projectId }: { projectId: string }) {
+function AutomationEditorForm({
+  projectId,
+  automation,
+}: {
+  projectId: string;
+  automation: Automation | null;
+}) {
   const closeEditor = useAutomationsStore((state) => state.closeEditor);
   const save = useAutomationsStore((state) => state.save);
+  const update = useAutomationsStore((state) => state.update);
 
   // This id survives an invoke failure while the dialog stays mounted, so the
   // person's Retry repeats durable intent instead of creating a second record.
   const [commandId] = React.useState(() => crypto.randomUUID());
-  const [name, setName] = React.useState("");
-  const [instructions, setInstructions] = React.useState("");
-  const [ownership, setOwnership] = React.useState<OwnershipChoice>("project");
-  const [runtimeChoice, setRuntimeChoice] = React.useState<RuntimeChoice>("inherit");
-  const [pin, setPin] = React.useState<ModelSelection | null>(null);
+  const [name, setName] = React.useState(automation?.name ?? "");
+  // A new Automation opens an EMPTY box (VC-112). The placeholder is what
+  // pushes toward `/skill`; seeding prose here is what that rule forbids.
+  const [instructions, setInstructions] = React.useState(automation?.instructions ?? "");
+  const [ownership, setOwnership] = React.useState<OwnershipChoice>(
+    automation === null || automation.projectId !== null ? "project" : "global",
+  );
+  // Inherited by default (VC-112): workflows persist while models churn, so
+  // the model must not be part of an Automation's identity. A stored pin that
+  // no longer parses opens on "inherit" rather than pretending to be one.
+  const [runtimeChoice, setRuntimeChoice] = React.useState<RuntimeChoice>(
+    automation !== null && isAutomationRuntimePin(automation.runtime) ? "pin" : "inherit",
+  );
+  const [pin, setPin] = React.useState<ModelSelection | null>(
+    automation !== null && isAutomationRuntimePin(automation.runtime) ? automation.runtime : null,
+  );
   const [problem, setProblem] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
@@ -130,13 +176,22 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
     if (incomplete || saving) return;
     setSaving(true);
     try {
-      const refusal = await save({
-        commandId,
-        projectId: ownership === "project" ? projectId : null,
-        name,
-        instructions,
-        runtime,
-      });
+      const refusal =
+        automation === null
+          ? await save({
+              commandId,
+              projectId: ownership === "project" ? projectId : null,
+              name,
+              instructions,
+              runtime,
+            })
+          : await update({
+              commandId,
+              automationId: automation.id,
+              name,
+              instructions,
+              runtime,
+            });
       if (refusal === null) closeEditor();
       else setProblem(refusal);
     } catch (error) {
@@ -150,7 +205,7 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
     <Dialog open onOpenChange={(open) => (open ? undefined : closeEditor())}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>New Automation</DialogTitle>
+          <DialogTitle>{automation === null ? "New Automation" : "Edit Automation"}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
@@ -162,14 +217,35 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
               aria-label="Name"
               className="flex-1"
             />
-            <Segmented<OwnershipChoice>
-              ariaLabel="Ownership"
-              value={ownership}
-              options={[
-                { key: "project", label: "This project" },
-                { key: "global", label: "All projects" },
-              ]}
-              onChange={setOwnership}
+            {/* Ownership decides WHERE this is listed, and main treats it as
+                identity on update — so an existing record states it and does
+                not offer to move it. */}
+            {automation === null ? (
+              <Segmented<OwnershipChoice>
+                ariaLabel="Ownership"
+                value={ownership}
+                options={[
+                  { key: "project", label: "This project" },
+                  { key: "global", label: "All projects" },
+                ]}
+                onChange={setOwnership}
+              />
+            ) : (
+              <span className="shrink-0 text-label text-muted-foreground">
+                {ownershipLabel(automation)}
+              </span>
+            )}
+          </div>
+          {/* The Trigger: what starts this BESIDES a person. Running by hand
+              is universal (VC-112), so it is never one of the answers. One
+              option today because the record holds one — the column Trigger
+              (VC-128) and the schedule (VC-130) add answers beside it. */}
+          <div className="flex items-center gap-2">
+            <Segmented<"manual">
+              ariaLabel="Trigger"
+              value="manual"
+              options={[{ key: "manual", label: MANUAL_TRIGGER_LABEL }]}
+              onChange={() => undefined}
             />
           </div>
           <ComposerPickerStack
@@ -235,7 +311,7 @@ function AutomationEditorForm({ projectId }: { projectId: string }) {
             Cancel
           </Button>
           <Button disabled={incomplete || saving} onClick={() => void submit()}>
-            Create automation
+            {automation === null ? "Create automation" : "Save changes"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -261,7 +337,7 @@ function InstructionsTextarea({
       ref={caret.ref}
       value={value}
       aria-label="Instructions"
-      placeholder={"Type / for a Skill, @ for a file…"}
+      placeholder={INSTRUCTIONS_PLACEHOLDER}
       className={cn(
         "min-h-32 w-full resize-y rounded-lg border border-border bg-transparent px-3 py-2",
         "text-sm text-foreground outline-none placeholder:text-muted-foreground",

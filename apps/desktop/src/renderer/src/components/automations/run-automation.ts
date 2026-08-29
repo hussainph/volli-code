@@ -49,16 +49,37 @@ export async function runAutomationOnTicket(input: {
     case "toast":
       toastError(action.message);
       return;
-    case "open-session": {
-      const chat = useChatSessionsStore.getState();
-      chat.adoptChatSession(action.sessionId);
-      chat.openChatTab(input.ticketId, action.sessionId);
-      useWorkspaceStore.getState().openTicketWorkspace(action.projectId, input.ticketId, {
-        tabId: chatTabId(action.sessionId),
+    case "open-session":
+      openRunSession({
+        sessionId: action.sessionId,
+        projectId: action.projectId,
+        ticketId: input.ticketId,
       });
-      // So the rail's row appears without waiting on an unrelated refresh.
-      void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
       return;
-    }
   }
+}
+
+/**
+ * Open the Session a Run created — the adopt + open pair every externally
+ * minted Session already rides.
+ *
+ * Extracted from the success arm above so the Automations page's Run history
+ * (VC-127) opens a Session by exactly the same steps a fresh Run does. A
+ * history row that navigated differently from the launch it records would be
+ * two answers to "where does this Run live", and the one nobody exercises is
+ * the one that rots.
+ */
+export function openRunSession(input: {
+  sessionId: string;
+  projectId: string;
+  ticketId: string;
+}): void {
+  const chat = useChatSessionsStore.getState();
+  chat.adoptChatSession(input.sessionId);
+  chat.openChatTab(input.ticketId, input.sessionId);
+  useWorkspaceStore.getState().openTicketWorkspace(input.projectId, input.ticketId, {
+    tabId: chatTabId(input.sessionId),
+  });
+  // So the rail's row appears without waiting on an unrelated refresh.
+  void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
 }

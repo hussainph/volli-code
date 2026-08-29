@@ -7,6 +7,7 @@ import {
   getAutomation,
   latestRunForTicket,
   listAutomationsForProject,
+  listRunsForProject,
   listRunsForTicket,
   recordAutomationRun,
   updateAutomation,
@@ -185,6 +186,62 @@ describe("automation runs repo", () => {
     const { ticket } = seeded();
     expect(latestRunForTicket(ctx.db, ticket.id)).toBeUndefined();
     expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([]);
+  });
+
+  it("scopes a project's Run history through the Ticket, newest first", () => {
+    const { project, ticket, session } = seeded();
+    const other = testProject();
+    insertProject(ctx.db, other);
+    const otherTicket = testTicket(other.id);
+    insertTicket(ctx.db, otherTicket);
+    const otherSession = testSession(other.id, otherTicket.id);
+    insertSession(ctx.db, otherSession);
+    // Global Ownership: listable in both projects, but its Run happened in one.
+    const global = createAutomation(
+      ctx.db,
+      { projectId: null, name: "Sweep", instructions: "x", runtime: null },
+      500,
+    );
+
+    const older = recordAutomationRun(
+      ctx.db,
+      { automationId: global.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      1000,
+    );
+    const newer = recordAutomationRun(
+      ctx.db,
+      { automationId: global.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      2000,
+    );
+    const elsewhere = recordAutomationRun(
+      ctx.db,
+      {
+        automationId: global.id,
+        ticketId: otherTicket.id,
+        sessionId: otherSession.id,
+        model: PIN,
+      },
+      3000,
+    );
+
+    expect(listRunsForProject(ctx.db, project.id)).toEqual([newer, older]);
+    expect(listRunsForProject(ctx.db, other.id)).toEqual([elsewhere]);
+  });
+
+  it("drops a Run whose Ticket was deleted rather than filing it under a project", () => {
+    const { project, ticket, session } = seeded();
+    recordAutomationRun(
+      ctx.db,
+      { automationId: null, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      1000,
+    );
+    expect(listRunsForProject(ctx.db, project.id)).toHaveLength(1);
+
+    // `automation_runs.ticket_id` orphans on delete, exactly as
+    // `sessions.ticket_id` does; the Session stays reachable, the project
+    // filing does not.
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run(ticket.id);
+    expect(listRunsForProject(ctx.db, project.id)).toEqual([]);
   });
 
   it("preserves an out-of-vocabulary historical reasoning level exactly", () => {

@@ -54,12 +54,14 @@ import type {
   BootstrapResult,
   AutomationCreateInput,
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationIdInput,
   AutomationResult,
   AutomationRunInput,
   AutomationRunsResult,
   AutomationRunStartResult,
   AutomationsResult,
+  AutomationSetEnabledInput,
   AutomationUpdateInput,
   CliDoctorInput,
   CliDoctorResult,
@@ -717,6 +719,14 @@ const api = {
     /** A Ticket's Runs, newest first. */
     runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-ticket", input),
+    /** Every Run on this project's Tickets, newest first — the page's history. */
+    runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-project", input),
+    /** Which Automations are switched off on this machine (VC-127). */
+    enablement: (): Promise<AutomationEnablementResult> => invoke("volli:automation-enablement"),
+    /** Switches one on or off here; answers with the whole new disabled set. */
+    setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationEnablementResult> =>
+      invoke("volli:automation-set-enabled", input),
   },
   /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
