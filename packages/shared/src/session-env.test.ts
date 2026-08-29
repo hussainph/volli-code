@@ -79,9 +79,9 @@ describe("memoizedPathExists", () => {
       return present.has(path);
     });
 
-    requiredSessionEnvTools("/repo", exists);
-    workspaceDependenciesStatus("/repo", exists);
-    workspaceInstallCommand("/repo", exists);
+    requiredSessionEnvTools("/repo", "/repo", exists);
+    workspaceDependenciesStatus("/repo", "/repo", exists);
+    workspaceInstallCommand("/repo", "/repo", exists);
 
     expect(asked.length).toBe(new Set(asked).size);
   });
@@ -148,6 +148,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/work/volli",
+        "/work/volli",
         resolver([], ["/work/volli/package.json", "/work/volli/node_modules"]).exists,
       ),
     ).toBe("installed");
@@ -160,6 +161,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/work/volli/apps/desktop",
+        "/work/volli",
         resolver(
           [],
           [
@@ -176,6 +178,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/work/volli/packages/shared",
+        "/work/volli",
         resolver([], ["/work/volli/packages/shared/package.json", "/work/volli/package.json"])
           .exists,
       ),
@@ -183,12 +186,51 @@ describe("workspaceDependenciesStatus", () => {
   });
 
   it("is null when no ancestor is a package workspace at all", () => {
-    expect(workspaceDependenciesStatus("/home/me", resolver().exists)).toBeNull();
+    expect(workspaceDependenciesStatus("/home/me", "/home/me", resolver().exists)).toBeNull();
+  });
+
+  it("never lets a stray manifest above a non-git project answer any workspace question", () => {
+    const asked: string[] = [];
+    const present = new Set(["/Users/me/package.json", "/Users/me/node_modules"]);
+    const exists = memoizedPathExists((path) => {
+      asked.push(path);
+      return present.has(path);
+    });
+    const cwd = "/Users/me/projects/empty";
+
+    expect(workspaceDependenciesStatus(cwd, cwd, exists)).toBeNull();
+    expect(
+      workspaceDependenciesStatus(cwd, cwd, resolver([], ["/Users/me/package.json"]).exists),
+    ).toBeNull();
+    expect(workspaceInstallCommand(cwd, cwd, exists)).toBeNull();
+    expect(requiredSessionEnvTools(cwd, cwd, exists)).toEqual([]);
+    expect(asked).toEqual([`${cwd}/.git`, `${cwd}/package.json`]);
+  });
+
+  it("measures the project root instead of an unrelated cwd outside it", () => {
+    expect(
+      workspaceDependenciesStatus(
+        "/tmp/elsewhere",
+        "/work/project",
+        resolver(
+          [],
+          [
+            "/tmp/elsewhere/package.json",
+            "/work/project/package.json",
+            "/work/project/node_modules",
+          ],
+        ).exists,
+      ),
+    ).toBe("installed");
   });
 
   it("stops the walk at the filesystem root without looping", () => {
     expect(
-      workspaceDependenciesStatus("/", resolver([], ["/package.json", "/node_modules"]).exists),
+      workspaceDependenciesStatus(
+        "/project",
+        "/",
+        resolver([], ["/package.json", "/node_modules"]).exists,
+      ),
     ).toBe("installed");
   });
 
@@ -196,6 +238,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/work/volli/",
+        "/work/volli",
         resolver([], ["/work/volli/package.json"]).exists,
       ),
     ).toBe("absent");
@@ -210,6 +253,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/Users/me/worktrees/wt",
+        "/Users/me",
         resolver(
           [],
           [
@@ -227,6 +271,7 @@ describe("workspaceDependenciesStatus", () => {
     expect(
       workspaceDependenciesStatus(
         "/repo/packages/a",
+        "/repo",
         resolver(
           [],
           [
@@ -246,6 +291,7 @@ describe("workspaceInstallCommand", () => {
     expect(
       workspaceInstallCommand(
         "/repo/packages/a",
+        "/repo",
         resolver(
           [],
           ["/repo/packages/a/package.json", "/repo/package.json", "/repo/pnpm-lock.yaml"],
@@ -263,6 +309,7 @@ describe("workspaceInstallCommand", () => {
     expect(
       workspaceInstallCommand(
         "/work/acme",
+        "/work/acme",
         resolver([], ["/work/acme/package.json", `/work/acme/${lockfile}`]).exists,
       ),
     ).toBe(command);
@@ -272,6 +319,7 @@ describe("workspaceInstallCommand", () => {
     expect(
       workspaceInstallCommand(
         "/repo/vendored",
+        "/repo",
         resolver(
           [],
           [
@@ -287,18 +335,23 @@ describe("workspaceInstallCommand", () => {
 
   it("defaults a lockfile-less manifest to npm, the manager every manifest answers to", () => {
     expect(
-      workspaceInstallCommand("/work/acme", resolver([], ["/work/acme/package.json"]).exists),
+      workspaceInstallCommand(
+        "/work/acme",
+        "/work/acme",
+        resolver([], ["/work/acme/package.json"]).exists,
+      ),
     ).toBe("npm install");
   });
 
   it("is null when no ancestor is a package workspace", () => {
-    expect(workspaceInstallCommand("/home/me", resolver().exists)).toBeNull();
+    expect(workspaceInstallCommand("/home/me", "/home/me", resolver().exists)).toBeNull();
   });
 
   it("does not read lockfiles past the repository boundary", () => {
     expect(
       workspaceInstallCommand(
         "/repo/wt",
+        "/repo",
         resolver(
           [],
           ["/repo/wt/package.json", "/repo/wt/.git", "/repo/package.json", "/repo/yarn.lock"],
@@ -319,6 +372,7 @@ describe("workspacePackageManager", () => {
     expect(
       workspacePackageManager(
         "/work/acme",
+        "/work/acme",
         resolver([], ["/work/acme/package.json", `/work/acme/${lockfile}`]).exists,
       ),
     ).toBe(manager);
@@ -326,12 +380,16 @@ describe("workspacePackageManager", () => {
 
   it("is npm for a manifest no lockfile speaks for", () => {
     expect(
-      workspacePackageManager("/work/acme", resolver([], ["/work/acme/package.json"]).exists),
+      workspacePackageManager(
+        "/work/acme",
+        "/work/acme",
+        resolver([], ["/work/acme/package.json"]).exists,
+      ),
     ).toBe("npm");
   });
 
   it("is null where no ancestor is a package workspace", () => {
-    expect(workspacePackageManager("/home/me", resolver().exists)).toBeNull();
+    expect(workspacePackageManager("/home/me", "/home/me", resolver().exists)).toBeNull();
   });
 });
 
@@ -343,21 +401,22 @@ describe("requiredSessionEnvTools", () => {
   // itself, found up the chain, and absent.
   it("finds the repository marker from a subdirectory of the checkout", () => {
     expect(
-      requiredSessionEnvTools("/repo/packages/a", resolver([], ["/repo/.git"]).exists),
+      requiredSessionEnvTools("/repo/packages/a", "/repo", resolver([], ["/repo/.git"]).exists),
     ).toEqual(["git"]);
   });
 
   // A linked worktree carries `.git` as a FILE, not a directory. Existence is
   // the test, which is what makes a Session's own worktree a repository.
   it("treats a linked worktree's .git file as the marker it is", () => {
-    expect(requiredSessionEnvTools("/wt/VC-1", resolver([], ["/wt/VC-1/.git"]).exists)).toEqual([
-      "git",
-    ]);
+    expect(
+      requiredSessionEnvTools("/wt/VC-1", "/wt/VC-1", resolver([], ["/wt/VC-1/.git"]).exists),
+    ).toEqual(["git"]);
   });
 
   it("requires git, node and the lockfile's manager for a pnpm checkout", () => {
     expect(
       requiredSessionEnvTools(
+        "/repo",
         "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/pnpm-lock.yaml"]).exists,
       ),
@@ -370,6 +429,7 @@ describe("requiredSessionEnvTools", () => {
     expect(
       requiredSessionEnvTools(
         "/repo",
+        "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/yarn.lock"]).exists,
       ),
     ).toEqual(["git", "node", "yarn"]);
@@ -377,18 +437,28 @@ describe("requiredSessionEnvTools", () => {
 
   it("requires only git for a repository with no JavaScript manifest", () => {
     expect(
-      requiredSessionEnvTools("/repo", resolver([], ["/repo/.git", "/repo/pyproject.toml"]).exists),
+      requiredSessionEnvTools(
+        "/repo",
+        "/repo",
+        resolver([], ["/repo/.git", "/repo/pyproject.toml"]).exists,
+      ),
     ).toEqual(["git"]);
   });
 
   it("requires node and npm for a package folder that is not a repository", () => {
     expect(
-      requiredSessionEnvTools("/scratch/app", resolver([], ["/scratch/app/package.json"]).exists),
+      requiredSessionEnvTools(
+        "/scratch/app",
+        "/scratch/app",
+        resolver([], ["/scratch/app/package.json"]).exists,
+      ),
     ).toEqual(["node", "npm"]);
   });
 
   it("requires nothing of a folder that is neither repository nor workspace", () => {
-    expect(requiredSessionEnvTools("/Users/me/notes", resolver().exists)).toEqual([]);
+    expect(
+      requiredSessionEnvTools("/Users/me/notes", "/Users/me/notes", resolver().exists),
+    ).toEqual([]);
   });
 
   // gh is measured everywhere and required nowhere: its absence is classified
@@ -396,6 +466,7 @@ describe("requiredSessionEnvTools", () => {
   it("never requires gh, whatever the project is", () => {
     expect(
       requiredSessionEnvTools(
+        "/repo",
         "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/pnpm-lock.yaml"]).exists,
       ),
@@ -409,6 +480,7 @@ describe("requiredSessionEnvTools", () => {
     expect(
       requiredSessionEnvTools(
         "/repo",
+        "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/bun.lock"]).exists,
       ),
     ).toEqual(["git", "bun"]);
@@ -418,6 +490,7 @@ describe("requiredSessionEnvTools", () => {
     expect(
       requiredSessionEnvTools(
         "/repo",
+        "/repo",
         resolver([], ["/repo/package.json", "/repo/bun.lockb"]).exists,
       ),
     ).toEqual(["bun"]);
@@ -426,6 +499,7 @@ describe("requiredSessionEnvTools", () => {
   it("lists requirements in census order, whatever the manager", () => {
     expect(
       requiredSessionEnvTools(
+        "/repo",
         "/repo",
         resolver([], ["/repo/.git", "/repo/package.json", "/repo/package-lock.json"]).exists,
       ),

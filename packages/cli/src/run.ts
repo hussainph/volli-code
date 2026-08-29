@@ -100,8 +100,8 @@ async function writeDegradedIdentify(
           tools,
           // Which of them this workspace actually implies — a disk question,
           // so the degraded block answers it as confidently as main does.
-          requiredTools: requiredSessionEnvTools(dependencies.cwd, pathExists),
-          dependencies: workspaceDependenciesStatus(dependencies.cwd, pathExists),
+          requiredTools: requiredSessionEnvTools(dependencies.cwd, dependencies.cwd, pathExists),
+          dependencies: workspaceDependenciesStatus(dependencies.cwd, dependencies.cwd, pathExists),
         },
         degraded: true,
       },
@@ -124,6 +124,7 @@ async function doctorObservation(
   return {
     ...(await dependencies.observe()),
     requiredTools: requiredSessionEnvTools(
+      dependencies.cwd,
       dependencies.cwd,
       memoizedPathExists(dependencies.pathExists ?? existsSync),
     ),

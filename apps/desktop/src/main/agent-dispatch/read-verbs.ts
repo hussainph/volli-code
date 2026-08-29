@@ -11,9 +11,10 @@ import {
   displayTicketId,
   isTicketStatus,
   MUTATION_PLAN_CONTRACT,
+  pathContains,
   shortSessionId,
 } from "@volli/shared";
-import type { AgentRequest, AgentResponse, SessionEvent } from "@volli/shared";
+import type { AgentRequest, AgentResponse, Project, SessionEvent } from "@volli/shared";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { listRecentComments } from "../db/comments-repo";
@@ -64,6 +65,32 @@ function worktreeMisalignment(
   return `You are working in ${cwd}, which is outside ${displayId}'s worktree at ${worktreePath}. Move your work there before continuing.`;
 }
 
+/**
+ * The outer boundary for a project-scoped environment read.
+ *
+ * A caller can stand in either the main checkout or any stamped worktree. The
+ * most specific worktree containing its cwd wins; otherwise the main checkout
+ * is the boundary. `fallback` covers a Session addressed from elsewhere while
+ * preserving its ticket worktree as the scope rather than measuring that
+ * unrelated directory.
+ */
+function environmentProjectRoot(
+  context: AgentCommandContext,
+  project: Project,
+  cwd: string,
+  fallback: string = project.path,
+): string {
+  const worktree = [
+    ...listTicketsByProject(context.options.db, project.id),
+    ...listArchivedTicketsByProject(context.options.db, project.id),
+  ]
+    .flatMap((ticket) => (ticket.worktreePath === null ? [] : [ticket.worktreePath]))
+    .filter((path) => pathContains(path, cwd))
+    .toSorted((a, b) => b.length - a.length)[0];
+  if (worktree !== undefined) return worktree;
+  return pathContains(project.path, cwd) ? project.path : fallback;
+}
+
 /** Reads VC-164's frozen list without backfilling or consulting current Settings. */
 function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
   for (const event of events) {
@@ -87,10 +114,6 @@ export async function identifyVerb(
 ): Promise<AgentResponse> {
   const { options, projects, sessions, envSession, sessionEngine } = context;
   const envSessionId = request.ctx.env.session;
-  // Measured at the moment the agent asks, like the worktree-
-  // misalignment warning above: main adopted the PATH once at boot, and
-  // this reports that outcome — never re-probes, never guesses.
-  const env = options.sessionEnv ? await options.sessionEnv(request.ctx.cwd) : undefined;
   if (envSessionId) {
     if (!envSession) {
       return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
@@ -100,6 +123,19 @@ export async function identifyVerb(
       return failure("PROJECT_NOT_FOUND", "The session's project no longer exists.");
     }
     const ticket = envSession.ticketId ? getTicket(options.db, envSession.ticketId) : undefined;
+    const projectRoot = environmentProjectRoot(
+      context,
+      project,
+      request.ctx.cwd,
+      ticket?.worktreePath ?? project.path,
+    );
+    // Measured at the moment the agent asks, like the worktree-misalignment
+    // warning below: main adopted the PATH once at boot, and this reports that
+    // outcome — never re-probes, never guesses. The second path is the outer
+    // boundary; a package cwd may still walk up to its monorepo root.
+    const env = options.sessionEnv
+      ? await options.sessionEnv(request.ctx.cwd, projectRoot)
+      : undefined;
     // A PTY session's directory is its terminal's cwd; a structured
     // Session has no PTY, so its workspace is the ticket worktree — or
     // the project root a ticketless Session was pointed at.
@@ -158,6 +194,15 @@ export async function identifyVerb(
     ? { ok: true as const, project: ticket.project }
     : projectForCreate(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
+  const projectRoot = environmentProjectRoot(
+    context,
+    resolved.project,
+    request.ctx.cwd,
+    ticket?.ok ? (ticket.ticket.worktreePath ?? ticket.project.path) : resolved.project.path,
+  );
+  const env = options.sessionEnv
+    ? await options.sessionEnv(request.ctx.cwd, projectRoot)
+    : undefined;
   return {
     v: 1,
     ok: true,

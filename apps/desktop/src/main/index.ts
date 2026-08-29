@@ -732,23 +732,28 @@ app.whenReady().then(async () => {
    */
   const readSessionEnvironment = async (
     cwd: string | null,
+    projectRoot: string | null,
     pathExists?: (path: string) => boolean,
   ) => {
     const outcome = await loginPathBootstrap.apply();
     const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
-    const report = await buildSessionEnvReport({
+    const reportInput = {
       // Read after apply: the bootstrap is the one writer that puts binDir
       // first even when the login shell could not be reached.
       path: process.env.PATH ?? "",
       provenance: outcome.kind,
       interactiveProvenance,
-      // A host-wide read has no project dependency fact to infer from main's
-      // own cwd, so the report leaves that one field unmeasured.
-      cwd: cwd ?? undefined,
       // A caller with a further workspace question of its own passes its memo
       // in, so the whole read stats each path once (Settings, below).
       ...(pathExists === undefined ? {} : { pathExists }),
-    });
+    };
+    // A host-wide read has no project dependency fact to infer from main's own
+    // cwd. Scoped reads carry both where the caller stands and the outer
+    // project boundary; constructing the two shapes separately keeps that
+    // all-or-nothing contract visible to TypeScript.
+    const report = await buildSessionEnvReport(
+      cwd === null || projectRoot === null ? reportInput : { ...reportInput, cwd, projectRoot },
+    );
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
     // their concrete facts instead of widening them to that fallback shape.
@@ -2435,8 +2440,8 @@ app.whenReady().then(async () => {
             // than the tool they were told to have.
             const pathExists = memoizedPathExists(existsSync);
             return {
-              ...(await readSessionEnvironment(cwd, pathExists)),
-              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, pathExists),
+              ...(await readSessionEnvironment(cwd, cwd, pathExists)),
+              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, cwd, pathExists),
             };
           },
           systemPathIssues: () => readSystemPathIssues(),
@@ -2572,7 +2577,7 @@ app.whenReady().then(async () => {
           // the one current pass — boot normally, a fresh pass after repair —
           // so the report never describes a PATH from before adoption finished
           // and is read at CALL time, never captured.
-          sessionEnv: (cwd) => readSessionEnvironment(cwd),
+          sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.

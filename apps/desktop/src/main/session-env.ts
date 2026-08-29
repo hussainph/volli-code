@@ -64,13 +64,17 @@ export function readWorkspaceEnvironment(
   workspacePath: string,
   pathExists: (path: string) => boolean = existsSync,
 ): RuntimeWorkspaceEnvironment {
+  // Both answers walk the same bounded workspace and must describe the same
+  // moment, so one memo serves the pair even when this function is called on
+  // its own (the structured runtime and prompt-baseline paths both do).
+  const exists = memoizedPathExists(pathExists);
   return {
-    dependencies: workspaceDependenciesStatus(workspacePath, pathExists),
-    installCommand: workspaceInstallCommand(workspacePath, pathExists),
+    dependencies: workspaceDependenciesStatus(workspacePath, workspacePath, exists),
+    installCommand: workspaceInstallCommand(workspacePath, workspacePath, exists),
   };
 }
 
-export interface SessionEnvReportDeps {
+interface SessionEnvReportBaseDeps {
   /** The session's resolved PATH — post-adoption, bin dir first. */
   path: string;
   /** The boot adoption outcome's kind: how `path` came to be what it is. */
@@ -81,8 +85,6 @@ export interface SessionEnvReportDeps {
    * `LoginPathBootstrap.interactiveProvenance`.
    */
   interactiveProvenance: SessionEnvInteractiveProvenance;
-  /** The workspace root to inspect, omitted for a host-wide environment read. */
-  cwd?: string;
   /** Test seam over the filesystem; defaults to the real one. */
   isExecutable?(path: string): Promise<boolean>;
   /**
@@ -91,6 +93,18 @@ export interface SessionEnvReportDeps {
    */
   pathExists?(path: string): boolean;
 }
+
+/** A report is either host-wide, or starts in a cwd with an explicit outer boundary. */
+export type SessionEnvReportDeps = SessionEnvReportBaseDeps &
+  (
+    | { cwd?: undefined; projectRoot?: undefined }
+    | {
+        /** The session directory where the workspace walk starts. */
+        cwd: string;
+        /** The outermost directory the project-scoped walk may consult. */
+        projectRoot: string;
+      }
+  );
 
 export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise<SessionEnvReport> {
   const pathEntries = deps.path.split(":").filter((entry) => entry.length > 0);
@@ -108,7 +122,11 @@ export async function buildSessionEnvReport(deps: SessionEnvReportDeps): Promise
     // Which of those measurements is allowed to be a fault, decided by what
     // the scoped workspace is (VC-157). A host-wide read has no project to
     // imply anything, and requires nothing.
-    requiredTools: deps.cwd === undefined ? [] : requiredSessionEnvTools(deps.cwd, pathExists),
-    dependencies: deps.cwd === undefined ? null : workspaceDependenciesStatus(deps.cwd, pathExists),
+    requiredTools:
+      deps.cwd === undefined ? [] : requiredSessionEnvTools(deps.cwd, deps.projectRoot, pathExists),
+    dependencies:
+      deps.cwd === undefined
+        ? null
+        : workspaceDependenciesStatus(deps.cwd, deps.projectRoot, pathExists),
   };
 }

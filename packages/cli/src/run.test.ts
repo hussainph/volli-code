@@ -920,6 +920,27 @@ describe("runCli — doctor", () => {
     expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "yarn"]);
   });
 
+  it("bounds the observation at a non-git project cwd", async () => {
+    const requests: AgentRequest[] = [];
+    const present = new Set(["/Users/me/package.json", "/Users/me/node_modules"]);
+    await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/Users/me/projects/empty",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      pathExists: (path) => present.has(path),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.args["requiredTools"]).toEqual([]);
+  });
+
   // A preview that validated different input than the real call would is not a
   // preview of it. The file is read (a read), folded into the same argument the
   // real request carries, and only then previewed.

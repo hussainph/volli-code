@@ -4894,13 +4894,13 @@ describe("identify env block (VC-94)", () => {
         ticketPrefix: "VC",
       }),
     );
-    const askedCwds: string[] = [];
+    const askedScopes: Array<{ cwd: string; projectRoot: string }> = [];
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
       now: () => 100,
-      sessionEnv: async (cwd) => {
-        askedCwds.push(cwd);
+      sessionEnv: async (cwd, projectRoot) => {
+        askedScopes.push({ cwd, projectRoot });
         return report;
       },
     });
@@ -4909,13 +4909,19 @@ describe("identify env block (VC-94)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { socket: "/tmp/volli.sock" } },
+      ctx: {
+        cwd: "/repo/volli/packages/shared",
+        env: { socket: "/tmp/volli.sock" },
+      },
     });
     expect(inSession).toMatchObject({ ok: true, data: { env: report, ticket: null } });
 
-    // The env seam is asked about the CALLER's cwd — the agent drives its own
-    // directory through bash, so where it stands is only knowable at ask time.
-    expect(askedCwds).toEqual(["/repo/volli"]);
+    // The walk starts at the caller's live cwd but carries the registered
+    // project root as its outer boundary, so a package Session can still read
+    // a monorepo-root manifest without ever escaping the project.
+    expect(askedScopes).toEqual([
+      { cwd: "/repo/volli/packages/shared", projectRoot: "/repo/volli" },
+    ]);
   });
 
   it("omits the env block rather than inventing one when main has no env facts", async () => {
