@@ -147,6 +147,23 @@ exists. What a search returns is third-party text, references rather than
 contents, and reading one of them is a new decision judged from scratch.
 _Avoid_: web search setting, browsing, internet permission
 
+**Browser Tab**:
+A sandboxed web page hosted inside the workspace as a native Electron
+`WebContentsView`, owned and placed by the desktop's main-process
+BrowserTabHost — never loaded into the app's own renderer. A tab has a
+product-owned opaque id, a mode-scoped session partition isolated from the app
+renderer and from every other mode, and a per-tab generation that advances on
+navigation. People browse in them; Sessions reach them only through the Browser
+port's six `browser_*` tools, which speak the accessibility-snapshot/ref
+dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
+remote debugging port ever opens. Everything a page contributes — title,
+snapshot, console, pixels — is untrusted third-party content in the same
+envelope discipline Web Access established. A tab is not Web Access: reading
+the public web through `web_fetch` and rendering a page a person can also see
+are different capabilities with different policies.
+_Avoid_: webview, BrowserView, preview pane (for the tab itself), browser
+session (when meaning a tab)
+
 **Agent CLI**:
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
