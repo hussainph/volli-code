@@ -52,6 +52,14 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  BrowserTabIdInput,
+  BrowserTabListInput,
+  BrowserTabListResult,
+  BrowserTabNavigateInput,
+  BrowserTabOpenInput,
+  BrowserTabResult,
+  BrowserTabSetBoundsInput,
+  BrowserTabStateEvent,
   CliDoctorInput,
   CliDoctorResult,
   CliRepairResult,
@@ -332,6 +340,43 @@ const api = {
   /** Reads the database size or runs one main-owned action without exposing its path. */
   database: (action?: DatabaseAction): Promise<DatabaseResult> =>
     action === undefined ? invoke("volli:database") : invoke("volli:database", action),
+  /**
+   * The Browser Tab door: chrome commands in, chrome snapshots out. Every
+   * operation names Volli's opaque tab id — no Chromium index, partition,
+   * preload, or WebContents id crosses here — and provenance is main's to
+   * stamp: a renderer-opened tab is always a `user` tab. The native surface
+   * itself is painted by main behind the renderer's measured plane; this door
+   * only steers it.
+   */
+  browser: {
+    open: (input: BrowserTabOpenInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-open", input),
+    close: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-close", input),
+    list: (input: BrowserTabListInput): Promise<BrowserTabListResult> =>
+      invoke("volli:browser-list", input),
+    navigate: (input: BrowserTabNavigateInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-navigate", input),
+    back: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-back", input),
+    forward: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-forward", input),
+    reload: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-reload", input),
+    setBounds: (input: BrowserTabSetBoundsInput): Promise<Result> =>
+      invoke("volli:browser-set-bounds", input),
+    show: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-show", input),
+    hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
+    openDevTools: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-open-devtools", input),
+    /** Subscribes to full chrome snapshots; returns the unsubscribe. */
+    onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+    },
+  },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
