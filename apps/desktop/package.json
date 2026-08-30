@@ -5,8 +5,7 @@
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
-    "postinstall": "pnpm run rebuild:native && pnpm run cache:node-sqlite",
-    "cache:node-sqlite": "node scripts/cache-node-sqlite.mjs",
+    "postinstall": "pnpm run rebuild:native",
     "check:theme-css": "node scripts/generate-theme-css.mjs --check",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
@@ -50,7 +49,7 @@
     "@volli/shared": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.83",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
