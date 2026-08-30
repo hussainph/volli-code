@@ -555,7 +555,15 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     const result = await h.call({ automation: "nightly SWEEP", ticket: "VC-1" });
 
     expect(h.runInputs).toEqual([
-      { commandId: "caller-session:tc-0", automationId: automation.id, ticketId: "ticket-one" },
+      {
+        commandId: "caller-session:tc-0",
+        // A saved record, by name. The verb reaches neither of the deliberate
+        // human surfaces' extras (VC-129): no Unbound Run, no per-invocation
+        // Runtime override.
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: "ticket-one",
+        modelOverride: null,
+      },
     ]);
     expect(result.text).toContain("Nightly sweep");
     expect(result.text).toContain("VC-1");
@@ -575,8 +583,9 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // call, with an id a person's click would have minted.
     const byHand = await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: "ticket-two",
+      modelOverride: null,
     });
     await h.runner.settled();
     if (!byHand.ok) throw new Error(byHand.error);
@@ -616,13 +625,16 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     expect(h.creates[0]?.projectId).toBe("project-one");
     expect(h.creates[0]?.actor).toEqual({ kind: "automation" });
     expect(h.creates[0]?.modelOverride).toBeUndefined();
-    // Three fields reach the Run door and no more: there is nothing an agent
-    // can vary here that a person clicking Run cannot.
+    // Four fields reach the Run door and no more, and two of them are fixed by
+    // this door rather than by the caller: there is nothing an agent can vary
+    // here that a person clicking Run cannot.
     expect(Object.keys(h.runInputs[0]!).toSorted()).toEqual([
-      "automationId",
       "commandId",
+      "modelOverride",
+      "target",
       "ticketId",
     ]);
+    expect(h.runInputs[0]?.modelOverride).toBeNull();
   });
 
   it("cannot name a Ticket outside the calling Session's project", async () => {
@@ -661,8 +673,8 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
 
     // The app's own listing rule (`listAutomationsForProject` orders the
     // project's own first), not a rule invented at this door.
-    expect(h.runInputs[0]?.automationId).toBe(own.id);
-    expect(h.runInputs[0]?.automationId).not.toBe(global.id);
+    expect(h.runInputs[0]?.target).toEqual({ kind: "automation", automationId: own.id });
+    expect(h.runInputs[0]?.target).not.toEqual({ kind: "automation", automationId: global.id });
     expect(result.text).toContain("Nightly sweep");
   });
 

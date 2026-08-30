@@ -384,8 +384,11 @@ try {
     if (!created.ok) return { fail: `create: ${created.error}` };
     const run = await window.api.automations.run({
       commandId: crypto.randomUUID(),
-      automationId: created.automation.id,
+      // A Run names its target since VC-129: a saved Automation here, or
+      // an Unbound Run's own Instructions.
+      target: { kind: "automation", automationId: created.automation.id },
       ticketId,
+      modelOverride: null,
     });
     const after = await window.api.sessions.listForTicket({ ticketId });
     return {

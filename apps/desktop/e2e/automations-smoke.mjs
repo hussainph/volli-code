@@ -182,8 +182,11 @@ try {
         async ({ automationId, ticketId }) => {
           const run = await window.api.automations.run({
             commandId: crypto.randomUUID(),
-            automationId,
+            // A Run names its target since VC-129: a saved Automation here, or
+            // an Unbound Run's own Instructions.
+            target: { kind: "automation", automationId },
             ticketId,
+            modelOverride: null,
           });
           const runs = await window.api.automations.runsForTicket({ ticketId });
           const sessions = await window.api.sessions.listForTicket({ ticketId });

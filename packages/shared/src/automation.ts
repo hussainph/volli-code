@@ -224,7 +224,157 @@ export type AutomationRunRefusalCode =
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
   | "MODEL_UNAVAILABLE"
+  /** An Unbound Run arrived with nothing to say (VC-129). */
+  | "INSTRUCTIONS_REQUIRED"
   | "RUN_FAILED";
+
+/* --------------------------------------------- unbound Runs (VC-129) ----- */
+
+/**
+ * What a Run names: a saved Automation, or nothing but the Instructions it
+ * carries (VC-112, "One-time work").
+ *
+ * A union rather than a nullable id beside a nullable prose field, because the
+ * two states this spells are the only two that exist: a bound Run reads its
+ * Instructions from the record it names, and an UNBOUND Run has no record to
+ * read them from. A pair of optional fields could spell "neither" (a Run with
+ * nothing to send) and "both" (a Run whose own Instructions silently outrank
+ * the Automation it claims to be) — neither is a thing anyone can mean.
+ *
+ * An Unbound Run writes no file and saves no record beyond the Run itself, so
+ * there is nothing afterwards to name, disable or delete. That is a property of
+ * this shape, not of the surface that produced it: nothing here can be saved,
+ * so no surface holding one has to promise not to save it.
+ */
+export type AutomationRunTarget =
+  | { kind: "automation"; automationId: string }
+  | { kind: "unbound"; instructions: string };
+
+/**
+ * The Automation a target names, or `null` for an Unbound Run — the value that
+ * lands in {@link AutomationRun.automationId}.
+ *
+ * Stated once so a Run's own record, the durable plan behind it and any retry
+ * guard agree about what "names no Automation" is spelled as.
+ */
+export function automationRunTargetId(target: AutomationRunTarget): string | null {
+  return target.kind === "automation" ? target.automationId : null;
+}
+
+/**
+ * What an Unbound Run is called wherever something must print a name: its
+ * history row, and the title of the Session it opens.
+ *
+ * One constant rather than a literal per surface. A Run row reading "Run once"
+ * beside a Session called something else would look like two facts about two
+ * pieces of work, when there is one — and the reason the name is a constant at
+ * all is that an Unbound Run has no record to take a name from.
+ */
+export const UNBOUND_RUN_LABEL = "Run once";
+
+/**
+ * Why an Unbound Run cannot start, or `null` when it can.
+ *
+ * The same rule {@link automationDraftProblem} states for a saved record's
+ * Instructions, and the same reason: a Run delivers its Instructions as its
+ * Session's first message, and the message layer already refuses blank text —
+ * so the Run refuses first, with a sentence about the thing the person is
+ * looking at. Shared for the same reason the draft rule is: the dialog's
+ * disabled Run button and main's refusal are one policy, not two that agree
+ * today.
+ *
+ * There is deliberately no name rule beside it. Naming an Unbound Run is the
+ * one thing it does not do.
+ */
+export function unboundRunProblem(instructions: string): string | null {
+  if (instructions.trim().length === 0) {
+    return "Write Instructions before running — a Run delivers them as its Session's first message.";
+  }
+  return null;
+}
+
+/* ------------------------------------------- one Run request's identity -- */
+
+/**
+ * What a Run request ASKED FOR, beside the ids that already travel with it —
+ * the half of a Run's intent that a plan's resolved fields cannot recover.
+ *
+ * A Run command id is durable intent, so two requests carrying the same id must
+ * either be the same request (replay its receipt) or a conflict (refuse). The
+ * Automation and the Ticket are not enough to decide that any more (VC-129):
+ * every Unbound Run names no Automation, so a second one with DIFFERENT
+ * Instructions would otherwise read as a retry of the first and silently replay
+ * work nobody asked for. The per-invocation override is here for the same
+ * reason — running the same Instructions on another model is a second Run.
+ *
+ * Deliberately the caller's words rather than the plan's `text`: `text` is the
+ * composer's expansion at request time, and a template edited between the two
+ * calls would turn one honest retry into a conflict.
+ *
+ * `instructions` is `null` for a bound Run, whose Instructions live in the
+ * record it names — which is also what a plan written before this field existed
+ * normalizes to (see the engine's plan reader).
+ */
+export interface AutomationRunRequestIdentity {
+  instructions: string | null;
+  modelOverride: ModelSelection | null;
+}
+
+/** One Run request's identity, read off the target and the invocation's override. */
+export function automationRunRequestIdentity(input: {
+  target: AutomationRunTarget;
+  modelOverride: ModelSelection | null;
+}): AutomationRunRequestIdentity {
+  return {
+    instructions: input.target.kind === "unbound" ? input.target.instructions : null,
+    modelOverride: input.modelOverride,
+  };
+}
+
+/** Whether two Run requests are the same intent — field by field, no JSON order. */
+export function sameAutomationRunRequestIdentity(
+  left: AutomationRunRequestIdentity,
+  right: AutomationRunRequestIdentity,
+): boolean {
+  if (left.instructions !== right.instructions) return false;
+  if (left.modelOverride === null || right.modelOverride === null) {
+    return left.modelOverride === right.modelOverride;
+  }
+  return (
+    left.modelOverride.providerId === right.modelOverride.providerId &&
+    left.modelOverride.modelId === right.modelOverride.modelId &&
+    left.modelOverride.reasoningLevel === right.modelOverride.reasoningLevel
+  );
+}
+
+/**
+ * The key a caller holding a durable command id across a lost reply files it
+ * under: the whole intent, so pressing again after CHANGING something asks for
+ * a new Run rather than replaying the old one's receipt.
+ *
+ * It is the renderer's half of the rule main enforces with
+ * {@link sameAutomationRunRequestIdentity} — one statement of "the same Run",
+ * rather than a key that agrees with the durable comparison only by luck.
+ * `\u0000` cannot appear in any of the parts, so no two different intents can
+ * spell one key.
+ */
+export function automationRunRetryKey(input: {
+  target: AutomationRunTarget;
+  ticketId: string;
+  modelOverride: ModelSelection | null;
+}): string {
+  const identity = automationRunRequestIdentity(input);
+  const override =
+    identity.modelOverride === null
+      ? "inherit"
+      : `${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
+  return [
+    automationRunTargetId(input.target) ?? "unbound",
+    identity.instructions ?? "",
+    input.ticketId,
+    override,
+  ].join("\u0000");
+}
 
 /** What a save must carry. Everything else on {@link Automation} is minted by the store. */
 export interface AutomationDraft {

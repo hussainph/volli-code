@@ -20,6 +20,7 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationRunTarget,
   AutomationTrigger,
   ColumnArming,
   BlobLinkView,
@@ -1453,11 +1454,29 @@ export interface AutomationIdInput {
   automationId: string;
 }
 
+/**
+ * One Run request: which Ticket, what it runs, and what it runs it on.
+ *
+ * `target` is the union rather than a nullable `automationId` beside nullable
+ * Instructions, so an Unbound Run (VC-129) is a Run this shape can spell and a
+ * Run that is somehow both, or neither, is one it cannot. Both fields are
+ * REQUIRED and explicitly nullable where they can be absent — an optional
+ * property admits `undefined`, which the Electron transport carries and an HTTP
+ * one would mangle (docs/BOUNDARIES.md rule 3).
+ */
 export interface AutomationRunInput {
   /** Caller-minted UUID: a transport retry repeats this exact command. */
   commandId: string;
-  automationId: string;
+  /** The saved Automation to run, or an Unbound Run's own Instructions. */
+  target: AutomationRunTarget;
   ticketId: string;
+  /**
+   * The Runtime THIS invocation runs on, or `null` to resolve the ordinary way
+   * — the Automation's own pin, then the project's preferences, then the global
+   * record (VC-112). A per-invocation override is never stored: the Run records
+   * the model it RESOLVED, which is the only durable evidence either way.
+   */
+  modelOverride: ModelSelection | null;
 }
 
 /**
@@ -1550,7 +1569,10 @@ export interface VolliAutomationIpcContract {
   "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
   /** A record delete — Runs retain their Automation id/name snapshot. */
   "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
-  /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
+  /**
+   * Runs one Automation — or one Unbound Run's own Instructions (VC-129) — by
+   * hand on a Ticket: one fresh chat Session, one Run row, either way.
+   */
   "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
   /** A Ticket's Runs, newest first. */
   "volli:automation-runs-for-ticket": {

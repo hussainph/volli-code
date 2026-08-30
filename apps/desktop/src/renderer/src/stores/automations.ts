@@ -67,6 +67,15 @@ interface AutomationsState {
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
   /**
+   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
+   *
+   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
+   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
+   * project-wide history would make a Ticket's rail depend on a page nobody
+   * visited. Main answers each question with its own indexed read.
+   */
+  runsByTicket: Record<string, readonly AutomationRun[]>;
+  /**
    * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
    * property of this host rather than of any project it can be listed in.
@@ -87,14 +96,24 @@ interface AutomationsState {
    */
   enablementRead: boolean;
   editor: AutomationEditorTarget | null;
-  /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
-  refresh(projectId: string): Promise<void>;
+  /**
+   * Re-fetches one project's list and replaces the cache. Toasts on failure.
+   *
+   * Resolves whether the cache now holds THIS read — false when the read
+   * failed, which leaves whatever was cached before untouched. A caller that
+   * refuses to decide from an unwarmed cache (VC-129's rail) needs that
+   * answer: a failed re-read of a cache that HAS landed is invisible in the
+   * slice, since the old value is still sitting there looking read.
+   */
+  refresh(projectId: string): Promise<boolean>;
   /** Re-fetches one project's Run history, newest first. Toasts on failure. */
   refreshRuns(projectId: string): Promise<void>;
-  /** Re-reads the machine-local enabled set. Toasts on failure. */
-  refreshEnablement(): Promise<void>;
-  /** Re-fetches one project's armed columns and replaces the cache. Toasts on failure. */
-  refreshArming(projectId: string): Promise<void>;
+  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
+  refreshTicketRuns(ticketId: string): Promise<void>;
+  /** Re-reads the machine-local enabled set. Resolves whether it landed. */
+  refreshEnablement(): Promise<boolean>;
+  /** Re-fetches one project's armed columns. Resolves whether the read landed. */
+  refreshArming(projectId: string): Promise<boolean>;
   /**
    * Arms one column with one offered Automation, or disarms it with
    * `automationId: null`. Resolves the refusal message, or `null` on success
@@ -161,6 +180,7 @@ export function createAutomationsStore() {
     byProject: {},
     armingByProject: {},
     runsByProject: {},
+    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     editor: null,
@@ -170,11 +190,13 @@ export function createAutomationsStore() {
         const result = await window.api.automations.list({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load automations: ${result.error}`);
-          return;
+          return false;
         }
         set((state) => ({ byProject: { ...state.byProject, [projectId]: result.automations } }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load automations: ${errorMessage(error)}`);
+        return false;
       }
     },
 
@@ -183,13 +205,15 @@ export function createAutomationsStore() {
         const result = await window.api.automations.armings({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load armed columns: ${result.error}`);
-          return;
+          return false;
         }
         set((state) => ({
           armingByProject: { ...state.armingByProject, [projectId]: result.armings },
         }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load armed columns: ${errorMessage(error)}`);
+        return false;
       }
     },
 
@@ -226,16 +250,31 @@ export function createAutomationsStore() {
       }
     },
 
+    async refreshTicketRuns(ticketId) {
+      try {
+        const result = await window.api.automations.runsForTicket({ ticketId });
+        if (!result.ok) {
+          toastError(`Couldn't load this ticket's runs: ${result.error}`);
+          return;
+        }
+        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
+      } catch (error) {
+        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
+      }
+    },
+
     async refreshEnablement() {
       try {
         const result = await window.api.automations.enablement();
         if (!result.ok) {
           toastError(`Couldn't read which automations are on: ${result.error}`);
-          return;
+          return false;
         }
         set({ enabledIds: result.enabledAutomationIds, enablementRead: true });
+        return true;
       } catch (error) {
         toastError(`Couldn't read which automations are on: ${errorMessage(error)}`);
+        return false;
       }
     },
 
@@ -243,7 +282,7 @@ export function createAutomationsStore() {
       const inFlight = warming.get(projectId);
       if (inFlight !== undefined) return inFlight;
       const state = get();
-      const reads: Promise<void>[] = [];
+      const reads: Promise<boolean>[] = [];
       if (state.byProject[projectId] === undefined) reads.push(state.refresh(projectId));
       if (state.armingByProject[projectId] === undefined)
         reads.push(state.refreshArming(projectId));
@@ -393,6 +432,15 @@ export const useAutomationsStore = createAutomationsStore();
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_ARMINGS: readonly ColumnArming[] = [];
+const NO_RUNS: readonly AutomationRun[] = [];
+
+/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
+export function selectTicketRuns(
+  state: AutomationsState,
+  ticketId: string,
+): readonly AutomationRun[] {
+  return state.runsByTicket[ticketId] ?? NO_RUNS;
+}
 
 /** One project's listable Automations — a frozen empty array before its first read. */
 export function selectAutomations(
@@ -405,6 +453,32 @@ export function selectAutomations(
 /** One project's armed columns — a frozen empty array before its first read. */
 export function selectArmings(state: AutomationsState, projectId: string): readonly ColumnArming[] {
   return state.armingByProject[projectId] ?? NO_ARMINGS;
+}
+
+/**
+ * Whether all three planning caches this project's Automations are decided from
+ * — its records, its armed columns, and this machine's switches — have LANDED,
+ * as opposed to resting at their empty defaults.
+ *
+ * The distinction the caches themselves cannot make: "nothing armed here" and
+ * "never asked here" are one value in every slice, deliberately (VC-112), so a
+ * caller that must not act on a guess asks this instead. Two of them do, and
+ * they answer the same question differently on purpose — an arrival mid-drag
+ * DEFERS its classification until this is true (`armed-run.ts`), while the
+ * ticket rail leaves its default press inert until it is (VC-129). Neither may
+ * decide from an empty cache; what they may do about it is theirs.
+ *
+ * What this canNOT answer is whether the value in a landed slice is FRESH: a
+ * re-read that failed leaves the old one sitting there, still landed. A caller
+ * re-reading on arrival asks its refreshes for that (they resolve whether the
+ * read landed) and asks this only for the cold-cache half.
+ */
+export function selectPlanningLoaded(state: AutomationsState, projectId: string): boolean {
+  return (
+    state.byProject[projectId] !== undefined &&
+    state.armingByProject[projectId] !== undefined &&
+    state.enablementRead
+  );
 }
 
 /**
