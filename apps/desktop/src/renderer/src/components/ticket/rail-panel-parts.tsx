@@ -69,6 +69,28 @@ export const RAIL_CARD_ROW =
   "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
 
 /**
+ * The framed card those rows sit in, and the hairline between them.
+ *
+ * SPELLED HERE FOR THE REASON {@link RAIL_CARD_ROW} IS. The repository card
+ * declared both inline; then the CI row took a copy of the seam; then the usage
+ * card (VC-203) took a copy of both, in a file whose own comment said that a
+ * second hand-typed copy of `border-sidebar-border/70` is how one surface
+ * silently keeps an old border after the other is retuned. Three copies of a
+ * recipe whose entire purpose is that two cards are INDISTINGUISHABLE as
+ * objects is the drift path already open, not a hypothetical one.
+ *
+ * The frame carries no margin. A card floating in a rail page wants
+ * {@link RAIL_PANEL_MARGIN}; one nested inside an already-inset block wants
+ * nothing, and baking a margin in here would make the second case override the
+ * first rather than compose with it.
+ */
+export const RAIL_CARD_FRAME =
+  "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 dark:bg-accent/50";
+
+/** The seam above every card row but the first. */
+export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
+
+/**
  * Insertions and deletions as one pair — the repository card's changes row, the
  * Diffs header, and the commit gate all wear it.
  *

@@ -8,9 +8,15 @@
  * 240px floor) rather than laid out to fit the page.
  *
  * Read it in this order:
- *   1. Home rail, live — the three scopes stacked as the Now page has them.
+ *   1. Home rail, live — both scopes in the one card the Now page has (VC-203).
  *   2. The states — empty, unpriced, partial, mixed, one model, long names.
- *   3. Narrow — the same content at the 240px floor, where the model line drops.
+ *   3. Narrow — the same content at the 240px floor.
+ *
+ * SINCE VC-203 THE CARDS ARE ALSO A TEST OF PROGRESSIVE DISCLOSURE, which a
+ * static screenshot cannot check: open every caret. Model names, per-session
+ * rankings, the cost basis and the session tally are all behind one now, and
+ * the thing to look for is whether the face still answers the question a reader
+ * actually arrived with.
  */
 import * as React from "react";
 
@@ -19,11 +25,17 @@ import { summarizeSessionUsage } from "@volli/shared";
 
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot } from "@renderer/components/ui/status-dot";
-import { ProjectUsageBlock } from "@renderer/components/usage/project-usage-block";
-import { SessionUsageFacts } from "@renderer/components/usage/session-usage-facts";
+import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
-import type { UsageGroupRow, UsageWindow } from "@renderer/usage/usage-format";
+import { formatTokens } from "@volli/session-presentation";
+import {
+  formatCachedShare,
+  formatUsageCost,
+  totalUsageTokens,
+  type UsageGroupRow,
+  type UsageWindow,
+} from "@renderer/usage/usage-format";
 
 export const title = "Usage surfaces (VC-87)";
 export const note = "Cost and token readouts at rail width — empty, unpriced, partial, mixed";
@@ -162,34 +174,56 @@ export default function UsageSurfaces() {
     <div className="flex flex-col gap-8">
       <Intro />
 
-      <Group heading="1 · Home rail — Now, all three scopes">
+      <Group heading="1 · Home rail — Now, both scopes in one card">
         <Rail>
-          <SectionHeading as="h3">Session</SectionHeading>
-          <dl className="flex flex-col gap-2">
-            <Fact label="Model">claude-opus-4-1</Fact>
-            <Fact label="Effort">high</Fact>
-            <Fact label="Activity">
-              <span className="flex items-center gap-1">
-                <StatusDot state="working" />
-                Working
-              </span>
-            </Fact>
-            <SessionUsageFacts summary={SESSION} />
-          </dl>
-          <div className="pt-4">
-            <ProjectUsageBlock
-              summary={PROJECT}
-              models={PROJECT_MODELS}
-              sessionCount={38}
-              meteredSessionCount={24}
-              window={window}
-              onWindowChange={setWindow}
-            />
+          {/* The rail's own inset, which the real Home rail's `SECTION` pays for
+              this block and the card pays for itself. */}
+          <div className="flex flex-col gap-2 px-4">
+            <SectionHeading as="h3">Session</SectionHeading>
+            <dl className="flex flex-col gap-2">
+              <Fact label="Model">claude-opus-4-1</Fact>
+              <Fact label="Effort">high</Fact>
+              <Fact label="Activity">
+                <span className="flex items-center gap-1">
+                  <StatusDot state="working" />
+                  Working
+                </span>
+              </Fact>
+            </dl>
           </div>
+          <HomeUsageBlock
+            summary={PROJECT}
+            models={PROJECT_MODELS}
+            sessionCount={38}
+            meteredSessionCount={24}
+            session={SESSION}
+            window={window}
+            onWindowChange={setWindow}
+          />
         </Rail>
         <Caption>
-          Three headings, three scopes. Cost is a fact each scope carries, never a section of its
-          own — a second block headed “Usage” would be two sections with one name.
+          The Session block stops at what the Session IS; what it has spent is a row of the card
+          below, beside the project total it is part of. Before VC-203 those were three key/value
+          rows up in the Session list and a separate card down here — two drawings of one kind of
+          number, a section apart.
+        </Caption>
+      </Group>
+
+      <Group heading="1b · The same card with no Session in front">
+        <Rail>
+          <HomeUsageBlock
+            summary={PROJECT}
+            models={PROJECT_MODELS}
+            sessionCount={38}
+            meteredSessionCount={24}
+            session={null}
+            window={window}
+            onWindowChange={setWindow}
+          />
+        </Rail>
+        <Caption>
+          The Board tab, a file tab, a terminal companion, a chat before its first reply. The row
+          leaves; the card does not restructure itself around its absence.
         </Caption>
       </Group>
 
@@ -202,9 +236,11 @@ export default function UsageSurfaces() {
           />
         </Rail>
         <Caption>
-          Click the card. The popover is the per-session breakdown — the placement that adds no
-          block and touches no roster row. “Terminal (claude)” stays in the list at `—`: dropping it
-          would make the rows fail to add up to the total above them.
+          Two doors, and each one opens what its own line asks about: the face explains the figure
+          (basis, the bar’s legend, the cached share, the top model), the “4 sessions” row is the
+          per-session breakdown — the placement that adds no block and touches no roster row.
+          “Terminal (claude)” stays in that list at `—`: dropping it would make the rows fail to add
+          up to the total above them.
         </Caption>
       </Group>
 
@@ -248,29 +284,32 @@ export default function UsageSurfaces() {
             />
           </Rail>
           <Rail width={RAIL_FLOOR} narrow>
-            <ProjectUsageBlock
+            <HomeUsageBlock
               summary={PROJECT}
               models={PROJECT_MODELS}
               sessionCount={38}
               meteredSessionCount={24}
+              session={SESSION}
               window={window}
               onWindowChange={setWindow}
             />
           </Rail>
         </div>
         <Caption>
-          At the floor the top-model line drops first and the bar never does — it is the cheapest
-          information per pixel on the card.
+          Nothing has to drop at the floor any more — the lines that used to be squeezed here (model
+          names, the basis sentence, the session tally) are behind carets at every width, so the
+          narrow card is the wide card with a tighter inset rather than a reduced one.
         </Caption>
       </Group>
 
       <Group heading="6 · Empty projects">
         <Rail>
-          <ProjectUsageBlock
+          <HomeUsageBlock
             summary={EMPTY}
             models={[]}
             sessionCount={4}
             meteredSessionCount={0}
+            session={null}
             window={window}
             onWindowChange={setWindow}
           />
@@ -330,8 +369,13 @@ function Rail({
   narrow?: boolean;
 }) {
   return (
+    // VERTICAL padding only. A horizontal inset here would stack on top of the
+    // blocks' own `RAIL_PANEL_INSET`/`RAIL_PANEL_MARGIN` and draw every card
+    // 32px narrower than the rail actually draws it — on a page whose entire
+    // subject is whether these figures survive at rail width, that is the one
+    // lie the furniture must not tell.
     <div
-      className="group/rail flex shrink-0 flex-col rounded-container border border-border bg-background p-4"
+      className="group/rail flex shrink-0 flex-col rounded-container border border-border bg-background py-4"
       data-narrow={narrow ? "true" : "false"}
       style={{ width }}
     >
@@ -340,7 +384,16 @@ function Rail({
   );
 }
 
-/** One notation state, at the width its figure will really be read at. */
+/**
+ * One notation state, at the width its figure will really be read at.
+ *
+ * The figure and its caption are spelled here rather than mounted from a
+ * component, because after VC-203 there is no component that draws only those
+ * two: the card's face is a popover trigger, and mounting six of them would put
+ * six triggers on a page whose subject is the NOTATION rather than the
+ * disclosure. Both lines still come from the shipping formatters, so the strings
+ * on this page are the strings the rail prints.
+ */
 function State({
   label,
   summary,
@@ -350,16 +403,24 @@ function State({
   summary: SessionUsageSummary;
   hint?: string;
 }) {
+  const cost = formatUsageCost(summary);
+  const tokens = totalUsageTokens(summary);
+  const cached = formatCachedShare(summary);
   return (
     <div className="flex w-56 flex-col gap-2 rounded-row border border-border bg-card p-4">
       <p className="text-label font-medium uppercase text-muted-foreground">{label}</p>
-      <dl className="flex flex-col gap-2">
-        <SessionUsageFacts summary={summary} />
-      </dl>
-      {summary.requestCount === 0 ? (
+      {cost === null ? (
         <p className="text-ui text-muted-foreground">(renders nothing)</p>
       ) : (
-        <UsageBar summary={summary} />
+        <>
+          <p className="text-heading tabular-nums text-foreground">{cost}</p>
+          <UsageBar summary={summary} />
+          {tokens > 0 ? (
+            <p className="text-ui text-muted-foreground tabular-nums">
+              {formatTokens(tokens)} tokens{cached === null ? "" : ` · ${cached} cached`}
+            </p>
+          ) : null}
+        </>
       )}
       {hint === undefined ? null : <p className="text-ui text-muted-foreground">{hint}</p>}
     </div>

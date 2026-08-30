@@ -34,10 +34,8 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGl
 import type { SkillReference, Ticket } from "@volli/shared";
 
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketUsageRailBlock } from "@renderer/components/usage/usage-rail";
-import { cn } from "@renderer/lib/utils";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
@@ -174,11 +172,10 @@ export function TicketRail({
             <TicketProperties projectId={projectId} ticket={ticket} />
             {/* What this Ticket cost, between the facts about it and the
                 Sessions that ran on it (VC-87) — which is where the owner's
-                question sits. Renders nothing when the reader has turned cost
-                off, or when no Session on this Ticket has metered a call. */}
-            <div className={cn("flex flex-col gap-2 pt-4", RAIL_PANEL_INSET)}>
-              <TicketUsageRailBlock ticketId={ticket.id} />
-            </div>
+                question sits. It owns its own inset and top padding, so an
+                absent card (cost turned off, or nothing metered on this Ticket)
+                leaves no gap behind it rather than sixteen pixels of dead rail. */}
+            <TicketUsageRailBlock ticketId={ticket.id} />
             <TicketSessionsPanel
               ticketId={ticket.id}
               creating={creating}
