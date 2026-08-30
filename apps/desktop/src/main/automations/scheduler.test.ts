@@ -293,14 +293,36 @@ describe("reschedule, never replay", () => {
   });
 
   it("still runs an occurrence that is merely a little late", async () => {
-    const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
-    const h = harness({
-      now: nextDue + AUTOMATION_SCHEDULE_LATE_GRACE_MS - 1,
-      cursors: { a1: nextDue - 1 },
-    });
+    // A timer that fired behind on a host that was awake for the due time:
+    // the grace is exactly for this, and the Run starts late.
+    const start = Date.parse("2026-06-10T12:00:00Z");
+    const nextDue = due(start);
+    const h = harness({ now: start, cursors: { a1: nextDue - 1 } });
     await h.scheduler.start();
+    expect(h.runs).toEqual([]);
+    h.setNow(nextDue + AUTOMATION_SCHEDULE_LATE_GRACE_MS - 1);
+    await h.fire();
     expect(h.skips).toEqual([]);
     expect(h.runs).toHaveLength(1);
+  });
+
+  it("skips rather than replays a due time that went by before this launch", async () => {
+    // The relaunch case, one minute wide: Volli was closed at 21:30 and opened
+    // at 21:31, inside the grace. The grace absorbs a timer that fired late,
+    // never a due time nobody was there for — so this launch starts no Run and
+    // records the occurrence as Skipped, with "Run now" beside it.
+    const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
+    const h = harness({ now: nextDue + 60_000, cursors: { a1: nextDue - 1 } });
+    await h.scheduler.start();
+    expect(h.runs).toEqual([]);
+    expect(h.skips).toHaveLength(1);
+    expect(h.skips[0]?.skip).toMatchObject({
+      dueAt: nextDue,
+      missedCount: 1,
+      reason: { kind: "app-closed" },
+    });
+    // And the cursor stands past it, so the next launch does not meet it again.
+    expect(h.cursors["a1"]).toBe(nextDue);
   });
 });
 

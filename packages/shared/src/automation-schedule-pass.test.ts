@@ -74,17 +74,78 @@ describe("the grace window", () => {
   it("still runs an occurrence exactly as late as the window allows", () => {
     // The boundary itself, stated in both directions rather than approached
     // from one side: "how late a Run may still start" includes that instant.
+    // The process was already watching when the occurrence came due, so the
+    // lateness is its own — which is the only lateness a grace may absorb.
     const at = due(Date.parse("2026-06-10T12:00:00Z"));
-    const owed = pass({ now: at + GRACE, cursor: at - 1 });
+    const owed = pass({ now: at + GRACE, cursor: at - 1, watchingSince: at - 1 });
     expect(owed.steps).toEqual([{ kind: "run", dueAt: at, through: at }]);
   });
 
   it("skips an occurrence one millisecond past the window", () => {
     const at = due(Date.parse("2026-06-10T12:00:00Z"));
-    const owed = pass({ now: at + GRACE + 1, cursor: at - 1 });
+    const owed = pass({ now: at + GRACE + 1, cursor: at - 1, watchingSince: at - 1 });
+    expect(owed.steps).toEqual([
+      { kind: "skip", dueAt: at, missedCount: 1, reason: { kind: "not-observed" }, through: at },
+    ]);
+  });
+
+  it("does not reach back past the moment this host started watching", () => {
+    // THE LAUNCH LEAK. An occurrence due one minute ago, and the app opened
+    // ten seconds ago: it is inside the grace's width, and it is still an
+    // occurrence that went by while Volli was closed. The grace absorbs a
+    // timer that fired late, never a time nobody was there for — so this is a
+    // Skipped occurrence with its reason, startable by hand, and never a Run
+    // that appears out of a relaunch.
+    const at = due(Date.parse("2026-06-10T12:00:00Z"));
+    const now = at + 60_000;
+    const owed = pass({ now, cursor: at - 1, watchingSince: now - 10_000 });
     expect(owed.steps).toEqual([
       { kind: "skip", dueAt: at, missedCount: 1, reason: { kind: "app-closed" }, through: at },
     ]);
+    expect(owed.nextDueAt).toBe(due(at));
+  });
+
+  it("replays nothing, at any launch moment inside the grace's width", () => {
+    // The same claim as a sweep of the whole window rather than one point in
+    // it, because the leak was exactly "whatever width the grace happens to
+    // have": for every launch after the due instant, right out to the far edge
+    // of the grace, no pass owes a Run.
+    const at = due(Date.parse("2026-06-10T12:00:00Z"));
+    for (const late of [1, ...Array.from({ length: 120 }, (_, i) => (i + 1) * 1_000), GRACE]) {
+      const now = at + late;
+      const owed = pass({ now, cursor: at - 1, watchingSince: now });
+      expect(owed.steps.some((step) => step.kind === "run")).toBe(false);
+      expect(owed.steps).toMatchObject([
+        { kind: "skip", dueAt: at, reason: { kind: "app-closed" } },
+      ]);
+    }
+  });
+
+  it("draws the line at the watching instant itself, on both sides", () => {
+    // The boundary stated rather than approached: an occurrence one
+    // millisecond older than this host's watch went by unwatched and is
+    // skipped; one that comes due at the very instant watching began was not
+    // missed, and a grace-width late start on it is the ordinary late Run the
+    // contract allows.
+    const at = due(Date.parse("2026-06-10T12:00:00Z"));
+    const now = at + GRACE;
+    expect(pass({ now, cursor: at - 1, watchingSince: at + 1 }).steps).toMatchObject([
+      { kind: "skip", dueAt: at },
+    ]);
+    expect(pass({ now, cursor: at - 1, watchingSince: at }).steps).toEqual([
+      { kind: "run", dueAt: at, through: at },
+    ]);
+  });
+
+  it("owes a launch nothing at all when the occurrence is still ahead of it", () => {
+    // The other side of the same rule: a host that launches BEFORE tonight's
+    // occurrence keeps it. Closing the leak must not cost the schedule the
+    // very Run it was armed for.
+    const at = due(Date.parse("2026-06-10T12:00:00Z"));
+    const now = at - 60_000;
+    const owed = pass({ now, cursor: at - 120_000, watchingSince: now });
+    expect(owed.steps).toEqual([]);
+    expect(owed.nextDueAt).toBe(at);
   });
 });
 
@@ -162,6 +223,15 @@ describe("reschedule, never replay", () => {
 });
 
 describe("a skip says something true", () => {
+  it("says the app was closed for a due time inside the grace but before launch", () => {
+    // The reason must survive the launch rule too: this occurrence is skipped
+    // because nobody was watching, not because the timer was slow, and the
+    // history says the true one.
+    const at = due(Date.parse("2026-06-10T12:00:00Z"));
+    const owed = pass({ now: at + 30_000, cursor: at - 1, watchingSince: at + 20_000 });
+    expect(owed.steps[0]).toMatchObject({ kind: "skip", reason: { kind: "app-closed" } });
+  });
+
   it("says the app was closed only for a due time older than this process", () => {
     const at = due(Date.parse("2026-06-10T12:00:00Z"));
     const owed = pass({

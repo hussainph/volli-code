@@ -10,7 +10,9 @@
  *    reached it. The comparison is `dueAt <= now`, with no rounding anywhere.
  *  - **Reschedule, never replay.** A gap of missed occurrences produces ONE
  *    skip step and no Runs, however long the app was closed. There is no input
- *    to this function that returns two Run steps.
+ *    to this function that returns two Run steps, and no input where a due time
+ *    older than `watchingSince` — one that went by while nobody was watching —
+ *    returns a Run at all, however narrowly it was missed.
  *  - **The cursor moves forward, once per step.** Each step carries the instant
  *    the caller's cursor should stand at after performing it, so a host that
  *    dies between two steps repeats at most the step it was in — and the
@@ -66,6 +68,13 @@ export interface SchedulePassInput {
    * watching". Exactly this late still runs; further behind is a skip, because
    * beyond the grace this process cannot claim to have observed the due time —
    * a suspended laptop and a closed app are the same blindness.
+   *
+   * The grace absorbs IN-PROCESS lateness only. It never reaches back past
+   * `watchingSince`: a due time that went by while the app was closed is a
+   * missed occurrence however recently it passed, so launching one minute
+   * after a 21:30 that nobody was there for records a Skipped occurrence and
+   * never a Run. Otherwise every launch would replay whatever the grace's
+   * width happened to cover, which is the replay this ticket forbids.
    */
   graceMs: number;
   /**
@@ -128,10 +137,12 @@ export interface SchedulePass {
  * Everything one host owes one schedule at `now`.
  *
  * Reading the body as the rules it encodes, in order: a schedule never seen
- * here starts its clock and owes nothing; a due time further behind than the
- * grace is a skip, however many occurrences the gap held, and is never
- * replayed; a due time the clock has reached and the grace still allows is a
- * Run; and the answer ends with the next occurrence after all of it.
+ * here starts its clock and owes nothing; a due time this host could not have
+ * observed — further behind than the grace, or older than the moment this host
+ * began watching — is a skip, however many occurrences the gap held, and is
+ * never replayed; a due time the clock has reached that this host was awake
+ * for and the grace still allows is a Run; and the answer ends with the next
+ * occurrence after all of it.
  */
 export function evaluateSchedulePass(input: SchedulePassInput): SchedulePass {
   const occurrence = (after: number): number =>
@@ -146,8 +157,18 @@ export function evaluateSchedulePass(input: SchedulePassInput): SchedulePass {
   }
 
   const steps: SchedulePassStep[] = [];
-  /** The earliest due time this pass is still willing to start. */
-  const runnableFrom = input.now - input.graceMs;
+  /**
+   * The earliest due time this pass is still willing to start.
+   *
+   * Two floors, and the later one wins. The grace says how far behind the
+   * timer may have fallen and still start the work; `watchingSince` says when
+   * this process could first see anything at all. An occurrence before that
+   * instant passed while the app was closed — a MISSED occurrence, which is
+   * skipped with its reason and never replayed — and no width of grace makes
+   * it observable after the fact. So a launch sweep starts nothing that was
+   * already due when it launched, however narrowly.
+   */
+  const runnableFrom = Math.max(input.now - input.graceMs, input.watchingSince);
   let due = occurrence(input.cursor);
 
   if (due < runnableFrom) {
