@@ -55,13 +55,13 @@
  * `vp test`.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import {
   cardById,
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   goToBoard,
   launch,
   makeGitRepo,
@@ -93,7 +93,7 @@ const fakeHome = join(scratch, "home");
 const worktreesRoot = join(scratch, "worktree-home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-sessions-host-evidence");
+const EVIDENCE_DIR = await evidenceDir("pi-sessions-host");
 
 async function shot(page, name) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
