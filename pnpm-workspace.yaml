@@ -35,13 +35,13 @@ allowBuilds:
 catalog:
   "@types/node": ^26.3.0
   "@types/react": ^19.2.18
-  "@types/react-dom": ^19.2.4
+  "@types/react-dom": ^19.2.5
   typescript: ~7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.2.5
-  vite-plus: 0.2.5
+  vite-plus: 0.3.0
   # Must match the vitest bundled in vite-plus (vp fails fast on version
   # skew) — bump in lockstep with the vite-plus pin above.
-  "@vitest/coverage-v8": 4.1.10
+  "@vitest/coverage-v8": 4.1.11
 
 # Supply-chain guard: refuse to install any version published within this many
 # minutes (relaxed from the vp default of 1440 = 24h). 60m still blocks the
