@@ -260,6 +260,11 @@ function LaneRow({
       ref={setNodeRef}
       data-lane-row={laneRowId(status, automation.id)}
       data-lane-digit={digit}
+      // Whether dnd-kit has actually picked this row up — for the page smoke,
+      // which cannot aim a drop before the drag it is aiming has begun
+      // (`automations-page-smoke.mjs`, the same hook the board's own drag
+      // exposes as `data-board-drag`).
+      data-lane-dragging={isDragging ? "true" : undefined}
       style={{ transform: CSS.Transform.toString(transform), transition: transition ?? undefined }}
       className={cn(
         "flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1",

@@ -440,8 +440,19 @@ try {
     const to = await stableBox(page.locator(`[data-lane-row="${status}:${before[0].id}"]`));
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    // Past dnd-kit's 4px activation, then above the row it is displacing.
+    // Past dnd-kit's 4px activation — and then WAIT for it, because a drop
+    // aimed before the drag began lands on nothing. The row says when it has
+    // been picked up; on a loaded CI runner that is several frames later than
+    // the move that asked for it.
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 12, { steps: 6 });
+    await waitUntil(
+      "dnd-kit to pick the row up",
+      async () =>
+        (await page
+          .locator(`[data-lane-row="${status}:${before[1].id}"][data-lane-dragging]`)
+          .count()) > 0,
+      { timeout: 10_000, interval: 100 },
+    );
     await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2 - 4, { steps: 12 });
     await page.mouse.up();
     await waitUntil(
