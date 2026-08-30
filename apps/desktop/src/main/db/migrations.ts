@@ -1465,6 +1465,80 @@ CREATE TABLE IF NOT EXISTS automation_column_order (
 );
 `;
 
+/**
+ * Migration 035: the `blobs` reconciler (VC-220).
+ *
+ * Migration 020 created `blobs` + `blob_links` and dropped `ticket_attachments`.
+ * A profile that ran a PARALLEL branch's version 20 took that number without
+ * that schema, and the runner only ever offers a version once — so such a
+ * database sits at `user_version` 34 saying it is current while the two tables
+ * are simply absent. The same fork 024, 026, 031 and 033 each had to reconcile,
+ * one number further along.
+ *
+ * It is filed under VC-220 because that is where the cost showed up. Worktree
+ * preparation reads `blob_links`, so on such a profile EVERY attach was
+ * rejected `location_unavailable` — "no such table: blob_links" — which meant
+ * every Automation Run opened a Session it could never deliver Instructions to.
+ * The Run doors were innocent; the schema underneath them was not.
+ *
+ * Probed per table rather than assumed, because this must be a no-op on the
+ * lineage that did run 020 — dropping and recreating `blobs` there would take
+ * a person's attachments with it. `ticket_attachments` is dropped only when it
+ * is still present AND empty: 020's own note says it never had a caller and so
+ * has never held a row, and a row would mean this is some other database whose
+ * data is worth more than this convergence.
+ */
+function applyMigration035BlobsReconcile(db: Database.Database): void {
+  const has = (table: string): boolean =>
+    (db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table) as unknown) !== undefined;
+  if (has("blobs") && has("blob_links")) return;
+  db.exec(MIGRATION_020_BLOBS_RECONCILE);
+  if (!has("ticket_attachments")) return;
+  const rows = db.prepare("SELECT COUNT(*) AS count FROM ticket_attachments").get() as {
+    count: number;
+  };
+  if (rows.count === 0) db.exec("DROP TABLE ticket_attachments;");
+}
+
+/**
+ * Migration 020's schema, restated so {@link applyMigration035BlobsReconcile}
+ * can land it on a lineage that skipped it.
+ *
+ * A copy rather than a reuse of {@link MIGRATION_020_BLOBS}: an applied
+ * migration is immutable and 020's statements are what ran on the day they ran,
+ * `DROP TABLE ticket_attachments` included. This one has to be safe on a
+ * database where that table may be gone already, so it says the same tables
+ * with `IF NOT EXISTS` and leaves the drop to the probe above. The two are
+ * pinned to each other by `migrations.test.ts`, which asserts a reconciled
+ * database has the same schema as one that ran 020 in its proper place.
+ */
+const MIGRATION_020_BLOBS_RECONCILE = `
+CREATE TABLE IF NOT EXISTS blobs (
+  hash          TEXT PRIMARY KEY CHECK (length(hash) = 64),
+  mime          TEXT NOT NULL CHECK (mime <> ''),
+  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
+  original_name TEXT NOT NULL CHECK (original_name <> ''),
+  width         INTEGER,
+  height        INTEGER,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS blob_links (
+  id         TEXT PRIMARY KEY,
+  blob_hash  TEXT NOT NULL REFERENCES blobs(hash) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  label      TEXT NOT NULL CHECK (label <> ''),
+  created_at INTEGER NOT NULL,
+  CHECK ((ticket_id IS NULL) <> (session_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_blob_links_ticket ON blob_links(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_blob_links_session ON blob_links(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_blob_links_blob ON blob_links(blob_hash);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1636,6 +1710,12 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 34,
     name: "automations — the column's machine-local order for its Offered list",
     sql: MIGRATION_034_COLUMN_ORDER,
+  },
+  {
+    version: 35,
+    name: "blobs + blob_links — reconcile a lineage that took 020's number without its schema",
+    sql: MIGRATION_020_BLOBS_RECONCILE,
+    apply: applyMigration035BlobsReconcile,
   },
 ];
 

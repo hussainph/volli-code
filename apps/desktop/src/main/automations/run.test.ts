@@ -5,7 +5,13 @@ import {
   NO_AUTOMATION_TRIGGER,
   SKILL_POLICY_DEFAULT,
 } from "@volli/shared";
-import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
+import type {
+  CommandReceipt,
+  ModelSelection,
+  PromptResource,
+  PromptTemplate,
+  SkillReference,
+} from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
 import type { AutomationRunPlan } from "./engine";
@@ -74,6 +80,8 @@ interface Harness {
   projectId: string;
   ticketId: string;
   attachState: "ready" | "needs-recovery";
+  /** What a refused attach answered with, which is the Run's whole diagnosis. */
+  attachReceipt: CommandReceipt | null;
 }
 
 function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
@@ -99,6 +107,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const sessionsByOperation = new Map<string, string>();
   let nextSession = 0;
   let attachState: Harness["attachState"] = "ready";
+  let attachReceipt: CommandReceipt | null = null;
 
   const runner = createAutomationRunner({
     engine,
@@ -130,7 +139,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
         return {
           sessionId: input.sessionId,
           state: attachState,
-          receipt: null,
+          receipt: attachReceipt,
           throughSequence: 0,
         };
       },
@@ -158,6 +167,12 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     },
     set attachState(value) {
       attachState = value;
+    },
+    get attachReceipt() {
+      return attachReceipt;
+    },
+    set attachReceipt(value) {
+      attachReceipt = value;
     },
   };
 }
@@ -1053,6 +1068,235 @@ describe("createAutomationRunner", () => {
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
     expect(h.creates).toHaveLength(2);
+  });
+});
+
+/**
+ * VC-220: a Run opened its Session and the kickoff never fired.
+ *
+ * Every Run door in the product funnels into the two methods below, so the
+ * doors are pinned HERE rather than through five app runs: the renderer's
+ * surfaces (the Ticket page's Run button, the rail's split button and its "Run
+ * once", the board card's menu, the armed column's drop window, the palette)
+ * all reach `volli:automation-run` → `run()` and differ only in the Target and
+ * the per-invocation Runtime they name; the schedule timer and "Run now" on a
+ * Skipped occurrence reach `runForProject()`; the agent verb reaches `run()`
+ * unattended. What each door owes is identical and is what was missing: the
+ * composed Instructions, delivered as the Session's FIRST turn, under the
+ * Run's own durable message ids.
+ */
+describe("every Run door delivers its Instructions as the kickoff turn (VC-220)", () => {
+  const doors = [
+    {
+      door: "the page Run button, the rail's split button, the board card, the armed column, the palette",
+      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+      open: (h: Harness, automationId: string) =>
+        h.runner.run({
+          commandId: randomUUID(),
+          target: { kind: "automation", automationId },
+          ticketId: h.ticketId,
+          modelOverride: null,
+          attendance: "attended",
+        }),
+    },
+    {
+      door: "a door that spends a different Runtime on this one Run",
+      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+      open: (h: Harness, automationId: string) =>
+        h.runner.run({
+          commandId: randomUUID(),
+          target: { kind: "automation", automationId },
+          ticketId: h.ticketId,
+          modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "medium" },
+          attendance: "attended",
+        }),
+    },
+    {
+      door: "the rail's Run once, whose Instructions no record supplies",
+      instructions: "/review src/a.ts once, and read @docs/DESIGN.md",
+      open: (h: Harness) =>
+        h.runner.run({
+          commandId: randomUUID(),
+          target: {
+            kind: "unbound",
+            instructions: "/review src/a.ts once, and read @docs/DESIGN.md",
+          },
+          ticketId: h.ticketId,
+          modelOverride: null,
+          attendance: "attended",
+        }),
+    },
+    {
+      door: "the agent verb, with nobody at the door",
+      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+      open: (h: Harness, automationId: string) =>
+        h.runner.run({
+          commandId: randomUUID(),
+          target: { kind: "automation", automationId },
+          ticketId: h.ticketId,
+          modelOverride: null,
+          attendance: "unattended",
+        }),
+    },
+    {
+      door: "the schedule timer",
+      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+      open: (h: Harness, automationId: string) =>
+        h.runner.runForProject({
+          commandId: randomUUID(),
+          automationId,
+          projectId: h.projectId,
+          attendance: "unattended",
+        }),
+    },
+    {
+      door: "Run now on a Skipped occurrence",
+      instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
+      open: (h: Harness, automationId: string) =>
+        h.runner.runForProject({
+          commandId: randomUUID(),
+          automationId,
+          projectId: h.projectId,
+          attendance: "attended",
+        }),
+    },
+  ];
+
+  for (const { door, instructions, open } of doors) {
+    it(door, async () => {
+      const h = harness();
+      const automation = await savedAutomation(h);
+
+      const outcome = await open(h, automation.id);
+      await h.runner.settled();
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error("refused");
+      // The Session was attached before anything was sent — an unattached
+      // Session is where the kickoff went missing.
+      expect(h.attaches).toEqual([outcome.run.sessionId]);
+      // Exactly one turn, carrying the composer's expansion of what this door
+      // asked for, addressed to the Session this Run opened.
+      const composer = expandCommandInvocation(instructions, [TEMPLATE], [SKILL]);
+      expect(h.delivered).toEqual([
+        expect.objectContaining({
+          sessionId: outcome.run.sessionId,
+          text: composer.text,
+          resources: composer.resources,
+        }),
+      ]);
+      // Under the Run's own durable ids, so a crash between here and the
+      // adapter replays this turn rather than sending a second one — and the
+      // intent is marked delivered only now that it has been.
+      const stored = ctx.db
+        .prepare(
+          "SELECT message_command_id, message_id, delivered_at FROM automation_run_deliveries WHERE run_id = ?",
+        )
+        .get(outcome.run.id);
+      expect(stored).toEqual({
+        message_command_id: h.delivered[0]?.commandId,
+        message_id: h.delivered[0]?.messageId,
+        delivered_at: 42_000,
+      });
+    });
+  }
+
+  it("says so when the attach that would have delivered them is refused", async () => {
+    // The owner's Run, at the seam. Its Session was minted, its attach was
+    // rejected — an unpreparable worktree — and the boot half returned without
+    // a word: the door had already answered `ok`, the Run row linked to a
+    // Session with nothing in it, and there was no line anywhere saying why.
+    //
+    // The intent is deliberately still owed (the attach failed, not the
+    // delivery), so the Session's own Retry and the next launch's recovery
+    // sweep can still land it under the same ids. What is no longer allowed is
+    // the silence — and beneath this seam the refused attach leaves the Session
+    // carrying a failure Attention, which is the `error` VC-133's notification
+    // rule fires on (`session-runtime.ts`, `session-need.ts`).
+    const h = harness();
+    h.attachState = "needs-recovery";
+    h.attachReceipt = {
+      id: "receipt-1",
+      commandId: "start-1",
+      status: "rejected",
+      code: "location_unavailable",
+      detail: "Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links",
+      recordedAt: 10,
+      sequence: 10,
+    };
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.delivered).toEqual([]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not attach its Session: Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links`,
+    ]);
+    expect(
+      ctx.db
+        .prepare("SELECT delivered_at FROM automation_run_deliveries WHERE run_id = ?")
+        .get(outcome.run.id),
+    ).toEqual({ delivered_at: null });
+  });
+
+  it("names an attach that answered nothing it could quote", async () => {
+    // A port is allowed to answer `needs-recovery` without a receipt — the
+    // legacy/test seams do. There is still no first turn, so there is still a
+    // line; it just cannot pretend to a diagnosis it was not given.
+    const h = harness();
+    h.attachState = "needs-recovery";
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach reported no receipt`,
+    ]);
+  });
+
+  it("names an attach that neither opened nor refused", async () => {
+    const h = harness();
+    h.attachState = "needs-recovery";
+    h.attachReceipt = {
+      id: "receipt-2",
+      commandId: "start-2",
+      status: "unreconciled",
+      detail: null,
+      recordedAt: 11,
+      sequence: 11,
+    };
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach is unreconciled`,
+    ]);
   });
 });
 

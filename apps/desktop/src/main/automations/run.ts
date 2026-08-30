@@ -24,6 +24,7 @@ import {
   type AutomationRunAttendance,
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
+  type CommandReceipt,
   type ModelSelection,
   type PromptResource,
   type PromptTemplate,
@@ -221,6 +222,20 @@ function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRef
 }
 
 /**
+ * Why an attach was not ready, in words, from the receipt it answered with.
+ *
+ * A rejected attach carries the diagnosis a person needs — an unpreparable
+ * worktree names the path and git's reason — and that sentence is the reason
+ * this Run has no first turn. The other statuses have no such sentence, so they
+ * are named as what they are rather than dressed up as one.
+ */
+function attachRefusal(receipt: CommandReceipt | null): string {
+  if (receipt === null) return "the attach reported no receipt";
+  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
+  return `the attach is ${receipt.status}`;
+}
+
+/**
  * The optimistic-open latch a Run belongs to, minted from the scope it names.
  *
  * One key derivation for both the fresh path and the replay path: a retry has
@@ -354,7 +369,25 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         operationId: randomUUID(),
         sessionId: run.sessionId,
       });
-      if (attached.state !== "ready") return;
+      if (attached.state !== "ready") {
+        // VC-220. This early return used to be wordless, and it is the whole of
+        // what the owner saw: a Run mints its Session, the attach is refused,
+        // and the only thing that would have delivered the Instructions gives
+        // up in silence — while the door has already answered `ok` and the Run
+        // row already links to a Session with nothing in it.
+        //
+        // The delivery intent is deliberately left pending: the attach is what
+        // failed, so the next ready attach (the Session's own Retry, or the
+        // next launch's recovery sweep) still owes this turn under the same
+        // durable ids. What may not be left is the SILENCE — so the refusal is
+        // said here, and the Session itself carries the failure Attention that
+        // makes it `error` for VC-133's notification rule
+        // (`session-runtime.ts`'s `#failAttach`).
+        log(
+          `[volli] automation Run ${run.id} could not attach its Session: ${attachRefusal(attached.receipt)}`,
+        );
+        return;
+      }
       await resumeDeliveryForSession(run.sessionId);
     } catch (error) {
       log(`[volli] automation Run ${run.id} could not attach its Session: ${errorMessage(error)}`);

@@ -2087,3 +2087,127 @@ describe("migration 033 — a Run's attendance", () => {
     db.close();
   });
 });
+
+/**
+ * A profile that took migration 020's NUMBER from a parallel branch and so
+ * never got its schema: every later migration ran, `user_version` says 34,
+ * and `blobs`/`blob_links` are simply absent. This is the real shape of the
+ * database VC-220 was reported against.
+ */
+function buildLineageWithout020(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((m) => m.version <= 34 && m.version !== 20)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 34");
+  return db;
+}
+
+/**
+ * Every table and index, by name and by the statement that made it.
+ *
+ * `IF NOT EXISTS` is normalized away: it is stored verbatim in
+ * `sqlite_master`, and the reconciler needs it where migration 020 — which
+ * lands on a database that provably lacks these tables — did not. The clause is
+ * the only difference the two are allowed to have.
+ */
+function schema(db: Database.Database): Array<{ name: string; sql: string }> {
+  return (
+    db
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type IN ('table', 'index') AND sql IS NOT NULL ORDER BY name",
+      )
+      .all() as Array<{ name: string; sql: string }>
+  ).map(({ name, sql }) => ({ name, sql: sql.replace(/ IF NOT EXISTS /g, " ") }));
+}
+
+describe("migrate — 035, the blobs reconciler (VC-220)", () => {
+  it("lands the tables a skipped 020 owed, and converges on the fresh schema", () => {
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    expect(tableExists(db, "blob_links")).toBe(false);
+    // The cost of the gap, and the reason this is filed under VC-220:
+    // preparing a worktree reads this table, so on such a profile every
+    // Session attach was rejected and every Automation Run opened a Session it
+    // could never deliver its Instructions to.
+    expect(() => db.prepare("SELECT 1 FROM blob_links").get()).toThrow(/no such table/);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
+    // 020 replaced `ticket_attachments`; a lineage that skipped it still had
+    // the old table, and converging means it is gone too.
+    expect(tableExists(db, "ticket_attachments")).toBe(false);
+
+    const freshPath = tempDbPath();
+    const fresh = openRawDb(freshPath);
+    migrate(fresh, freshPath);
+    expect(schema(db)).toEqual(schema(fresh));
+    fresh.close();
+    db.close();
+  });
+
+  it("leaves the lineage that ran 020 exactly as it found it", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+         VALUES ('${"a".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+    ).run();
+
+    // Re-offered the version, as a database restored from a backup would be.
+    db.pragma("user_version = 34");
+    migrate(db, dbPath);
+
+    // The bytes a person attached are still there: the reconciler probes and
+    // returns rather than recreating a table it would have had to drop first.
+    expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("lands the tables when the old one is already gone", () => {
+    // A fork that dropped `ticket_attachments` under its own 020 without ever
+    // creating these two. There is nothing left to tidy, and asking the empty
+    // table how many rows it has would be the only thing that could fail here.
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    db.exec("DROP TABLE ticket_attachments;");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(tableExists(db, "blob_links")).toBe(true);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("keeps a ticket_attachments table that still holds rows", () => {
+    // 020's note says that table never had a caller and so has never held a
+    // row. If one is there anyway, this is not the database that note is about,
+    // and its rows outrank a tidy schema.
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', 'body', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_attachments (id, ticket_id, kind, label, file_name, url, created_at)
+         VALUES ('a1', 't1', 'file', 'notes.txt', 'notes.txt', NULL, 1)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "blob_links")).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 1 });
+    db.close();
+  });
+});
