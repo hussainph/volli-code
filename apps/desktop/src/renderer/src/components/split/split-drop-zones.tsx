@@ -11,18 +11,21 @@
  * will this end up?") rather than the one the implementation has ("which
  * region am I over?").
  *
- * ONE preview element, not three: the highlight MORPHS from the centre to a
- * half as the pointer crosses into a band, because it is the same rectangle
- * changing its mind rather than two rectangles swapping.
+ * ONE preview element, not three, and it is MOUNTED FOR THE WHOLE DRAG: the
+ * highlight fades in where the pointer entered and morphs from the centre to a
+ * half as it crosses into a band, because it is the same rectangle changing its
+ * mind rather than two rectangles swapping — and because nothing in the real
+ * world appears from nothing.
  *
  * MOTION, per the decision framework (`docs/plans/split-view.md` §6):
- *  • The overlay fades in, opacity only, 120ms ease-out — appearing from
- *    nothing reads as a glitch, and 120ms is under what a hand mid-gesture
- *    would call a delay.
- *  • The preview morphs in 150ms ease-out on the four properties that actually
- *    move. Frequent interaction, so it stays at the short end.
- *  • `motion-reduce` cancels both: the highlight is the message, the motion is
- *    polish.
+ *  • Opacity and the four box properties, named exactly, 150ms `ease-out`. The
+ *    plan asked for 120ms on the fade and 150ms on the morph; one element can
+ *    only have one duration without an inline `transition` (which `motion-reduce`
+ *    could not then cancel, being a class), and 150ms is the morph's — both
+ *    numbers sit under the ceiling for something this frequent, and one element
+ *    that never blinks is worth more than 30ms.
+ *  • `motion-reduce` cancels all of it: the highlight is the message, the
+ *    motion is polish.
  *  • A KEYBOARD split (`⌘\`) never mounts this at all — it is not a drag, and
  *    an action repeated tens of times a day gets no animation.
  *
@@ -110,7 +113,13 @@ function ActiveDropZones({ paneId, native }: { paneId: string; native: boolean }
     }
   };
 
-  const preview = zone === null ? null : splitDropPreview(zone);
+  // The rect the preview holds while it fades OUT is the last one it showed, so
+  // the highlight leaves from where it was rather than jumping to a default on
+  // its way to transparent. A cache write during render: same value in, same
+  // value out (the strip's `useSteadyIds` does the same, for the same reason).
+  const lastZone = React.useRef<SplitDropZone>("center");
+  if (zone !== null) lastZone.current = zone;
+  const preview = splitDropPreview(zone ?? lastZone.current);
 
   return (
     <div
@@ -118,7 +127,6 @@ function ActiveDropZones({ paneId, native }: { paneId: string; native: boolean }
       data-pane-id={paneId}
       className={cn(
         "absolute inset-0 z-20",
-        "animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none",
         // A dnd-kit drag is MEASURED, never hit-tested, so the overlay must not
         // stand between the pointer and the tab it is carrying. A native drag
         // is the opposite: the browser routes it by hit-testing, so the overlay
@@ -126,24 +134,30 @@ function ActiveDropZones({ paneId, native }: { paneId: string; native: boolean }
         native ? "pointer-events-auto" : "pointer-events-none",
       )}
       onDragOver={handleDragOver}
-      onDragLeave={() => setNativeZone(null)}
+      // Only when the pointer leaves the OVERLAY, not when it crosses between
+      // the regions inside it — `dragleave` bubbles, and clearing on a child's
+      // would make the highlight blink every time the pointer changed bands.
+      onDragLeave={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        setNativeZone(null);
+      }}
       onDrop={handleDrop}
     >
       {ZONES.map((name) => (
         <DropZoneRegion key={name} paneId={paneId} zone={name} active={zone === name} />
       ))}
-      {preview === null ? null : (
-        <div
-          data-slot="split-drop-preview"
-          data-zone={zone}
-          aria-hidden
-          style={preview}
-          className={cn(
-            "pointer-events-none absolute rounded-md bg-primary/10 ring-1 ring-primary/40 ring-inset",
-            "transition-[left,top,width,height] duration-150 ease-out motion-reduce:transition-none",
-          )}
-        />
-      )}
+      <div
+        data-slot="split-drop-preview"
+        data-zone={zone ?? undefined}
+        aria-hidden
+        style={preview}
+        className={cn(
+          "pointer-events-none absolute rounded-md bg-primary/10 ring-1 ring-primary/40 ring-inset",
+          "transition-[opacity,left,top,width,height] duration-150 ease-out motion-reduce:transition-none",
+          zone === null ? "opacity-0" : "opacity-100",
+        )}
+      />
     </div>
   );
 }

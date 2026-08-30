@@ -111,7 +111,7 @@ function PaneEmptyRow({
         // move under the finger reads as a label rather than a control
         // (`ui/button.tsx` documents the scale and its reduced-motion cancel).
         "transition-[color,background-color,scale] duration-150 ease-out",
-        "hover:bg-accent/50 active:scale-[0.99] active:bg-accent/70",
+        "hover:bg-accent/50 active:scale-[0.97] active:bg-accent/70",
         "motion-reduce:transition-[color,background-color] motion-reduce:scale-100!",
         "focus-visible:ring-2 focus-visible:ring-ring/45",
       )}

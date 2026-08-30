@@ -25,6 +25,11 @@
  *   6. Closing the last tab of the last extra pane collapses the SURFACE back
  *      to one plane — no pane cells named, no ring, exactly the unsplit
  *      workspace this app had before the feature (the compatibility claim).
+ *   7. A FILE ROW dragged out of the rail's navigator opens a split without a
+ *      tab existing first — the native (HTML5) half of §4, which is a
+ *      different transport from the tab drag above and shares only the zones.
+ *      Driven with real `DragEvent`s carrying a real `DataTransfer`, because
+ *      Chromium does not synthesize HTML5 drags from mouse input.
  *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -64,6 +69,14 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-split
 const { attempt, must, summarize } = createRunner();
 
 const PROJECT = { id: "split-view-project", name: "Split View Project", prefix: "SV" };
+
+/**
+ * The rail navigator row this smoke drags. `README.md` is what `makeGitRepo`
+ * commits, so it exists in the ticket's WORKTREE too — an untracked file in the
+ * main checkout would not, and the navigator lists the worktree.
+ */
+const DRAGGED_FILE = "README.md";
+const FILE_ROW = `[data-testid="ticket-files-row"][data-path="${DRAGGED_FILE}"]`;
 
 // ---- DOM probes ------------------------------------------------------------
 
@@ -179,7 +192,6 @@ async function main() {
     await sleep(800);
 
     const projectPath = await makeGitRepo(scratch, "split-view-");
-    await fs.writeFile(join(projectPath, "readme.md"), "# split view\n");
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     const { byName } = await readSeededProjects(page);
     if (!byName[PROJECT.name]?.id) throw new Error("seeded project missing after import");
@@ -360,6 +372,129 @@ async function main() {
         detail: JSON.stringify(panes.map((pane) => ({ label: pane.label, tabs: pane.tabs }))),
       };
     });
+    // ---- 8. A rail row drags onto the plane ---------------------------------
+    //
+    // The native transport, which Playwright's mouse cannot drive: Chromium
+    // starts an HTML5 drag from the OS, not from synthesized mouse events. So
+    // the events are dispatched by hand, on the real row and the real overlay,
+    // through one real `DataTransfer` — the row's own handler is what fills it,
+    // and the drop reads it back exactly as a hand-dragged one would.
+    await attempt(
+      8,
+      "a file row dragged from the rail opens a split, with no tab first",
+      async () => {
+        const aside = page.locator("aside");
+        await aside.getByTestId("ticket-rail-tab-files").click();
+        await waitUntil(
+          "the files list",
+          async () => (await aside.getByTestId("ticket-files-list").count()) === 1,
+          { timeout: 10_000 },
+        );
+        await waitUntil("the file row", async () => (await aside.locator(FILE_ROW).count()) === 1, {
+          timeout: 10_000,
+        });
+
+        const panes = await readPanes(page);
+        const box = await paneBox(page, panes[0].paneId);
+        // Deep into the primary pane's right band.
+        const point = {
+          x: Math.round(box.x + box.width - 24),
+          y: Math.round(box.y + box.height / 2),
+        };
+
+        // The row's own `dragstart` fills the transfer and announces the drag;
+        // the transfer is parked on `window` so every event below is the SAME
+        // one, exactly as a real gesture would carry it.
+        const started = await page.evaluate((selector) => {
+          const row = document.querySelector(selector);
+          if (row === null) return { error: "no row" };
+          if (row.getAttribute("draggable") !== "true") return { error: "row is not draggable" };
+          const transfer = new DataTransfer();
+          window.volliDragTransfer = transfer;
+          row.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+          return { types: [...transfer.types] };
+        }, FILE_ROW);
+        if (started.error !== undefined) return { ok: false, detail: started.error };
+
+        // The zones are a render away from the announcement, not a tick.
+        await waitUntil(
+          "the panes to offer their zones",
+          async () => (await page.locator('[data-slot="split-drop-zones"]').count()) > 0,
+          { timeout: 4000 },
+        );
+
+        const dispatchAt = (kind) =>
+          page.evaluate(
+            ({ at, type }) => {
+              const transfer = window.volliDragTransfer;
+              const overlay = document
+                .elementFromPoint(at.x, at.y)
+                ?.closest?.('[data-slot="split-drop-zones"]');
+              if (!overlay) return false;
+              overlay.dispatchEvent(
+                new DragEvent(type, {
+                  bubbles: true,
+                  cancelable: true,
+                  dataTransfer: transfer,
+                  clientX: at.x,
+                  clientY: at.y,
+                }),
+              );
+              return true;
+            },
+            { at: point, type: kind },
+          );
+
+        if (!(await dispatchAt("dragover"))) {
+          return { ok: false, detail: "no zone overlay under the pointer" };
+        }
+
+        // Read the highlight from a real intermediate state — a React render
+        // later, which is why this is a poll and not the same tick.
+        const zone = await waitUntil(
+          "the right zone to light up for the native drag",
+          async () => {
+            const zones = await readActiveZones(page);
+            return zones.length > 0 ? zones[0] : null;
+          },
+          { timeout: 4000 },
+        ).catch(() => null);
+
+        await dispatchAt("drop");
+        await page.evaluate((selector) => {
+          document.querySelector(selector)?.dispatchEvent(
+            new DragEvent("dragend", {
+              bubbles: true,
+              dataTransfer: window.volliDragTransfer,
+            }),
+          );
+        }, FILE_ROW);
+
+        const after = await waitUntil(
+          "the file to open in a pane of its own",
+          async () => {
+            const seen = await readPanes(page);
+            return seen.length === 2 && seen[1]?.tabs.some((tab) => tab.includes(DRAGGED_FILE))
+              ? seen
+              : null;
+          },
+          { timeout: 6000 },
+        ).catch(() => readPanes(page));
+
+        return {
+          ok:
+            started.types?.includes("application/x-volli-file") === true &&
+            zone?.zone === "right" &&
+            zone?.paneId === panes[0].paneId &&
+            after.length === 2 &&
+            after[1]?.focused === true &&
+            after[1].tabs.some((tab) => tab.includes(DRAGGED_FILE)),
+          detail: `types=${JSON.stringify(started.types)} zone=${JSON.stringify(zone)} panes=${JSON.stringify(
+            after.map((pane) => pane.tabs),
+          )}`,
+        };
+      },
+    );
   } finally {
     await closeAppBounded(app).catch(() => {});
     await cleanup();
