@@ -27,7 +27,12 @@ import type { AgentToolDoorOptions } from "./agent-tool-door";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
-import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
+import {
+  getAutomation,
+  listAutomationsForProject,
+  listProjectRunsForAutomation,
+  listRunsForTicket,
+} from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
@@ -447,7 +452,9 @@ function automationHarness(options: { host?: "absent" } = {}) {
       const found = getTicket(db, ticketId);
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
     },
+    findProject: (projectId) => projectId === "project-one" || projectId === "project-two",
     listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
+    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);

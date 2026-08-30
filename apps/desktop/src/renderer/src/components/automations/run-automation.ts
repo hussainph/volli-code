@@ -60,6 +60,85 @@ async function startRun(input: {
   }
 }
 
+/**
+ * The same call for a Run whose Target is the PROJECT (VC-130) — a schedule's
+ * own door, reached by hand from a Skipped occurrence's "Run now".
+ *
+ * A second function rather than a nullable Ticket on the one above, because
+ * the transports are two channels and the retry key is a different pair. What
+ * they DO share is the retry map: a click whose IPC reply was lost keeps its
+ * durable command id, so pressing again repeats the intent rather than opening
+ * a second Session.
+ */
+async function startProjectRun(input: {
+  automationId: string;
+  projectId: string;
+}): Promise<RunAutomationAction | null> {
+  const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
+  const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
+  pendingCommandIds.set(retryKey, commandId);
+  try {
+    const action = runAutomationAction(
+      await window.api.automations.runForProject({ ...input, commandId }),
+    );
+    pendingCommandIds.delete(retryKey);
+    return action;
+  } catch (error) {
+    toastError(`Couldn't run automation: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Start the Run a Skipped occurrence records as not having happened (VC-112:
+ * "a person may start it by hand from the Run history afterwards").
+ *
+ * It runs at the Target the schedule would have used — the Project — so what a
+ * person gets by hand is the same Session the schedule would have opened. Like
+ * every other listing-surface Run it does NOT navigate: the person is reading a
+ * history and may well start a second one, so the door arrives as a toast
+ * action (VC-13 decision 2).
+ *
+ * It starts ONE Run, whatever `missedCount` the row stands for. A skip covering
+ * fifty missed hours is fifty occurrences that will never be replayed — the
+ * button offers the work now, not the backlog.
+ */
+export async function runSkippedOccurrence(input: {
+  automationId: string;
+  automationName: string;
+  projectId: string;
+}): Promise<void> {
+  const action = await startProjectRun({
+    automationId: input.automationId,
+    projectId: input.projectId,
+  });
+  if (action === null) return;
+  switch (action.kind) {
+    case "open-model-access":
+      useUiStore.getState().setSettingsOpen(true, "model-access");
+      return;
+    case "toast":
+      toastError(action.message);
+      return;
+    case "open-session": {
+      useChatSessionsStore.getState().adoptChatSession(action.sessionId);
+      toast.success(`${input.automationName} started`, {
+        action: {
+          label: "Open session",
+          onClick: () =>
+            openRunSession({
+              sessionId: action.sessionId,
+              projectId: action.projectId,
+              // A schedule Run names no Ticket, so its Session opens in Home.
+              ticketId: null,
+            }),
+        },
+      });
+      return;
+    }
+  }
+}
+
 export async function runAutomationOnTicket(input: {
   automationId: string;
   ticketId: string;

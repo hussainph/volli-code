@@ -20,6 +20,7 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationSkippedOccurrence,
   AutomationTrigger,
   ColumnArming,
   BlobLinkView,
@@ -1461,6 +1462,25 @@ export interface AutomationRunInput {
 }
 
 /**
+ * Running an Automation against a PROJECT rather than a Ticket (VC-130).
+ *
+ * Its own input and its own channel rather than a nullable `ticketId` on the
+ * one above: the two are different Targets with different Session Roles, and a
+ * nullable field on the wire would let a caller ask for a Project Session by
+ * FORGETTING something. docs/BOUNDARIES.md rule 3 wants the shape to say what
+ * it means, so the shape that means "the Project" names a project.
+ *
+ * The renderer reaches it from a Skipped occurrence's "Run now" — a schedule
+ * that did not fire, started by hand, at the Target it would have used.
+ */
+export interface AutomationRunForProjectInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  projectId: string;
+}
+
+/**
  * Turning one Automation on or off ON THIS MACHINE (VC-127).
  *
  * Enablement is deliberately NOT a field on the {@link Automation} record.
@@ -1509,6 +1529,8 @@ export type AutomationResult = Result<{
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
 /** Every armed column in the project — the whole truth, so a caller reconstructs nothing. */
 export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
 
@@ -1581,6 +1603,27 @@ export interface VolliAutomationIpcContract {
   "volli:automation-set-enabled": {
     args: [input: AutomationSetEnabledInput];
     result: AutomationSetEnabledResult;
+  };
+  /**
+   * Every due time this project's schedules missed, newest first (VC-130).
+   *
+   * A read of its own beside `volli:automation-runs-for-project`, because a
+   * skip and a Run are different records with different actions — a Run opens
+   * its Session, a skip offers to start one. The page interleaves them by time;
+   * merging them on the wire would need a discriminant nothing else wants.
+   */
+  "volli:automation-skips-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationSkipsResult;
+  };
+  /**
+   * Runs an Automation against the PROJECT: one fresh Project Session, one Run
+   * row naming no Ticket. The schedule's own Target, reachable by hand so a
+   * Skipped occurrence is recoverable (VC-112).
+   */
+  "volli:automation-run-for-project": {
+    args: [input: AutomationRunForProjectInput];
+    result: AutomationRunStartResult;
   };
 }
 

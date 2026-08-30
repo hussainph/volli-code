@@ -32,14 +32,22 @@
 import * as React from "react";
 
 import {
+  automationScheduleProblem,
   automationTriggerColumns,
+  automationTriggerSchedule,
   errorMessage,
+  hostTimeZone,
   isAutomationRuntimePin,
   NO_AUTOMATION_TRIGGER,
+  SCHEDULE_WEEKDAYS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Automation,
+  type AutomationSchedule,
+  type AutomationSchedulePreset,
+  type AutomationTrigger,
   type ModelSelection,
+  type ScheduleWeekday,
   type TicketStatus,
 } from "@volli/shared";
 
@@ -48,6 +56,7 @@ import {
   MANUAL_TRIGGER_LABEL,
   ownershipLabel,
 } from "./automations-page-model";
+import { TimeZonePicker } from "./time-zone-picker";
 
 import {
   ComposerPickerStack,
@@ -82,12 +91,33 @@ const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
 type OwnershipChoice = "project" | "global";
 type RuntimeChoice = "inherit" | "pin";
 /**
- * The Trigger control's two answers in V1 (VC-112 rules three; "On a schedule"
- * arrives with the scheduler in VC-130). "Only when I run it" is the default
- * and a complete answer rather than an inert one — run by hand is universal,
- * so the Trigger says only what ELSE starts this Automation.
+ * The Trigger control's three answers — the whole set VC-112 rules, complete
+ * as of VC-130. "Only when I run it" is the default and a complete answer
+ * rather than an inert one: run by hand is universal, so the Trigger says only
+ * what ELSE starts this Automation.
  */
-type TriggerChoice = "none" | "columns";
+type TriggerChoice = "none" | "columns" | "schedule";
+
+/** What a new schedule opens on: nine in the morning, here, every day. */
+const DEFAULT_SCHEDULE_HOUR = 9;
+const DEFAULT_SCHEDULE_WEEKDAY: ScheduleWeekday = "monday";
+
+/** The preset control's own words, finishing the sentence "Every …". */
+const SCHEDULE_PRESET_OPTIONS: readonly { key: AutomationSchedulePreset; label: string }[] = [
+  { key: "hourly", label: "hour" },
+  { key: "daily", label: "day" },
+  { key: "weekdays", label: "weekday" },
+  { key: "weekly", label: "week" },
+];
+
+/** Three letters each: seven segments have to fit beside the rest of the sentence. */
+const WEEKDAY_OPTIONS: readonly { key: ScheduleWeekday; label: string }[] = SCHEDULE_WEEKDAYS.map(
+  (weekday) => ({ key: weekday, label: `${weekday[0]!.toUpperCase()}${weekday.slice(1, 3)}` }),
+);
+
+function twoDigits(value: number): string {
+  return value.toString().padStart(2, "0");
+}
 
 /**
  * The dialog itself, mounted once beside the command palette. It renders only
@@ -142,11 +172,36 @@ function AutomationEditorForm({
   // The Trigger opens on what the record holds. A stored Trigger is already
   // canonical (main parses on the way in), so the columns seed straight from
   // it and an Automation offered nowhere opens on "Only when I run it".
-  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(
-    automation !== null && automation.trigger.kind === "columns" ? "columns" : "none",
+  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(() =>
+    automation === null || automation.trigger.kind === "none" ? "none" : automation.trigger.kind,
   );
   const [columns, setColumns] = React.useState<readonly TicketStatus[]>(() =>
     automation === null ? [] : automationTriggerColumns(automation.trigger),
+  );
+  // The schedule's parts are held SEPARATELY rather than as the stored union,
+  // so switching "every week" to "every hour" and back does not forget the hour
+  // that was already chosen. The union is projected from them below, which is
+  // what keeps the RECORD unable to spell "hourly, at 09:00".
+  const storedSchedule = automation === null ? null : automationTriggerSchedule(automation.trigger);
+  const [preset, setPreset] = React.useState<AutomationSchedulePreset>(
+    storedSchedule?.preset ?? "daily",
+  );
+  const [weekday, setWeekday] = React.useState<ScheduleWeekday>(
+    storedSchedule !== null && storedSchedule.preset === "weekly"
+      ? storedSchedule.weekday
+      : DEFAULT_SCHEDULE_WEEKDAY,
+  );
+  const [hour, setHour] = React.useState<number>(
+    storedSchedule !== null && storedSchedule.preset !== "hourly"
+      ? storedSchedule.hour
+      : DEFAULT_SCHEDULE_HOUR,
+  );
+  const [minute, setMinute] = React.useState<number>(storedSchedule?.minute ?? 0);
+  // The host's zone seeds a NEW schedule and is never read again: from the
+  // moment it is stored, the stored zone wins and travelling moves nothing
+  // (VC-112).
+  const [timeZone, setTimeZone] = React.useState<string>(
+    storedSchedule?.timeZone ?? hostTimeZone(),
   );
   const [problem, setProblem] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -180,10 +235,28 @@ function AutomationEditorForm({
     };
   }, [inspect, hiddenModels]);
 
-  const trigger =
-    triggerChoice === "columns" && columns.length > 0
-      ? ({ kind: "columns", columns } as const)
-      : NO_AUTOMATION_TRIGGER;
+  const schedule: AutomationSchedule =
+    preset === "hourly"
+      ? { preset, minute, timeZone }
+      : preset === "weekly"
+        ? { preset, weekday, hour, minute, timeZone }
+        : { preset, hour, minute, timeZone };
+  const trigger: AutomationTrigger =
+    triggerChoice === "schedule"
+      ? { kind: "schedule", schedule }
+      : triggerChoice === "columns" && columns.length > 0
+        ? { kind: "columns", columns }
+        : NO_AUTOMATION_TRIGGER;
+  // A schedule Run's Target is the Project, so a scheduled Automation has to
+  // belong to one. On a CREATE that is settled by forcing the choice — the
+  // control shows "This project" and stops offering the other answer, which is
+  // legible in a way a refusal at Save is not. On an EDIT, Ownership is
+  // identity and cannot move, so a globally listed record gets the shared
+  // refusal below and the one action that resolves it.
+  const ownershipChoice: OwnershipChoice = triggerChoice === "schedule" ? "project" : ownership;
+  const savingProjectId =
+    automation === null ? (ownershipChoice === "project" ? projectId : null) : automation.projectId;
+  const scheduleProblem = automationScheduleProblem({ projectId: savingProjectId, trigger });
   const runtime = runtimeChoice === "pin" ? pin : null;
   const pinStops =
     pin === null
@@ -199,6 +272,7 @@ function AutomationEditorForm({
     // says so at the moment of the choice, rather than letting the record
     // collapse it to "Nothing else" behind the person's back.
     (triggerChoice === "columns" && columns.length === 0) ||
+    scheduleProblem !== null ||
     (runtimeChoice === "pin" && pin === null);
 
   const submit = async () => {
@@ -209,7 +283,7 @@ function AutomationEditorForm({
         automation === null
           ? await save({
               commandId,
-              projectId: ownership === "project" ? projectId : null,
+              projectId: savingProjectId,
               name,
               instructions,
               trigger,
@@ -254,11 +328,15 @@ function AutomationEditorForm({
             {automation === null ? (
               <Segmented<OwnershipChoice>
                 ariaLabel="Ownership"
-                value={ownership}
+                value={ownershipChoice}
                 options={[
                   { key: "project", label: "This project" },
                   { key: "global", label: "All projects" },
                 ]}
+                // A schedule has to name the project it runs in, so while one
+                // is chosen this states the only valid answer instead of
+                // offering a second that Save would refuse.
+                disabled={triggerChoice === "schedule"}
                 onChange={setOwnership}
               />
             ) : (
@@ -273,8 +351,9 @@ function AutomationEditorForm({
               it", or "Ticket enters" — and then which columns. The columns sit
               on their own row rather than beside the segmented pill, so the
               choice of ANSWER and the choice of COLUMNS are not one
-              undifferentiated strip of five-plus chips. The schedule (VC-130)
-              adds a third answer beside these two. */}
+              undifferentiated strip of five-plus chips. The schedule's own row
+              (VC-130) sits in the same place for the same reason, and reads as
+              the sentence VC-112 names: "Every [day] at [21:00] [zone]". */}
           <div className="flex flex-col gap-2">
             <Segmented<TriggerChoice>
               ariaLabel="Trigger"
@@ -284,9 +363,73 @@ function AutomationEditorForm({
                 // this same constant on every row that names no column.
                 { key: "none", label: MANUAL_TRIGGER_LABEL },
                 { key: "columns", label: "Ticket enters" },
+                { key: "schedule", label: "On a schedule" },
               ]}
               onChange={setTriggerChoice}
             />
+            {triggerChoice === "schedule" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* The connecting words are the row's grammar, not copy under a
+                    control: VC-112 asks for one row that reads as a sentence,
+                    and "Every" / "at" are what make the controls a sentence
+                    rather than a form. */}
+                <span className="text-ui text-muted-foreground">Every</span>
+                <Segmented<AutomationSchedulePreset>
+                  ariaLabel="Schedule"
+                  value={preset}
+                  options={SCHEDULE_PRESET_OPTIONS}
+                  onChange={setPreset}
+                />
+                {preset === "weekly" ? (
+                  <Segmented<ScheduleWeekday>
+                    ariaLabel="Day of the week"
+                    value={weekday}
+                    options={WEEKDAY_OPTIONS}
+                    onChange={setWeekday}
+                  />
+                ) : null}
+                <span className="text-ui text-muted-foreground">at</span>
+                {preset === "hourly" ? (
+                  // An hourly schedule has no hour to state — only the minute
+                  // past each one. A time field here would ask for an hour the
+                  // record cannot hold.
+                  <Input
+                    type="number"
+                    min={0}
+                    max={59}
+                    aria-label="Minutes past the hour"
+                    className="w-20"
+                    value={minute}
+                    onChange={(event) => {
+                      const next = Number(event.currentTarget.value);
+                      // An out-of-range or half-typed value changes nothing:
+                      // the record stores a real minute or the previous one.
+                      if (Number.isInteger(next) && next >= 0 && next <= 59) setMinute(next);
+                    }}
+                  />
+                ) : (
+                  <Input
+                    type="time"
+                    aria-label="Time"
+                    className="w-28"
+                    value={`${twoDigits(hour)}:${twoDigits(minute)}`}
+                    onChange={(event) => {
+                      const [nextHour, nextMinute] = event.currentTarget.value.split(":");
+                      if (nextHour === undefined || nextMinute === undefined) return;
+                      setHour(Number(nextHour));
+                      setMinute(Number(nextMinute));
+                    }}
+                  />
+                )}
+                <TimeZonePicker value={timeZone} onChange={setTimeZone} />
+              </div>
+            ) : null}
+            {scheduleProblem === null ? null : (
+              // A blocked state with one recovery action — one of the copy
+              // rule's stated exceptions. Ownership is identity on an existing
+              // record, so this is the only place the way out can be named.
+              <p className="text-label text-muted-foreground">{scheduleProblem}</p>
+            )}
             {triggerChoice === "columns" ? (
               <div className="flex flex-wrap gap-2">
                 {TICKET_STATUSES.map((status) => {

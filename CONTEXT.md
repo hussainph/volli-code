@@ -576,10 +576,12 @@ archive.
 _Avoid_: paused, archived, active, on (alone)
 
 **Skipped occurrence**:
-A scheduled Trigger's due time that passed without a Run, because the app was
-not open. It is recorded with its reason and never replayed — the next
-occurrence stands — and a person may start it by hand from the Run history
-afterwards. A skip and a silence must not look the same.
+A scheduled Trigger's due time that passed without a Run — usually because the
+app was not open, and otherwise because the Run door refused when the moment
+came. It is recorded with its reason and never replayed — the next occurrence
+stands — and a person may start it by hand from the Run history afterwards, as
+one Run rather than as the backlog it stood for. A skip and a silence must not
+look the same.
 _Avoid_: missed run, failed run
 
 **Skill**:

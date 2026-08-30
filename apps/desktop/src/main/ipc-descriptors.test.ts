@@ -2790,9 +2790,36 @@ describe("AUTOMATION_IPC descriptor table", () => {
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: 7 }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: null }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: ["doing"] }])).toBe(false);
+      // A schedule (VC-130) passes as a SHAPE; whether its zone is one this
+      // build's ICU knows, and whether its hour is on the clock, is the shared
+      // parser's job on the way in — the same division the columns get above.
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: {
+              kind: "schedule",
+              schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+            },
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: { kind: "schedule", schedule: { preset: "daily", timeZone: "Mars/Olympus" } },
+          },
+        ]),
+      ).toBe(true);
       // A record, but not a Trigger this build can read.
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: {} }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule", schedule: "daily" } }]),
+      ).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns" } }])).toBe(false);
       expect(
         guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: "doing" } }]),
@@ -2975,7 +3002,9 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(11);
+      // 11 through VC-128, plus VC-130's two: the project's Skipped
+      // occurrences, and the Run door whose Target is the Project.
+      expect(AUTOMATION_CHANNELS).toHaveLength(13);
     });
   });
 });

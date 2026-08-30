@@ -15,6 +15,7 @@ export * from "./agent-plan";
 export * from "./agent-runtime";
 export * from "./agent-observability";
 export * from "./automation";
+export * from "./automation-schedule";
 export * from "./model-access-policy";
 export * from "./model-access-sign-in";
 export * from "./compaction-policy";

@@ -7,14 +7,18 @@ import {
   automationDraftProblem,
   automationOwnership,
   automationPinProblem,
+  automationScheduleProblem,
   automationTriggerColumns,
+  automationTriggerSchedule,
   automationTriggersColumn,
   isAutomationRuntimePin,
   isColumnArrival,
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
+  parseAutomationSkipReason,
   parseAutomationTrigger,
   type Automation,
+  type AutomationTrigger,
   type ColumnArming,
 } from "./automation";
 
@@ -155,14 +159,123 @@ describe("parseAutomationTrigger", () => {
       "columns",
       [],
       {},
-      // A Trigger this build has no arm for — a schedule, once VC-130 ships and
-      // an older build reads a newer record.
-      { kind: "schedule" },
+      // A Trigger kind this build has no arm for at all.
+      { kind: "webhook" },
       // The right kind carrying the wrong shape.
       { kind: "columns" },
       { kind: "columns", columns: "doing" },
+      { kind: "schedule" },
+      { kind: "schedule", schedule: { preset: "daily", hour: 9, minute: 0 } },
+      // A zone this build's ICU cannot resolve. Repairing it would start
+      // unattended work at a time nobody chose.
+      {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 9, minute: 0, timeZone: "Mars/Olympus" },
+      },
     ]) {
       expect(parseAutomationTrigger(raw)).toEqual(NO_AUTOMATION_TRIGGER);
+    }
+  });
+
+  it("reads a schedule Trigger and keeps its stored zone (VC-130)", () => {
+    expect(
+      parseAutomationTrigger({
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      }),
+    ).toEqual({
+      kind: "schedule",
+      schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+    });
+  });
+});
+
+describe("automationTriggerSchedule", () => {
+  const schedule = {
+    preset: "weekly",
+    weekday: "monday",
+    hour: 8,
+    minute: 0,
+    timeZone: "UTC",
+  } as const;
+
+  it("answers the schedule a Trigger carries, and null for every other arm", () => {
+    expect(automationTriggerSchedule({ kind: "schedule", schedule })).toEqual(schedule);
+    expect(automationTriggerSchedule(NO_AUTOMATION_TRIGGER)).toBeNull();
+    expect(automationTriggerSchedule({ kind: "columns", columns: ["doing"] })).toBeNull();
+  });
+
+  it("leaves a schedule Trigger out of every column question", () => {
+    // The two arms are not interchangeable: a schedule names the Project, so
+    // it is offered in no column and can arm none.
+    const scheduled = automation({ trigger: { kind: "schedule", schedule } });
+    expect(automationTriggerColumns(scheduled.trigger)).toEqual([]);
+    expect(automationTriggersColumn(scheduled, "doing")).toBe(false);
+    expect(offeredAutomationsForColumn([scheduled], "doing", null)).toEqual([]);
+    expect(armedAutomationFor([scheduled], [arming()], "doing")).toBeNull();
+  });
+});
+
+describe("automationScheduleProblem", () => {
+  const scheduled: AutomationTrigger = {
+    kind: "schedule",
+    schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+  };
+
+  it("accepts a schedule on a project-owned Automation", () => {
+    expect(automationScheduleProblem({ projectId: "p1", trigger: scheduled })).toBeNull();
+  });
+
+  it("refuses a schedule on a globally listed Automation, and names the way out", () => {
+    // A schedule Run's Target is the Project, and a global record belongs to
+    // none: firing in every project would be the launch backlog VC-130 forbids.
+    const problem = automationScheduleProblem({ projectId: null, trigger: scheduled });
+    expect(problem).toMatch(/one project/);
+    expect(problem).toMatch(/Duplicate/);
+  });
+
+  it("has nothing to say about the other Triggers, at either Ownership", () => {
+    expect(
+      automationScheduleProblem({ projectId: null, trigger: NO_AUTOMATION_TRIGGER }),
+    ).toBeNull();
+    expect(
+      automationScheduleProblem({
+        projectId: null,
+        trigger: { kind: "columns", columns: ["doing"] },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("parseAutomationSkipReason", () => {
+  it("reads the two reasons a schedule actually records", () => {
+    expect(parseAutomationSkipReason({ kind: "app-closed" })).toEqual({ kind: "app-closed" });
+    expect(
+      parseAutomationSkipReason({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" }),
+    ).toEqual({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" });
+  });
+
+  it("keeps a refusal code this build no longer knows, verbatim", () => {
+    // Historical evidence, like a Run's recorded reasoning level: printed as
+    // recorded rather than rewritten into today's vocabulary.
+    expect(
+      parseAutomationSkipReason({ kind: "run-refused", code: "QUOTA_EXHAUSTED", error: "Later" }),
+    ).toEqual({ kind: "run-refused", code: "QUOTA_EXHAUSTED", error: "Later" });
+  });
+
+  it("still reads as a skip when the reason itself is unreadable", () => {
+    // Never invented as "app-closed": the cause is unknown, but a skip that
+    // degraded into a silence is the one outcome VC-112 forbids.
+    for (const raw of [
+      null,
+      "app-closed",
+      {},
+      { kind: "nope" },
+      { kind: "run-refused" },
+      { kind: "run-refused", code: 7, error: "x" },
+      { kind: "run-refused", code: "X", error: null },
+    ]) {
+      expect(parseAutomationSkipReason(raw)).toEqual({ kind: "unknown" });
     }
   });
 });

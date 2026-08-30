@@ -13,10 +13,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, Ticket } from "@volli/shared";
+import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import { openRunSession, runAutomationFromListing } from "./run-automation";
+import { openRunSession, runAutomationFromListing, runSkippedOccurrence } from "./run-automation";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -27,6 +27,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
   runAutomationFromListing: vi.fn(),
+  runSkippedOccurrence: vi.fn(),
 }));
 
 let root: Root | null = null;
@@ -92,9 +93,24 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
   };
 }
 
+function skip(overrides: Partial<AutomationSkippedOccurrence> = {}): AutomationSkippedOccurrence {
+  return {
+    id: "skip-1",
+    automationId: "automation-1",
+    automationName: "Nightly sweep",
+    projectId: "p1",
+    dueAt: 5,
+    missedCount: 1,
+    reason: { kind: "app-closed" },
+    recordedAt: 40,
+    ...overrides,
+  };
+}
+
 const doors = {
   list: vi.fn(),
   runsForProject: vi.fn(),
+  skipsForProject: vi.fn(),
   enablement: vi.fn(),
   setEnabled: vi.fn(),
   create: vi.fn(),
@@ -105,10 +121,12 @@ const doors = {
 async function mount(seed: {
   automations?: Automation[];
   runs?: AutomationRun[];
+  skips?: AutomationSkippedOccurrence[];
   enabled?: string[];
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
+  doors.skipsForProject.mockResolvedValue({ ok: true, skips: seed.skips ?? [] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
   doors.setEnabled.mockResolvedValue({
     ok: true,
@@ -152,11 +170,13 @@ beforeEach(() => {
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationFromListing).mockReset();
+  vi.mocked(runSkippedOccurrence).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
     byProject: {},
     runsByProject: {},
+    skipsByProject: {},
     enabledIds: [],
     editor: null,
   });
@@ -377,5 +397,61 @@ describe("run history", () => {
       projectId: "p1",
       ticketId: null,
     });
+  });
+});
+
+describe("schedules (VC-130)", () => {
+  const NIGHTLY = {
+    kind: "schedule" as const,
+    schedule: { preset: "daily" as const, hour: 21, minute: 0, timeZone: "Europe/London" },
+  };
+
+  it("prints a scheduled row's whole sentence, zone included", async () => {
+    await mount({ automations: [automation({ trigger: NIGHTLY })] });
+    // The stored zone is shown ALWAYS (VC-112) — a row that hid it would leave
+    // a reader unable to tell whose 21:00 this is.
+    expect(text()).toContain("Every day at 21:00 Europe/London");
+    expect(text()).not.toContain("Only when I run it");
+  });
+
+  it("shows a Skipped occurrence in the Run history, never as a silence", async () => {
+    await mount({
+      automations: [automation({ trigger: NIGHTLY })],
+      runs: [run({ createdAt: 1 })],
+      skips: [skip({ dueAt: 5, missedCount: 3 })],
+    });
+
+    expect(text()).toContain("Nightly sweep");
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Volli wasn’t running");
+    // One row per gap, saying how wide the gap was.
+    expect(text()).toContain("3 occurrences");
+  });
+
+  it("offers Run now on a skip, and starts ONE Run at the Project", async () => {
+    await mount({ skips: [skip({ missedCount: 50 })] });
+
+    await act(async () => {
+      button("Run Nightly sweep now").click();
+    });
+
+    // Fifty missed occurrences, one Run: a missed occurrence is never replayed
+    // (VC-112), and this is the by-hand recovery offered instead.
+    expect(vi.mocked(runSkippedOccurrence)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runSkippedOccurrence)).toHaveBeenCalledWith({
+      automationId: "automation-1",
+      automationName: "Nightly sweep",
+      projectId: "p1",
+    });
+  });
+
+  it("says a refused Run was refused, and quotes the reason", async () => {
+    await mount({
+      skips: [
+        skip({ reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." } }),
+      ],
+    });
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Choose a model.");
   });
 });

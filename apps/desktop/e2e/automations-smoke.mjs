@@ -79,6 +79,11 @@ try {
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
+      // "Nothing else" is a VALUE, not an absent field (VC-128): the door
+      // refuses a create that leaves the Trigger off, because an optional
+      // field can only mean the default on a transport that survives
+      // `undefined` (docs/BOUNDARIES.md rule 3).
+      trigger: { kind: "none" },
       runtime: null,
     });
     return result.ok ? result.automation : { fail: result.error };
@@ -107,6 +112,7 @@ try {
           projectId,
           name: "   ",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: null,
         });
         const pin = await window.api.automations.create({
@@ -114,6 +120,7 @@ try {
           projectId,
           name: "Pinned",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: { providerId: "nope", modelId: "ghost", reasoningLevel: "high" },
         });
         const listed = await window.api.automations.list({ projectId });
@@ -140,6 +147,7 @@ try {
         projectId: null,
         name: "A global one",
         instructions: "/tdd",
+        trigger: { kind: "none" },
         runtime: null,
       });
       if (!global.ok) return [global.error];
@@ -159,6 +167,7 @@ try {
         automationId,
         name: "Review sweep v2",
         instructions: "/review again",
+        trigger: { kind: "none" },
         runtime: null,
       });
       return result.ok ? result.automation.name : result.error;
