@@ -37,11 +37,11 @@ catalog:
   "@types/react": ^19.2.18
   "@types/react-dom": ^19.2.5
   typescript: ~7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.5
-  vite-plus: 0.2.5
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
+  vite-plus: 0.3.0
   # Must match the vitest bundled in vite-plus (vp fails fast on version
   # skew) — bump in lockstep with the vite-plus pin above.
-  "@vitest/coverage-v8": 4.1.10
+  "@vitest/coverage-v8": 4.1.11
 
 # Supply-chain guard: refuse to install any version published within this many
 # minutes (relaxed from the vp default of 1440 = 24h). 60m still blocks the
@@ -50,17 +50,14 @@ catalog:
 # pins into the exclude list below when a fresh release must land immediately.
 minimumReleaseAge: 60
 
+# An entry here earns its place only while its version is still inside the
+# window above; once the release ages out, the exclude does nothing, because an
+# exclude for a version nobody installs is inert. So entries are dropped when
+# the tree no longer holds that exact version, and the list keeps only versions
+# it can still be read against. The vite-plus 0.3.0 bump (VC-212) needed no
+# entries of its own: 0.3.0 published 2026-08-24, days rather than minutes
+# before it landed here, so it cleared the gate unaided.
 minimumReleaseAgeExclude:
-  - "@voidzero-dev/vite-plus-core@0.2.5"
-  - "@voidzero-dev/vite-plus-darwin-arm64@0.2.5"
-  - "@voidzero-dev/vite-plus-darwin-x64@0.2.5"
-  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.2.5"
-  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.2.5"
-  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.2.5"
-  - "@voidzero-dev/vite-plus-linux-x64-musl@0.2.5"
-  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.2.5"
-  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.2.5"
-  - vite-plus@0.2.5
   - "@typescript/typescript-aix-ppc64@7.0.2"
   - "@typescript/typescript-darwin-arm64@7.0.2"
   - "@typescript/typescript-darwin-x64@7.0.2"
@@ -82,9 +79,6 @@ minimumReleaseAgeExclude:
   - "@typescript/typescript-win32-arm64@7.0.2"
   - "@typescript/typescript-win32-x64@7.0.2"
   - typescript@7.0.2
-  - astro@7.1.1
-  - miniflare@4.20260714.0
-  - wrangler@4.112.0
 
 overrides:
   vite: "catalog:"
