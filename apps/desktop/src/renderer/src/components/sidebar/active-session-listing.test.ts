@@ -1,6 +1,7 @@
 import {
   createSessionHarnessState,
   HARNESS_EVENT_GRACE_MS,
+  PERSON_STARTED,
   receiveHarnessEvent,
   type ChatSessionRecord,
   type CreateSessionHarnessStateInput,
@@ -805,6 +806,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
 
@@ -850,6 +852,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      provenance: PERSON_STARTED,
       target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
     } satisfies ActiveSessionRow;
 
@@ -880,6 +883,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" },
     } satisfies ActiveSessionRow;
 
@@ -2262,6 +2266,7 @@ function previousRow(
     title: "Chat",
     kind: "chat",
     endedOrQuietAt: 1_000,
+    provenance: PERSON_STARTED,
     target: null,
     cleaned: false,
     ...overrides,

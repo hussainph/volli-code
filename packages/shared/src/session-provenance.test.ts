@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  automationMarkName,
   automationProvenanceName,
   drawsSessionProvenanceMark,
   PERSON_STARTED,
@@ -48,6 +49,25 @@ describe("automationProvenanceName", () => {
 
   it("names the act for an Unbound Run, which has no record to name", () => {
     expect(automationProvenanceName({ automationName: null })).toBe("Run once");
+  });
+});
+
+describe("automationMarkName", () => {
+  it("says nothing for a row that is not a Run's", () => {
+    expect(automationMarkName(PERSON_STARTED, "Plan the migration")).toBeNull();
+    expect(automationMarkName(PARENT, "Plan the migration")).toBeNull();
+  });
+
+  // The ordinary Run: `run.ts` titles the Session after its Automation, so the
+  // word is already the largest text on the row.
+  it("does not repeat a name the row's title already is", () => {
+    expect(automationMarkName(AUTOMATION, "Nightly sweep")).toBeNull();
+    expect(automationMarkName(AUTOMATION, "  nightly SWEEP ")).toBeNull();
+  });
+
+  it("prints the name once the title no longer carries it", () => {
+    expect(automationMarkName(AUTOMATION, "Fixing the flaky worktree test")).toBe("Nightly sweep");
+    expect(automationMarkName(UNBOUND, "Fixing the flaky worktree test")).toBe("Run once");
   });
 });
 

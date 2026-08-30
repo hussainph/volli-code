@@ -7,7 +7,10 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   errorMessage,
+  PERSON_STARTED,
+  sessionProvenanceHoverLine,
   type SessionListingRow,
+  type SessionProvenance,
   type SessionRecord,
   type SkillReference,
 } from "@volli/shared";
@@ -28,6 +31,7 @@ import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -41,6 +45,7 @@ import {
   nextTicketSessionStatusChangeAt,
   sessionRailRowStampAt,
   ticketOutputStamps,
+  ticketSessionProvenance,
   type SessionRailRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
@@ -143,6 +148,7 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
 function SessionRow({
   kind,
   title,
+  provenance,
   trailing,
   editing,
   onActivate,
@@ -154,6 +160,14 @@ function SessionRow({
   kind: "chat" | "terminal";
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
+  /**
+   * Who started this Session (VC-131). The rail is a listing like any other, so
+   * it draws the same mark the sidebar's bands do, from the same component —
+   * the rule is that a Run's Session is distinguishable everywhere a Session
+   * appears, and a rail with its own idea of that would be the second place to
+   * fix when the mark changes.
+   */
+  provenance: SessionProvenance;
   /** Right-edge metadata: live status for current rows, relative end time for history rows. */
   trailing: React.ReactNode;
   editing: boolean;
@@ -188,8 +202,20 @@ function SessionRow({
             onCancel={onCancelRename}
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
-            {title}
+          <span
+            className="flex min-w-0 flex-1 items-center gap-1.5"
+            // The provenance line is the whole mark for a Session another
+            // Session started, and it rides on a node the row already had.
+            title={sessionProvenanceHoverLine(provenance) ?? undefined}
+          >
+            {/* Left of the title rather than after it: this row's right edge is
+                the status column, and a mark that drifted between the title and
+                that column depending on title length would stop being scannable
+                down the list. */}
+            <SessionProvenanceMark provenance={provenance} rowTitle={title} />
+            <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+              {title}
+            </span>
           </span>
         )
       }
@@ -219,6 +245,7 @@ function SessionRow({
 function SessionList({
   rows,
   variant,
+  provenance,
   now,
   ticketId,
   editingId,
@@ -233,6 +260,8 @@ function SessionList({
   rows: readonly SessionRailRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
   variant: "current" | "history";
+  /** Sparse, keyed by Session id — a miss is the resting case (VC-131). */
+  provenance: Readonly<Record<string, SessionProvenance>>;
   /**
    * The clock the History variant's relative stamps are read against. A current
    * row prints no stamp, so for that variant this is unread — the panel hands
@@ -260,6 +289,7 @@ function SessionList({
               key={sessionId}
               kind="chat"
               title={title}
+              provenance={provenance[sessionId] ?? PERSON_STARTED}
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
@@ -294,6 +324,7 @@ function SessionList({
             key={record.id}
             kind="terminal"
             title={title}
+            provenance={provenance[record.id] ?? PERSON_STARTED}
             trailing={
               variant === "current" ? (
                 <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
@@ -537,6 +568,9 @@ export function TicketSessionsPanel({
   }, [ageBoundaryAt, ageNow]);
 
   const listProps = {
+    // Read off the listing rows before the panel splits them into two record
+    // arrays, which is where the row wrapper carrying it is lost (VC-131).
+    provenance: ticketSessionProvenance(rows),
     ticketId,
     editingId,
     setEditingId,

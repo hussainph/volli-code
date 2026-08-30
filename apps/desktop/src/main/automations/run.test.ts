@@ -12,7 +12,9 @@ import { createAutomationRunner } from "./run";
 import type { AutomationRunnerDeps } from "./run";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import { getAutomation, listRunsForTicket, recordAutomationRun } from "../db/automations-repo";
+import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
+import { readSessionProvenance } from "../db/session-provenance-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
@@ -205,6 +207,67 @@ describe("createAutomationRunner", () => {
     ]);
     expect(h.delivered[0]?.commandId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(h.delivered[0]?.messageId).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  // VC-131's fourth acceptance criterion, end to end across the two pieces that
+  // make it true: the Run door hands `mint` the `automation` Actor, and `mint`
+  // records the launch on the Ticket. Production wires those together in
+  // `index.ts` (`recordSessionStarted: recordSessionStartedOnce`), so the fake
+  // Session facade here does the same thing with the actor it is handed rather
+  // than asserting on the argument alone — an argument nobody wrote down is not
+  // a timeline entry.
+  it("records each Run's launch on the Ticket timeline, with the automation Actor", async () => {
+    const h = harness({
+      sessions: {
+        create: async (input) => {
+          const sessionId = `session-${input.operationId}`;
+          if (input.ticketId !== null) {
+            recordSessionStartedOnce(ctx.db, {
+              ticketId: input.ticketId,
+              sessionId,
+              now: 42_000,
+              actor: input.actor ?? { kind: "user" },
+            });
+          }
+          return { sessionId, model: RESOLVED };
+        },
+        attach: async (input) => ({
+          sessionId: input.sessionId,
+          state: "ready" as const,
+          receipt: null,
+          throughSequence: 0,
+        }),
+      },
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      ticketId: h.ticketId,
+    });
+    await h.runner.settled();
+    if (!outcome.ok) throw new Error(outcome.error);
+
+    const started = listTicketEvents(ctx.db, h.ticketId).filter(
+      (event) => event.payload.kind === "session_started",
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]?.actor).toBe("automation");
+    expect(started[0]?.payload).toEqual({
+      kind: "session_started",
+      sessionId: outcome.run.sessionId,
+    });
+
+    // And the same launch, read back as the mark every listing draws. The bolt
+    // and the timeline entry are two readings of one Run, which is the point of
+    // deriving provenance from the records rather than storing it a third time.
+    expect(
+      readSessionProvenance(ctx.db, {
+        sessionId: outcome.run.sessionId,
+        ticketId: h.ticketId,
+      }),
+    ).toEqual({ kind: "automation", automationName: "Two-opinion review" });
   });
 
   it("passes a pinned Runtime whole — model and reasoning together", async () => {

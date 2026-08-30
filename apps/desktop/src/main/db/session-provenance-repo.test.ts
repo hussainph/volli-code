@@ -1,0 +1,260 @@
+import { afterEach, describe, expect, it } from "vite-plus/test";
+import type Database from "better-sqlite3";
+
+import { recordAutomationRun } from "./automations-repo";
+import { recordSessionStartedOnce, recordTicketEvent } from "./events-repo";
+import { insertProject } from "./projects-repo";
+import { readSessionProvenance } from "./session-provenance-repo";
+import { openTestDb, testProject, testTicket } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
+import { insertTicket } from "./tickets-repo";
+
+let ctx: TestDb;
+
+afterEach(() => {
+  ctx.cleanup();
+});
+
+const MODEL = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" };
+
+interface Fixture {
+  db: Database.Database;
+  projectId: string;
+  ticketId: string;
+  session(id: string, title: string | null): string;
+}
+
+function fixture(): Fixture {
+  ctx = openTestDb();
+  const project = testProject();
+  insertProject(ctx.db, project);
+  const ticket = testTicket(project.id);
+  insertTicket(ctx.db, ticket);
+  return {
+    db: ctx.db,
+    projectId: project.id,
+    ticketId: ticket.id,
+    session(id, title) {
+      ctx.db
+        .prepare(
+          "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?,?,?,?,?)",
+        )
+        .run(id, project.id, ticket.id, title, 1_000);
+      return id;
+    },
+  };
+}
+
+describe("readSessionProvenance", () => {
+  it("marks a Run's Session with the Automation that produced it", () => {
+    const f = fixture();
+    f.session("session-run", "Nightly sweep");
+    recordAutomationRun(
+      f.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: f.ticketId,
+        sessionId: "session-run",
+        model: MODEL,
+      },
+      2_000,
+    );
+
+    expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
+      {
+        kind: "automation",
+        automationName: "Nightly sweep",
+      },
+    );
+  });
+
+  // The name snapshot is what survives a record delete (`AutomationRun.automationName`).
+  // An Unbound Run never had one, and the mark says so rather than inventing it.
+  it("marks an Unbound Run with no name", () => {
+    const f = fixture();
+    f.session("session-unbound", null);
+    recordAutomationRun(
+      f.db,
+      {
+        automationId: null,
+        automationName: null,
+        ticketId: f.ticketId,
+        sessionId: "session-unbound",
+        model: MODEL,
+      },
+      2_000,
+    );
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-unbound", ticketId: f.ticketId }),
+    ).toEqual({ kind: "automation", automationName: null });
+  });
+
+  // The Run is asked FIRST because it is the only record that can carry a name:
+  // a Run writes a `session_started` event too, with the `automation` actor and
+  // no room for which Automation ran.
+  it("prefers the Run record over the launch event, which cannot name an Automation", () => {
+    const f = fixture();
+    f.session("session-run", null);
+    recordAutomationRun(
+      f.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: f.ticketId,
+        sessionId: "session-run",
+        model: MODEL,
+      },
+      2_000,
+    );
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-run",
+      now: 2_000,
+      actor: { kind: "automation" },
+    });
+
+    expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
+      {
+        kind: "automation",
+        automationName: "Nightly sweep",
+      },
+    );
+  });
+
+  it("names the parent Session a `session.start` opened this one from", () => {
+    const f = fixture();
+    f.session("session-parent", "Orchestrator");
+    f.session("session-child", null);
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-child",
+      now: 2_000,
+      actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+    });
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-child", ticketId: f.ticketId }),
+    ).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+  });
+
+  it("still marks the child when the parent Session row is gone", () => {
+    const f = fixture();
+    f.session("session-child", null);
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-child",
+      now: 2_000,
+      actor: { kind: "session", sessionId: "session-vanished", ticketId: f.ticketId },
+    });
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-child", ticketId: f.ticketId }),
+    ).toEqual({
+      kind: "session",
+      parentSessionId: "session-vanished",
+      parentTitle: null,
+    });
+  });
+
+  it("leaves a Session a person started completely unmarked", () => {
+    const f = fixture();
+    f.session("session-human", "Plan the migration");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-human",
+      now: 2_000,
+      actor: { kind: "user" },
+    });
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-human", ticketId: f.ticketId }),
+    ).toEqual({ kind: "user" });
+  });
+
+  it("reads a ticketless Session as person-started without touching the log", () => {
+    const f = fixture();
+    expect(readSessionProvenance(f.db, { sessionId: "session-project", ticketId: null })).toEqual({
+      kind: "user",
+    });
+  });
+
+  it("reads a Session with no launch event at all as person-started", () => {
+    const f = fixture();
+    f.session("session-legacy", "Older than the event");
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-legacy", ticketId: f.ticketId }),
+    ).toEqual({ kind: "user" });
+  });
+
+  // The three actors that are not a Session all answer the same way, and none of
+  // them may be read THROUGH into a parent id: an `automation` actor with no Run
+  // behind it, an `unauthenticated` one, and a stored token this build cannot
+  // read at all.
+  it("draws no parent from an actor that is not a Session", () => {
+    const f = fixture();
+    for (const [sessionId, actor] of [
+      ["session-a", "automation"],
+      ["session-b", "unauthenticated"],
+      ["session-c", "{not json"],
+      ["session-d", JSON.stringify({ kind: "automation", sessionId: "session-parent" })],
+      ["session-e", JSON.stringify({ kind: "session" })],
+      ["session-f", JSON.stringify(["session-parent"])],
+      ["session-g", "{}"],
+    ] as const) {
+      // Written straight to the column: `serializeActor` cannot spell a
+      // malformed token, and unreadable history is exactly what this branch is
+      // for — a build that stops recognising a stored actor must fall back to
+      // "no mark", never to a wrong one.
+      f.db
+        .prepare(
+          `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+           VALUES (?, ?, 'session_started', ?, ?, 2000)`,
+        )
+        .run(
+          `event-${sessionId}`,
+          f.ticketId,
+          actor,
+          JSON.stringify({ kind: "session_started", sessionId }),
+        );
+
+      expect(readSessionProvenance(f.db, { sessionId, ticketId: f.ticketId })).toEqual({
+        kind: "user",
+      });
+    }
+  });
+
+  // A launch event belongs to the Ticket it was recorded on, and the read is
+  // scoped by that Ticket for the index it buys. Pinned so a later "optimisation"
+  // that drops the payload comparison cannot start handing one Session's parent
+  // to the Session that started next on the same Ticket.
+  it("does not confuse two Sessions that started on the same Ticket", () => {
+    const f = fixture();
+    f.session("session-parent", "Orchestrator");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-first",
+      now: 2_000,
+      actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+    });
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-second",
+      now: 3_000,
+      actor: { kind: "user" },
+    });
+    // A neighbouring event of another kind, so the `kind` filter is exercised
+    // rather than assumed.
+    recordTicketEvent(f.db, f.ticketId, { kind: "archived" }, 4_000, { kind: "user" });
+
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-second", ticketId: f.ticketId }),
+    ).toEqual({ kind: "user" });
+  });
+});

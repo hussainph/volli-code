@@ -15,6 +15,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { PERSON_STARTED } from "@volli/shared";
 import type { Ticket } from "@volli/shared";
 
 import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
@@ -57,6 +58,7 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
     attention: null,
     waitingOn: null,
     lastActivityAt: 60_000,
+    provenance: PERSON_STARTED,
     target: { kind: "terminal", tabId: "s1", paneId: "p1" },
     ...overrides,
   };
@@ -250,6 +252,7 @@ describe("PreviousBandRow identity", () => {
     title: "Review fixes",
     kind: "chat",
     endedOrQuietAt: 0,
+    provenance: PERSON_STARTED,
     target: null,
     cleaned: false,
   };

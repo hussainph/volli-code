@@ -102,6 +102,31 @@ export function automationProvenanceName(provenance: {
 }
 
 /**
+ * The Automation name a row must PRINT beside its bolt, or `null` when the row
+ * already says it.
+ *
+ * A Run titles its Session after its Automation — `run.ts` hands the Session
+ * start `title: plan.automationName` — so in the ordinary case the name is
+ * already the largest text on the row, and printing it again beside the glyph
+ * would be two copies of one word in a rail VC-112 explicitly asks not to
+ * clutter. The bolt always draws; this decides only whether the word repeats.
+ *
+ * It comes apart exactly where it should. A Session that was auto-titled from
+ * its first turn, renamed by hand, or born of an Unbound Run no longer carries
+ * its origin in its title — and those are precisely the rows where the reader
+ * cannot otherwise tell which Automation is responsible, so the name appears.
+ *
+ * Compared after trimming and case-insensitively, because a title that differs
+ * from its Automation only by whitespace or capitalisation is the same answer
+ * to the reader, and a mark that printed it again would look like a bug.
+ */
+export function automationMarkName(provenance: SessionProvenance, rowTitle: string): string | null {
+  if (provenance.kind !== "automation") return null;
+  const name = automationProvenanceName(provenance);
+  return name.trim().toLowerCase() === rowTitle.trim().toLowerCase() ? null : name;
+}
+
+/**
  * The one line a hover tooltip adds for this Session, or `null` when the row
  * has nothing to add.
  *
