@@ -16,7 +16,7 @@
  *    decision 2's no-redirect rule — so the finished Run becomes a toast whose
  *    action is the door (the shape VC-128's armed window also uses).
  */
-import { errorMessage } from "@volli/shared";
+import { errorMessage, type AutomationRunTarget, type ModelSelection } from "@volli/shared";
 import { toast } from "sonner";
 
 import { runAutomationAction, type RunAutomationAction } from "./run-automation-model";
@@ -31,15 +31,37 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 const pendingCommandIds = new Map<string, string>();
 
 /**
+ * What a lost reply is retried AS.
+ *
+ * A bound Run is identified by its record and its Ticket. An Unbound Run has no
+ * record, so its own Instructions stand in: the same words on the same Ticket
+ * are the same intent and reuse the durable command id, while a person who
+ * edited the box before pressing again means a different Run and gets a new
+ * one. A per-invocation model override is deliberately NOT part of it — running
+ * the same work again on a different model is a second Run, and it takes the
+ * fresh id the missing key gives it.
+ */
+function retryKeyFor(target: AutomationRunTarget, ticketId: string): string {
+  const named =
+    target.kind === "automation" ? target.automationId : `unbound:${target.instructions}`;
+  return `${named}\u0000${ticketId}`;
+}
+
+/** One Run request, as every caller in the renderer spells it. */
+export interface RunRequest {
+  target: AutomationRunTarget;
+  ticketId: string;
+  /** This invocation's Runtime, or `null` to resolve it the ordinary way. */
+  modelOverride: ModelSelection | null;
+}
+
+/**
  * The one Run call. Answers the classified action, or `null` when the
  * transport itself failed — that arm has already toasted, because a person is
  * waiting on a Session and no other surface will tell them.
  */
-async function startRun(input: {
-  automationId: string;
-  ticketId: string;
-}): Promise<RunAutomationAction | null> {
-  const retryKey = `${input.automationId}\u0000${input.ticketId}`;
+async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+  const retryKey = retryKeyFor(input.target, input.ticketId);
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
@@ -60,10 +82,16 @@ async function startRun(input: {
   }
 }
 
-export async function runAutomationOnTicket(input: {
-  automationId: string;
-  ticketId: string;
-}): Promise<void> {
+/**
+ * Run on the Ticket the person is looking at, and open the Session.
+ *
+ * The palette's "run by name", and the ticket rail's own button (VC-129): in
+ * both, the person asked for this Run with the Ticket already in front of them,
+ * so the fresh Session opens as that Ticket's tab rather than announcing itself
+ * in a toast. It is not the listing surfaces' no-redirect case — nothing is
+ * taken away, because the Session lands beside the rail that started it.
+ */
+export async function runAutomationOnTicket(input: RunRequest): Promise<void> {
   const action = await startRun(input);
   if (action === null) return;
   switch (action.kind) {
@@ -102,8 +130,9 @@ export async function runAutomationFromListing(input: {
   ticketDisplayId: string;
 }): Promise<void> {
   const action = await startRun({
-    automationId: input.automationId,
+    target: { kind: "automation", automationId: input.automationId },
     ticketId: input.ticketId,
+    modelOverride: null,
   });
   if (action === null) return;
   switch (action.kind) {

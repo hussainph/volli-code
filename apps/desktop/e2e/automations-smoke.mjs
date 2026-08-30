@@ -79,6 +79,9 @@ try {
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
+      // Every write carries a Trigger since VC-128 — "Nothing else" is the
+      // union's own member rather than an absent field.
+      trigger: { kind: "none" },
       runtime: null,
     });
     return result.ok ? result.automation : { fail: result.error };
@@ -107,6 +110,7 @@ try {
           projectId,
           name: "   ",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: null,
         });
         const pin = await window.api.automations.create({
@@ -114,6 +118,7 @@ try {
           projectId,
           name: "Pinned",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: { providerId: "nope", modelId: "ghost", reasoningLevel: "high" },
         });
         const listed = await window.api.automations.list({ projectId });
@@ -140,6 +145,7 @@ try {
         projectId: null,
         name: "A global one",
         instructions: "/tdd",
+        trigger: { kind: "none" },
         runtime: null,
       });
       if (!global.ok) return [global.error];
@@ -159,6 +165,7 @@ try {
         automationId,
         name: "Review sweep v2",
         instructions: "/review again",
+        trigger: { kind: "none" },
         runtime: null,
       });
       return result.ok ? result.automation.name : result.error;
@@ -174,8 +181,11 @@ try {
         async ({ automationId, ticketId }) => {
           const run = await window.api.automations.run({
             commandId: crypto.randomUUID(),
-            automationId,
+            // A Run names its target since VC-129: a saved Automation here, or
+            // an Unbound Run's own Instructions.
+            target: { kind: "automation", automationId },
             ticketId,
+            modelOverride: null,
           });
           const runs = await window.api.automations.runsForTicket({ ticketId });
           const sessions = await window.api.sessions.listForTicket({ ticketId });

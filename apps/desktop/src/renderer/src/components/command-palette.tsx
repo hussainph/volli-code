@@ -228,8 +228,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   // The palette closes now; the run navigates to the fresh
                   // Session itself the moment main answers (run-automation.ts).
                   void runAutomationOnTicket({
-                    automationId: item.automationId,
+                    target: { kind: "automation", automationId: item.automationId },
                     ticketId: item.ticketId,
+                    // Run by name, on the Automation's own Runtime. The
+                    // per-invocation override lives where a person has already
+                    // stopped to choose (VC-112), not on a name typed in flight.
+                    modelOverride: null,
                   });
                   finishNavigation();
                 }}

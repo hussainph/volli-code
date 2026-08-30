@@ -224,7 +224,74 @@ export type AutomationRunRefusalCode =
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
   | "MODEL_UNAVAILABLE"
+  /** An Unbound Run arrived with nothing to say (VC-129). */
+  | "INSTRUCTIONS_REQUIRED"
   | "RUN_FAILED";
+
+/* --------------------------------------------- unbound Runs (VC-129) ----- */
+
+/**
+ * What a Run names: a saved Automation, or nothing but the Instructions it
+ * carries (VC-112, "One-time work").
+ *
+ * A union rather than a nullable id beside a nullable prose field, because the
+ * two states this spells are the only two that exist: a bound Run reads its
+ * Instructions from the record it names, and an UNBOUND Run has no record to
+ * read them from. A pair of optional fields could spell "neither" (a Run with
+ * nothing to send) and "both" (a Run whose own Instructions silently outrank
+ * the Automation it claims to be) — neither is a thing anyone can mean.
+ *
+ * An Unbound Run writes no file and saves no record beyond the Run itself, so
+ * there is nothing afterwards to name, disable or delete. That is a property of
+ * this shape, not of the surface that produced it: nothing here can be saved,
+ * so no surface holding one has to promise not to save it.
+ */
+export type AutomationRunTarget =
+  | { kind: "automation"; automationId: string }
+  | { kind: "unbound"; instructions: string };
+
+/**
+ * The Automation a target names, or `null` for an Unbound Run — the value that
+ * lands in {@link AutomationRun.automationId}.
+ *
+ * Stated once so a Run's own record, the durable plan behind it and any retry
+ * guard agree about what "names no Automation" is spelled as.
+ */
+export function automationRunTargetId(target: AutomationRunTarget): string | null {
+  return target.kind === "automation" ? target.automationId : null;
+}
+
+/**
+ * What an Unbound Run is called wherever something must print a name: its
+ * history row, and the title of the Session it opens.
+ *
+ * One constant rather than a literal per surface. A Run row reading "Run once"
+ * beside a Session called something else would look like two facts about two
+ * pieces of work, when there is one — and the reason the name is a constant at
+ * all is that an Unbound Run has no record to take a name from.
+ */
+export const UNBOUND_RUN_LABEL = "Run once";
+
+/**
+ * Why an Unbound Run cannot start, or `null` when it can.
+ *
+ * The same rule {@link automationDraftProblem} states for a saved record's
+ * Instructions, and the same reason: a Run delivers its Instructions as its
+ * Session's first message, and the message layer already refuses blank text —
+ * so the Run refuses first, with a sentence about the thing the person is
+ * looking at. Shared for the same reason the draft rule is: the dialog's
+ * disabled Run button and main's refusal are one policy, not two that agree
+ * today.
+ *
+ * There is deliberately no name rule beside it. Naming an Unbound Run is the
+ * one thing it does not do.
+ */
+export function unboundRunProblem(instructions: string): string | null {
+  if (instructions.trim().length === 0) {
+    return "Write Instructions before running — a Run delivers them as its Session's first message.";
+  }
+  return null;
+}
 
 /** What a save must carry. Everything else on {@link Automation} is minted by the store. */
 export interface AutomationDraft {

@@ -10,13 +10,18 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  automationRunTargetId,
   errorMessage,
   expandCommandInvocation,
   isAutomationRuntimePin,
+  unboundRunProblem,
+  UNBOUND_RUN_LABEL,
   type Automation,
   type AutomationCommandReceipt,
   type AutomationRun,
   type AutomationRunRefusalCode,
+  type AutomationRunTarget,
+  type ModelSelection,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -85,12 +90,25 @@ export interface AutomationRunRefusal {
   receipt?: AutomationCommandReceipt;
 }
 
+/**
+ * One Run request, whatever asked for it — the rail, the palette, the board's
+ * armed window, the agent's verb.
+ *
+ * `target` is the union so an Unbound Run (VC-129) travels the same door as a
+ * bound one: one Run, one Session, one Run row, and the only difference is
+ * whether a record supplied the Instructions. `modelOverride` is this
+ * invocation's Runtime and is never stored on anything but the Run's own
+ * resolved model.
+ */
+export interface AutomationRunRequest {
+  commandId: string;
+  target: AutomationRunTarget;
+  ticketId: string;
+  modelOverride: ModelSelection | null;
+}
+
 export interface AutomationRunner {
-  run(input: {
-    commandId: string;
-    automationId: string;
-    ticketId: string;
-  }): Promise<RunAutomationOutcome>;
+  run(input: AutomationRunRequest): Promise<RunAutomationOutcome>;
   /** Resume a persistent first-message intent after any successful Session attach. */
   resumeDeliveryForSession(sessionId: string): Promise<void>;
   /** Recover accepted Run plans that died before their Session/Run projection committed. */
@@ -112,6 +130,7 @@ function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | n
     case "RUN_IN_FLIGHT":
     case "MODEL_REQUIRED":
     case "MODEL_UNAVAILABLE":
+    case "INSTRUCTIONS_REQUIRED":
     case "RUN_FAILED":
       return value;
     default:
@@ -232,7 +251,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         operationId: plan.sessionOperationId,
         projectId: plan.projectId,
         ticketId: plan.ticketId,
-        title: plan.automationName,
+        // An Unbound Run has no record to take a name from, so its Session
+        // wears the one name that IS true of it — the same words its Run row
+        // prints, rather than a second spelling of "nothing named this".
+        title: plan.automationName ?? UNBOUND_RUN_LABEL,
         actor: { kind: "automation" },
         ...(plan.runtime === null
           ? {}
@@ -274,10 +296,13 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
   }
 
   async function replayExistingPlan(
-    input: { commandId: string; automationId: string; ticketId: string },
+    input: AutomationRunRequest,
     plan: AutomationRunPlan,
   ): Promise<RunAutomationOutcome> {
-    if (plan.automationId !== input.automationId || plan.ticketId !== input.ticketId) {
+    if (
+      plan.automationId !== automationRunTargetId(input.target) ||
+      plan.ticketId !== input.ticketId
+    ) {
       return refuse(
         "RUN_FAILED",
         "This command id was already accepted for a different Automation Run.",
@@ -345,20 +370,44 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       }
       if (persistedPlan !== null) return replayExistingPlan(input, persistedPlan);
 
-      const automation = deps.findAutomation(input.automationId);
-      if (automation === undefined) {
-        return refuse("AUTOMATION_NOT_FOUND", "No Automation by that id exists.");
-      }
-      if (automation.runtime !== null && !isAutomationRuntimePin(automation.runtime)) {
-        return refuse(
-          "RUN_FAILED",
-          "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair before running.",
-        );
+      // What this Run will send, and where it came from. An Unbound Run has no
+      // record to read: it carries its own Instructions, saves nothing beyond
+      // the Run, and therefore skips every check that is about a record.
+      let automation: Automation | null = null;
+      let instructions: string;
+      if (input.target.kind === "automation") {
+        const found = deps.findAutomation(input.target.automationId);
+        if (found === undefined) {
+          return refuse("AUTOMATION_NOT_FOUND", "No Automation by that id exists.");
+        }
+        // Refused even when this invocation overrides the Runtime. The override
+        // would indeed replace the corrupt value, but a record whose stored
+        // Runtime cannot be read is a record to repair on the page rather than
+        // one to keep running around — and a rescue that only worked from the
+        // surfaces offering an override would be a second, quieter policy.
+        if (found.runtime !== null && !isAutomationRuntimePin(found.runtime)) {
+          return refuse(
+            "RUN_FAILED",
+            "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair before running.",
+          );
+        }
+        automation = found;
+        instructions = found.instructions;
+      } else {
+        // The shared rule the dialog's disabled Run button already applies — one
+        // policy, checked again here because a door is not a form.
+        const problem = unboundRunProblem(input.target.instructions);
+        if (problem !== null) return refuse("INSTRUCTIONS_REQUIRED", problem);
+        instructions = input.target.instructions;
       }
       const ticket = deps.findTicket(input.ticketId);
       if (ticket === undefined)
         return refuse("TICKET_NOT_FOUND", "The requested Ticket was not found.");
-      if (automation.projectId !== null && automation.projectId !== ticket.projectId) {
+      if (
+        automation !== null &&
+        automation.projectId !== null &&
+        automation.projectId !== ticket.projectId
+      ) {
         return refuse(
           "AUTOMATION_NOT_IN_PROJECT",
           "This Automation belongs to another project and cannot run on this Ticket.",
@@ -385,18 +434,20 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
           // place instead of changing the saved Instructions or refusing work.
           log(`[volli] automation Run could not read the prompt supply: ${errorMessage(error)}`);
         }
-        const expanded = expandCommandInvocation(
-          automation.instructions,
-          supply.templates,
-          supply.skills,
-        );
+        const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
         const accepted = await deps.engine.acceptRun({
           commandId: input.commandId,
-          automation: {
-            id: automation.id,
-            name: automation.name,
-            runtime: automation.runtime,
-          },
+          automation: automation === null ? null : { id: automation.id, name: automation.name },
+          // The per-invocation override wins for THIS Run and is stored nowhere:
+          // VC-112 puts the override on the deliberate surfaces precisely so a
+          // person can spend one Run differently without editing the record.
+          // Without one, the Automation's own Runtime rides (a whole pin, or
+          // `null` to inherit through project and global preferences).
+          runtime:
+            input.modelOverride ??
+            (automation !== null && isAutomationRuntimePin(automation.runtime)
+              ? automation.runtime
+              : null),
           projectId: ticket.projectId,
           ticketId: ticket.id,
           text: expanded.text,

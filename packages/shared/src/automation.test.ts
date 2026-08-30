@@ -7,6 +7,7 @@ import {
   automationDraftProblem,
   automationOwnership,
   automationPinProblem,
+  automationRunTargetId,
   automationTriggerColumns,
   automationTriggersColumn,
   isAutomationRuntimePin,
@@ -14,6 +15,8 @@ import {
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
   parseAutomationTrigger,
+  UNBOUND_RUN_LABEL,
+  unboundRunProblem,
   type Automation,
   type ColumnArming,
 } from "./automation";
@@ -243,5 +246,32 @@ describe("isColumnArrival", () => {
 describe("ARMED_RUN_DELAY_MS", () => {
   it("is the 3500 ms VC-112 ruled, stated once for every surface", () => {
     expect(ARMED_RUN_DELAY_MS).toBe(3500);
+  });
+});
+
+describe("automationRunTargetId", () => {
+  it("names the Automation a bound Run runs", () => {
+    expect(automationRunTargetId({ kind: "automation", automationId: "a1" })).toBe("a1");
+  });
+
+  it("names none for an Unbound Run, which is what its own record stores", () => {
+    expect(automationRunTargetId({ kind: "unbound", instructions: "/sweep" })).toBeNull();
+  });
+});
+
+describe("unboundRunProblem", () => {
+  it("accepts Instructions with something in them", () => {
+    expect(unboundRunProblem("/sweep the diff")).toBeNull();
+  });
+
+  it("refuses blank Instructions, as the saved record's own rule does", () => {
+    expect(unboundRunProblem("")).toContain("Write Instructions");
+    expect(unboundRunProblem("   \n\t ")).toContain("Write Instructions");
+  });
+});
+
+describe("UNBOUND_RUN_LABEL", () => {
+  it("is the one name an Unbound Run wears on every surface", () => {
+    expect(UNBOUND_RUN_LABEL).toBe("Run once");
   });
 });

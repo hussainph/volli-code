@@ -117,11 +117,24 @@ export interface AutomationRunPlan {
   commandId: string;
   /** UUID minted with the accepted Run command. */
   runId: string;
-  automationId: string;
-  automationName: string;
+  /**
+   * The Automation this Run came from, or `null` for an Unbound Run — one that
+   * carries its own Instructions and names no record (VC-112, "One-time work").
+   * A plan written before VC-129 always names one, and reads unchanged: this is
+   * a widened union, not a changed field.
+   */
+  automationId: string | null;
+  /** That Automation's name at launch; `null` for the same reason as above. */
+  automationName: string | null;
   projectId: string;
   ticketId: string;
-  /** A whole pin or inherit, captured when the Run was requested. */
+  /**
+   * The whole pin this Run starts under, or inherit — captured when the Run was
+   * requested. It is the Automation's own Runtime unless the invocation
+   * overrode it (VC-112's per-invocation override), and the plan deliberately
+   * does not record which of the two it was: what a Run owes the future is the
+   * model it RESOLVED, and that lands on the Run itself.
+   */
   runtime: ModelSelection | null;
   /** The composer's expansion at request time, never re-expanded on recovery. */
   text: string;
@@ -265,7 +278,10 @@ export interface AutomationEngine {
   columnArmings(projectId: string): Promise<ColumnArming[]>;
   acceptRun(input: {
     commandId: string;
-    automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
+    /** The Automation being run, or `null` for an Unbound Run. */
+    automation: Pick<Automation, "id" | "name"> | null;
+    /** The resolved Runtime for this invocation — an override, a pin, or inherit. */
+    runtime: ModelSelection | null;
     projectId: string;
     ticketId: string;
     text: string;
@@ -682,6 +698,23 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async acceptRun(input) {
+      // One spelling of the plan for both the in-flight rejection below and the
+      // accepted path under it: two constructions of the same durable record is
+      // how a field added to one of them quietly goes missing from the other.
+      const draftPlan = (): AutomationRunPlan => ({
+        commandId: input.commandId,
+        runId: ports.nextId(),
+        automationId: input.automation?.id ?? null,
+        automationName: input.automation?.name ?? null,
+        projectId: input.projectId,
+        ticketId: input.ticketId,
+        runtime: input.runtime,
+        text: input.text,
+        resources: input.resources,
+        sessionOperationId: ports.nextId(),
+        messageCommandId: ports.nextId(),
+        messageId: ports.nextId(),
+      });
       return ports.ledger.transaction(async (tx) => {
         // First find a replay by command id. It must outrank the Ticket guard:
         // a network retry of the accepted Run is the same Run, not a second
@@ -695,11 +728,11 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           }
           const plan = existing.intent.plan;
           if (
-            plan.automationId !== input.automation.id ||
-            plan.automationName !== input.automation.name ||
+            plan.automationId !== (input.automation?.id ?? null) ||
+            plan.automationName !== (input.automation?.name ?? null) ||
             plan.projectId !== input.projectId ||
             plan.ticketId !== input.ticketId ||
-            !sameJson(plan.runtime, input.automation.runtime) ||
+            !sameJson(plan.runtime, input.runtime) ||
             plan.text !== input.text ||
             !sameJson(plan.resources, input.resources)
           ) {
@@ -735,20 +768,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         const pending = await tx.listRecoverableRunPlans();
         if (pending.some((plan) => plan.ticketId === input.ticketId)) {
           const now = ports.now();
-          const plan: AutomationRunPlan = {
-            commandId: input.commandId,
-            runId: ports.nextId(),
-            automationId: input.automation.id,
-            automationName: input.automation.name,
-            projectId: input.projectId,
-            ticketId: input.ticketId,
-            runtime: input.automation.runtime,
-            text: input.text,
-            resources: input.resources,
-            sessionOperationId: ports.nextId(),
-            messageCommandId: ports.nextId(),
-            messageId: ports.nextId(),
-          };
+          const plan = draftPlan();
           const command: AutomationCommand = {
             id: input.commandId,
             intent: { kind: "automation.run", plan },
@@ -776,20 +796,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
 
         const now = ports.now();
-        const plan: AutomationRunPlan = {
-          commandId: input.commandId,
-          runId: ports.nextId(),
-          automationId: input.automation.id,
-          automationName: input.automation.name,
-          projectId: input.projectId,
-          ticketId: input.ticketId,
-          runtime: input.automation.runtime,
-          text: input.text,
-          resources: input.resources,
-          sessionOperationId: ports.nextId(),
-          messageCommandId: ports.nextId(),
-          messageId: ports.nextId(),
-        };
+        const plan = draftPlan();
         const command: AutomationCommand = {
           id: input.commandId,
           intent: { kind: "automation.run", plan },

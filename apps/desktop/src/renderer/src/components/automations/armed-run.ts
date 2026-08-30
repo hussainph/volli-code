@@ -264,8 +264,11 @@ async function start(pending: PendingArmedRun): Promise<void> {
         // A durable retry identity, minted once per window. A window fires at
         // most once, so it needs no cross-call memory of its own.
         commandId: crypto.randomUUID(),
-        automationId: pending.automationId,
+        target: { kind: "automation", automationId: pending.automationId },
         ticketId: pending.ticketId,
+        // No override on the drag path, ever (VC-112): this Run belongs to a
+        // card someone dropped, and the Runtime is the one the record resolves.
+        modelOverride: null,
       }),
     );
   } catch (error) {

@@ -14,6 +14,7 @@ import {
   selectArmedAutomation,
   selectArmings,
   selectAutomations,
+  selectTicketRuns,
 } from "./automations";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -52,6 +53,7 @@ function stubApi(impl: {
   update?: () => Promise<unknown>;
   delete?: () => Promise<unknown>;
   runsForProject?: () => Promise<unknown>;
+  runsForTicket?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
   armings?: () => Promise<unknown>;
@@ -69,6 +71,7 @@ function stubApi(impl: {
         runsForProject: vi.fn(
           impl.runsForProject ?? (() => Promise.resolve({ ok: true, runs: [] })),
         ),
+        runsForTicket: vi.fn(impl.runsForTicket ?? (() => Promise.resolve({ ok: true, runs: [] }))),
         // The stored set is the ENABLED one (`automations/enablement.ts`), so
         // the resting default here is an empty enabled set: nothing on.
         enablement: vi.fn(
@@ -802,5 +805,57 @@ describe("ensureLoaded", () => {
     await store.getState().ensureLoaded("p1");
 
     expect(window.api.automations.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("refreshTicketRuns", () => {
+  it("caches one Ticket's Runs under that Ticket, beside the project's own history", async () => {
+    const listed = [run(), run({ id: "run-2", automationId: null, automationName: null })];
+    stubApi({ runsForTicket: () => Promise.resolve({ ok: true, runs: listed }) });
+    const store = createAutomationsStore();
+
+    // The rail's read and the page's read are separate slices on purpose: a
+    // Ticket's rail must not depend on a project history nobody opened.
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(store.getState().runsByTicket["t1"]).toEqual(listed);
+    expect(store.getState().runsByProject["p1"]).toBeUndefined();
+    expect(selectTicketRuns(store.getState(), "t1")).toEqual(listed);
+  });
+
+  it("toasts a refusal and leaves the cache empty", async () => {
+    stubApi({ runsForTicket: () => Promise.resolve({ ok: false, error: "Unknown ticket" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(store.getState().runsByTicket["t1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load this ticket's runs: Unknown ticket",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a transport failure the same way", async () => {
+    stubApi({ runsForTicket: () => Promise.reject(new Error("ipc gone")) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load this ticket's runs: ipc gone",
+      expect.anything(),
+    );
+  });
+
+  it("answers one frozen empty list before the first read", () => {
+    const store = createAutomationsStore();
+
+    const first = selectTicketRuns(store.getState(), "t1");
+
+    expect(first).toEqual([]);
+    // The same reference, so a rail subscribing to it does not re-render on
+    // every unrelated store update while the cache is cold.
+    expect(selectTicketRuns(store.getState(), "t2")).toBe(first);
   });
 });

@@ -288,7 +288,7 @@ describe("automation IPC", () => {
         ok: true,
         run: {
           id: "run-1",
-          automationId: input.automationId,
+          automationId: input.target.kind === "automation" ? input.target.automationId : null,
           automationName: "Review",
           ticketId: input.ticketId,
           sessionId: "session-1",
@@ -306,8 +306,9 @@ describe("automation IPC", () => {
 
     const result = await call<AutomationRunStartResult>("volli:automation-run", {
       commandId: randomUUID(),
-      automationId: "automation-1",
+      target: { kind: "automation", automationId: "automation-1" },
       ticketId: ticket.id,
+      modelOverride: null,
     });
     expect(result).toMatchObject({ ok: true, run: { sessionId: "session-1" }, receipt });
   });

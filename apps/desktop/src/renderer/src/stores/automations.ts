@@ -67,6 +67,15 @@ interface AutomationsState {
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
   /**
+   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
+   *
+   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
+   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
+   * project-wide history would make a Ticket's rail depend on a page nobody
+   * visited. Main answers each question with its own indexed read.
+   */
+  runsByTicket: Record<string, readonly AutomationRun[]>;
+  /**
    * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
    * property of this host rather than of any project it can be listed in.
@@ -91,6 +100,8 @@ interface AutomationsState {
   refresh(projectId: string): Promise<void>;
   /** Re-fetches one project's Run history, newest first. Toasts on failure. */
   refreshRuns(projectId: string): Promise<void>;
+  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
+  refreshTicketRuns(ticketId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Toasts on failure. */
   refreshEnablement(): Promise<void>;
   /** Re-fetches one project's armed columns and replaces the cache. Toasts on failure. */
@@ -161,6 +172,7 @@ export function createAutomationsStore() {
     byProject: {},
     armingByProject: {},
     runsByProject: {},
+    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     editor: null,
@@ -223,6 +235,19 @@ export function createAutomationsStore() {
         set((state) => ({ runsByProject: { ...state.runsByProject, [projectId]: result.runs } }));
       } catch (error) {
         toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshTicketRuns(ticketId) {
+      try {
+        const result = await window.api.automations.runsForTicket({ ticketId });
+        if (!result.ok) {
+          toastError(`Couldn't load this ticket's runs: ${result.error}`);
+          return;
+        }
+        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
+      } catch (error) {
+        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
       }
     },
 
@@ -393,6 +418,15 @@ export const useAutomationsStore = createAutomationsStore();
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_ARMINGS: readonly ColumnArming[] = [];
+const NO_RUNS: readonly AutomationRun[] = [];
+
+/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
+export function selectTicketRuns(
+  state: AutomationsState,
+  ticketId: string,
+): readonly AutomationRun[] {
+  return state.runsByTicket[ticketId] ?? NO_RUNS;
+}
 
 /** One project's listable Automations — a frozen empty array before its first read. */
 export function selectAutomations(
