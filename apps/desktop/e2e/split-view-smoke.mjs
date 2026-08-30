@@ -10,26 +10,31 @@
  * and what the chords mean (`lib/split-shortcut.test.ts`). What only a running
  * app can answer is everything between them —
  *
- *   1. ⌘\ over a ticket workspace opens a SECOND PANE: two `data-pane-id`
- *      cells, the new one focused, each named "Pane N of 2".
- *   2. The new pane is EMPTY and offers the surface menu — and, because the
- *      split came from the keyboard, keyboard focus is already on its first
- *      row (the one place in the grid that moves DOM focus on purpose).
- *   3. Its "New terminal" row boots a PTY and the tab LANDS IN THAT PANE: the
- *      new pane draws its own tab strip holding the session tab, and the
- *      primary strip does not.
- *   4. A tab DRAGGED onto another pane's right edge lights that pane's right
- *      zone and, on release, splits it — the drop-zone half of §4, asserted
- *      through the same `data-zone` hooks the component draws.
- *   5. An empty pane's "Close pane" row collapses it.
- *   6. Closing the last tab of the last extra pane collapses the SURFACE back
- *      to one plane — no pane cells named, no ring, exactly the unsplit
- *      workspace this app had before the feature (the compatibility claim).
- *   7. A FILE ROW dragged out of the rail's navigator opens a split without a
- *      tab existing first — the native (HTML5) half of §4, which is a
- *      different transport from the tab drag above and shares only the zones.
- *      Driven with real `DragEvent`s carrying a real `DataTransfer`, because
- *      Chromium does not synthesize HTML5 drags from mouse input.
+ *   1. An unsplit workspace is one UNNAMED plane — the state every existing
+ *      test and every existing smoke is about.
+ *   2. ⌘\ opens a SECOND PANE: two `data-pane-id` cells, the new one focused,
+ *      each named "Pane N of 2".
+ *   3. That pane is EMPTY and offers the surface menu — and, because the split
+ *      came from the keyboard, keyboard focus is already on its first row (the
+ *      one place in the grid that moves DOM focus on purpose).
+ *   4. Its "New terminal" row boots a PTY and the tab LANDS IN THAT PANE: the
+ *      new pane draws its own strip holding the session tab, and the surface's
+ *      strip does not.
+ *   5. A tab DRAGGED onto another pane's right edge lights that pane's right
+ *      zone and, on release, splits it open — the drop-zone half of §4,
+ *      asserted through the same `data-zone` hooks the component draws.
+ *   6. ⇧⌘\ opens an empty pane and its "Close pane" row collapses it.
+ *   7. Closing the last tab of the last extra pane collapses the SURFACE back
+ *      to one unnamed plane — the compatibility claim, read off the DOM.
+ *   8. A FILE ROW dragged out of the rail's navigator opens a split with no tab
+ *      existing first — the native (HTML5) half of §4, a different transport
+ *      from the tab drag above that shares only the zones. Driven with real
+ *      `DragEvent`s, because Chromium does not synthesize HTML5 drags from
+ *      mouse input.
+ *   9. The CENTRE zone means "move here": that tab dropped on the primary pane
+ *      joins it, and the surface collapses back to one plane.
+ *  10. A within-strip reorder still means what it meant before there were panes
+ *      (VC-189) — the surface's one drag context did not change the drop.
  *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -40,8 +45,10 @@
  *
  *   Exit code is non-zero if any numbered check fails.
  */
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { createTicketViaBridge } from "./lib/agent-kit.mjs";
 import {
@@ -65,6 +72,8 @@ if (process.platform !== "darwin") {
   process.exit(1);
 }
 
+const execFileAsync = promisify(execFile);
+
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-split-view-smoke-");
 const { attempt, must, summarize } = createRunner();
 
@@ -77,6 +86,13 @@ const PROJECT = { id: "split-view-project", name: "Split View Project", prefix: 
  */
 const DRAGGED_FILE = "README.md";
 const FILE_ROW = `[data-testid="ticket-files-row"][data-path="${DRAGGED_FILE}"]`;
+/**
+ * A second committed file, for the reorder check's second movable tab. At the
+ * repository ROOT on purpose: the navigator lists one folder at a time, so a
+ * file under `docs/` is not a row until somebody opens `docs/`.
+ */
+const SECOND_FILE = "second.md";
+const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]`;
 
 // ---- DOM probes ------------------------------------------------------------
 
@@ -165,6 +181,18 @@ async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
   if (drop) await page.mouse.up();
 }
 
+/**
+ * The SURFACE's own strip — the primary pane's, drawn above the grid rather
+ * than inside a cell, which is why `readPanes` cannot see it.
+ */
+function readSurfaceStrip(page) {
+  return page.evaluate(() =>
+    Array.from(
+      document.querySelectorAll('[role="tablist"][aria-label="Ticket tabs"] [role="tab"]'),
+    ).map((tab) => (tab.getAttribute("aria-label") ?? "").trim()),
+  );
+}
+
 /** The box of one pane cell, as the pointer sees it. */
 async function paneBox(page, paneId) {
   const box = await page
@@ -192,6 +220,12 @@ async function main() {
     await sleep(800);
 
     const projectPath = await makeGitRepo(scratch, "split-view-");
+    // Two more COMMITTED files, so the ticket's worktree has something to open
+    // beside its README — an untracked file in the main checkout would not be
+    // in the worktree at all.
+    await fs.writeFile(join(projectPath, SECOND_FILE), "# second\n");
+    await execFileAsync("git", ["add", "-A"], { cwd: projectPath });
+    await execFileAsync("git", ["commit", "-q", "-m", "second file"], { cwd: projectPath });
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     const { byName } = await readSeededProjects(page);
     if (!byName[PROJECT.name]?.id) throw new Error("seeded project missing after import");
@@ -335,12 +369,44 @@ async function main() {
 
     // ---- 6. Close pane ------------------------------------------------------
     await attempt(6, "⇧⌘\\ opens an empty pane and its Close pane row collapses it", async () => {
-      const before = await paneCount(page);
+      const before = (await readPanes(page)).map((pane) => pane.paneId);
       await page.keyboard.press("Shift+Meta+\\");
-      await waitUntil("one more pane", async () => (await paneCount(page)) === before + 1);
-      await paneMenuRow(page, "Close pane").click();
-      await waitUntil("the pane to collapse", async () => (await paneCount(page)) === before);
-      return { ok: (await paneCount(page)) === before, detail: `panes=${await paneCount(page)}` };
+      // The app's own signal that the split has SETTLED: a keyboard split ends
+      // by putting focus on the new pane's first row. Waiting for that (rather
+      // than for a pane count, which the store publishes a render earlier)
+      // keeps the click below off a pane that is still being drawn.
+      await waitUntil(
+        "focus to land in the new pane",
+        async () => (await readFocus(page)).slot === "pane-empty-row",
+        { timeout: 4000 },
+      ).catch(() => false);
+      const opened = (await readPanes(page)).map((pane) => pane.paneId);
+      const minted = opened.filter((id) => !before.includes(id));
+
+      // The click is RETRIED, the way `openTicketViaCard` retries its
+      // double-click. On a loaded machine the first trusted click into a pane
+      // that appeared a frame ago is sometimes not delivered to the row (the
+      // event reaches the document but the row's own listeners never run);
+      // clicking again always lands. Worth knowing rather than hiding: see the
+      // note in the PHASE 3 report. A programmatic click on the same node works
+      // every time, so what the check is really asserting — that the row closes
+      // the pane — is not what is flaky.
+      let closed = null;
+      for (let tries = 0; tries < 3 && closed === null; tries += 1) {
+        await paneMenuRow(page, "Close pane").click({ timeout: 8000 });
+        closed = await waitUntil(
+          "the pane to collapse",
+          async () => {
+            const now = (await readPanes(page)).map((pane) => pane.paneId);
+            return minted.every((id) => !now.includes(id)) ? now : null;
+          },
+          { timeout: 2500 },
+        ).catch(() => null);
+      }
+      return {
+        ok: minted.length === 1 && closed !== null && closed.length === before.length,
+        detail: `before=${before.length} minted=${minted.length} after=${closed === null ? "unchanged" : closed.length}`,
+      };
     });
 
     // ---- 7. The surface collapses back to one plane -------------------------
@@ -495,6 +561,77 @@ async function main() {
         };
       },
     );
+    // ---- 9. The centre zone moves rather than splits ------------------------
+    await attempt(
+      9,
+      "the same tab dropped on the primary pane's CENTRE joins it, and the split collapses",
+      async () => {
+        const panes = await readPanes(page);
+        const tab = panes[1]?.tabs[0];
+        if (tab === undefined) return { ok: false, detail: "no tab to move" };
+        const primary = await paneBox(page, panes[0].paneId);
+        await dragTabTo(page, tab, {
+          x: Math.round(primary.x + primary.width / 3),
+          y: Math.round(primary.y + primary.height / 2),
+        });
+        const after = await waitUntil(
+          "the surface to collapse to one plane",
+          async () => {
+            const seen = await readPanes(page);
+            return seen.length === 1 ? seen : null;
+          },
+          { timeout: 6000 },
+        ).catch(() => readPanes(page));
+        const strip = await readSurfaceStrip(page);
+        return {
+          // The pane emptied by the move collapses, which takes the whole split
+          // with it — and the tab is on the surface's own strip again.
+          ok: after.length === 1 && after[0]?.label === null && strip.includes(tab),
+          detail: `panes=${after.length} strip=${JSON.stringify(strip)}`,
+        };
+      },
+    );
+
+    // ---- 10. A within-strip reorder still means what it meant ---------------
+    await attempt(10, "a drag inside one strip reorders it, exactly as before panes", async () => {
+      const aside = page.locator("aside");
+      // Pin the file already open (double-click its row), then preview a second
+      // one beside it — a preview tab would otherwise be replaced, not joined.
+      await aside.locator(FILE_ROW).dblclick();
+      await aside.locator(SECOND_ROW).click();
+      const before = await waitUntil(
+        "two file tabs on the surface's strip",
+        async () => {
+          const strip = await readSurfaceStrip(page);
+          return strip.includes("README.md") && strip.includes("second.md") ? strip : null;
+        },
+        { timeout: 8000 },
+      ).catch(() => null);
+      if (before === null) return { ok: false, detail: "never got two file tabs" };
+
+      const target = await page
+        .getByRole("tab", { name: before[1], exact: true })
+        .first()
+        .boundingBox();
+      if (target === null) return { ok: false, detail: "no box for the leading tab" };
+      // Drag the trailing tab onto the leading one: the pair swaps.
+      await dragTabTo(page, before[2], {
+        x: Math.round(target.x + target.width / 2),
+        y: Math.round(target.y + target.height / 2),
+      });
+      const after = await waitUntil(
+        "the strip to reorder",
+        async () => {
+          const strip = await readSurfaceStrip(page);
+          return strip[1] === before[2] ? strip : null;
+        },
+        { timeout: 6000 },
+      ).catch(() => readSurfaceStrip(page));
+      return {
+        ok: after[0] === before[0] && after[1] === before[2] && after[2] === before[1],
+        detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+      };
+    });
   } finally {
     await closeAppBounded(app).catch(() => {});
     await cleanup();
