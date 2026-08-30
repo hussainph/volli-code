@@ -308,6 +308,8 @@ describe("createAutomationRunner", () => {
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "openai", modelId: "gpt-5" },
       reasoningLevel: "medium",
+      // And recorded rather than validated: see the unavailable-pin case below.
+      whenUnavailable: "record",
     });
   });
 
@@ -470,7 +472,53 @@ describe("createAutomationRunner", () => {
     expect(h.creates).toEqual([]);
   });
 
-  it("keeps a later-unavailable pin on the existing Session failure path and records no Run projection", async () => {
+  it("opens a Session for a pin that has become unavailable, instead of refusing at the door", async () => {
+    // VC-112: "a pinned model that has since become unavailable does not
+    // silently fall back — let the Session fail through the existing error
+    // path rather than building a second failure surface", and VC-133: that
+    // Run "lands in `error` and is covered by the same rule".
+    //
+    // Neither is reachable from a door-time refusal, because a refusal creates
+    // nothing to land in `error` and nothing to notify about. So this door
+    // asks the Session facade to RECORD the Runtime, and the attach raises the
+    // `configuration_invalid` Attention that is `error`. The unattended doors
+    // are why it matters: a refusal returned to the schedule timer or to
+    // another Session's tool call is a sentence nobody reads.
+    const h = harness();
+    const automation = await savedAutomation(h, {
+      runtime: { providerId: "retired-provider", modelId: "retired-model", reasoningLevel: "high" },
+    });
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    expect(h.creates[0]?.modelOverride).toEqual({
+      model: { providerId: "retired-provider", modelId: "retired-model" },
+      reasoningLevel: "high",
+      whenUnavailable: "record",
+    });
+    // A Run row exists, bound to a Session — which is the thing a person can
+    // open, the thing the dot reads, and the thing the notification names.
+    // (What that recorded selection then IS, the Session facade answers, and
+    // `sessions.test.ts` pins it; this fake echoes its own resolved model.)
+    const [run] = listRunsForTicket(ctx.db, h.ticketId);
+    expect(run?.sessionId).toBe("session-1");
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
+  });
+
+  it("still speaks plainly if the Session facade refuses an unavailable model anyway", async () => {
+    // The door no longer asks for validation, but `Sessions` is a port: an
+    // implementation that refuses regardless must still produce this Run
+    // vocabulary rather than a `RUN_FAILED` shrug, and the refusal must be
+    // terminal so a lost response replays the receipt instead of minting a
+    // second Session.
     const h = harness({
       sessions: {
         create: async () => {
@@ -501,8 +549,6 @@ describe("createAutomationRunner", () => {
         attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
-    // A lost response retries the same terminal receipt, not a generic
-    // RUN_IN_FLIGHT refusal and not another Session-create attempt.
     await expect(
       h.runner.run({
         commandId,
@@ -585,6 +631,7 @@ describe("createAutomationRunner", () => {
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoningLevel: "high",
+      whenUnavailable: "record",
     });
     // ...and the record keeps the Runtime it was saved with.
     expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({
@@ -609,6 +656,7 @@ describe("createAutomationRunner", () => {
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoningLevel: "high",
+      whenUnavailable: "record",
     });
   });
 

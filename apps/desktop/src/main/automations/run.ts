@@ -386,6 +386,27 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
                   modelId: plan.runtime.modelId,
                 },
                 reasoningLevel: plan.runtime.reasoningLevel,
+                // VC-112: "a pinned model that has since become unavailable
+                // does not silently fall back — let the Session fail through
+                // the existing error path rather than building a second
+                // failure surface." So this Run's Runtime is RECORDED as
+                // asked and the attach is what refuses it (VC-133).
+                //
+                // A door-time refusal would have been the second failure
+                // surface: no Session, no Run row, nothing on the Automations
+                // page, and — for the two doors with nobody behind them, the
+                // schedule timer and the agent verb — a returned error string
+                // that no person is on the other end of. Recorded, the same
+                // fact becomes a Session in `error` with the failing model in
+                // its history, which is what the dot reads, what the Run row
+                // links to, and what makes VC-133's "lands in `error` and is
+                // covered by the same rule" true rather than aspirational.
+                //
+                // It is also what the INHERITED path already did: a configured
+                // default that has gone stale is not inspected at mint either.
+                // Pin and inherit are meant to be interchangeable answers to
+                // one question, so they may not fail in two different places.
+                whenUnavailable: "record" as const,
               },
             }),
       });
@@ -751,6 +772,17 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
   };
 }
 
+/**
+ * A Session start that failed, as a Run refusal.
+ *
+ * `MODEL_UNAVAILABLE` is no longer something THIS host asks for — `executePlan`
+ * records its Runtime rather than having it validated — but the arm stays for
+ * two live reasons. {@link Sessions} is a port, so an implementation that
+ * refuses anyway must still produce a sentence rather than a `RUN_FAILED`
+ * shrug; and the code remains durable vocabulary, because a Run rejected under
+ * it by an earlier build is still in the ledger and its command id may still
+ * be replayed (`runRefusalCode` reads that stored code back).
+ */
 function mapSessionStartFailure(error: unknown): AutomationRunRefusal {
   if (error instanceof StructuredSessionsError) {
     if (error.code === "DEFAULT_MODEL_REQUIRED") return refuse("MODEL_REQUIRED", error.message);

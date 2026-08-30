@@ -316,8 +316,8 @@ export interface AutomationCommandReceipt {
 /**
  * Why a Run request was refused, as vocabulary rather than prose: transports
  * carry a code beside the sentence so surfaces classify without string
- * matching. `MODEL_REQUIRED` and `MODEL_UNAVAILABLE` are the Session start's
- * own refusals passing through — the existing error path, never a new one.
+ * matching. `MODEL_REQUIRED` is the Session start's own refusal passing
+ * through — the existing error path, never a new one.
  */
 export type AutomationRunRefusalCode =
   | "AUTOMATION_NOT_FOUND"
@@ -327,6 +327,16 @@ export type AutomationRunRefusalCode =
   | "PROJECT_NOT_FOUND"
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
+  /**
+   * Retained vocabulary, no longer minted by the Run door (VC-133).
+   *
+   * A Run's Runtime is now RECORDED as asked and refused by the attach, so an
+   * unavailable pin arrives as a Session in `error` rather than as this code —
+   * VC-112's "let the Session fail through the existing error path". The word
+   * stays because rejections carrying it are durable: a Run an earlier build
+   * refused this way is still in the ledger, and replaying its command id must
+   * still answer with the code that was stored.
+   */
   | "MODEL_UNAVAILABLE"
   /** An Unbound Run arrived with nothing to say (VC-129). */
   | "INSTRUCTIONS_REQUIRED"

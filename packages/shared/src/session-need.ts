@@ -34,10 +34,17 @@
  *    for a rate limit is how a person learns to switch notifications off.
  *
  * This is what makes VC-112's model clause true without a second failure
- * surface: a Run whose pinned model has become unavailable fails its attach with
- * `configuration_invalid` (`session-runtime/pi-adapter.ts`), which is one of the
- * three below, so it lands in `error` and rides this same rule. VC-112 rejected
- * "a dedicated Run failed to start surface" for precisely that reason.
+ * surface: a Run whose pinned model has become unavailable fails its ATTACH
+ * with `configuration_invalid` (`session-runtime/pi-adapter.ts`), which is one
+ * of the three below, so it lands in `error` and rides this same rule. VC-112
+ * rejected "a dedicated Run failed to start surface" for precisely that reason.
+ *
+ * The attach is where that failure lands only because the Run door declines to
+ * pre-empt it: `automations/run.ts` records its Runtime
+ * (`SessionModelOverride.whenUnavailable`) instead of asking Model Access to
+ * validate it, so the Session exists to be in `error` at all. A door-time
+ * refusal would have left nothing for this predicate to answer about — which
+ * is exactly the gap that shipped first and had to be closed.
  *
  * Pure and transport-free like its neighbours: the host reads a projection it
  * already holds and asks this one question of it.
