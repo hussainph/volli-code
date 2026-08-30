@@ -11,12 +11,14 @@
 import type {
   AutomationArmingsResult,
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationIpcChannel,
   AutomationResult,
   AutomationRunInput,
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  AutomationSetEnabledResult,
 } from "../../ipc/contract";
 import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
@@ -79,6 +81,16 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       service.armings(input.projectId),
 
     "volli:automation-arm": (input): AutomationArmingsResult => service.arm(input),
+    "volli:automation-runs-for-project": (input): AutomationRunsResult =>
+      service.runsForProject(input.projectId),
+
+    "volli:automation-enablement": async (): Promise<AutomationEnablementResult> => ({
+      ok: true,
+      enabledAutomationIds: await service.enabledAutomationIds(),
+    }),
+
+    "volli:automation-set-enabled": async (input): Promise<AutomationSetEnabledResult> =>
+      service.setEnabled(input),
   };
 
   registerGuardedIpcHandlers(AUTOMATION_IPC, handlers);

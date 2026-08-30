@@ -24,8 +24,7 @@ import {
   type SessionUsageScope,
 } from "@volli/shared";
 
-import { ProjectUsageBlock } from "@renderer/components/usage/project-usage-block";
-import { SessionUsageFacts } from "@renderer/components/usage/session-usage-facts";
+import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
@@ -70,13 +69,20 @@ function useSettleSignal(): string {
  * screen and only announces `loading` when there is nothing to show yet. So a
  * remount paints the old figure immediately and replaces it when the read
  * lands — no flicker, and no lie.
+ *
+ * `null` IS A QUERY. Home's card reports the Session in front, and there is
+ * routinely no Session in front — the Board tab, a file tab, a terminal. A
+ * conditional hook is not available to express that, and a placeholder scope
+ * would spend an indexed read announcing that nothing is selected, so the
+ * absent case travels as a null query that reads nothing and answers null.
  */
-function useUsageReport(query: UsageQuery): SessionUsageReport | null {
-  const key = usageKey(query.scope, query.windowMs, query.groupBy);
-  const entry = useUsageStore((state) => state.byQuery[key]);
+function useUsageReport(query: UsageQuery | null): SessionUsageReport | null {
+  const key = query === null ? null : usageKey(query.scope, query.windowMs, query.groupBy);
+  const entry = useUsageStore((state) => (key === null ? undefined : state.byQuery[key]));
   const settleSignal = useSettleSignal();
 
   React.useEffect(() => {
+    if (query === null) return;
     void useUsageStore.getState().refresh(query);
     // `key` stands for the whole query — it is derived from every field of it,
     // so depending on the object as well would re-read on each render.
@@ -92,25 +98,14 @@ function useCostVisible(): boolean {
 }
 
 /**
- * The Session in front, as three more facts in Home's Session block.
+ * Home's usage card: the project rollup, the Session in front, and the window
+ * control they are read through.
  *
- * Renders nothing when the preference is off, when nothing has been metered, or
- * for a Session that is not a chat — see `session-usage-facts.tsx` for why an
- * unmetered Session is silent rather than dashed.
- */
-export function SessionUsageRailFacts({ sessionId }: { sessionId: string }) {
-  const costVisible = useCostVisible();
-  const scope = React.useMemo<SessionUsageScope>(
-    () => ({ kind: "session", sessionId }),
-    [sessionId],
-  );
-  const report = useUsageReport({ scope });
-  if (!costVisible || report === null) return null;
-  return <SessionUsageFacts summary={report.total} />;
-}
-
-/**
- * The project rollup, with its own window control.
+ * ONE COMPONENT FOR BOTH SCOPES since VC-203. They used to be two exports
+ * mounted a section apart, which is why they could drift into two different
+ * drawings of the same kind of number — see `home-usage-block.tsx` for what that
+ * looked like on screen. Reading both here also lets the card decide as a whole
+ * whether it has anything to say.
  *
  * The window is session-local rather than persisted. It is a question someone
  * asks ("what has the last week cost?"), not a standing preference like the
@@ -118,7 +113,14 @@ export function SessionUsageRailFacts({ sessionId }: { sessionId: string }) {
  * time, because a project's all-time total only grows and stops being a number
  * anyone can act on.
  */
-export function ProjectUsageRailBlock({ projectId }: { projectId: string }) {
+export function HomeUsageRailCard({
+  projectId,
+  sessionId,
+}: {
+  projectId: string;
+  /** The chat Session in front, or `null` for the Board, a file tab or a terminal. */
+  sessionId: string | null;
+}) {
   const costVisible = useCostVisible();
   const [window, setWindow] = React.useState<UsageWindow>("30d");
   const scope = React.useMemo<SessionUsageScope>(
@@ -130,6 +132,20 @@ export function ProjectUsageRailBlock({ projectId }: { projectId: string }) {
     windowMs: USAGE_WINDOW_MS[window],
     groupBy: "model",
   });
+  // THROUGH THE SAME WINDOW as the project above it, and that is a correctness
+  // requirement rather than a preference. The card draws this Session as a row
+  // UNDER the project figure, which is a claim that it is part of that figure —
+  // so an unwindowed row could report more than the total it sits beneath (a
+  // long-lived Session read at 7d), or a cost under "No metered model calls
+  // yet". Everything inside one card answers through one lens; the lens is named
+  // on the heading, two lines up, where the reader set it.
+  const sessionScope = React.useMemo<SessionUsageScope | null>(
+    () => (sessionId === null ? null : { kind: "session", sessionId }),
+    [sessionId],
+  );
+  const sessionReport = useUsageReport(
+    sessionScope === null ? null : { scope: sessionScope, windowMs: USAGE_WINDOW_MS[window] },
+  );
   // THE DURABLE PER-PROJECT LISTING, not the open chat tabs. `38 sessions · 24
   // metered` only means anything if the first number counts this project's
   // Sessions and all of them: the resident chat slices are keyed by whatever
@@ -147,7 +163,7 @@ export function ProjectUsageRailBlock({ projectId }: { projectId: string }) {
 
   if (!costVisible || report === null) return null;
   return (
-    <ProjectUsageBlock
+    <HomeUsageBlock
       summary={report.total}
       models={groupRows(report, modelLabel)}
       // The larger of the two, because the listing can lag a Session that has
@@ -156,6 +172,11 @@ export function ProjectUsageRailBlock({ projectId }: { projectId: string }) {
       // exist to show, and make an honest gap look like a cheap project.
       sessionCount={Math.max(sessionCount, report.meteredSessionCount)}
       meteredSessionCount={report.meteredSessionCount}
+      // The block renders no row for a Session that metered nothing, so a
+      // terminal companion and a chat before its first reply both stay silent
+      // rather than dashed — the distinction `formatUsageCost` keeps between
+      // `null` and `"—"`.
+      session={sessionReport?.total ?? null}
       window={window}
       onWindowChange={setWindow}
     />

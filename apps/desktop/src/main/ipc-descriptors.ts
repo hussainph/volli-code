@@ -1227,6 +1227,28 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
     invalidError: "Invalid automation arm request",
   },
+  "volli:automation-runs-for-project": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-enablement": {
+    guard: (args): args is IpcArgs<"volli:automation-enablement"> => args.length === 0,
+    invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-set-enabled": {
+    // A `commandId` like every other write: the projection is machine-local
+    // (`enablement.ts`), the INTENT is a durable command with an event and a
+    // receipt (docs/BOUNDARIES.md rule 5). `enabled` is a value rather than a
+    // toggle, so a replayed command is also the same end state.
+    guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["enabled"] === "boolean",
+    invalidError: "Invalid automation enablement request",
+  },
 };
 
 /** Every channel the automations surface owns, derived — never hand-synced. */

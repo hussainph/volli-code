@@ -285,6 +285,36 @@ export function listRunsForTicket(db: Database.Database, ticketId: string): Auto
   return rows.map(mapRun);
 }
 
+/**
+ * Every Run in one project, newest first — the Automations page's Run history
+ * (VC-127).
+ *
+ * The scope comes from the Run's OWN durable evidence: the Session it opened,
+ * whose `project_id` is `NOT NULL` and was written when the Run was recorded.
+ * Not through the Automation — a global Automation is listable in every
+ * project, but a Run it produced happened in ONE of them, and listing it in a
+ * second project's history would be a door into work done elsewhere.
+ *
+ * Deliberately not an inner join on live Tickets either. `automation_runs`
+ * orphans `ticket_id` exactly as `sessions.ticket_id` does, so a Ticket delete
+ * would erase a Run from every project's history while its Session, its
+ * resolved model and its first message all survive — history that quietly
+ * disappears is worse than history that names something gone. The same
+ * evidence is what lets a Run that names no Ticket at all (VC-112's
+ * project-target schedule Runs, VC-130) be filed here without a second
+ * scoping rule.
+ */
+export function listRunsForProject(db: Database.Database, projectId: string): AutomationRun[] {
+  const rows = prepared<[string], AutomationRunRow>(
+    db,
+    `SELECT automation_runs.* FROM automation_runs
+       JOIN sessions ON sessions.id = automation_runs.session_id
+      WHERE sessions.project_id = ?
+      ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
+  ).all(projectId);
+  return rows.map(mapRun);
+}
+
 /** The newest Run on a Ticket, or undefined — retained for older read-only callers. */
 export function latestRunForTicket(
   db: Database.Database,

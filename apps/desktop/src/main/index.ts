@@ -76,6 +76,7 @@ import {
   getAutomation,
   listAutomationsForProject,
   listColumnArmings,
+  listRunsForProject,
   listRunsForTicket,
   setColumnArming,
 } from "./db/automations-repo";
@@ -1126,6 +1127,7 @@ app.whenReady().then(async () => {
           listColumnArmings: (projectId) => listColumnArmings(sessionDb, projectId),
           setColumnArming: (input) => setColumnArming(sessionDb, input, Date.now()),
           clearColumnArming: (input) => clearColumnArming(sessionDb, input),
+          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),

@@ -1,41 +1,42 @@
 /**
- * The Ticket rail's USAGE card — what this Ticket cost, and which of its
+ * The Ticket rail's usage card — what this Ticket cost, and which of its
  * Sessions spent it.
  *
- * WHY THE PER-SESSION BREAKDOWN LIVES IN THIS CARD'S POPOVER. The Ticket rail
- * has no "session in front" block — it is Repository, then Properties, then a
- * roster — so a ticket Session's own cost has nowhere obvious to go. The two
- * alternatives were both worse: adding a facts block would duplicate Home's
- * Session block one rail over, and hanging a figure off each roster row would
- * put a second trailing number on rows that were deliberately reduced to one
- * line, where status and age already outrank cost as navigation facts.
+ * WHY THE PER-SESSION BREAKDOWN LIVES BEHIND A ROW. The Ticket rail has no
+ * "session in front" block — it is Repository, then Properties, then a roster —
+ * so a ticket Session's own cost has nowhere obvious to go. The two alternatives
+ * were both worse: adding a facts block would duplicate Home's Session block one
+ * rail over, and hanging a figure off each roster row would put a second
+ * trailing number on rows that were deliberately reduced to one line, where
+ * status and age already outrank cost as navigation facts.
  *
- * A popover on the aggregate is the placement that adds no block and touches no
- * row, and it happens to be the honest shape of the question: "which Session on
- * this Ticket cost the most" is a breakdown OF this total, so it belongs behind
- * this total.
+ * A breakdown OF this total belongs behind this total, and since VC-203 it is
+ * behind its own row rather than behind the whole card: "N sessions" is the
+ * question the popover answers, so the row that opens it is the one that asks
+ * it. That also frees the face to be a figure rather than a trigger with four
+ * lines of cargo.
  *
- * THERE IS NO BY-MODEL LIST HERE. The card already names the top model, and the
- * Home rail's Project block carries the full ranking. A second copy would be a
- * second opinion about the same money, which is the failure
- * `session-usage-report.ts` refuses at the arithmetic level and this file
- * refuses at the surface level.
+ * THERE IS STILL NO BY-MODEL LIST HERE. The Home rail's Project card carries the
+ * full ranking, and a second copy would be a second opinion about the same
+ * money — the failure `session-usage-report.ts` refuses at the arithmetic level
+ * and this file refuses at the surface level. What the card knows is its TOP
+ * model, which is one fact rather than a ranking, and it says it in the face's
+ * popover where it qualifies the figure instead of costing a line on the card.
  */
+import { ChartDonutIcon } from "@phosphor-icons/react/dist/csr/ChartDonut";
+
 import type { SessionUsageSummary } from "@volli/shared";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { UsageBar, UsageClassRows } from "@renderer/components/usage/usage-bar";
-import { UsageRankRow } from "@renderer/components/usage/project-usage-block";
-import { formatTokens } from "@volli/session-presentation";
-import { cn } from "@renderer/lib/utils";
 import {
-  formatCachedShare,
-  formatUsageCost,
-  totalUsageTokens,
-  usageBasisLine,
-  type UsageGroupRow,
-} from "@renderer/usage/usage-format";
+  UsageBreakdown,
+  UsageBreakdownFact,
+  UsageCard,
+  UsageCardHero,
+  UsageCardRow,
+  UsageRankList,
+} from "@renderer/components/usage/usage-card";
+import { cn } from "@renderer/lib/utils";
+import { formatUsageCost, type UsageGroupRow } from "@renderer/usage/usage-format";
 
 export function TicketUsageBlock({
   summary,
@@ -53,119 +54,39 @@ export function TicketUsageBlock({
   const cost = formatUsageCost(summary);
   // Absent, not empty. A Ticket whose Sessions never called a model has nothing
   // to report, and a card saying so would be furniture on every fresh Ticket in
-  // the project — the same silence the Venue card keeps at zero loose files.
+  // the project — the same silence the repository card keeps at a clean tree.
   if (cost === null) return null;
 
   return (
-    <div className={cn("flex flex-col gap-2", className)}>
-      <SectionHeading as="h3">Usage</SectionHeading>
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Ticket usage ${cost} — open breakdown`}
-            className="flex w-full cursor-pointer flex-col gap-2 rounded-row border border-border bg-card p-4 text-left transition-colors hover:border-border-strong focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+    // `pt-4` on the card's own wrapper rather than on the rail's: this block is
+    // absent for a Ticket that never metered a call, and a wrapper in the rail
+    // that paid the padding would leave the gap behind whether or not anything
+    // arrived to fill it.
+    <div className={cn("pt-4", className)}>
+      <UsageCard testId="ticket-usage-card">
+        <UsageCardHero name="Ticket usage" cost={cost} summary={summary}>
+          <UsageBreakdown title="Ticket usage" summary={summary}>
+            {topModelLabel === null ? null : (
+              <UsageBreakdownFact label="Top model" value={topModelLabel} />
+            )}
+          </UsageBreakdown>
+        </UsageCardHero>
+
+        {sessions.length > 0 ? (
+          <UsageCardRow
+            icon={ChartDonutIcon}
+            label={`${sessions.length} ${sessions.length === 1 ? "session" : "sessions"}`}
+            ariaLabel={`${sessions.length} ${sessions.length === 1 ? "session" : "sessions"} — open the per-session breakdown`}
+            testId="ticket-usage-sessions"
           >
-            <TicketUsageFace
-              summary={summary}
-              cost={cost}
-              sessionCount={sessions.length}
-              topModelLabel={topModelLabel}
-            />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" side="left" className="w-72 p-4">
-          <TicketUsageBreakdown summary={summary} cost={cost} sessions={sessions} />
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-/** The card's own face: the figure, the picture, and the two lines that read it. */
-function TicketUsageFace({
-  summary,
-  cost,
-  sessionCount,
-  topModelLabel,
-}: {
-  summary: SessionUsageSummary;
-  cost: string;
-  sessionCount: number;
-  topModelLabel: string | null;
-}) {
-  const tokens = totalUsageTokens(summary);
-  const cached = formatCachedShare(summary);
-  return (
-    <>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-heading tabular-nums text-foreground">{cost}</span>
-        <span className="shrink-0 text-ui text-muted-foreground tabular-nums">
-          {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
-        </span>
-      </div>
-      {tokens > 0 ? <UsageBar summary={summary} /> : null}
-      {tokens > 0 ? (
-        <span className="text-ui text-muted-foreground tabular-nums">
-          {formatTokens(tokens)} tokens{cached === null ? "" : ` · ${cached} cached`}
-        </span>
-      ) : null}
-      {/* Drops first at the narrow floor: the model is the least load-bearing
-          line on the card, and the bar above it is the cheapest information per
-          pixel the card has. */}
-      {topModelLabel === null ? null : (
-        <span className="w-full truncate text-ui text-muted-foreground group-data-[narrow=true]/rail:hidden">
-          {topModelLabel}
-        </span>
-      )}
-    </>
-  );
-}
-
-function TicketUsageBreakdown({
-  summary,
-  cost,
-  sessions,
-}: {
-  summary: SessionUsageSummary;
-  cost: string;
-  sessions: readonly UsageGroupRow[];
-}) {
-  const cached = formatCachedShare(summary);
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-ui font-medium">Ticket usage</span>
-          <span className="text-ui tabular-nums text-foreground">{cost}</span>
-        </div>
-        <p className="text-ui text-muted-foreground">{usageBasisLine(summary)}</p>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <UsageClassRows summary={summary} />
-        {cached === null ? null : (
-          <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
-            <span className="text-ui text-muted-foreground">Cached input share</span>
-            <span className="text-ui tabular-nums text-foreground">{cached}</span>
-          </div>
-        )}
-      </div>
-
-      {sessions.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <SectionHeading as="p">By session</SectionHeading>
-          <dl className="flex flex-col gap-2">
-            {sessions.map((session) => (
-              // A Session that recorded nothing still appears, at `—`. Dropping
-              // it would make these rows fail to add up to the total above them,
-              // and the reader would have no way to see that a manual companion
-              // is where the missing work went.
-              <UsageRankRow key={session.key} row={session} />
-            ))}
-          </dl>
-        </div>
-      ) : null}
+            {/* A Session that recorded nothing still appears, at `—`. Dropping it
+                would make these rows fail to add up to the total above them, and
+                the reader would have no way to see that a manual companion is
+                where the missing work went. */}
+            <UsageRankList heading="By session" rows={sessions} />
+          </UsageCardRow>
+        ) : null}
+      </UsageCard>
     </div>
   );
 }

@@ -1448,6 +1448,48 @@ export interface AutomationRunInput {
   ticketId: string;
 }
 
+/**
+ * Turning one Automation on or off ON THIS MACHINE (VC-127).
+ *
+ * Enablement is deliberately NOT a field on the {@link Automation} record.
+ * VC-112 puts the shareable half of an Automation in git as a Skill and keeps
+ * the record local; enablement is one step more local still — the same tier as
+ * a column's arming, which that ruling also declares per machine. So its
+ * PROJECTION lives in `app_state`, beside the global runtime-preferences record
+ * that ruling cites, and a project cannot carry it anywhere.
+ *
+ * The INTENT is an ordinary durable command all the same, hence the
+ * `commandId`: docs/BOUNDARIES.md rule 5 governs new domain surfaces, and a
+ * switch that decides whether an Automation fires is one. A retry repeats the
+ * same command and replays its receipt rather than flipping anything twice.
+ *
+ * It governs what starts an Automation BESIDES a person. Running by hand is
+ * universal (VC-112), so an Automation that is off is still runnable from
+ * every surface that lists it — it simply never fires on its own.
+ */
+export interface AutomationSetEnabledInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  enabled: boolean;
+}
+
+/**
+ * The ENABLED set, whole, rather than one automation's boolean.
+ *
+ * Whole, so a caller never reconstructs what it now believes from what it just
+ * asked for. Enabled rather than disabled, because VC-112 rules that a machine
+ * fires nothing until someone turns something on there: absent has to mean
+ * off, and a disabled-set shape cannot tell "never asked here" from "on".
+ */
+export type AutomationEnablementResult = Result<{ enabledAutomationIds: string[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetEnabledResult = Result<{
+  enabledAutomationIds: string[];
+  receipt: AutomationCommandReceipt;
+}>;
+
 export type AutomationsResult = Result<{ automations: Automation[] }>;
 export type AutomationResult = Result<{
   automation: Automation;
@@ -1504,6 +1546,24 @@ export interface VolliAutomationIpcContract {
   };
   /** Arms one column with one offered Automation, or disarms it. */
   "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmingsResult };
+  /**
+   * Every Run in this project, newest first — the Automations page's Run
+   * history (VC-127). Scoped through each Run's own durable evidence (the
+   * Session it opened, which names the project) rather than through the
+   * Automation: a global Automation is listable everywhere, but a Run it
+   * produced happened in ONE project.
+   */
+  "volli:automation-runs-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationRunsResult;
+  };
+  /** Which Automations are switched on on this machine. */
+  "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
+  /** Switches one Automation on or off here, and answers with the whole new set. */
+  "volli:automation-set-enabled": {
+    args: [input: AutomationSetEnabledInput];
+    result: AutomationSetEnabledResult;
+  };
 }
 
 export type AutomationIpcChannel = keyof VolliAutomationIpcContract;

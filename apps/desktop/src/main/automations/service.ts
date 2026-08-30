@@ -28,6 +28,7 @@ export interface AutomationServiceDeps {
   listColumnArmings(projectId: string): ColumnArming[];
   setColumnArming(input: { projectId: string; status: TicketStatus; automationId: string }): void;
   clearColumnArming(input: { projectId: string; status: TicketStatus }): void;
+  runsForProject(projectId: string): AutomationRun[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
 }
@@ -48,6 +49,15 @@ export type AutomationDeleteOutcome =
 export type AutomationArmingOutcome =
   | { ok: true; armings: ColumnArming[] }
   | { ok: false; error: string };
+
+export type AutomationRunHistoryOutcome =
+  | { ok: true; runs: AutomationRun[] }
+  | { ok: false; error: string };
+
+/** The whole machine-local set after the write, plus the receipt that changed it. */
+export type AutomationEnablementOutcome =
+  | { ok: true; enabledAutomationIds: string[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
 /**
  * The host-facing Automation application service. It owns validation against
@@ -147,6 +157,44 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       });
       deps.onMutation?.({ projectId: input.projectId });
       return { ok: true, armings: deps.listColumnArmings(input.projectId) };
+    },
+
+    /**
+     * The Automations page's Run history. Project-guarded like {@link list}
+     * above and unlike `runsForTicket`: this reads a whole project's work,
+     * so an unknown id is a refusal rather than a convincing empty list.
+     */
+    runsForProject(projectId: string): AutomationRunHistoryOutcome {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, runs: deps.runsForProject(projectId) };
+    },
+
+    /**
+     * Which Automations are switched on ON THIS MACHINE (VC-127).
+     *
+     * Absent means off: VC-112 rules that a machine fires nothing until
+     * someone turns something on there, so "never asked here" and "said no
+     * here" are deliberately one state — see `enablement.ts`.
+     */
+    enabledAutomationIds(): Promise<string[]> {
+      return deps.engine.enabledAutomationIds();
+    },
+
+    /**
+     * Flips one switch. A durable command like every other product write
+     * (docs/BOUNDARIES.md rule 5): what is machine-local is where the
+     * projection LANDS, not whether the intent is recorded. No `onMutation`
+     * fan-out — nothing about the shared record moved, and another window's
+     * list is unchanged by a switch belonging to this host.
+     */
+    async setEnabled(input: {
+      commandId: string;
+      automationId: string;
+      enabled: boolean;
+    }): Promise<AutomationEnablementOutcome> {
+      const outcome = await deps.engine.setEnabled(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, enabledAutomationIds: outcome.value, receipt: outcome.receipt };
     },
 
     async create(input: {

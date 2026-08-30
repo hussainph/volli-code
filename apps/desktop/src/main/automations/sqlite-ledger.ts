@@ -4,6 +4,7 @@ import type { Automation, AutomationRun, PromptResource } from "@volli/shared";
 
 import { getAutomation, getAutomationRun, triggerColumnValue } from "../db/automations-repo";
 import { prepared } from "../db/prepared";
+import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
   AutomationCommand,
   AutomationEvent,
@@ -198,6 +199,21 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     return (
       prepared(this.db, "DELETE FROM automations WHERE id = ?").run(automationId).changes === 1
     );
+  }
+
+  /**
+   * The machine-local half of the projection (VC-127). An `app_state` row
+   * rather than a table because it names THIS HOST rather than the record —
+   * `enablement.ts` states why — and it is written here, inside the same
+   * transaction as the event that decided it, so the switch and the history of
+   * the switch commit together or neither does.
+   */
+  enabledAutomationIds(): readonly string[] {
+    return enabledAutomationIds(this.db);
+  }
+
+  putEnabledAutomationIds(ids: readonly string[], recordedAt: number): readonly string[] {
+    return putEnabledAutomationIds(this.db, ids, recordedAt);
   }
 
   getRun(runId: string): AutomationRun | null {
