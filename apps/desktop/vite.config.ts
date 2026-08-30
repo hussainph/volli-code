@@ -165,6 +165,12 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
+        // to, and where a section truncates behind its "Show all" row. Sliced
+        // with cmdk's own exported filter precisely so the mounted subset can
+        // never disagree with the palette's native ranking — that drift is the
+        // failure no view test would catch.
+        "src/components/command-palette-search.ts",
         // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
         // what a query matches, and whether an invocation previews or pins.
         // Pure `.ts` beside the overlay for the gate's sake — a scope that
