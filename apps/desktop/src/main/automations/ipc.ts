@@ -71,7 +71,17 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
           error: "The Session runtime is not available this launch.",
         };
       }
-      const outcome = await deps.runner.run(input);
+      // ATTENDED, and decided here rather than read off `input` (VC-133).
+      //
+      // Every surface behind this channel is one a person had to act on to
+      // reach: the Ticket rail's split button, the board card's context menu,
+      // the armed column's 3500ms drop window, the command palette. VC-112:
+      // "a column move is attended because a person is right there."
+      //
+      // The renderer does not get to say so — `AutomationRunInput` carries no
+      // attendance field and the guard would reject one. Being this handler is
+      // the evidence, so the fact cannot be forged or forgotten upstream.
+      const outcome = await deps.runner.run({ ...input, attendance: "attended" });
       return outcome;
     },
 
@@ -112,7 +122,12 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
           error: "The Session runtime is not available this launch.",
         };
       }
-      return deps.runner.runForProject(input);
+      // ATTENDED for the same reason as the Ticket door above: the only caller
+      // of this CHANNEL is "Run now" on a Skipped occurrence, which is a person
+      // recovering an evening the app was closed for. The schedule timer runs
+      // the same Automation through the same runner method, but it does not
+      // come through IPC — it is inside main, and it passes `unattended`.
+      return deps.runner.runForProject({ ...input, attendance: "attended" });
     },
   };
 

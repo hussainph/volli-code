@@ -1342,6 +1342,45 @@ CREATE INDEX IF NOT EXISTS idx_automation_arming_automation
 const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGRATION_031_COLUMN_ARMING}`;
 
 /**
+ * Migration 033: a Run's attendance (VC-112's "Notification rule", VC-133).
+ *
+ * One nullable column, because the question it answers is one a person can only
+ * be asked at the moment of the invocation: was somebody there? VC-112 rules
+ * that attendance follows the Trigger and withdraws the per-Automation switch
+ * that would have made this a property of the record, so it belongs on the RUN
+ * and nowhere else.
+ *
+ * NULLABLE with no default rather than `NOT NULL DEFAULT 'attended'`, matching
+ * `automations.trigger_spec` beside it. A backfilled default would be a claim
+ * about historical Runs that nothing observed; NULL is the honest "this build
+ * did not record it", and `parseAutomationRunAttendance` turns that into
+ * `attended` on read — the answer that stays silent. The distinction is not
+ * academic: it keeps the column's meaning and the read's degrade rule in one
+ * place instead of freezing a guess into the rows.
+ *
+ * The CHECK admits only the two words the vocabulary has, so a hand-edited
+ * database cannot introduce a third that the reader would then have to
+ * interpret.
+ */
+const MIGRATION_033_RUN_ATTENDANCE = `
+ALTER TABLE automation_runs ADD COLUMN attendance TEXT
+  CHECK (attendance IS NULL OR attendance IN ('attended', 'unattended'));
+`;
+
+/**
+ * Migration 033's reconciler, for the reason 031's doc gives at length:
+ * `ALTER TABLE … ADD COLUMN` cannot be written idempotently in SQL, and this
+ * table is the one several automations branches have been landing against, so a
+ * developer database can hold a `user_version` that says it is current while
+ * missing this column. Probing converges every lineage.
+ */
+function applyMigration033RunAttendance(db: Database.Database): void {
+  const columns = db.pragma("table_info(automation_runs)") as { name: string }[];
+  if (columns.some((column) => column.name === "attendance")) return;
+  db.exec(MIGRATION_033_RUN_ATTENDANCE);
+}
+
+/**
  * Migration 032: Skipped occurrences (VC-112, VC-130).
  *
  * A due time that passed without a Run, recorded. It is a TABLE rather than a
@@ -1545,6 +1584,12 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 32,
     name: "automations — Skipped occurrences, the record of a due time that passed without a Run",
     sql: MIGRATION_032_SCHEDULE_SKIPS,
+  },
+  {
+    version: 33,
+    name: "automations — whether a person was at the door that asked for a Run",
+    sql: MIGRATION_033_RUN_ATTENDANCE,
+    apply: applyMigration033RunAttendance,
   },
 ];
 

@@ -330,4 +330,41 @@ describe("watchSessionActivity", () => {
     for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);
     watch.stop();
   });
+
+  it("hands every folded projection to the observer, before the row gate (VC-133)", async () => {
+    // The notification rule hangs off this port. It must see the projection —
+    // the listing row cannot spell `error` at all — and it must see every fold,
+    // because "did this LISTING change" is a different question from "did this
+    // Session change".
+    let state = projection();
+    const engine = stubEngine(() => state);
+    const observe = vi.fn();
+    const publish = vi.fn();
+    const watch = watchSessionActivity(engine, { publish, observe, coalesceMs: 0 });
+
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(observe.mock.calls[0]?.[0]).toBe(state);
+
+    // A second fold that leaves the row byte-identical still reaches the
+    // observer, though the publish gate correctly swallows it.
+    const publishes = publish.mock.calls.length;
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls.length).toBe(publishes);
+
+    watch.stop();
+  });
+
+  it("does not require an observer", async () => {
+    // Optional for the reason `provenanceOf` is: a test that only asks whether
+    // a write was noticed has no notification channel to hand in.
+    const engine = stubEngine(() => projection());
+    const watch = watchSessionActivity(engine, { publish: vi.fn(), coalesceMs: 0 });
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await expect(watch.flush()).resolves.toBeUndefined();
+    watch.stop();
+  });
 });

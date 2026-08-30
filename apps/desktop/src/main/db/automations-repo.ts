@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 import {
   isTicketStatus,
   NO_AUTOMATION_TRIGGER,
+  parseAutomationRunAttendance,
   parseAutomationSkipReason,
   parseAutomationTrigger,
   parseSessionModel,
@@ -24,6 +25,7 @@ import {
 import type {
   Automation,
   AutomationRun,
+  AutomationRunAttendance,
   AutomationRuntime,
   AutomationSkippedOccurrence,
   AutomationTrigger,
@@ -62,6 +64,8 @@ interface AutomationRunRow {
   provider_id: string;
   model_id: string;
   reasoning_level: string;
+  /** `null` for a Run recorded before VC-133 — read as `attended`. */
+  attendance: string | null;
   created_at: number;
 }
 
@@ -141,6 +145,11 @@ function mapRun(row: AutomationRunRow): AutomationRun {
       // provider's historical level, but it must never invent "medium".
       reasoningLevel: row.reasoning_level,
     },
+    // Tolerant on read, like the reasoning level above it and for a related
+    // reason: a row older than VC-133 records nothing here, and the degrade
+    // direction is silence rather than a notification about work nobody is
+    // waiting on (`AUTOMATION_RUN_ATTENDANCE`).
+    attendance: parseAutomationRunAttendance(row.attendance),
     createdAt: row.created_at,
   };
 }
@@ -257,6 +266,12 @@ export interface AutomationRunWrite {
   sessionId: string;
   /** The RESOLVED selection the Session was born with, never the reference. */
   model: ResolvedAutomationModel;
+  /**
+   * Whether a person was at the door that asked (VC-133). Optional only for the
+   * legacy test/support callers `automationName` is optional for; absent is the
+   * silent answer, never a guess.
+   */
+  attendance?: AutomationRunAttendance;
 }
 
 export function recordAutomationRun(
@@ -271,11 +286,12 @@ export function recordAutomationRun(
       : (input.automationName ??
         getAutomation(db, input.automationId)?.name ??
         "Deleted Automation");
+  const attendance = parseAutomationRunAttendance(input.attendance);
   prepared(
     db,
     `INSERT INTO automation_runs
-      (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, attendance, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.automationId,
@@ -285,6 +301,7 @@ export function recordAutomationRun(
     input.model.providerId,
     input.model.modelId,
     input.model.reasoningLevel,
+    attendance,
     now,
   );
   return {
@@ -294,8 +311,38 @@ export function recordAutomationRun(
     ticketId: input.ticketId,
     sessionId: input.sessionId,
     model: input.model,
+    attendance,
     createdAt: now,
   };
+}
+
+/**
+ * Whether the Run that opened this Session was unattended (VC-133), or `null`
+ * when no Run owns it.
+ *
+ * Its own narrow read rather than a field on `SessionProvenance`, because the
+ * two answer different questions for different audiences: provenance is drawn
+ * on screen for a person reading a list, while this decides whether to
+ * interrupt one. Widening the provenance row would put attendance on every
+ * listing row that crosses the IPC seam — traffic and surface area for a fact
+ * no surface renders.
+ *
+ * `null` covers both "a person opened this chat" and VC-131's pre-Run crash
+ * window, where a Session is provably a Run's but its `automation_runs` row
+ * never landed. Both read as "do not notify", which is the same conservative
+ * direction the column's own absent value takes.
+ *
+ * `idx_automation_runs_session` already indexes this lookup (VC-126).
+ */
+export function readAutomationRunAttendance(
+  db: Database.Database,
+  sessionId: string,
+): AutomationRunAttendance | null {
+  const row = prepared<[string], { attendance: string | null }>(
+    db,
+    "SELECT attendance FROM automation_runs WHERE session_id = ? LIMIT 1",
+  ).get(sessionId);
+  return row === undefined ? null : parseAutomationRunAttendance(row.attendance);
 }
 
 /** One Run projection by durable id. */

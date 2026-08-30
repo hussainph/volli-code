@@ -280,8 +280,8 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     prepared(
       this.db,
       `INSERT INTO automation_runs
-        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, attendance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       run.id,
       run.automationId,
@@ -291,6 +291,7 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
       run.model.providerId,
       run.model.modelId,
       run.model.reasoningLevel,
+      run.attendance,
       run.createdAt,
     );
   }

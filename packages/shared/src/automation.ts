@@ -180,6 +180,69 @@ export function automationOwnership(
 }
 
 /**
+ * Whether a person was at the door that asked for this Run (VC-112, VC-133).
+ *
+ * ── ATTENDANCE FOLLOWS THE TRIGGER, AND THE DOOR IS WHERE THE TRIGGER LANDS ─
+ * VC-112 rules it in one line — "Nothing declares itself attended or
+ * unattended. A column move is attended because a person is right there; a
+ * schedule is not" — and explicitly WITHDRAWS the per-Automation attendance
+ * switch that would have let a record claim otherwise. So this is never
+ * authored, never a setting, and never inferred from window focus: it is a
+ * property of the invocation, decided by whichever door accepted it.
+ *
+ * V1 has exactly four such doors, and each one knows its own answer without
+ * asking anything:
+ *
+ *  - **attended** — the renderer's Ticket-scoped Run door (`automations/ipc.ts`)
+ *    behind the rail's split button, the board card's context menu, the armed
+ *    column's drop window, and the command palette; and the renderer's "Run now"
+ *    on a Skipped occurrence. A person clicked something to get here.
+ *  - **unattended** — the schedule timer (`main/index.ts`), which is the case
+ *    VC-112 names; and the agent's Run verb (`agent-tool-door.ts`), where the
+ *    caller is another Session that has gone on to its own work and can neither
+ *    see a permission prompt nor answer one.
+ *
+ * ── WHY IT IS DURABLE RATHER THAN PROCESS-LOCAL ───────────────────────────
+ * A Run plan is accepted durably BEFORE its Session work happens, and
+ * `AutomationRunner.recover()` replays plans whose process died in between. The
+ * process that must decide whether to notify is therefore not always the
+ * process that took the request, so a `Set` of unattended Session ids in memory
+ * would answer "attended" for every recovered Run — silently, and only after a
+ * crash, which is the worst way to lose a notification.
+ *
+ * ── AND WHY THE UNKNOWN ANSWER IS `attended` ──────────────────────────────
+ * Runs recorded before this ticket carry nothing here. They are read as
+ * `attended`, which is the answer that NEVER notifies. The degrade direction is
+ * chosen the same way every other one in this file is: a wrong `unattended`
+ * would raise a notification about work a person is already watching, teaching
+ * them that these notifications are noise, and VC-112 is explicit that this is
+ * how a person learns to switch a feature off. A wrong `attended` costs one
+ * missed notification on a historical Run and nothing else.
+ */
+export const AUTOMATION_RUN_ATTENDANCE = ["attended", "unattended"] as const;
+
+export type AutomationRunAttendance = (typeof AUTOMATION_RUN_ATTENDANCE)[number];
+
+export function isAutomationRunAttendance(value: unknown): value is AutomationRunAttendance {
+  return (
+    typeof value === "string" && (AUTOMATION_RUN_ATTENDANCE as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * A stored or transported attendance read in today's vocabulary — absent,
+ * unreadable, or from a build that spelled it differently all become
+ * `attended`.
+ *
+ * One function so the column read, the plan read and the wire guard cannot
+ * disagree about what an old row means. See {@link AUTOMATION_RUN_ATTENDANCE}
+ * for why silence is the safe answer rather than the lossy one.
+ */
+export function parseAutomationRunAttendance(value: unknown): AutomationRunAttendance {
+  return isAutomationRunAttendance(value) ? value : "attended";
+}
+
+/**
  * One invocation of an Automation against one Ticket, and the durable record
  * of which Automation and which *resolved* model and reasoning produced a
  * given Session. `id` is a UUID for the same standing rule as the Automation's.
@@ -212,6 +275,17 @@ export interface AutomationRun {
    * later, and what makes the pin/inherit decision self-correcting.
    */
   model: ResolvedAutomationModel;
+  /**
+   * Whether a person was at the door that asked for this Run — the fact the
+   * notification rule turns on (VC-112's "Notification rule", VC-133).
+   *
+   * Stored on the Run rather than derived later because there is nothing to
+   * derive it FROM once the invocation is over: the Automation's own Trigger
+   * cannot answer it (running by hand is universal in V1, so a scheduled
+   * Automation is regularly run by a person standing right there), and the
+   * Session records who launched it but not whether they stayed.
+   */
+  attendance: AutomationRunAttendance;
   /** Epoch milliseconds. */
   createdAt: number;
 }

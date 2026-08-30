@@ -84,6 +84,9 @@ import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
+import { readAutomationRunAttendance } from "./db/automations-repo";
+import { createRunAttentionWatch } from "./automations/run-attention";
+import { readNotificationPreferences } from "./notification-preferences";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -695,6 +698,21 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // The Notification rule (VC-112, VC-133): an unattended Run that enters
+  // `waiting` or `error` says so, and nothing else does. It hangs off the
+  // activity watch below because that is the one place every durable Session
+  // write in this process is already seen — see `automations/run-attention.ts`.
+  const runAttention =
+    watchedDb !== null
+      ? createRunAttentionWatch({
+          attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
+          // Re-read per notification rather than captured at boot, so switching
+          // notifications off takes effect on the next one instead of the next
+          // launch. It is one indexed `app_state` read.
+          preferences: () => readNotificationPreferences(watchedDb),
+          notify: ({ title, body }) => new Notification({ title, body }).show(),
+        })
+      : null;
   const sessionActivityWatch =
     watchedDb !== null
       ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
@@ -703,6 +721,7 @@ app.whenReady().then(async () => {
           // survives its Session's first turn (VC-131): the renderer upserts
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          observe: (projection) => runAttention?.observe(projection),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;
@@ -1943,7 +1962,15 @@ app.whenReady().then(async () => {
         broadcastDataChanged({ projectId: input.skip.projectId });
       },
       startRun: async (input) => {
-        const outcome = await runnerForSchedule.runForProject(input);
+        // UNATTENDED (VC-133), and this is the case VC-112 names outright:
+        // "a column move is attended because a person is right there; a
+        // schedule is not." A timer fired this; the app may not even have a
+        // window open. If its Session stops for a person, this is how they
+        // find out.
+        const outcome = await runnerForSchedule.runForProject({
+          ...input,
+          attendance: "unattended",
+        });
         return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
       },
       setTimer: (delayMs, fire) => setTimeout(fire, delayMs),

@@ -21,6 +21,7 @@ import {
   type Automation,
   type AutomationCommandReceipt,
   type AutomationRun,
+  type AutomationRunAttendance,
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
   type ModelSelection,
@@ -141,6 +142,22 @@ export interface AutomationRunRequest {
   target: AutomationRunTarget;
   ticketId: string;
   modelOverride: ModelSelection | null;
+  /**
+   * Whether a person was at the door that asked (VC-133).
+   *
+   * **Set by the door, never carried on the wire.** The renderer's IPC payload
+   * has no such field: `automations/ipc.ts` fills in `attended` because being
+   * that handler IS the evidence — a person clicked the rail, the palette, the
+   * board card or the armed column's window to get there. The agent verb
+   * (`agent-tool-door.ts`) is the other caller of this door and fills in
+   * `unattended`, because its caller is a Session that has gone on to its own
+   * work.
+   *
+   * Keeping it off the wire is what makes it trustworthy: a fact the renderer
+   * declared about itself would be a claim, and this one decides whether a
+   * person is interrupted.
+   */
+  attendance: AutomationRunAttendance;
 }
 
 /**
@@ -156,6 +173,16 @@ export interface AutomationProjectRunRequest {
   commandId: string;
   automationId: string;
   projectId: string;
+  /**
+   * Whether a person was at the door that asked (VC-133).
+   *
+   * This door has both answers, which is exactly why attendance cannot be
+   * derived from the Trigger of the Automation being run: the schedule timer
+   * (`main/index.ts`) arrives here `unattended`, and "Run now" on a Skipped
+   * occurrence arrives here `attended` — same Automation, same schedule, same
+   * Project Session, and a person standing at one of them.
+   */
+  attendance: AutomationRunAttendance;
 }
 
 /**
@@ -169,6 +196,7 @@ interface InternalRunRequest {
   target: AutomationRunTarget;
   scope: RunScope;
   modelOverride: ModelSelection | null;
+  attendance: AutomationRunAttendance;
 }
 
 export interface AutomationRunner {
@@ -619,6 +647,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
           (automation !== null && isAutomationRuntimePin(automation.runtime)
             ? automation.runtime
             : null),
+        // Recorded with the plan, because the plan is what a recovery replays
+        // and the door that knew this will not exist then (VC-133).
+        attendance: input.attendance,
         // Beside the RESOLVED Runtime above, what was actually asked for —
         // the durable half of this command id's identity, which no later
         // retry may quietly differ from.
@@ -659,6 +690,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         target: input.target,
         scope: { kind: "ticket", ticketId: input.ticketId },
         modelOverride: input.modelOverride,
+        attendance: input.attendance,
       });
     },
 
@@ -671,6 +703,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // unattended, and "Run now" on a Skipped occurrence is the same work
         // the schedule would have done. The record's own Runtime rides.
         modelOverride: null,
+        // Attendance, by contrast, is NOT the same for those two — one of them
+        // has a person in front of it — so it comes from the caller rather than
+        // being assumed here. See `AutomationProjectRunRequest.attendance`.
+        attendance: input.attendance,
       });
     },
 
