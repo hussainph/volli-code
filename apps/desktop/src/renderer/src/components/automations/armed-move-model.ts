@@ -27,6 +27,23 @@
  * at both the arrival and the deadline, because it governs what starts an
  * Automation BESIDES a person. Running one by hand is universal and is
  * deliberately unaffected: the palette and the rail never consult this file.
+ *
+ * VC-132 adds one more way a window opens and does not add a second kind of
+ * window. A release on a named target in the ⌥ drag picker carries the
+ * Automation it named ({@link DeliberateMoveChoice}), and that Automation gets
+ * **the same 3500 ms window, with the same one Cancel**. It does not fire
+ * immediately, and the AC settles that on its own terms: `1` in the picker is
+ * specified to reproduce a plain drop, so a picked target that fired at once
+ * would make `1` strictly MORE dangerous than the drop it claims to reproduce,
+ * and ⌥-drag the only unguarded door on the board to spending tokens.
+ *
+ * What a pick does bypass is the two switches, because neither is what it
+ * depended on: an ⌥-pick is a PERSON, and VC-112 rules that enablement (and,
+ * beside it, arming) governs what starts an Automation *besides* a person. What
+ * it does NOT bypass is the arrival rule above — a release back into the column
+ * a card came from is not an arrival for a pick any more than for a plain drop,
+ * which is also the only reading under which "`1` reproduces a plain drop"
+ * stays true in every column.
  */
 import {
   ARMED_RUN_DELAY_MS,
@@ -36,6 +53,22 @@ import {
   type ColumnArming,
   type TicketStatus,
 } from "@volli/shared";
+
+/**
+ * What a Deliberate move carries from the ⌥ picker (VC-132): the Automation the
+ * person named, or the named Move only target.
+ *
+ * It comes from ONE door — the board's own drop commit. A `volli ticket move`
+ * never carries one, and neither does the card's context menu or the ticket
+ * rail's status pill: those are moves, not aimed releases, and an absent choice
+ * is exactly today's path.
+ */
+export type DeliberateMoveChoice =
+  | { kind: "automation"; automationId: string }
+  | { kind: "move-only" };
+
+/** Which door opened a window: the column's own arming, or a person's pick. */
+export type PendingArmedRunOrigin = "armed" | "chosen";
 
 /** One open delay window: an arrival that has not yet become a Run. */
 export interface PendingArmedRun {
@@ -54,6 +87,12 @@ export interface PendingArmedRun {
   automationName: string;
   /** The column arrived in. Re-checked at the deadline — see {@link armedRunVerdict}. */
   status: TicketStatus;
+  /**
+   * Which door opened this window (VC-132). Read at the deadline and nowhere
+   * else: a `chosen` window is not abandoned by disarming or by the
+   * machine-local switch, because the pick never depended on either.
+   */
+  origin: PendingArmedRunOrigin;
   /** Epoch ms the window opened. */
   openedAt: number;
   /** Epoch ms the Run may start at, and never before. */
@@ -71,7 +110,7 @@ export interface PendingArmedRun {
  */
 export type ArmedMoveDecision =
   | { kind: "nothing" }
-  | { kind: "open-window"; automation: Automation };
+  | { kind: "open-window"; automation: Automation; origin: PendingArmedRunOrigin };
 
 export function armedMoveDecision(input: {
   automations: readonly Automation[];
@@ -80,11 +119,28 @@ export function armedMoveDecision(input: {
   enabledAutomationIds: readonly string[];
   from: TicketStatus;
   to: TicketStatus;
+  /** What the ⌥ picker named on release, when the move came from the board's drop. */
+  choice?: DeliberateMoveChoice;
 }): ArmedMoveDecision {
   // A reorder inside one column is not an arrival. This is why a card dragged
   // up its own armed column — the most common slip on the board — can never
-  // start anything, before any delay is even considered.
+  // start anything, before any delay is even considered. It is asked first for
+  // a PICK too: see the module doc.
   if (!isColumnArrival(input.from, input.to)) return { kind: "nothing" };
+  // The named Move only target: land the card, start nothing. It is the whole
+  // point of the target, so it answers before anything about arming is asked.
+  if (input.choice?.kind === "move-only") return { kind: "nothing" };
+  const choice = input.choice;
+  if (choice?.kind === "automation") {
+    const picked = input.automations.find((automation) => automation.id === choice.automationId);
+    // Deleted between the release and this classification. Falling back to the
+    // column's own armed Automation would run something the person did not
+    // name, which is the one substitution this whole layer exists to prevent.
+    if (picked === undefined) return { kind: "nothing" };
+    // Neither switch is consulted: an ⌥-pick is a person, and both switches
+    // govern what starts an Automation *besides* a person (VC-112).
+    return { kind: "open-window", automation: picked, origin: "chosen" };
+  }
   const automation = armedAutomationFor(input.automations, input.armings, input.to);
   // An unarmed column is a pure status change, exactly as it is today.
   if (automation === null) return { kind: "nothing" };
@@ -93,7 +149,7 @@ export function armedMoveDecision(input: {
   // the switch is about this MACHINE, and a person who turns it back on wants
   // the column they armed still armed.
   if (!input.enabledAutomationIds.includes(automation.id)) return { kind: "nothing" };
-  return { kind: "open-window", automation };
+  return { kind: "open-window", automation, origin: "armed" };
 }
 
 /** Opens a window for `automation`, at `now`. `startAt` is the only deadline anything reads. */
@@ -103,6 +159,7 @@ export function openArmedRun(input: {
   projectId: string;
   automation: Automation;
   status: TicketStatus;
+  origin: PendingArmedRunOrigin;
   now: number;
 }): PendingArmedRun {
   return {
@@ -112,6 +169,7 @@ export function openArmedRun(input: {
     automationId: input.automation.id,
     automationName: input.automation.name,
     status: input.status,
+    origin: input.origin,
     openedAt: input.now,
     startAt: input.now + ARMED_RUN_DELAY_MS,
   };
@@ -161,6 +219,14 @@ export function armedRunVerdict(input: {
   if (input.currentStatus !== input.pending.status) {
     return { kind: "abandon", reason: "left-column" };
   }
+  // The two switch re-checks below are skipped for a window a person opened by
+  // NAMING this Automation on a landing target (VC-132). The pick never
+  // depended on either switch — both govern what starts an Automation besides a
+  // person — so abandoning it because the column was disarmed mid-countdown
+  // would cancel a Run nobody asked to cancel. The two facts that remain are
+  // the ones about the arrival itself, and they are checked above for every
+  // window: the Ticket is still on the board, and still where it landed.
+  if (input.pending.origin === "chosen") return { kind: "start" };
   if (input.armedNow === null || input.armedNow.id !== input.pending.automationId) {
     return { kind: "abandon", reason: "disarmed" };
   }

@@ -49,6 +49,7 @@ describe("ticketRailAutomations", () => {
       automations: [armed],
       armings: [arming()],
       status: "doing",
+      rankedAutomationIds: [],
       ready: true,
     });
 
@@ -61,6 +62,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [],
       status: "doing",
+      rankedAutomationIds: [],
       ready: true,
     });
 
@@ -76,24 +78,40 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [arming({ status: "todo" })],
       status: "doing",
+      rankedAutomationIds: [],
       ready: true,
     });
 
     expect(rail.primary).toEqual({ kind: "run-once" });
   });
 
-  it("offers this column's list with the armed one first", () => {
-    const offeredFirst = automation({ id: "a2", name: "Alphabetically first" });
+  it("offers this column's list in the rank its lane arranged (VC-132)", () => {
+    // The menu and the lane are one list read twice. It is deliberately NOT
+    // the drag's pinned shape — the pin protects what digit `1` means, and
+    // this menu has no digits — so the armed row is not floated to the top.
+    const listedFirst = automation({ id: "a2", name: "Alphabetically first" });
     const armed = automation();
 
-    const rail = ticketRailAutomations({
-      automations: [offeredFirst, armed],
-      armings: [arming()],
-      status: "doing",
-      ready: true,
-    });
+    expect(
+      ticketRailAutomations({
+        automations: [listedFirst, armed],
+        armings: [arming()],
+        status: "doing",
+        rankedAutomationIds: ["a1", "a2"],
+        ready: true,
+      }).offered.map((entry) => entry.id),
+    ).toEqual(["a1", "a2"]);
 
-    expect(rail.offered.map((entry) => entry.id)).toEqual(["a1", "a2"]);
+    // Unarranged, it is the order main listed them in.
+    expect(
+      ticketRailAutomations({
+        automations: [listedFirst, armed],
+        armings: [arming()],
+        status: "doing",
+        rankedAutomationIds: [],
+        ready: true,
+      }).offered.map((entry) => entry.id),
+    ).toEqual(["a2", "a1"]);
   });
 
   it("offers nothing in a column no Trigger names, and still presses", () => {
@@ -101,6 +119,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation({ trigger: NO_AUTOMATION_TRIGGER })],
       armings: [],
       status: "doing",
+      rankedAutomationIds: [],
       ready: true,
     });
 
@@ -116,6 +135,7 @@ describe("ticketRailAutomations", () => {
       automations: [],
       armings: [],
       status: "doing",
+      rankedAutomationIds: [],
       ready: true,
     });
 
@@ -133,6 +153,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [arming()],
       status: "doing",
+      rankedAutomationIds: [],
       ready: false,
     });
 
@@ -152,6 +173,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [arming()],
       status: "doing",
+      rankedAutomationIds: [],
       ready: false,
     });
 

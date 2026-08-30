@@ -706,23 +706,162 @@ export interface ColumnArming {
   armedAt: number;
 }
 
+/* ------------------------------------- the column's own order (VC-132) ---- */
+
 /**
- * The Automations `status` offers, armed one first (CONTEXT, "Offered list").
+ * One column's authored rank for its Offered list: which Automation reads as
+ * `1`, which as `2`, and so on when a card is dragged over it.
  *
- * Membership is the record's Trigger; order is the Arming plus whatever order
- * the caller was handed (main lists name-ordered, project's own before global).
- * The digit accelerators and hand-dragged ranking are VC-132's; this is the
- * list they will rank.
+ * Machine-local for the same reason {@link ColumnArming} is, and the reason is
+ * sharper here than it looks: the digit printed in the lane view must be the
+ * digit that works mid-drag, and the drag's digits are pinned by an arming that
+ * never travels. An order that travelled while the arming it is read against
+ * did not would print one digit on this machine and mean another on the next.
+ *
+ * Keyed by `(projectId, status)` like the arming, because a rank is a property
+ * of the COLUMN: one Automation offered in two columns holds a rank in each,
+ * and neither is visible in the record they both point at.
+ *
+ * The list is stale-TOLERANT rather than pruned. An id naming an Automation
+ * this column no longer offers is inert on read (it is filtered against the
+ * Offered list), so an edit made anywhere else never has to be chased with a
+ * second write to keep a rank honest.
+ */
+export interface ColumnAutomationOrder {
+  projectId: string;
+  status: TicketStatus;
+  /** Automation ids, best rank first. Ids this column no longer offers are inert. */
+  rankedAutomationIds: readonly string[];
+  /** Epoch milliseconds the order was last written. */
+  orderedAt: number;
+}
+
+/**
+ * How many Offered rows can carry a digit, and therefore how many landing
+ * targets a column can grow under ⌥ (VC-132).
+ *
+ * Nine because the accelerators are `1`–`9`: a row past the ninth has no key to
+ * press and no target to aim at, which is a smaller lie than a tenth row that
+ * looks identical to the nine above it and answers no digit. Rank 10+ stays
+ * authorable in the lane and runnable by hand from every surface that lists it.
+ */
+export const MAX_OFFERED_DIGITS = 9;
+
+/**
+ * The Automations `status` offers, in AUTHORED rank order (CONTEXT, "Offered
+ * list").
+ *
+ * Membership is the record's Trigger; order is the column's own rank
+ * ({@link ColumnAutomationOrder}) followed by whatever order the caller was
+ * handed for the ids that rank names nothing about (main lists name-ordered,
+ * project's own before global) — so a project that has never been arranged
+ * still reads as a stable `1`…`n`.
+ *
+ * Uncapped and UNPINNED on purpose. This is the list a surface shows when it is
+ * choosing a record rather than pressing a digit: the column's bolt menu picks
+ * what to arm, and arming an Automation ranked tenth is an ordinary thing to
+ * want. The pinned, digit-capped shape the drag reads is
+ * {@link offeredAutomationsInDigitOrder}.
  */
 export function offeredAutomationsForColumn(
   automations: readonly Automation[],
   status: TicketStatus,
-  armedAutomationId: string | null,
+  rankedAutomationIds: readonly string[] = [],
 ): readonly Automation[] {
   const offered = automations.filter((automation) => automationTriggersColumn(automation, status));
-  const armed = offered.find((automation) => automation.id === armedAutomationId);
-  if (armed === undefined) return offered;
-  return [armed, ...offered.filter((automation) => automation.id !== armed.id)];
+  const byId = new Map(offered.map((automation) => [automation.id, automation]));
+  const ranked: Automation[] = [];
+  for (const id of rankedAutomationIds) {
+    const automation = byId.get(id);
+    // An id this column no longer offers, or one named twice, contributes
+    // nothing rather than failing the read — see ColumnAutomationOrder.
+    if (automation === undefined) continue;
+    ranked.push(automation);
+    byId.delete(id);
+  }
+  // Anything the rank never named keeps the caller's order, appended.
+  for (const automation of offered) {
+    if (byId.has(automation.id)) ranked.push(automation);
+  }
+  return ranked;
+}
+
+/**
+ * The DRAG-TIME list for `status`: the digits `1`–`9`, in the order they read.
+ *
+ * Two things happen to the authored rank here, and the ORDER of the two is the
+ * rule rather than an implementation detail:
+ *
+ *  1. **The effective armed Automation is pinned to digit `1`.** That is what
+ *     makes `1` safe to press while learning — in an armed column it reproduces
+ *     exactly what a plain drop would do. `effectiveArmedAutomationId` is the
+ *     armed record **that is also switched on here**: an armed Automation this
+ *     machine has switched off starts nothing on a plain drop, so pinning it
+ *     would make `1` promise a Run that never comes.
+ *  2. **…before the nine-digit cap**, not after. An armed Automation whose
+ *     authored rank is past the ninth would otherwise be sliced out of the very
+ *     list whose digit `1` it owns.
+ *
+ * Applied at READ time rather than written into the stored rank, so disarming
+ * returns the Automation to its authored slot instead of wherever the pin last
+ * left it, and the stored order never has to know about arming at all.
+ *
+ * Enablement changes the PIN and never the membership or the order: a switched
+ * off Automation keeps its row and its digit, because renumbering the rows
+ * below it would poison the muscle memory the digits exist to build (and an
+ * ⌥-pick of it is a hand-run, which VC-112 rules is universal).
+ *
+ * An `effectiveArmedAutomationId` this column does not offer is ignored rather
+ * than an error — the same stale-arming tolerance {@link armedAutomationFor}
+ * has, whose armed-first shape this generalises.
+ */
+export function offeredAutomationsInDigitOrder(input: {
+  automations: readonly Automation[];
+  status: TicketStatus;
+  rankedAutomationIds?: readonly string[];
+  /** The armed record that is also switched on here, or `null`. */
+  effectiveArmedAutomationId?: string | null;
+}): readonly Automation[] {
+  const ranked = offeredAutomationsForColumn(
+    input.automations,
+    input.status,
+    input.rankedAutomationIds ?? [],
+  );
+  const armed = ranked.find((automation) => automation.id === input.effectiveArmedAutomationId);
+  if (armed === undefined) return ranked.slice(0, MAX_OFFERED_DIGITS);
+  return [armed, ...ranked.filter((automation) => automation.id !== armed.id)].slice(
+    0,
+    MAX_OFFERED_DIGITS,
+  );
+}
+
+/**
+ * The rank to STORE after a lane drop, given the lane's new drawn order.
+ *
+ * The lane draws the pinned, capped list; the record stores the authored,
+ * uncapped one. Two rows are therefore on screen that this write must not
+ * disturb — the armed row pinned to slot 1, and everything ranked past the
+ * ninth, which is not drawn at all — so the arithmetic is "refill the slots the
+ * lane actually moved" rather than "take the lane's list as the new order":
+ *
+ *  - every authored slot holding one of `reorderedIds` takes the next id from
+ *    `reorderedIds`, in the lane's new order;
+ *  - every other slot keeps its own occupant, which is exactly how the armed
+ *    row keeps its authored rank (so disarming returns it there) and how a
+ *    row past the digit cap keeps its place under rows it cannot see.
+ *
+ * `reorderedIds` may name ids `authoredIds` does not; those are dropped, since
+ * the authored list is what the record stores.
+ */
+export function columnRankAfterLaneDrop(
+  authoredIds: readonly string[],
+  reorderedIds: readonly string[],
+): readonly string[] {
+  const authored = new Set(authoredIds);
+  const moved = reorderedIds.filter((id) => authored.has(id));
+  const movedSet = new Set(moved);
+  let next = 0;
+  return authoredIds.map((id) => (movedSet.has(id) ? (moved[next++] as string) : id));
 }
 
 /**
@@ -745,6 +884,28 @@ export function armedAutomationFor(
   const automation = automations.find((candidate) => candidate.id === arming.automationId);
   if (automation === undefined) return null;
   return automationTriggersColumn(automation, status) ? automation : null;
+}
+
+/**
+ * The Automation `status` would fire on its own RIGHT HERE: armed, and switched
+ * on on this machine (VC-132).
+ *
+ * Two switches decide it and both are machine-local, which is why one function
+ * says so once: arming names WHICH Automation a column fires, enablement says
+ * whether this machine fires that Automation at all. A column armed with an
+ * Automation nobody switched on here starts nothing on a plain drop — so this,
+ * and not {@link armedAutomationFor}, is what the drag picker pins to digit `1`
+ * and what an open picker preselects.
+ */
+export function effectiveArmedAutomationFor(input: {
+  automations: readonly Automation[];
+  armings: readonly ColumnArming[];
+  enabledAutomationIds: readonly string[];
+  status: TicketStatus;
+}): Automation | null {
+  const armed = armedAutomationFor(input.automations, input.armings, input.status);
+  if (armed === null) return null;
+  return input.enabledAutomationIds.includes(armed.id) ? armed : null;
 }
 
 /**

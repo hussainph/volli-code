@@ -37,6 +37,7 @@ import {
   noteDeliberateMove,
   type DeliberateMove,
 } from "@renderer/components/automations/armed-run";
+import type { DeliberateMoveChoice } from "@renderer/components/automations/armed-move-model";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -183,11 +184,18 @@ interface BoardState {
    * project this renderer already knows about never clobbers its live data.
    */
   seedProject(projectId: string): void;
+  /**
+   * A Deliberate move this window makes. `choice` is what the ⌥ drag picker
+   * named on release (VC-132) and is passed straight through to the one
+   * observer below — the board's drop is the only caller that has one, and an
+   * absent choice is the plain move every other surface makes.
+   */
   moveTicket(
     projectId: string,
     ticketId: string,
     toStatus: TicketStatus,
     toIndex: number,
+    choice?: DeliberateMoveChoice,
   ): Promise<void>;
   /**
    * Creates a ticket in `status`'s column via `gateway`. Returns the created
@@ -558,7 +566,7 @@ export function createBoardStore(
         return result.ticket;
       },
 
-      async moveTicket(projectId, ticketId, toStatus, toIndex) {
+      async moveTicket(projectId, ticketId, toStatus, toIndex, choice) {
         const previous = get().ticketsByProject[projectId] ?? [];
         // Read BEFORE the op, and folded into its own no-op guard below: the
         // shared op only returns a new list when it found this ticket, so the
@@ -584,7 +592,7 @@ export function createBoardStore(
         reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
         // Only now, with the move durable and reconciled: an armed column may
         // open its delay window against a status change that really happened.
-        onDeliberateMove({ projectId, ticketId, from: fromStatus, to: toStatus });
+        onDeliberateMove({ projectId, ticketId, from: fromStatus, to: toStatus, choice });
       },
 
       async setTicketPriority(projectId, ticketId, priority) {

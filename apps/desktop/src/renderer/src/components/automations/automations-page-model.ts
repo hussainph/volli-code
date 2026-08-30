@@ -23,7 +23,9 @@ import {
   automationOwnership,
   automationTriggerColumns,
   automationTriggerSchedule,
+  columnRankAfterLaneDrop,
   isAutomationRuntimePin,
+  isTicketStatus,
   scheduleSentence,
   TICKET_STATUS_LABELS,
 } from "@volli/shared";
@@ -33,6 +35,7 @@ import type {
   AutomationRuntime,
   AutomationSkippedOccurrence,
   AutomationTrigger,
+  TicketStatus,
 } from "@volli/shared";
 
 /**
@@ -194,6 +197,70 @@ export function duplicateName(name: string, taken: readonly string[]): string {
     const candidate = `${name} (copy ${n})`;
     if (!used.has(candidate)) return candidate;
   }
+}
+
+/* ------------------------------------------------- the lane view (VC-132) */
+
+/**
+ * One lane row's drag identity: the column AND the Automation.
+ *
+ * Composite because one Automation can be offered in two columns and hold a
+ * different rank in each — two rows, one record — and dnd-kit needs one id per
+ * draggable in a context. It is also what tells a drop which lane it happened
+ * in without the view having to remember.
+ */
+export function laneRowId(status: TicketStatus, automationId: string): string {
+  return `${status}:${automationId}`;
+}
+
+/** The lane and the Automation behind a {@link laneRowId}, or `null` for anything else. */
+export function parseLaneRowId(id: string): { status: TicketStatus; automationId: string } | null {
+  const separator = id.indexOf(":");
+  if (separator === -1) return null;
+  const status = id.slice(0, separator);
+  const automationId = id.slice(separator + 1);
+  if (!isTicketStatus(status) || automationId.length === 0) return null;
+  return { status, automationId };
+}
+
+/**
+ * What a lane drop asks the record to store, or `null` for a drop that asks
+ * for nothing.
+ *
+ * Three drops ask for nothing, and each is a rule rather than an edge case:
+ *
+ *  - **A drop on nothing** (`overId` null — the pointer left the lanes) is a
+ *    cancelled gesture.
+ *  - **A drop into ANOTHER lane.** A lane's membership is the Automation's
+ *    Trigger, which is authored in the editor; dragging a row between lanes
+ *    would silently rewrite a field of the record from a surface that is
+ *    arranging digits. Rank is what a lane owns.
+ *  - **A drop on its own slot**, which changes no order at all.
+ *
+ * `visibleIds` is what the lane DRAWS as draggable, in drawn order: the armed
+ * row pinned to slot 1 is not among them, and neither is anything ranked past
+ * the digit cap. {@link columnRankAfterLaneDrop} is what puts the moved rows
+ * back into the authored list without disturbing either.
+ */
+export function laneDropRank(input: {
+  authoredIds: readonly string[];
+  visibleIds: readonly string[];
+  activeId: string;
+  overId: string | null;
+}): { status: TicketStatus; rankedAutomationIds: readonly string[] } | null {
+  const active = parseLaneRowId(input.activeId);
+  const over = input.overId === null ? null : parseLaneRowId(input.overId);
+  if (active === null || over === null || over.status !== active.status) return null;
+  const from = input.visibleIds.indexOf(active.automationId);
+  const to = input.visibleIds.indexOf(over.automationId);
+  if (from === -1 || to === -1 || from === to) return null;
+  const reordered = [...input.visibleIds];
+  const [moved] = reordered.splice(from, 1);
+  reordered.splice(to, 0, moved as string);
+  return {
+    status: active.status,
+    rankedAutomationIds: columnRankAfterLaneDrop(input.authoredIds, reordered),
+  };
 }
 
 /**

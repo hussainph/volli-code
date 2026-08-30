@@ -43,6 +43,7 @@ function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
       projectId: "p1",
       automation: automation(),
       status: "doing",
+      origin: "armed",
       now: 1_000,
     }),
     ...overrides,
@@ -60,7 +61,7 @@ describe("armedMoveDecision", () => {
         from: "todo",
         to: "doing",
       }),
-    ).toEqual({ kind: "open-window", automation: armed });
+    ).toEqual({ kind: "open-window", automation: armed, origin: "armed" });
   });
 
   it("does nothing for an arrival in an unarmed column — today's behaviour, unchanged", () => {
@@ -124,6 +125,82 @@ describe("armedMoveDecision", () => {
   });
 });
 
+describe("armedMoveDecision — what the ⌥ picker named (VC-132)", () => {
+  const picked = automation({ id: "a2", name: "Two-opinion review" });
+
+  it("opens the SAME window for a named Automation, marked as chosen", () => {
+    expect(
+      armedMoveDecision({
+        automations: [automation(), picked],
+        armings: [ARMED],
+        enabledAutomationIds: ENABLED,
+        from: "todo",
+        to: "doing",
+        choice: { kind: "automation", automationId: "a2" },
+      }),
+    ).toEqual({ kind: "open-window", automation: picked, origin: "chosen" });
+  });
+
+  it("opens it in an UNARMED column, and for an Automation switched off here", () => {
+    // An ⌥-pick is a person, and both switches govern what starts an
+    // Automation *besides* a person (VC-112).
+    expect(
+      armedMoveDecision({
+        automations: [picked],
+        armings: [],
+        enabledAutomationIds: [],
+        from: "todo",
+        to: "doing",
+        choice: { kind: "automation", automationId: "a2" },
+      }),
+    ).toEqual({ kind: "open-window", automation: picked, origin: "chosen" });
+  });
+
+  it("lands Move only as a pure move, whatever the column arms", () => {
+    expect(
+      armedMoveDecision({
+        automations: [automation()],
+        armings: [ARMED],
+        enabledAutomationIds: ENABLED,
+        from: "todo",
+        to: "doing",
+        choice: { kind: "move-only" },
+      }),
+    ).toEqual({ kind: "nothing" });
+  });
+
+  it("starts nothing when the picked Automation was deleted mid-flight", () => {
+    // Never the column's armed one instead: running something nobody named is
+    // the one substitution this whole gesture exists to prevent.
+    expect(
+      armedMoveDecision({
+        automations: [automation()],
+        armings: [ARMED],
+        enabledAutomationIds: ENABLED,
+        from: "todo",
+        to: "doing",
+        choice: { kind: "automation", automationId: "gone" },
+      }),
+    ).toEqual({ kind: "nothing" });
+  });
+
+  it("still refuses a release that is not an arrival", () => {
+    // "`1` reproduces a plain drop" is only true in every column if a pick
+    // obeys the arrival rule the plain drop obeys — a card released back into
+    // the column it came from starts nothing, picked or not.
+    expect(
+      armedMoveDecision({
+        automations: [automation(), picked],
+        armings: [ARMED],
+        enabledAutomationIds: ENABLED,
+        from: "doing",
+        to: "doing",
+        choice: { kind: "automation", automationId: "a2" },
+      }),
+    ).toEqual({ kind: "nothing" });
+  });
+});
+
 describe("openArmedRun", () => {
   it("puts the deadline exactly 3500 ms out and snapshots what it will start", () => {
     const window = openArmedRun({
@@ -132,12 +209,30 @@ describe("openArmedRun", () => {
       projectId: "p1",
       automation: automation(),
       status: "doing",
+      origin: "armed",
       now: 1_000,
     });
     expect(window.startAt).toBe(1_000 + ARMED_RUN_DELAY_MS);
     expect(window.openedAt).toBe(1_000);
     expect(window.automationName).toBe("Review sweep");
     expect(window.status).toBe("doing");
+    expect(window.origin).toBe("armed");
+  });
+
+  it("gives a picked window the same delay and the same one control", () => {
+    // The whole ruling in one assertion: a named target does not bypass the
+    // window, it opens it.
+    const window = openArmedRun({
+      ticketId: "t1",
+      ticketDisplayId: "VC-12",
+      projectId: "p1",
+      automation: automation({ id: "a2" }),
+      status: "doing",
+      origin: "chosen",
+      now: 1_000,
+    });
+    expect(window.startAt - window.openedAt).toBe(ARMED_RUN_DELAY_MS);
+    expect(window.origin).toBe("chosen");
   });
 });
 
@@ -225,6 +320,41 @@ describe("armedRunVerdict", () => {
       // Named apart from "disarmed": the column still arms it, so sending the
       // person to the column bolt to undo this would be the wrong control.
     ).toEqual({ kind: "abandon", reason: "switched-off" });
+  });
+
+  it("keeps a CHOSEN window through a disarm and through the machine-local switch", () => {
+    const chosen = pending({ origin: "chosen" });
+    expect(
+      armedRunVerdict({
+        pending: chosen,
+        now: chosen.startAt,
+        currentStatus: "doing",
+        armedNow: null,
+        enabledAutomationIds: [],
+      }),
+    ).toEqual({ kind: "start" });
+  });
+
+  it("still abandons a CHOSEN window when the arrival itself stopped being true", () => {
+    const chosen = pending({ origin: "chosen" });
+    expect(
+      armedRunVerdict({
+        pending: chosen,
+        now: chosen.startAt,
+        currentStatus: "todo",
+        armedNow: null,
+        enabledAutomationIds: [],
+      }),
+    ).toEqual({ kind: "abandon", reason: "left-column" });
+    expect(
+      armedRunVerdict({
+        pending: chosen,
+        now: chosen.startAt,
+        currentStatus: null,
+        armedNow: null,
+        enabledAutomationIds: [],
+      }),
+    ).toEqual({ kind: "abandon", reason: "gone" });
   });
 
   it("checks the clock BEFORE the board — an early wake is never an abandonment", () => {

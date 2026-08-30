@@ -5,6 +5,7 @@ import {
   digitFor,
   forgetAutomation,
   offeredForColumn,
+  offeredForColumnWithArming,
   reorderInColumn,
   type ColumnOrder,
 } from "./column-order";
@@ -38,16 +39,55 @@ describe("offeredForColumn", () => {
     const order: ColumnOrder = { doing: ["atm-gone", "atm-implement"] };
     expect(offeredForColumn(SEEDED_AUTOMATIONS, "doing", order).map((a) => a.id)).toEqual([
       "atm-implement",
+      "atm-standards",
     ]);
   });
 
-  it("ignores off-board automations", () => {
+  it("ignores off-board automations, and an empty column offers nothing", () => {
     const ids = offeredForColumn(SEEDED_AUTOMATIONS, "backlog", {}).map((a) => a.id);
     expect(ids).not.toContain("atm-signals");
     expect(ids).not.toContain("atm-tdd");
-    expect(candidatesForColumn(SEEDED_AUTOMATIONS, "backlog").map((a) => a.id)).toEqual([
-      "atm-grill",
-    ]);
+    // Backlog is the seeded empty column (VC-132's rig needs one on screen).
+    expect(candidatesForColumn(SEEDED_AUTOMATIONS, "backlog")).toEqual([]);
+  });
+});
+
+describe("offeredForColumnWithArming", () => {
+  it("pins the armed automation to digit 1 ahead of the authored rank", () => {
+    const order: ColumnOrder = { needs_review: ["atm-standards", "atm-review", "atm-spec"] };
+    expect(
+      offeredForColumnWithArming(SEEDED_AUTOMATIONS, "needs_review", order, "atm-review").map(
+        (a) => a.id,
+      ),
+    ).toEqual(["atm-review", "atm-standards", "atm-spec"]);
+  });
+
+  it("is the plain offered list when the column is unarmed", () => {
+    const order: ColumnOrder = { needs_review: ["atm-standards", "atm-review", "atm-spec"] };
+    expect(
+      offeredForColumnWithArming(SEEDED_AUTOMATIONS, "needs_review", order, undefined),
+    ).toEqual(offeredForColumn(SEEDED_AUTOMATIONS, "needs_review", order));
+  });
+
+  it("ignores an armed id the column does not offer (stale arming)", () => {
+    expect(
+      offeredForColumnWithArming(SEEDED_AUTOMATIONS, "doing", {}, "atm-review").map((a) => a.id),
+    ).toEqual(["atm-implement", "atm-standards"]);
+  });
+
+  it("pins before the digit cap, so an armed automation ranked past 9 keeps digit 1", () => {
+    const crowd: Automation[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `atm-crowd-${i}`,
+      scope: "project",
+      name: `Crowd ${i}`,
+      trigger: { kind: "enters-column", columns: ["doing"] },
+      steps: SEEDED_AUTOMATIONS[0].steps,
+    }));
+    const pinned = offeredForColumnWithArming(crowd, "doing", {}, "atm-crowd-9").map((a) => a.id);
+    expect(pinned).toHaveLength(9);
+    expect(pinned[0]).toBe("atm-crowd-9");
+    // The cap still holds — the pin displaces the tail, never widens the list.
+    expect(pinned).not.toContain("atm-crowd-8");
   });
 });
 
@@ -83,22 +123,11 @@ describe("reorderInColumn", () => {
   });
 
   it("lets the same automation hold different ranks in different columns", () => {
-    const order = reorderInColumn(SEEDED_AUTOMATIONS, { backlog: ["atm-grill"] }, "todo", 0, 0);
-    // Grill is alone in both; give Todo a second peer and rank grill below it.
-    const withPeer: Automation[] = [
-      ...SEEDED_AUTOMATIONS,
-      {
-        id: "atm-peer",
-        scope: "project",
-        name: "Peer",
-        trigger: { kind: "enters-column", columns: ["todo"] },
-        steps: SEEDED_AUTOMATIONS[0].steps,
-      },
-    ];
-    const ranked = reorderInColumn(withPeer, order, "todo", 0, 1);
-    expect(digitFor(withPeer, "backlog", ranked, "atm-grill")).toBe(1);
-    expect(digitFor(withPeer, "todo", ranked, "atm-grill")).toBe(2);
-    expect(digitFor(withPeer, "todo", ranked, "atm-peer")).toBe(1);
+    // Standards sweep is seeded into Doing and Needs Review. Rank it first in
+    // Needs Review and it still reads second in Doing — one record, two digits.
+    const ranked = reorderInColumn(SEEDED_AUTOMATIONS, {}, "needs_review", 1, 0);
+    expect(digitFor(SEEDED_AUTOMATIONS, "needs_review", ranked, "atm-standards")).toBe(1);
+    expect(digitFor(SEEDED_AUTOMATIONS, "doing", ranked, "atm-standards")).toBe(2);
   });
 });
 

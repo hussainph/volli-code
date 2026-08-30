@@ -13,6 +13,7 @@ import type {
   AutomationSkippedOccurrence,
   AutomationTrigger,
   ColumnArming,
+  ColumnAutomationOrder,
   ModelAccessSnapshot,
   ModelSelection,
   TicketStatus,
@@ -63,6 +64,16 @@ export type AutomationArmingReadOutcome =
 /** The same set after a write, plus the receipt for the command that changed it. */
 export type AutomationArmingOutcome =
   | { ok: true; armings: ColumnArming[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
+
+/** Every arranged column in the project — a read, with no command behind it. */
+export type AutomationColumnOrderReadOutcome =
+  | { ok: true; orders: ColumnAutomationOrder[] }
+  | { ok: false; error: string };
+
+/** The same set after a write, plus the receipt for the command that changed it. */
+export type AutomationColumnOrderOutcome =
+  | { ok: true; orders: ColumnAutomationOrder[]; receipt: AutomationCommandReceipt }
   | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
 export type AutomationRunHistoryOutcome =
@@ -193,6 +204,52 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       const outcome = await deps.engine.setColumnArming(input);
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       return { ok: true, armings: outcome.value, receipt: outcome.receipt };
+    },
+
+    /**
+     * One project's arranged columns — machine-local, never part of the
+     * record's list. Project-guarded like {@link list}, for its reason.
+     */
+    async columnOrders(projectId: string): Promise<AutomationColumnOrderReadOutcome> {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, orders: await deps.engine.columnOrders(projectId) };
+    },
+
+    /**
+     * Arranges one column's Offered list — which Automation reads as digit `1`
+     * when a card is dragged over it (VC-132).
+     *
+     * A durable command like the arming beside it, and validated far more
+     * lightly on purpose. Arming makes a column FIRE something, so it checks
+     * that the record exists, is listed in this project and is offered here;
+     * a rank only decides the ORDER of a list every reader re-filters against
+     * the Offered list anyway. An id that went stale between the lane's read
+     * and this write is inert rather than a refusal — refusing would make a
+     * lane un-arrangeable until someone found the row that had moved.
+     *
+     * What it does refuse is a request that could not have come from a lane:
+     * an unknown project, or a list naming one Automation twice, which would
+     * put one record in two slots of a list whose whole content is position.
+     *
+     * No `onMutation` fan-out — nothing about the shared record moved, and
+     * another window's list is unchanged by an arrangement belonging to this
+     * host.
+     */
+    async setColumnOrder(input: {
+      commandId: string;
+      projectId: string;
+      status: TicketStatus;
+      rankedAutomationIds: readonly string[];
+    }): Promise<AutomationColumnOrderOutcome> {
+      if (!(await deps.engine.hasCommand(input.commandId))) {
+        if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        if (new Set(input.rankedAutomationIds).size !== input.rankedAutomationIds.length) {
+          return { ok: false, error: "An automation can hold only one rank in a column." };
+        }
+      }
+      const outcome = await deps.engine.setColumnOrder(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, orders: outcome.value, receipt: outcome.receipt };
     },
 
     /**

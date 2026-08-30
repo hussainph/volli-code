@@ -8,7 +8,10 @@ import {
   automationHistory,
   duplicateName,
   groupByOwnership,
+  laneDropRank,
+  laneRowId,
   listingRunTarget,
+  parseLaneRowId,
   ownershipLabel,
   runAutomationLabel,
   runModelLabel,
@@ -148,6 +151,114 @@ describe("duplicateName", () => {
 
   it("takes the plain suffix when nothing has claimed it", () => {
     expect(duplicateName("Review", [])).toBe("Review (copy)");
+  });
+});
+
+describe("lane row identity", () => {
+  it("is the column AND the record, so one Automation can be two rows", () => {
+    expect(laneRowId("needs_review", "a1")).toBe("needs_review:a1");
+    expect(parseLaneRowId("needs_review:a1")).toEqual({
+      status: "needs_review",
+      automationId: "a1",
+    });
+  });
+
+  it("reads back nothing for an id that is not a lane row", () => {
+    expect(parseLaneRowId("a1")).toBeNull();
+    expect(parseLaneRowId("shipped:a1")).toBeNull();
+    expect(parseLaneRowId("doing:")).toBeNull();
+  });
+
+  it("survives an Automation id containing a colon", () => {
+    expect(parseLaneRowId(laneRowId("doing", "a:1"))).toEqual({
+      status: "doing",
+      automationId: "a:1",
+    });
+  });
+});
+
+describe("laneDropRank", () => {
+  const authoredIds = ["a", "b", "c"];
+
+  it("writes the arrangement a drop asks for", () => {
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b", "c"],
+        activeId: laneRowId("doing", "c"),
+        overId: laneRowId("doing", "a"),
+      }),
+    ).toEqual({ status: "doing", rankedAutomationIds: ["c", "a", "b"] });
+  });
+
+  it("leaves the pinned armed row's own rank alone", () => {
+    // "b" is armed, drawn at slot 1 and not draggable, so it is absent from
+    // `visibleIds` — and its authored slot survives everything moving past it.
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "c"],
+        activeId: laneRowId("doing", "c"),
+        overId: laneRowId("doing", "a"),
+      }),
+    ).toEqual({ status: "doing", rankedAutomationIds: ["c", "b", "a"] });
+  });
+
+  it("asks for nothing on a drop that changes nothing", () => {
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b", "c"],
+        activeId: laneRowId("doing", "a"),
+        overId: laneRowId("doing", "a"),
+      }),
+    ).toBeNull();
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b", "c"],
+        activeId: laneRowId("doing", "a"),
+        overId: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a drop into ANOTHER lane — membership is the Trigger, not a rank", () => {
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b", "c"],
+        activeId: laneRowId("doing", "a"),
+        overId: laneRowId("needs_review", "b"),
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a drop whose ids this lane does not draw", () => {
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b", "c"],
+        activeId: "not-a-lane-row",
+        overId: laneRowId("doing", "b"),
+      }),
+    ).toBeNull();
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b"],
+        activeId: laneRowId("doing", "c"),
+        overId: laneRowId("doing", "b"),
+      }),
+    ).toBeNull();
+    expect(
+      laneDropRank({
+        authoredIds,
+        visibleIds: ["a", "b"],
+        activeId: laneRowId("doing", "a"),
+        overId: laneRowId("doing", "c"),
+      }),
+    ).toBeNull();
   });
 });
 

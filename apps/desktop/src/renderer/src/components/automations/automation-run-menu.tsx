@@ -59,6 +59,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   selectArmings,
+  selectColumnRank,
   selectAutomations,
   selectPlanningLoaded,
   useAutomationsStore,
@@ -133,6 +134,9 @@ export function useAutomationRunOffer(
 ): TicketRailAutomations {
   const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
   const armings = useAutomationsStore((state) => selectArmings(state, projectId));
+  const rankedAutomationIds = useAutomationsStore((state) =>
+    selectColumnRank(state, projectId, status),
+  );
   const landed = useAutomationsStore((state) => selectPlanningLoaded(state, projectId));
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
@@ -162,7 +166,13 @@ export function useAutomationRunOffer(
   // `landed` adds the cold-cache half of the same rule: a slice that has never
   // been filled is not something to classify from either. The control keeps
   // saying it is reading rather than claiming this project has no Automations.
-  return ticketRailAutomations({ automations, armings, status, ready: read && landed });
+  return ticketRailAutomations({
+    automations,
+    armings,
+    status,
+    rankedAutomationIds,
+    ready: read && landed,
+  });
 }
 
 /**

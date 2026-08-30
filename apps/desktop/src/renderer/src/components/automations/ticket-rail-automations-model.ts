@@ -61,7 +61,7 @@ export type RailRunAction =
 export interface TicketRailAutomations {
   /** The split button's default press. */
   primary: RailRunAction;
-  /** This column's Offered list, armed one first — the caret menu's rows. */
+  /** This column's Offered list in its authored rank — the caret menu's rows. */
   offered: readonly Automation[];
   /**
    * Whether this project lists any Automation at all. False is the empty state
@@ -85,6 +85,13 @@ export function ticketRailAutomations(input: {
   automations: readonly Automation[];
   armings: readonly ColumnArming[];
   status: TicketStatus;
+  /**
+   * This column's authored rank (VC-132) — the order its lane arranges, so the
+   * menu and the lane are one list read twice. Deliberately NOT the drag's
+   * pinned shape: the pin exists to protect what digit `1` means, and this menu
+   * has no digits.
+   */
+  rankedAutomationIds: readonly string[];
   /** Whether the reads behind `automations`/`armings` have landed for this rail. */
   ready: boolean;
 }): TicketRailAutomations {
@@ -93,7 +100,11 @@ export function ticketRailAutomations(input: {
   const armed = armedAutomationFor(input.automations, input.armings, input.status);
   return {
     primary: armed === null ? { kind: "run-once" } : { kind: "automation", automation: armed },
-    offered: offeredAutomationsForColumn(input.automations, input.status, armed?.id ?? null),
+    offered: offeredAutomationsForColumn(
+      input.automations,
+      input.status,
+      input.rankedAutomationIds,
+    ),
     listsAny: input.automations.length > 0,
     ready: true,
   };

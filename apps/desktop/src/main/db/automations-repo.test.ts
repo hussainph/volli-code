@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, offeredAutomationsForColumn } from "@volli/shared";
 import type { ModelSelection } from "@volli/shared";
 
 import {
@@ -13,6 +13,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listColumnOrders,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -20,6 +21,7 @@ import {
   readAutomationRunAttendance,
   recordAutomationRun,
   setColumnArming,
+  setColumnOrder,
   updateAutomation,
 } from "./automations-repo";
 import { insertProject } from "./projects-repo";
@@ -902,5 +904,172 @@ describe("Run attendance (VC-133)", () => {
     expect(() => ctx.db.prepare("UPDATE automation_runs SET attendance = 'maybe'").run()).toThrow(
       /CHECK constraint failed/,
     );
+  });
+});
+
+describe("column order (migration 034)", () => {
+  /** One project with two Automations offered in Doing, for the rank to arrange. */
+  function twoOffered() {
+    const { project } = seeded();
+    const first = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "A",
+        instructions: "x",
+        trigger: { kind: "columns", columns: ["doing"] },
+        runtime: null,
+      },
+      1000,
+    );
+    const second = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "B",
+        instructions: "x",
+        trigger: { kind: "columns", columns: ["doing"] },
+        runtime: null,
+      },
+      1000,
+    );
+    return { project, first, second };
+  }
+
+  it("round-trips one column's rank and replaces it whole on the next write", () => {
+    const { project, first, second } = twoOffered();
+
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id, second.id] },
+      1000,
+    );
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [second.id, first.id] },
+      2000,
+    );
+
+    expect(listColumnOrders(ctx.db, project.id)).toEqual([
+      {
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: [second.id, first.id],
+        orderedAt: 2000,
+      },
+    ]);
+  });
+
+  it("keeps each column's rank to itself — one Automation, two ranks", () => {
+    const { project, first, second } = twoOffered();
+
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id, second.id] },
+      1000,
+    );
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "needs_review", rankedAutomationIds: [second.id, first.id] },
+      1000,
+    );
+
+    const orders = listColumnOrders(ctx.db, project.id);
+    expect(orders).toHaveLength(2);
+    expect(orders.find((order) => order.status === "doing")?.rankedAutomationIds).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(orders.find((order) => order.status === "needs_review")?.rankedAutomationIds).toEqual([
+      second.id,
+      first.id,
+    ]);
+  });
+
+  it("stores an empty rank as no row at all — 'arranged into nothing' IS 'never arranged'", () => {
+    const { project, first } = twoOffered();
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id] },
+      1000,
+    );
+
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [] },
+      2000,
+    );
+
+    expect(listColumnOrders(ctx.db, project.id)).toEqual([]);
+  });
+
+  it("keeps a rank naming a deleted Automation, inert rather than dangling", () => {
+    // Unlike the arming beside it, a rank is a LIST and is stale-tolerant by
+    // construction: every read filters it against the Offered list, so a
+    // deleted record leaves an id nothing resolves rather than a broken row.
+    const { project, first, second } = twoOffered();
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id, second.id] },
+      1000,
+    );
+
+    deleteAutomation(ctx.db, first.id);
+
+    expect(listColumnOrders(ctx.db, project.id)[0]?.rankedAutomationIds).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(offeredAutomationsForColumn([second], "doing", [first.id, second.id])).toEqual([second]);
+  });
+
+  it("drops a row this build cannot read, per column and never per project", () => {
+    const { project, first } = twoOffered();
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id] },
+      1000,
+    );
+    // Three hand-edited rows from a future build: a column with no name here,
+    // a rank that is not a list of ids, and one that is not a list at all.
+    ctx.db
+      .prepare(
+        "INSERT INTO automation_column_order (project_id, status, ranked_ids, ordered_at) VALUES (?, 'shipped', '[\"a\"]', 1)",
+      )
+      .run(project.id);
+    ctx.db
+      .prepare(
+        "INSERT INTO automation_column_order (project_id, status, ranked_ids, ordered_at) VALUES (?, 'todo', '[1,2]', 1)",
+      )
+      .run(project.id);
+    ctx.db
+      .prepare(
+        "INSERT INTO automation_column_order (project_id, status, ranked_ids, ordered_at) VALUES (?, 'done', '\"nope\"', 1)",
+      )
+      .run(project.id);
+
+    // The column we can read is untouched: a lost rank costs an arrangement,
+    // never a Run, so it fails closed one row at a time.
+    expect(listColumnOrders(ctx.db, project.id)).toEqual([
+      {
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: [first.id],
+        orderedAt: 1000,
+      },
+    ]);
+  });
+
+  it("goes with the project, like every other machine-local projection", () => {
+    const { project, first } = twoOffered();
+    setColumnOrder(
+      ctx.db,
+      { projectId: project.id, status: "doing", rankedAutomationIds: [first.id] },
+      1000,
+    );
+
+    ctx.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
+
+    expect(listColumnOrders(ctx.db, project.id)).toEqual([]);
   });
 });

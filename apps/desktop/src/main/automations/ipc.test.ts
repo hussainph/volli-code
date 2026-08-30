@@ -11,6 +11,8 @@ import type {
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  AutomationColumnOrdersResult,
+  AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
   AutomationSkipsResult,
   Result,
@@ -142,6 +144,8 @@ describe("automation IPC", () => {
       "volli:automation-runs-for-ticket",
       "volli:automation-arming-list",
       "volli:automation-arm",
+      "volli:automation-column-order-list",
+      "volli:automation-set-column-order",
       "volli:automation-runs-for-project",
       "volli:automation-enablement",
       "volli:automation-set-enabled",
@@ -1358,5 +1362,192 @@ describe("automation IPC", () => {
       code: "RUN_FAILED",
       error: "The Session runtime is not available this launch.",
     });
+  });
+});
+
+describe("the column's own order (VC-132)", () => {
+  /** Two Automations offered in Doing, so a rank has something to arrange. */
+  async function twoOffered() {
+    const seeded = setup();
+    const first = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: seeded.project.id,
+      name: "First",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing", "needs_review"] },
+      runtime: null,
+    });
+    const second = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: seeded.project.id,
+      name: "Second",
+      instructions: "/tdd",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!first.ok || !second.ok) throw new Error("refused");
+    seeded.mutations.length = 0;
+    return { ...seeded, first: first.automation, second: second.automation };
+  }
+
+  it("arranges a column through command → event → receipt, and answers with the whole set", async () => {
+    const { project, first, second, mutations } = await twoOffered();
+
+    expect(
+      await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: [second.id, first.id],
+      }),
+    ).toMatchObject({
+      ok: true,
+      orders: [{ status: "doing", rankedAutomationIds: [second.id, first.id] }],
+      receipt: { status: "completed" },
+    });
+
+    expect(
+      await call<AutomationColumnOrdersResult>("volli:automation-column-order-list", {
+        projectId: project.id,
+      }),
+    ).toMatchObject({
+      ok: true,
+      orders: [{ status: "doing", rankedAutomationIds: [second.id, first.id] }],
+    });
+
+    // Nothing about the shared record moved: an arrangement is this host's own
+    // choice about its own board, exactly as the arming is.
+    expect(mutations).toEqual([]);
+    expect(
+      ctx.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM automation_events WHERE kind = 'automation.column-order.changed'",
+        )
+        .get(),
+    ).toEqual({ n: 1 });
+  });
+
+  it("keeps each column's rank to itself — one Automation, two ranks", async () => {
+    const { project, first, second } = await twoOffered();
+    await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      status: "doing",
+      rankedAutomationIds: [second.id, first.id],
+    });
+    const both = await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      status: "needs_review",
+      rankedAutomationIds: [first.id],
+    });
+
+    if (!both.ok) throw new Error("refused");
+    expect(both.orders).toHaveLength(2);
+    expect(both.orders.find((order) => order.status === "doing")?.rankedAutomationIds).toEqual([
+      second.id,
+      first.id,
+    ]);
+    expect(
+      both.orders.find((order) => order.status === "needs_review")?.rankedAutomationIds,
+    ).toEqual([first.id]);
+  });
+
+  it("replays one arrangement command rather than arranging twice", async () => {
+    const { project, first, second } = await twoOffered();
+    const request = {
+      commandId: "66666666-6666-4666-8666-666666666666",
+      projectId: project.id,
+      status: "doing",
+      rankedAutomationIds: [second.id, first.id],
+    };
+
+    const once = await call<AutomationSetColumnOrderResult>(
+      "volli:automation-set-column-order",
+      request,
+    );
+    const twice = await call<AutomationSetColumnOrderResult>(
+      "volli:automation-set-column-order",
+      request,
+    );
+
+    expect(once).toMatchObject({ ok: true, receipt: { status: "completed" } });
+    expect(twice).toEqual(once);
+    expect(
+      ctx.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM automation_events WHERE kind = 'automation.column-order.changed'",
+        )
+        .get(),
+    ).toEqual({ n: 1 });
+  });
+
+  it("tolerates a rank naming an Automation this column no longer offers", async () => {
+    // A rank is a list every reader re-filters against the Offered list, so a
+    // stale id is inert. Refusing it would make a lane un-arrangeable until
+    // somebody found the row that had moved.
+    const { project, first } = await twoOffered();
+    expect(
+      await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: ["ghost", first.id],
+      }),
+    ).toMatchObject({
+      ok: true,
+      orders: [{ rankedAutomationIds: ["ghost", first.id] }],
+    });
+  });
+
+  it("refuses one Automation holding two ranks, and an unknown project", async () => {
+    const { project, first } = await twoOffered();
+    expect(
+      await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: [first.id, first.id],
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/only one rank/) });
+    expect(
+      await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+        commandId: randomUUID(),
+        projectId: "no-such-project",
+        status: "doing",
+        rankedAutomationIds: [],
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+    expect(
+      await call<AutomationColumnOrdersResult>("volli:automation-column-order-list", {
+        projectId: "no-such-project",
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+    // Neither refusal recorded a command: the live-fact checks run before the
+    // intent, exactly as create's and arm's do.
+    expect(
+      ctx.db
+        .prepare("SELECT COUNT(*) AS n FROM automation_events WHERE kind LIKE 'automation.column%'")
+        .get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("clears a column's rank when the arrangement empties", async () => {
+    const { project, first, second } = await twoOffered();
+    await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      status: "doing",
+      rankedAutomationIds: [second.id, first.id],
+    });
+
+    expect(
+      await call<AutomationSetColumnOrderResult>("volli:automation-set-column-order", {
+        commandId: randomUUID(),
+        projectId: project.id,
+        status: "doing",
+        rankedAutomationIds: [],
+      }),
+    ).toMatchObject({ ok: true, orders: [] });
   });
 });

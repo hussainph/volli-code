@@ -22,12 +22,16 @@
 import { create } from "zustand";
 import {
   armedAutomationFor,
+  effectiveArmedAutomationFor,
   errorMessage,
   isAutomationRuntimePin,
+  offeredAutomationsForColumn,
+  offeredAutomationsInDigitOrder,
   type Automation,
   type AutomationRun,
   type AutomationSkippedOccurrence,
   type ColumnArming,
+  type ColumnAutomationOrder,
   type TicketStatus,
 } from "@volli/shared";
 
@@ -65,6 +69,16 @@ interface AutomationsState {
    * Automation that could be carried along with the record.
    */
   armingByProject: Record<string, readonly ColumnArming[]>;
+  /**
+   * projectId → the rank each of its columns gives its Offered list (VC-132).
+   *
+   * A third slice beside the arming and for the same reason: the order is a
+   * property of the COLUMN and of THIS machine, never a field on an Automation
+   * that could travel with the record. It is read beside the arming too — the
+   * digit a lane prints and the digit a drag answers are one list, composed by
+   * {@link offeredInDigitOrder}.
+   */
+  orderByProject: Record<string, readonly ColumnAutomationOrder[]>;
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
   /**
@@ -125,6 +139,18 @@ interface AutomationsState {
   refreshEnablement(): Promise<boolean>;
   /** Re-fetches one project's armed columns. Resolves whether the read landed. */
   refreshArming(projectId: string): Promise<boolean>;
+  /** Re-fetches one project's column ranks. Resolves whether the read landed. */
+  refreshOrder(projectId: string): Promise<boolean>;
+  /**
+   * Arranges one column's Offered list — the whole new rank, best first.
+   * Resolves the refusal message, or `null` on success (the answer carries the
+   * project's whole new order set, so nothing is re-fetched afterwards).
+   */
+  setColumnOrder(input: {
+    projectId: string;
+    status: TicketStatus;
+    rankedAutomationIds: readonly string[];
+  }): Promise<string | null>;
   /**
    * Arms one column with one offered Automation, or disarms it with
    * `automationId: null`. Resolves the refusal message, or `null` on success
@@ -137,8 +163,8 @@ interface AutomationsState {
     automationId: string | null;
   }): Promise<string | null>;
   /**
-   * Fills whichever of this project's three caches has never landed, and
-   * resolves once they all have (VC-128).
+   * Fills whichever of this project's four caches has never landed, and
+   * resolves once they all have (VC-128, VC-132).
    *
    * For the one caller that cannot answer from an empty cache: a Deliberate
    * move arriving before the board's own reads resolved would otherwise be
@@ -190,6 +216,7 @@ export function createAutomationsStore() {
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
     armingByProject: {},
+    orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
     runsByTicket: {},
@@ -226,6 +253,45 @@ export function createAutomationsStore() {
       } catch (error) {
         toastError(`Couldn't load armed columns: ${errorMessage(error)}`);
         return false;
+      }
+    },
+
+    async refreshOrder(projectId) {
+      try {
+        const result = await window.api.automations.columnOrders({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load automation order: ${result.error}`);
+          return false;
+        }
+        set((state) => ({
+          orderByProject: { ...state.orderByProject, [projectId]: result.orders },
+        }));
+        return true;
+      } catch (error) {
+        toastError(`Couldn't load automation order: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+
+    async setColumnOrder(input) {
+      try {
+        const result = await window.api.automations.setColumnOrder({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          projectId: input.projectId,
+          status: input.status,
+          rankedAutomationIds: [...input.rankedAutomationIds],
+        });
+        // Resolved rather than toasted, like `arm`'s: the lane that asked is
+        // still on screen and is where a correction belongs.
+        if (!result.ok) return result.error;
+        set((state) => ({
+          orderByProject: { ...state.orderByProject, [input.projectId]: result.orders },
+        }));
+        return null;
+      } catch (error) {
+        return errorMessage(error);
       }
     },
 
@@ -313,6 +379,10 @@ export function createAutomationsStore() {
       if (state.byProject[projectId] === undefined) reads.push(state.refresh(projectId));
       if (state.armingByProject[projectId] === undefined)
         reads.push(state.refreshArming(projectId));
+      // The order belongs in the cold-cache door too (VC-132): a drop whose
+      // pick names a digit would otherwise be classified against a rank that
+      // has not landed, which is the same silent miss the arming cache had.
+      if (state.orderByProject[projectId] === undefined) reads.push(state.refreshOrder(projectId));
       if (!state.enablementRead) reads.push(state.refreshEnablement());
       if (reads.length === 0) return;
       const job = Promise.all(reads).then(() => undefined);
@@ -459,6 +529,8 @@ export const useAutomationsStore = createAutomationsStore();
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_ARMINGS: readonly ColumnArming[] = [];
+const NO_ORDERS: readonly ColumnAutomationOrder[] = [];
+const NO_RANK: readonly string[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
 
 /** One Ticket's Runs, newest first — a frozen empty array before its first read. */
@@ -480,6 +552,31 @@ export function selectAutomations(
 /** One project's armed columns — a frozen empty array before its first read. */
 export function selectArmings(state: AutomationsState, projectId: string): readonly ColumnArming[] {
   return state.armingByProject[projectId] ?? NO_ARMINGS;
+}
+
+/** One project's arranged columns — a frozen empty array before its first read. */
+export function selectColumnOrders(
+  state: AutomationsState,
+  projectId: string,
+): readonly ColumnAutomationOrder[] {
+  return state.orderByProject[projectId] ?? NO_ORDERS;
+}
+
+/** One column's authored rank — a frozen empty array for a column nobody arranged. */
+export function selectColumnRank(
+  state: AutomationsState,
+  projectId: string,
+  status: TicketStatus,
+): readonly string[] {
+  return rankFor(selectColumnOrders(state, projectId), status);
+}
+
+/** The same lookup for a surface that already holds the order rows. */
+function rankFor(
+  orders: readonly ColumnAutomationOrder[],
+  status: TicketStatus,
+): readonly string[] {
+  return orders.find((order) => order.status === status)?.rankedAutomationIds ?? NO_RANK;
 }
 
 /**
@@ -524,4 +621,72 @@ export function selectArmedAutomation(
     selectArmings(state, projectId),
     status,
   );
+}
+
+/**
+ * The four machine-local slices an Offered list is composed from, in the shape
+ * a component can actually hold them.
+ *
+ * Slices rather than the whole state, and that is forced rather than stylistic:
+ * a composition mints an array on every read, so no surface may SUBSCRIBE to
+ * one. Every surface therefore subscribes to these four raw (each is a stable
+ * reference the store swaps only when it changes) and composes inside a memo —
+ * and a memo may only read what it was handed, since anything else is a
+ * dependency the compiler cannot see. Handing the slices in is what lets the
+ * one composition below be the one every surface runs.
+ */
+export interface OfferedListSlices {
+  automations: readonly Automation[];
+  armings: readonly ColumnArming[];
+  orders: readonly ColumnAutomationOrder[];
+  /** The ids switched on THIS machine — {@link AutomationsState.enabledIds}. */
+  enabledAutomationIds: readonly string[];
+}
+
+/**
+ * What a column would fire on a PLAIN drop right now: armed, and switched on
+ * here (VC-132). The pin's own source — see the shared rule.
+ */
+export function effectiveArmedIn(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): Automation | null {
+  return effectiveArmedAutomationFor({
+    automations: slices.automations,
+    armings: slices.armings,
+    enabledAutomationIds: slices.enabledAutomationIds,
+    status,
+  });
+}
+
+/**
+ * The column's Offered list in DIGIT order (VC-132): the authored rank, the
+ * effective armed Automation pinned to `1`, capped at nine.
+ *
+ * The one composition of all four slices, so the digit a lane prints and the
+ * digit a drag answers can never be two lists. Not memoized — every caller
+ * derives it inside a `useMemo` of its own.
+ */
+export function offeredInDigitOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsInDigitOrder({
+    automations: slices.automations,
+    status,
+    rankedAutomationIds: rankFor(slices.orders, status),
+    effectiveArmedAutomationId: effectiveArmedIn(slices, status)?.id ?? null,
+  });
+}
+
+/**
+ * The same list in AUTHORED rank order — uncapped, unpinned: what a surface
+ * shows when it is choosing a record rather than pressing a digit (the column's
+ * bolt menu, the lane's own arrangement).
+ */
+export function offeredInRankOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsForColumn(slices.automations, status, rankFor(slices.orders, status));
 }

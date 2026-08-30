@@ -173,6 +173,13 @@ export default defineConfig(({ mode }) => ({
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
+        // The ⌥-drag picker's whole decision surface (VC-132): whether a column
+        // is expanded into landing targets, which row a release obeys, and what
+        // that release chose. Gated for `armed-move-model.ts`'s reason one file
+        // below — a missed branch here is a Run a person did not aim at, or an
+        // ambiguous drop region in the one gesture whose promise is that none
+        // remains.
+        "src/components/board/drag-picker-model.ts",
         "src/components/board/board-session-activity.ts",
         // What the board's header says now that it no longer says its own name
         // (VC-55): the count that qualifies itself under a filter, and the live

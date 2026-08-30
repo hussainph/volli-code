@@ -1249,6 +1249,28 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
     invalidError: "Invalid automation arm request",
   },
+  "volli:automation-column-order-list": {
+    guard: (args): args is IpcArgs<"volli:automation-column-order-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation order request",
+  },
+  "volli:automation-set-column-order": {
+    // A `commandId` like every other write: the PROJECTION is machine-local
+    // (`automation_column_order`), the INTENT is a durable command with an
+    // event and a receipt (docs/BOUNDARIES.md rule 5). The whole list travels
+    // and every element must be a string, because this is what a lane's drop
+    // MEANS — a shape-check here is the last place a non-id can be turned away
+    // before it is stored as somebody's digit.
+    guard: (args): args is IpcArgs<"volli:automation-set-column-order"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isTicketStatus(args[0]["status"]) &&
+      Array.isArray(args[0]["rankedAutomationIds"]) &&
+      args[0]["rankedAutomationIds"].every((id) => typeof id === "string"),
+    invalidError: "Invalid automation order request",
+  },
   "volli:automation-runs-for-project": {
     guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",

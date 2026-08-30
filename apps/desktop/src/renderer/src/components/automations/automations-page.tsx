@@ -10,12 +10,14 @@
  * carries the guardrail that Home must not become a junk drawer, and VC-112
  * names this page as the fourth `NavKey` for that reason.
  *
- * A FLAT LIST, deliberately. VC-112's eventual drawing is one lane per column
- * holding that column's Offered list in digit order; that layout belongs to
- * the ticket that owns per-column ordering (VC-132), and building a lane view
- * before columns can be a Trigger would be drawing lanes with nothing to put
- * in them. What this page owes today is the whole record lifecycle — create,
- * edit, duplicate, enable, disable, delete — the Run history, and Run itself.
+ * TWO drawings of one set, and the split is the point (VC-132). The **lanes**
+ * across the top are one per board column, holding that column's Offered list
+ * in digit order: they exist to arrange the ORDER, which is the one fact about
+ * an Automation that is a property of a column rather than of the record. The
+ * **flat list** below them owns the whole record lifecycle — create, edit,
+ * duplicate, enable, disable, delete — plus the Run history and Run itself.
+ * The lanes render and arrange; they never author, because a second authoring
+ * surface is a second authoring surface however it is drawn.
  *
  * Three rows of vocabulary worth stating once, because all three are
  * load-bearing:
@@ -64,6 +66,7 @@ import {
   triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorDialog } from "./automation-editor";
+import { AutomationLanes } from "./automation-lanes";
 import {
   openRunSession,
   runAutomationFromListing,
@@ -145,6 +148,8 @@ function AutomationsSurface({
   const closeEditor = useAutomationsStore((state) => state.closeEditor);
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshRuns = useAutomationsStore((state) => state.refreshRuns);
+  const refreshArming = useAutomationsStore((state) => state.refreshArming);
+  const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
   const refreshSkips = useAutomationsStore((state) => state.refreshSkips);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
 
@@ -159,8 +164,22 @@ function AutomationsSurface({
     // The scheduler broadcasts a planning change when it records a skip, so a
     // due time missed while this page is open lands here without a reload.
     void refreshSkips(projectId);
+    // The lanes compose the same four machine-local reads the drag does, so a
+    // digit printed here is the digit that works mid-drag — which is only true
+    // if the arming and the order arrive with the list.
+    void refreshArming(projectId);
+    void refreshOrder(projectId);
     void refreshEnablement();
-  }, [projectId, planningVersion, refresh, refreshRuns, refreshSkips, refreshEnablement]);
+  }, [
+    projectId,
+    planningVersion,
+    refresh,
+    refreshRuns,
+    refreshSkips,
+    refreshArming,
+    refreshOrder,
+    refreshEnablement,
+  ]);
 
   // The editor is this page's dialog, so leaving the page closes it. Without
   // this, walking away mid-draft would leave the form armed to reappear the
@@ -188,6 +207,10 @@ function AutomationsSurface({
           <EmptyAutomations projectId={projectId} />
         ) : (
           <>
+            {/* Where a column's order is arranged (VC-132). Above the list
+                because it answers the question the list cannot: not what an
+                Automation IS, but which one a column reaches for first. */}
+            <AutomationLanes projectId={projectId} />
             <AutomationSection
               title="This project"
               projectId={projectId}

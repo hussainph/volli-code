@@ -61,6 +61,7 @@ let run: ReturnType<typeof vi.fn>;
 /** The three reads a cold cache fills itself from. */
 let list: ReturnType<typeof vi.fn>;
 let armings: ReturnType<typeof vi.fn>;
+let columnOrders: ReturnType<typeof vi.fn>;
 let enablement: ReturnType<typeof vi.fn>;
 
 function seed(
@@ -74,6 +75,7 @@ function seed(
   useAutomationsStore.setState({
     byProject: { p1: [AUTOMATION] },
     armingByProject: { p1: options.armings ?? [ARMING] },
+    orderByProject: { p1: [] },
     enabledIds: options.enabledIds ?? [AUTOMATION.id],
     // Warm: these tests are about a board someone is already looking at. The
     // cold-cache path has its own describe below.
@@ -107,10 +109,11 @@ beforeEach(() => {
   );
   list = vi.fn(() => Promise.resolve({ ok: true, automations: [AUTOMATION] }));
   armings = vi.fn(() => Promise.resolve({ ok: true, armings: [ARMING] }));
+  columnOrders = vi.fn(() => Promise.resolve({ ok: true, orders: [] }));
   enablement = vi.fn(() => Promise.resolve({ ok: true, enabledAutomationIds: [AUTOMATION.id] }));
   vi.stubGlobal("window", {
     api: {
-      automations: { run, list, armings, enablement },
+      automations: { run, list, armings, columnOrders, enablement },
       sessions: { list: vi.fn(() => Promise.resolve({ ok: true, sessions: [] })) },
       // Adopting the fresh Session opens the RPC link. Stubbed rather than
       // avoided: a Run that could not be adopted is a Run nothing on screen
@@ -131,6 +134,7 @@ afterEach(() => {
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
+    orderByProject: {},
     enabledIds: [],
     enablementRead: false,
   });
@@ -299,6 +303,7 @@ describe("a cold cache", () => {
     useAutomationsStore.setState({
       byProject: {},
       armingByProject: {},
+      orderByProject: {},
       enabledIds: [],
       enablementRead: false,
     });
@@ -315,6 +320,7 @@ describe("a cold cache", () => {
     expect(useArmedRunStore.getState().pending).toEqual({});
     expect(list).toHaveBeenCalledTimes(1);
     expect(armings).toHaveBeenCalledTimes(1);
+    expect(columnOrders).toHaveBeenCalledTimes(1);
     expect(enablement).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(0);
@@ -350,6 +356,85 @@ describe("a cold cache", () => {
 
     await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
     expect(useArmedRunStore.getState().pending).toEqual({});
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A release on a named landing target (VC-132). The rule under test is the one
+ * the rig could not prove and the AC settles: a named target STARTS the same
+ * window rather than bypassing it.
+ */
+describe("what the ⌥ picker named", () => {
+  const OTHER: Automation = { ...AUTOMATION, id: "a2", name: "Two-opinion review" };
+
+  it("opens the same 3500 ms window, with the same one control, for a picked Automation", async () => {
+    seed({ armings: [] });
+    useAutomationsStore.setState({ byProject: { p1: [AUTOMATION, OTHER] } });
+
+    noteDeliberateMove({
+      projectId: "p1",
+      ticketId: "t1",
+      from: "todo",
+      to: "doing",
+      choice: { kind: "automation", automationId: "a2" },
+    });
+
+    const open = useArmedRunStore.getState().pending["t1"];
+    expect(open?.automationName).toBe("Two-opinion review");
+    expect(open?.startAt).toBe(open!.openedAt + ARMED_RUN_DELAY_MS);
+    expect(run).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({ target: { kind: "automation", automationId: "a2" } }),
+    );
+  });
+
+  it("is cancelled by the same one control", async () => {
+    seed({ armings: [] });
+    useAutomationsStore.setState({ byProject: { p1: [AUTOMATION, OTHER] } });
+    noteDeliberateMove({
+      projectId: "p1",
+      ticketId: "t1",
+      from: "todo",
+      to: "doing",
+      choice: { kind: "automation", automationId: "a2" },
+    });
+
+    cancelArmedRun("t1");
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("survives a disarm inside the window — the pick never depended on it", async () => {
+    seed();
+    noteDeliberateMove({
+      projectId: "p1",
+      ticketId: "t1",
+      from: "todo",
+      to: "doing",
+      choice: { kind: "automation", automationId: "a1" },
+    });
+    useAutomationsStore.setState({ armingByProject: { p1: [] }, enabledIds: [] });
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts nothing at all for the Move only target", async () => {
+    seed();
+    noteDeliberateMove({
+      projectId: "p1",
+      ticketId: "t1",
+      from: "todo",
+      to: "doing",
+      choice: { kind: "move-only" },
+    });
+
+    expect(useArmedRunStore.getState().pending).toEqual({});
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
     expect(run).not.toHaveBeenCalled();
   });
 });
