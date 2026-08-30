@@ -13,6 +13,14 @@
  * So this asserts the shipped artifact, not the patch file: reading
  * `patches/…` would only prove the patch still exists on disk, which is the
  * half that was never in doubt.
+ *
+ * The patch now carries TWO guards, because the first one turned out to cover
+ * only half the loop (VC-221). `sameMeasuredRects` stops `useRects` setting an
+ * unchanged VALUE; `sameScrollableAncestors` stops `useScrollableAncestors`
+ * minting a new array IDENTITY for an unchanged chain — which re-armed both
+ * `useRects` and `useScrollOffsets` on every commit and reached React error
+ * #185 by itself. Losing either one brings a board-killing drag crash back, so
+ * both are asserted on every build a consumer can reach.
  */
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -35,11 +43,26 @@ describe("@dnd-kit/core patch", () => {
     expect(dndKitBuild("core.esm.js")).toContain("function sameMeasuredRects(");
   });
 
+  it("guards useScrollableAncestors against minting a new identity (ESM build)", () => {
+    // VC-221: the value guard above cannot see this one. A card and the column
+    // holding it have different PARENTS but the same scroll chain, so dnd-kit's
+    // own parent check misses and hands back a fresh array — which is a new
+    // dependency for `useRects` and `useScrollOffsets` on every commit.
+    const esm = dndKitBuild("core.esm.js");
+    expect(esm).toContain("function sameScrollableAncestors(");
+    // …and it is actually CONSULTED, not merely defined.
+    expect(esm).toContain("sameScrollableAncestors(previousValue, next)");
+  });
+
   it("guards the CommonJS builds too", () => {
-    expect(dndKitBuild("core.cjs.development.js")).toContain("function sameMeasuredRects(");
-    // Minified, so the guard is inlined rather than named — its private prefix
-    // is the only stable handle on it.
-    expect(dndKitBuild("core.cjs.production.min.js")).toContain("_vrRef");
+    const development = dndKitBuild("core.cjs.development.js");
+    expect(development).toContain("function sameMeasuredRects(");
+    expect(development).toContain("function sameScrollableAncestors(");
+    // Minified, so the guards are inlined rather than named — their private
+    // prefixes are the only stable handle on them.
+    const production = dndKitBuild("core.cjs.production.min.js");
+    expect(production).toContain("_vrRef");
+    expect(production).toContain("_vsaPick");
   });
 
   it("no longer hands setRects an unconditionally fresh array", () => {

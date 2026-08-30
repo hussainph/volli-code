@@ -32,7 +32,7 @@ overrides:
 packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
-  '@dnd-kit/core@6.3.1': d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd
+  '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-ai@0.84.3': 3b8aea53eb86b4ff3eab62ecd350584b4310cf99826eb57c4c97930e462b929d
   restty@0.2.0: a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af
 
@@ -54,13 +54,13 @@ importers:
     dependencies:
       '@dnd-kit/core':
         specifier: ^6.3.1
-        version: 6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        version: 6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@dnd-kit/modifiers':
         specifier: ^9.0.0
-        version: 9.0.0(@dnd-kit/core@6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
+        version: 9.0.0(@dnd-kit/core@6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       '@dnd-kit/sortable':
         specifier: ^10.0.0
-        version: 10.0.0(@dnd-kit/core@6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
+        version: 10.0.0(@dnd-kit/core@6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.8)
@@ -8472,7 +8472,7 @@ snapshots:
       react: 19.2.8
       tslib: 2.8.1
 
-  '@dnd-kit/core@6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@dnd-kit/core@6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@dnd-kit/accessibility': 3.1.1(react@19.2.8)
       '@dnd-kit/utilities': 3.2.2(react@19.2.8)
@@ -8480,16 +8480,16 @@ snapshots:
       react-dom: 19.2.8(react@19.2.8)
       tslib: 2.8.1
 
-  '@dnd-kit/modifiers@9.0.0(@dnd-kit/core@6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)':
+  '@dnd-kit/modifiers@9.0.0(@dnd-kit/core@6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@dnd-kit/core': 6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@dnd-kit/core': 6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@dnd-kit/utilities': 3.2.2(react@19.2.8)
       react: 19.2.8
       tslib: 2.8.1
 
-  '@dnd-kit/sortable@10.0.0(@dnd-kit/core@6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)':
+  '@dnd-kit/sortable@10.0.0(@dnd-kit/core@6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@dnd-kit/core': 6.3.1(patch_hash=d09b21283e0e4bde5825e0a98b613934fdb88c8812da390c32247d9a86ce54bd)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@dnd-kit/core': 6.3.1(patch_hash=b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@dnd-kit/utilities': 3.2.2(react@19.2.8)
       react: 19.2.8
       tslib: 2.8.1
