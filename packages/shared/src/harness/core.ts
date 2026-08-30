@@ -43,23 +43,24 @@ export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()]
 
 /**
  * The begin/end markers a fenced managed block wears, per comment syntax. One
- * table, consumed by the merge below and by the installer's body-extraction and
- * uninstall-excision regexes (`harness-install.ts`), so the three sites that
- * have to recognize the same block cannot drift apart.
+ * table, consumed by the merge below, by {@link fencedBody}'s end-marker scan,
+ * and — through {@link fencedBlockPattern} — by the installer's uninstall
+ * excision (`harness-install.ts`), so the sites that have to recognize the same
+ * block cannot drift apart.
  */
 const FENCE_MARKERS: Record<FenceComment, { begin(version: number): string; end: string }> = {
   html: { begin: (version) => `<!-- volli:begin v=${version} -->`, end: "<!-- volli:end -->" },
   hash: { begin: (version) => `# volli:begin v=${version}`, end: "# volli:end" },
 };
 
-const FENCE_PATTERNS: Record<FenceComment, { block: string; body: string }> = {
+const FENCE_PATTERNS: Record<FenceComment, { block: string; begin: string }> = {
   html: {
     block: "<!-- volli:begin v=\\d+ -->[\\s\\S]*?<!-- volli:end -->",
-    body: "<!-- volli:begin v=\\d+ -->\\r?\\n?([\\s\\S]*?)\\r?\\n?<!-- volli:end -->",
+    begin: "<!-- volli:begin v=\\d+ -->",
   },
   hash: {
     block: "# volli:begin v=\\d+[\\s\\S]*?# volli:end",
-    body: "# volli:begin v=\\d+ *\\r?\\n?([\\s\\S]*?)\\r?\\n?# volli:end",
+    begin: "# volli:begin v=\\d+ *",
   },
 };
 
@@ -68,14 +69,49 @@ export function fencedBlockPattern(comment: FenceComment = "html"): RegExp {
   return new RegExp(FENCE_PATTERNS[comment].block);
 }
 
+const CR = 0x0d;
+const LF = 0x0a;
+
+/** Index just past one optional `\r?\n` line ending at `index`. */
+function skipLineEnding(text: string, index: number): number {
+  let i = index;
+  if (text.charCodeAt(i) === CR) i += 1;
+  if (text.charCodeAt(i) === LF) i += 1;
+  return i;
+}
+
+/** Index where one optional `\r?\n` line ending ending at `end` starts, never below `min`. */
+function lineEndingStart(text: string, end: number, min: number): number {
+  let i = end;
+  if (i > min && text.charCodeAt(i - 1) === LF) i -= 1;
+  if (i > min && text.charCodeAt(i - 1) === CR) i -= 1;
+  return i;
+}
+
 /**
- * Matches one fenced block with the body in capture group 1, tolerating CRLF
- * and a missing newline adjacent to either marker — a strict `\n` requirement
- * makes the body null on Windows-edited or trailing-newline-stripped files,
- * which fails the hash guard open (null → "write" → silent overwrite).
+ * The body of the first fenced block in `content` — what sits between the two
+ * markers, minus one line ending adjacent to each — or null when `content`
+ * carries no complete block.
+ *
+ * Tolerates CRLF and a missing newline next to either marker: a strict `\n`
+ * requirement makes the body null on Windows-edited or
+ * trailing-newline-stripped files, which fails the hash guard open (null →
+ * "write" → silent overwrite of a user's edits).
+ *
+ * Index arithmetic rather than one `BEGIN\r?\n?(body)\r?\n?END` regex: there,
+ * an optional line ending and the lazy body can each claim the same newline,
+ * and that ambiguity backtracks quadratically over a newline-heavy file whose
+ * end marker is missing (CodeQL js/polynomial-redos). A managed file is local
+ * and the user's own, so that was a hang-your-own-app risk rather than a remote
+ * one — but scanning is linear and states the tolerance instead of implying it.
  */
-export function fencedBodyPattern(comment: FenceComment = "html"): RegExp {
-  return new RegExp(FENCE_PATTERNS[comment].body);
+export function fencedBody(content: string, comment: FenceComment = "html"): string | null {
+  const begin = new RegExp(FENCE_PATTERNS[comment].begin).exec(content);
+  if (begin === null) return null;
+  const bodyStart = skipLineEnding(content, begin.index + begin[0].length);
+  const end = content.indexOf(FENCE_MARKERS[comment].end, bodyStart);
+  if (end === -1) return null;
+  return content.slice(bodyStart, lineEndingStart(content, end, bodyStart));
 }
 
 export function mergeFencedSection(
