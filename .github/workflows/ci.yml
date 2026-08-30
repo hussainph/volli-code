@@ -192,6 +192,8 @@ jobs:
             sigstop-smoke.mjs
             quit-window-lifecycle-smoke.mjs
             memory-smoke.mjs
+            # browser tabs
+            browser-tab-smoke.mjs
             # editor / rendering
             monaco-reconciliation-smoke.mjs
             editor-theme-smoke.mjs

@@ -11,6 +11,30 @@
  * tab this Session cannot touch is a tab it was never shown, and a refusal
  * that says "exists, but not yours" is a listing of somebody else's work.
  *
+ * Visibility of a personal tab carries ACTUATION, not only reading: a Session
+ * may `navigate` and `act` on a `user` tab, not merely snapshot it. That is a
+ * deliberate grant and a knowingly accepted risk, so it is written down here
+ * rather than left to be rediscovered. Personal tabs share one PERSISTENT
+ * profile (`persist:volli-browser:user`), so they carry real cookies and real
+ * sign-ins, while Session tabs get a credentialless per-Ticket partition. The
+ * consequence to hold in view: page content this port returns is untrusted,
+ * and a prompt injection that survives the tools' envelope could ask the model
+ * to steer an authenticated tab and read the result back. Volli takes that
+ * trade for now because duosync is the feature — "drive the thing I am looking
+ * at" is the point, and a read-only port would not be it.
+ *
+ * This is explicitly PROVISIONAL. The preferred end state is an approval step:
+ * the person confirms before a Session acts on a tab that is theirs, the way a
+ * destructive command asks first. It is deferred rather than rejected — the
+ * open question is how often the prompt would fire in real use, and whether it
+ * lands as a safeguard or as friction, which only running the feature answers.
+ * Should it prove noisy enough to click through blindly, it would buy nothing.
+ *
+ * When that lands, it belongs HERE, in `steer` and `act`, keyed on
+ * `tab.createdBy === "user"` — not in the visibility filter below, because
+ * listing a tab and driving it are separate questions and only the second one
+ * needs an answer from the person.
+ *
  * Generations bridge the two owners: the host counts navigations off the
  * webContents' own events (a person navigating a shared tab included), and
  * every port call re-syncs the controller to the host's count before acting,
