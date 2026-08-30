@@ -126,9 +126,9 @@ describe("fencedBody", () => {
   });
 
   it("answers a newline-heavy file with no end marker in milliseconds", () => {
-    // The `BEGIN\r?\n?(body)\r?\n?END` regex this replaced backtracked
-    // quadratically here: every `\n` could belong to the body or to a
-    // separator (CodeQL js/polynomial-redos).
+    // The shape CodeQL flagged in the `BEGIN\r?\n?(body)\r?\n?END` regex this
+    // replaced (js/polynomial-redos): every `\n` could belong to the body or to
+    // a separator. The scan has no such choice to make, at any length.
     const unterminated = `<!-- volli:begin v=1 -->${"\n".repeat(100_000)}`;
     const started = performance.now();
     expect(fencedBody(unterminated)).toBeNull();

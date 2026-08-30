@@ -76,11 +76,16 @@ export function resolveGhosttyThemeName(value: string, appearance: ResolvedAppea
  * Splits one `light:Name` / `dark:Name` entry of a theme pair into its variant
  * and theme name, or null when it carries no such prefix.
  *
- * Split on the first `:` rather than `/^(light|dark)\s*:\s*(.*)$/`, whose two
- * `\s*` runs backtrack quadratically on an entry that is a `light` followed by
- * a long run of tabs (CodeQL js/polynomial-redos). The value is the user's own
- * config line, so that was a hang-your-own-app risk rather than a remote one,
- * but one `indexOf` says the same thing in linear time.
+ * Split on the first `:` rather than `/^(light|dark)\s*:\s*(.*)$/`, whose `\s*`
+ * and `(.*)` overlap on tabs: `dark:<40k tabs>\nx\ny` took 16 seconds to fail
+ * (CodeQL js/polynomial-redos). A config file is local and the user's own, so
+ * that was a hang-your-own-app risk rather than a remote one, but one `indexOf`
+ * and two trims say the same thing in linear time.
+ *
+ * "The same thing" includes the line terminators `.` refuses: a value reaches
+ * here from ONE line of a config file, so an entry carrying a newline is a
+ * fragment of a mangled file rather than a variant entry, and is skipped the
+ * way the old `(.*)$` skipped it.
  */
 function parseVariantEntry(rawEntry: string): { variant: "light" | "dark"; name: string } | null {
   const entry = rawEntry.trim();
@@ -88,8 +93,12 @@ function parseVariantEntry(rawEntry: string): { variant: "light" | "dark"; name:
   if (colon === -1) return null;
   const variant = entry.slice(0, colon).trimEnd();
   if (variant !== "light" && variant !== "dark") return null;
-  return { variant, name: entry.slice(colon + 1).trimStart() };
+  const name = entry.slice(colon + 1).trimStart();
+  return LINE_TERMINATOR.test(name) ? null : { variant, name };
 }
+
+/** The line terminators a regex `.` never crosses. One class, so no backtracking. */
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 
 /** Parses `font-size` into a positive finite point size, or null. */
 function parseFontSize(value: string): number | null {

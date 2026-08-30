@@ -58,14 +58,21 @@ describe("resolveGhosttyThemeName", () => {
     expect(resolveGhosttyThemeName("dark  :  Rose Pine", "dark")).toBe("Rose Pine");
   });
 
-  it("reads a value that is a variant followed by a long run of tabs in milliseconds", () => {
-    // The `/^(light|dark)\s*:\s*(.*)$/` match this replaced backtracked
-    // quadratically on tab runs (CodeQL js/polynomial-redos); splitting on the
-    // first `:` is linear.
-    const tabs = "\t".repeat(100_000);
+  // A newline is what made the old regex fail late: `(.*)` cannot cross one, so
+  // the value is not a variant entry at all and resolution falls back to it
+  // verbatim. Both halves of that sentence are asserted here.
+  it("skips a variant entry whose name carries a newline", () => {
+    expect(resolveGhosttyThemeName("dark:Rose\nPine", "dark")).toBe("dark:Rose\nPine");
+    expect(resolveGhosttyThemeName("dark:Rose\nPine,light:Dawn", "dark")).toBe("Dawn");
+  });
+
+  it("fails a `dark:<tabs>\\n…` value in milliseconds instead of seconds", () => {
+    // The overlap between `\s*` and `(.*)` in `/^(light|dark)\s*:\s*(.*)$/` made
+    // this shape quadratic (CodeQL js/polynomial-redos): at 40k tabs the old
+    // regex took 16 seconds to conclude what the split concludes at once.
+    const value = `dark:${"\t".repeat(100_000)}\nx\ny`;
     const started = performance.now();
-    expect(resolveGhosttyThemeName(`dark${tabs}`, "dark")).toBe(`dark${tabs}`);
-    expect(resolveGhosttyThemeName(`dark:${tabs}Rose Pine`, "dark")).toBe("Rose Pine");
+    expect(resolveGhosttyThemeName(value, "dark")).toBe(value);
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

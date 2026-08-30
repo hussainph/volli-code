@@ -43,9 +43,10 @@ export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()]
 
 /**
  * The begin/end markers a fenced managed block wears, per comment syntax. One
- * table, consumed by the merge below and by the installer's body-extraction and
- * uninstall-excision regexes (`harness-install.ts`), so the three sites that
- * have to recognize the same block cannot drift apart.
+ * table, consumed by the merge below, by {@link fencedBody}'s end-marker scan,
+ * and — through {@link fencedBlockPattern} — by the installer's uninstall
+ * excision (`harness-install.ts`), so the sites that have to recognize the same
+ * block cannot drift apart.
  */
 const FENCE_MARKERS: Record<FenceComment, { begin(version: number): string; end: string }> = {
   html: { begin: (version) => `<!-- volli:begin v=${version} -->`, end: "<!-- volli:end -->" },
