@@ -107,6 +107,39 @@ describe("watchSessionActivity", () => {
       ticketId: "ticket-1",
       row: { kind: "chat", record: { sessionId: "session-1", activity: "idle" } },
     });
+    // No provenance port, so the row reads as person-started — the quiet answer
+    // a caller that cannot ask gets, never a mark it did not earn.
+    expect(publish.mock.calls[0]![0].row.provenance).toEqual({ kind: "user" });
+    watch.stop();
+  });
+
+  // A pushed row is applied by the renderer as a whole-row upsert, so a push
+  // that dropped provenance would take a Run's bolt off the row the first time
+  // that Run did anything (VC-131). The port is asked for the SAME Session the
+  // fold is about, which is what lets a Run started after this window opened
+  // arrive marked without a second fetch.
+  it("carries who started the Session on the pushed row", async () => {
+    const publish = vi.fn();
+    const provenanceOf = vi.fn(() => ({
+      kind: "automation" as const,
+      automationName: "Nightly sweep",
+    }));
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      { publish, provenanceOf },
+    );
+
+    await watch.engine.observe({} as never);
+    await watch.flush();
+
+    expect(provenanceOf).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      ticketId: "ticket-1",
+    });
+    expect(publish.mock.calls[0]![0].row.provenance).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
     watch.stop();
   });
 
