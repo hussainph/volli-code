@@ -1,3 +1,4 @@
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, ChatSessionRecord, Project, Ticket } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -189,6 +190,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
     projectId: "p1",
     name: "Review",
     instructions: "/review go",
+    trigger: NO_AUTOMATION_TRIGGER,
     runtime: null,
     createdAt: 0,
     updatedAt: 0,

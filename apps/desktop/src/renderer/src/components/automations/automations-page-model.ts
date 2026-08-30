@@ -19,8 +19,18 @@
  *    a malformed row must not be silently re-read as inheritance; the page is
  *    where a person can see that and re-pin.
  */
-import { automationOwnership, isAutomationRuntimePin } from "@volli/shared";
-import type { Automation, AutomationRun, AutomationRuntime } from "@volli/shared";
+import {
+  automationOwnership,
+  automationTriggerColumns,
+  isAutomationRuntimePin,
+  TICKET_STATUS_LABELS,
+} from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationRuntime,
+  AutomationTrigger,
+} from "@volli/shared";
 
 /**
  * The Trigger every new Automation opens on, and the only one the record can
@@ -34,6 +44,32 @@ import type { Automation, AutomationRun, AutomationRuntime } from "@volli/shared
  * *else* starts an Automation.
  */
 export const MANUAL_TRIGGER_LABEL = "Only when I run it";
+
+/**
+ * The Trigger, in one line: what starts this Automation BESIDES a person.
+ *
+ * A row that named its own Trigger "Only when I run it" while the record said
+ * "Ticket enters Doing" would be a page lying about the field it exists to
+ * author, so the label is derived from the record rather than assumed — the
+ * manual sentence is what a Trigger naming no column says, not what every row
+ * says.
+ *
+ * The columns come out of the shared accessor, so they arrive in board order
+ * with unknown names already dropped, and they are printed with the board's own
+ * labels: a row saying "Needs Review" and a column header saying the same thing
+ * are the same fact, and two spellings of it would read as two.
+ *
+ * It deliberately does not say whether any of those columns is ARMED. Arming is
+ * the column's own choice and lives on the board's bolt; a record listed in
+ * every project cannot have one answer to it (VC-128).
+ */
+export function triggerLabel(trigger: AutomationTrigger): string {
+  const columns = automationTriggerColumns(trigger);
+  if (columns.length === 0) return MANUAL_TRIGGER_LABEL;
+  // The same verb the editor's second choice uses, finished by the columns —
+  // one sentence across the two surfaces rather than a label and a paraphrase.
+  return `Ticket enters ${columns.map((status) => TICKET_STATUS_LABELS[status]).join(", ")}`;
+}
 
 /**
  * The Instructions placeholder. It names the grammar rather than describing

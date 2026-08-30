@@ -1132,11 +1132,29 @@ function isAutomationCommandId(value: unknown): value is string {
   );
 }
 
+/**
+ * A transported Trigger's shape (VC-128). Only the wire grammar is judged here
+ * — which column names are real, and whether the list collapses to "Nothing
+ * else", is the shared parser's job on the way into the record, so this guard
+ * never has to be kept in step with the board's columns.
+ *
+ * A MISSING Trigger is refused rather than read as the default. "Nothing else"
+ * has its own union member (`{ kind: "none" }`) precisely so the default is a
+ * value a JSON transport can carry, and a door that also accepted absence would
+ * be the second spelling docs/BOUNDARIES.md rule 3 exists to prevent.
+ */
+function isAutomationTriggerShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value["kind"] === "none") return true;
+  return value["kind"] === "columns" && Array.isArray(value["columns"]);
+}
+
 /** The editable fields every automation write carries, shape-checked once. */
 function isAutomationDraftShape(value: Record<string, unknown>): boolean {
   return (
     typeof value["name"] === "string" &&
     typeof value["instructions"] === "string" &&
+    isAutomationTriggerShape(value["trigger"]) &&
     (value["runtime"] === null || isModelSelectionShape(value["runtime"]))
   );
 }
@@ -1194,6 +1212,26 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-runs-for-ticket"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
     invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-arming-list": {
+    guard: (args): args is IpcArgs<"volli:automation-arming-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation arming request",
+  },
+  "volli:automation-arm": {
+    // A `commandId` like every other automation write: the PROJECTION is
+    // machine-local (`db/automations-repo.ts`), the INTENT is a durable command
+    // with an event and a receipt (docs/BOUNDARIES.md rule 5). `automationId:
+    // null` is disarm, and the status is checked against the board's own
+    // vocabulary here because it is half of the row's primary key.
+    guard: (args): args is IpcArgs<"volli:automation-arm"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isTicketStatus(args[0]["status"]) &&
+      (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
+    invalidError: "Invalid automation arm request",
   },
   "volli:automation-runs-for-project": {
     guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>

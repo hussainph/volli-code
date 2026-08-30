@@ -1,8 +1,20 @@
-import type { Automation, AutomationRun, ModelSelection } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationTrigger,
+  ColumnArming,
+  ModelSelection,
+} from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
-import { createAutomationsStore } from "./automations";
+import {
+  createAutomationsStore,
+  selectArmedAutomation,
+  selectArmings,
+  selectAutomations,
+} from "./automations";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -12,6 +24,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
     projectId: "p1",
     name: "Review",
     instructions: "/review go",
+    trigger: NO_AUTOMATION_TRIGGER,
     runtime: null,
     createdAt: 1,
     updatedAt: 1,
@@ -41,12 +54,16 @@ function stubApi(impl: {
   runsForProject?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
+  armings?: () => Promise<unknown>;
+  arm?: () => Promise<unknown>;
 }) {
   vi.stubGlobal("window", {
     api: {
       automations: {
         list: vi.fn(impl.list ?? (() => Promise.resolve({ ok: true, automations: [] }))),
         create: vi.fn(impl.create ?? (() => Promise.resolve({ ok: false, error: "unused" }))),
+        armings: vi.fn(impl.armings ?? (() => Promise.resolve({ ok: true, armings: [] }))),
+        arm: vi.fn(impl.arm ?? (() => Promise.resolve({ ok: false, error: "unused" }))),
         update: vi.fn(impl.update ?? (() => Promise.resolve({ ok: false, error: "unused" }))),
         delete: vi.fn(impl.delete ?? (() => Promise.resolve({ ok: true, receipt: {} }))),
         runsForProject: vi.fn(
@@ -65,6 +82,16 @@ function stubApi(impl: {
     },
   });
 }
+
+const ARMING: ColumnArming = {
+  projectId: "p1",
+  status: "doing",
+  automationId: "automation-1",
+  armedAt: 5,
+};
+
+/** A record that is OFFERED in one column — the Trigger, never the column's arming. */
+const COLUMNS_TRIGGER: AutomationTrigger = { kind: "columns", columns: ["doing"] };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -140,9 +167,13 @@ describe("save", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "Review", instructions: "/review go", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "Review",
+      instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
@@ -157,9 +188,13 @@ describe("save", () => {
     const store = createAutomationsStore();
     store.getState().openEditor("p1");
 
-    const problem = await store
-      .getState()
-      .save({ projectId: null, name: "Global", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: null,
+      name: "Global",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
@@ -172,9 +207,13 @@ describe("save", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: null, name: "Global", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: null,
+      name: "Global",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).not.toHaveBeenCalled();
@@ -184,9 +223,13 @@ describe("save", () => {
     stubApi({ create: () => Promise.resolve({ ok: false, error: "Name this Automation" }) });
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBe("Name this Automation");
     expect(toast.error).not.toHaveBeenCalled();
@@ -196,11 +239,151 @@ describe("save", () => {
     stubApi({ create: () => Promise.reject(new Error("ipc gone")) });
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "n", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBe("ipc gone");
+  });
+});
+
+/* ------------------------------------------------ column arming (VC-128) --- */
+
+describe("refreshArming", () => {
+  it("caches one project's armed columns, apart from its Automations", async () => {
+    stubApi({ armings: () => Promise.resolve({ ok: true, armings: [ARMING] }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshArming("p1");
+
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(store.getState().byProject["p1"]).toBeUndefined();
+  });
+
+  it("toasts a refused read — a person asked for this surface and did not get it", async () => {
+    stubApi({ armings: () => Promise.resolve({ ok: false, error: "Unknown project" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshArming("p1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("Unknown project"),
+      expect.anything(),
+    );
+    expect(store.getState().armingByProject["p1"]).toBeUndefined();
+  });
+
+  it("toasts a transport throw rather than swallowing it", async () => {
+    stubApi({ armings: () => Promise.reject(new Error("ipc gone")) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshArming("p1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("ipc gone"),
+      expect.anything(),
+    );
+  });
+});
+
+describe("arm", () => {
+  it("replaces the project's arming slice from the door's own answer, with no re-read", async () => {
+    const armings = vi.fn(() => Promise.resolve({ ok: true, armings: [] }));
+    stubApi({ arm: () => Promise.resolve({ ok: true, armings: [ARMING] }) });
+    (window.api.automations.armings as unknown) = armings;
+    const store = createAutomationsStore();
+
+    const refusal = await store
+      .getState()
+      .arm({ projectId: "p1", status: "doing", automationId: "automation-1" });
+
+    expect(refusal).toBeNull();
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(armings).not.toHaveBeenCalled();
+  });
+
+  it("mints a durable command id: the projection is machine-local, the intent is not", async () => {
+    const arm = vi.fn(() => Promise.resolve({ ok: true, armings: [ARMING], receipt: {} }));
+    stubApi({});
+    (window.api.automations.arm as unknown) = arm;
+    const store = createAutomationsStore();
+
+    await store.getState().arm({ projectId: "p1", status: "doing", automationId: "automation-1" });
+
+    expect(arm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // A UUID the renderer minted, exactly as create/update/delete do
+        // (docs/BOUNDARIES.md rule 5) — main refuses anything else.
+        commandId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+        projectId: "p1",
+        status: "doing",
+        automationId: "automation-1",
+      }),
+    );
+  });
+
+  it("resolves a refusal for the caller rather than toasting behind it", async () => {
+    stubApi({ arm: () => Promise.resolve({ ok: false, error: "not offered here" }) });
+    const store = createAutomationsStore();
+
+    expect(
+      await store.getState().arm({ projectId: "p1", status: "doing", automationId: "a9" }),
+    ).toBe("not offered here");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("resolves a transport throw as the same shape", async () => {
+    stubApi({ arm: () => Promise.reject(new Error("ipc gone")) });
+    const store = createAutomationsStore();
+
+    expect(
+      await store.getState().arm({ projectId: "p1", status: "doing", automationId: null }),
+    ).toBe("ipc gone");
+  });
+});
+
+describe("selectors", () => {
+  it("hand back frozen empties for a project nothing has read yet", () => {
+    const store = createAutomationsStore();
+    const state = store.getState();
+
+    expect(selectAutomations(state, "p1")).toEqual([]);
+    expect(selectArmings(state, "p1")).toEqual([]);
+    // Same reference twice: a fresh [] per call would defeat every memo reading it.
+    expect(selectAutomations(state, "p1")).toBe(selectAutomations(state, "p2"));
+    expect(selectArmings(state, "p1")).toBe(selectArmings(state, "p2"));
+  });
+
+  it("resolves the armed Automation through the shared rule, not the raw row", async () => {
+    const offered = automation({ trigger: { kind: "columns", columns: ["doing"] } });
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [offered] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+    });
+    const store = createAutomationsStore();
+    await store.getState().refresh("p1");
+    await store.getState().refreshArming("p1");
+
+    expect(selectArmedAutomation(store.getState(), "p1", "doing")).toEqual(offered);
+    expect(selectArmedAutomation(store.getState(), "p1", "todo")).toBeNull();
+  });
+
+  it("reads an arming whose Automation no longer offers the column as unarmed", async () => {
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+    });
+    const store = createAutomationsStore();
+    await store.getState().refresh("p1");
+    await store.getState().refreshArming("p1");
+
+    expect(selectArmedAutomation(store.getState(), "p1", "doing")).toBeNull();
   });
 });
 
@@ -217,6 +400,7 @@ describe("update", () => {
       automationId: "automation-1",
       name: "Review sweep",
       instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
 
@@ -230,9 +414,13 @@ describe("update", () => {
     stubApi({ update });
     const store = createAutomationsStore();
 
-    await store
-      .getState()
-      .update({ automationId: "automation-1", name: "n", instructions: "x", runtime: null });
+    await store.getState().update({
+      automationId: "automation-1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ commandId: expect.stringMatching(/-/) }),
@@ -249,6 +437,7 @@ describe("update", () => {
       automationId: "automation-1",
       name: "n",
       instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
 
@@ -263,9 +452,13 @@ describe("update", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    await store
-      .getState()
-      .update({ automationId: "automation-1", name: "n", instructions: "x", runtime: null });
+    await store.getState().update({
+      automationId: "automation-1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(list).not.toHaveBeenCalled();
   });
@@ -274,17 +467,25 @@ describe("update", () => {
     stubApi({ update: () => Promise.resolve({ ok: false, error: "Name this Automation" }) });
     const store = createAutomationsStore();
     expect(
-      await store
-        .getState()
-        .update({ automationId: "a", name: "", instructions: "x", runtime: null }),
+      await store.getState().update({
+        automationId: "a",
+        name: "",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
     ).toBe("Name this Automation");
 
     stubApi({ update: () => Promise.reject(new Error("ipc gone")) });
     const other = createAutomationsStore();
     expect(
-      await other
-        .getState()
-        .update({ automationId: "a", name: "n", instructions: "x", runtime: null }),
+      await other.getState().update({
+        automationId: "a",
+        name: "n",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
     ).toBe("ipc gone");
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -292,7 +493,7 @@ describe("update", () => {
 
 describe("duplicate", () => {
   it("copies the work under a distinguishable name and opens the copy's form", async () => {
-    const source = automation({ name: "Review" });
+    const source = automation({ name: "Review", trigger: COLUMNS_TRIGGER });
     const copy = automation({ id: "automation-2", name: "Review (copy)" });
     const create = vi.fn(() => Promise.resolve({ ok: true, automation: copy }));
     stubApi({ create, list: () => Promise.resolve({ ok: true, automations: [source, copy] }) });
@@ -306,6 +507,12 @@ describe("duplicate", () => {
         projectId: "p1",
         name: "Review (copy)",
         instructions: source.instructions,
+        // The Trigger travels with the work. A copy created without one would
+        // rewrite a column Trigger to "Nothing else" behind the person's back
+        // — and "same work, different Trigger" is the whole point of Duplicate,
+        // so the field it exists to let you change is the one it must not
+        // silently clear.
+        trigger: COLUMNS_TRIGGER,
         runtime: null,
       }),
     );
@@ -313,6 +520,20 @@ describe("duplicate", () => {
     // something, and the Trigger is what VC-112 expects to change.
     expect(store.getState().editor).toEqual({ projectId: "p1", automation: copy });
     expect(store.getState().byProject["p1"]).toEqual([source, copy]);
+  });
+
+  it("copies a manual Trigger as the value it is, never as an absent field", async () => {
+    const create = vi.fn(() => Promise.resolve({ ok: true, automation: automation() }));
+    stubApi({ create });
+    const store = createAutomationsStore();
+
+    await store.getState().duplicate("p1", automation({ trigger: NO_AUTOMATION_TRIGGER }));
+
+    // Not `toBeUndefined`: "Nothing else" is a union member the transport can
+    // carry, and the create door requires it (docs/BOUNDARIES.md rule 3).
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: NO_AUTOMATION_TRIGGER }),
+    );
   });
 
   it("keeps Ownership, so a global copy is still listed everywhere", async () => {
@@ -502,5 +723,84 @@ describe("enablement", () => {
       "Couldn't change that automation: ipc gone",
       expect.anything(),
     );
+  });
+});
+
+describe("ensureLoaded", () => {
+  it("fills all three caches for a project nothing has read yet", async () => {
+    // The one caller that cannot answer from an empty cache: an arrival that
+    // beat the board's own reads, or a `volli ticket move` into a project no
+    // window has opened.
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(store.getState().byProject["p1"]).toHaveLength(1);
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(store.getState().enabledIds).toEqual(["automation-1"]);
+    expect(store.getState().enablementRead).toBe(true);
+  });
+
+  it("reads nothing when every cache has already landed", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({
+      byProject: { p1: [automation()] },
+      armingByProject: { p1: [ARMING] },
+      enabledIds: [],
+      // An EMPTY enabled set that has been read is not a cache that hasn't:
+      // "nothing on here" is an answer, and this flag is what says so.
+      enablementRead: true,
+    });
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).not.toHaveBeenCalled();
+    expect(window.api.automations.armings).not.toHaveBeenCalled();
+    expect(window.api.automations.enablement).not.toHaveBeenCalled();
+  });
+
+  it("fills only what is missing", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({ byProject: { p1: [automation()] } });
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).not.toHaveBeenCalled();
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one read across simultaneous callers", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+
+    await Promise.all([
+      store.getState().ensureLoaded("p1"),
+      store.getState().ensureLoaded("p1"),
+      store.getState().ensureLoaded("p1"),
+    ]);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a later caller try again after a failed read", async () => {
+    // The read toasted its own failure and left the cache empty, so the next
+    // arrival must not inherit a refusal nobody can see any more.
+    stubApi({ list: () => Promise.resolve({ ok: false, error: "Unknown project" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().ensureLoaded("p1");
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(2);
   });
 });

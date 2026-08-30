@@ -42,6 +42,7 @@ import { useBoardCanvasPan } from "@renderer/hooks/use-board-canvas-pan";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
+import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -206,6 +207,23 @@ export const Board = React.memo(function Board({
   React.useEffect(() => {
     boardMounted.current = true;
   }, []);
+
+  // What this project's columns offer and what they arm (VC-128). Read when the
+  // board appears rather than subscribed, for the palette's reason: the record
+  // changes only through this app's own doors, and a drop must be able to
+  // consult the answer WITHOUT an await — a move that had to wait on IPC to
+  // learn it was armed would either delay every drop or race the countdown.
+  React.useEffect(() => {
+    const automations = useAutomationsStore.getState();
+    void automations.refresh(projectId);
+    void automations.refreshArming(projectId);
+    // And which of them are switched on HERE (VC-127): an armed column fires
+    // only what this machine has turned on, so the answer belongs beside the
+    // other two. An arrival that beats all three still gets a true answer —
+    // `noteDeliberateMove` waits for cold caches rather than reading them
+    // empty — but a board that is up should not be making it wait.
+    void automations.refreshEnablement();
+  }, [projectId]);
 
   React.useEffect(() => {
     if (selectedId === null) return;

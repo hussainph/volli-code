@@ -1980,4 +1980,53 @@ describe("migration 030 — birth-frozen Ticket Session delegation grants", () =
     ).toThrow("session delegation is immutable");
     db.close();
   });
+  it("adds the column Trigger and a column-arming table that admits one row per column (031)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+         VALUES ('a1', 'p1', 'Sweep', '/review', '{"kind":"columns","columns":["doing"]}', NULL, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+         VALUES ('a2', 'p1', 'Other', '/tdd', NULL, NULL, 1, 0, 0)`,
+    ).run();
+
+    // "A column arms at most one Automation" is the key, not a convention.
+    db.prepare(
+      "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','doing','a1',1)",
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','doing','a2',2)",
+        )
+        .run(),
+    ).toThrow(/UNIQUE|PRIMARY/);
+
+    // A Trigger is JSON or it is not stored at all.
+    expect(() =>
+      db.prepare("UPDATE automations SET trigger_spec = 'not json' WHERE id = 'a1'").run(),
+    ).toThrow(/CHECK/);
+
+    // Neither an Automation nor a project leaves an arming behind it.
+    db.prepare("DELETE FROM automations WHERE id = 'a1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
+    db.prepare(
+      "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','done','a2',3)",
+    ).run();
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
+    db.close();
+  });
 });

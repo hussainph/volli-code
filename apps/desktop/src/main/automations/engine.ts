@@ -1,10 +1,14 @@
+import { parseAutomationTrigger } from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationTrigger,
+  ColumnArming,
   ModelSelection,
   PromptResource,
   ResolvedAutomationModel,
+  TicketStatus,
 } from "@volli/shared";
 
 /** A value a durable host may answer synchronously today or asynchronously later. */
@@ -22,6 +26,7 @@ export type AutomationCommandIntent =
       projectId: string | null;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }
   | {
@@ -29,6 +34,7 @@ export type AutomationCommandIntent =
       automationId: string;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }
   | { kind: "automation.delete"; automationId: string }
@@ -43,6 +49,25 @@ export type AutomationCommandIntent =
    * future account-side record inherits the record's history and not this.
    */
   | { kind: "automation.set-enabled"; automationId: string; enabled: boolean }
+  /**
+   * Arming one column with one Automation, or disarming it (`automationId:
+   * null`) — ON THIS MACHINE.
+   *
+   * The same shape as the switch above it, and for the same reason: this is
+   * user intent that decides whether work starts without a person, so it is
+   * recorded, evented and receipted rather than written straight into a table
+   * behind a raw channel (docs/BOUNDARIES.md rule 5). What is machine-local is
+   * the PROJECTION it writes — `automation_column_arming`, which never travels
+   * with a project and is not part of the record that will one day move to an
+   * account. One pattern, two switches: enablement says WHETHER an Automation
+   * may fire on this machine, arming says WHICH column fires it.
+   */
+  | {
+      kind: "automation.set-arming";
+      projectId: string;
+      status: TicketStatus;
+      automationId: string | null;
+    }
   | { kind: "automation.run"; plan: AutomationRunPlan };
 
 /**
@@ -72,6 +97,14 @@ export type AutomationReceiptResult =
       automationId: string;
       enabled: boolean;
       enabledAutomationIds: string[];
+    }
+  /** The project's whole new arming set, whole for the reason the set above is. */
+  | {
+      kind: "automation.arming.set";
+      projectId: string;
+      status: TicketStatus;
+      automationId: string | null;
+      armings: ColumnArming[];
     }
   | { kind: "automation.not-found"; automationId: string }
   | { kind: "automation.run.accepted"; plan: AutomationRunPlan }
@@ -137,6 +170,18 @@ export interface AutomationLedgerTransaction {
   /** Replaces that set whole, inside the same transaction as the event that decided it. */
   putEnabledAutomationIds(ids: readonly string[], recordedAt: number): Awaitable<readonly string[]>;
 
+  /** The other machine-local projection: which Automation each of a project's columns arms. */
+  columnArmings(projectId: string): Awaitable<readonly ColumnArming[]>;
+  /**
+   * Arms one column, or disarms it with `automationId: null`, and answers with
+   * the project's whole new set. Called inside the same transaction as the
+   * event that decided it, so the row and the history of the row move together.
+   */
+  putColumnArming(
+    input: { projectId: string; status: TicketStatus; automationId: string | null },
+    recordedAt: number,
+  ): Awaitable<readonly ColumnArming[]>;
+
   getRun(runId: string): Awaitable<AutomationRun | null>;
   insertRun(run: AutomationRun): Awaitable<void>;
   getDelivery(runId: string): Awaitable<AutomationRunDelivery | null>;
@@ -186,6 +231,7 @@ export interface AutomationEngine {
     projectId: string | null;
     name: string;
     instructions: string;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<AutomationCommandOutcome<Automation>>;
   update(input: {
@@ -193,6 +239,7 @@ export interface AutomationEngine {
     automationId: string;
     name: string;
     instructions: string;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<AutomationCommandOutcome<Automation>>;
   delete(input: {
@@ -207,6 +254,15 @@ export interface AutomationEngine {
   }): Promise<AutomationCommandOutcome<string[]>>;
   /** That set, read back — the machine-local projection, never a record field. */
   enabledAutomationIds(): Promise<string[]>;
+  /** Arms one column with one Automation, or disarms it; answers with the project's whole set. */
+  setColumnArming(input: {
+    commandId: string;
+    projectId: string;
+    status: TicketStatus;
+    automationId: string | null;
+  }): Promise<AutomationCommandOutcome<ColumnArming[]>>;
+  /** Every armed column in one project — the machine-local projection, read back. */
+  columnArmings(projectId: string): Promise<ColumnArming[]>;
   acceptRun(input: {
     commandId: string;
     automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
@@ -288,7 +344,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
   ): Promise<AutomationCommand | null> {
     const existing = await tx.getCommand(commandId);
     if (existing === null) return null;
-    if (!sameJson(existing.intent, intent)) {
+    if (!sameJson(readIntent(existing.intent), readIntent(intent))) {
       throw new AutomationEngineConflictError(
         `Automation command ${commandId} was already accepted with different intent`,
       );
@@ -309,7 +365,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         `Automation command ${commandId} has no durable receipt`,
       );
     }
-    const value = select(latest.result);
+    const value = select(readResult(latest.result));
     if (value !== null) return { ok: true, value, receipt: publicReceipt(latest), replayed: true };
     if (latest.result.kind === "automation.not-found") {
       return {
@@ -340,6 +396,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         projectId: input.projectId,
         name: input.name,
         instructions: input.instructions,
+        trigger: input.trigger,
         runtime: input.runtime,
       };
       return ports.ledger.transaction(async (tx) => {
@@ -356,6 +413,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           projectId: input.projectId,
           name: input.name,
           instructions: input.instructions,
+          trigger: input.trigger,
           runtime: input.runtime,
           createdAt: now,
           updatedAt: now,
@@ -381,6 +439,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         automationId: input.automationId,
         name: input.name,
         instructions: input.instructions,
+        trigger: input.trigger,
         runtime: input.runtime,
       };
       return ports.ledger.transaction(async (tx) => {
@@ -409,6 +468,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           ...prior,
           name: input.name,
           instructions: input.instructions,
+          trigger: input.trigger,
           runtime: input.runtime,
           updatedAt: now,
         };
@@ -535,6 +595,90 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
 
     async enabledAutomationIds() {
       return ports.ledger.transaction(async (tx) => [...(await tx.enabledAutomationIds())]);
+    },
+
+    async setColumnArming(input) {
+      const intent: AutomationCommandIntent = {
+        kind: "automation.set-arming",
+        projectId: input.projectId,
+        status: input.status,
+        automationId: input.automationId,
+      };
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await existingCommand(tx, input.commandId, intent);
+        if (existing !== null) {
+          return replay(tx, input.commandId, "automation.arming.set", (result) =>
+            result.kind === "automation.arming.set" ? result.armings : null,
+          );
+        }
+        const now = ports.now();
+        const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
+        await tx.insertCommand(command);
+        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        // Arming names a record, so a record that is gone cannot be armed: the
+        // same refusal and the same replayable receipt the switch gives. A
+        // disarm names none and therefore skips this — emptying a column is
+        // valid however little is left to point at.
+        if (input.automationId !== null) {
+          const target = await tx.getAutomation(input.automationId);
+          if (target === null) {
+            const rejected = receipt(
+              command.id,
+              "rejected",
+              { kind: "automation.not-found", automationId: input.automationId },
+              now,
+            );
+            await recordReceipt(tx, rejected);
+            return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
+          }
+        }
+        // The projection's own answer is what both the event and the receipt
+        // quote. Writing it first inside this transaction (rather than deriving
+        // the new set in memory and evented it ahead of the row) means the
+        // history and the row can never disagree about what a column arms: they
+        // are the same value, and one COMMIT decides whether both happened.
+        const armings = [
+          ...(await tx.putColumnArming(
+            {
+              projectId: input.projectId,
+              status: input.status,
+              automationId: input.automationId,
+            },
+            now,
+          )),
+        ];
+        await tx.appendEvent(
+          event(
+            command.id,
+            "automation.arming.changed",
+            {
+              projectId: input.projectId,
+              status: input.status,
+              automationId: input.automationId,
+              armings,
+            },
+            now,
+          ),
+        );
+        const completed = receipt(
+          command.id,
+          "completed",
+          {
+            kind: "automation.arming.set",
+            projectId: input.projectId,
+            status: input.status,
+            automationId: input.automationId,
+            armings,
+          },
+          now,
+        );
+        await recordReceipt(tx, completed);
+        return { ok: true, value: armings, receipt: publicReceipt(completed) };
+      });
+    },
+
+    async columnArmings(projectId) {
+      return ports.ledger.transaction(async (tx) => [...(await tx.columnArmings(projectId))]);
     },
 
     async acceptRun(input) {
@@ -897,6 +1041,60 @@ function terminalReceipt(
   receipts: readonly StoredAutomationReceipt[],
 ): StoredAutomationReceipt | null {
   return receipts.toReversed().find((receipt) => receipt.status !== "accepted") ?? null;
+}
+
+/**
+ * A stored intent, read in TODAY's vocabulary.
+ *
+ * The ledger is append-only and older than the Trigger (VC-128): a create or
+ * update written before it carries no `trigger` field at all. Two things go
+ * wrong if such a row is read literally, and both are upgrade-day bugs rather
+ * than theory — the first retry after the upgrade is what hits them.
+ *
+ *  - **The retry conflicts instead of replaying.** {@link existingCommand}
+ *    compares intents exactly, so `{name, instructions, runtime}` and
+ *    `{name, instructions, trigger: none, runtime}` read as two different
+ *    intents and the caller is told its own command was already accepted with
+ *    a different one. Normalizing on READ makes the comparison about what the
+ *    intent MEANT: an absent Trigger meant "Nothing else", which is exactly
+ *    what {@link parseAutomationTrigger} answers for it.
+ *  - **Both sides go through it**, because the point is meaning, not spelling:
+ *    a caller re-sending a non-canonical Trigger (unsorted columns, a
+ *    duplicate) is re-sending the same intent, and the record already stored
+ *    the canonical form of it.
+ *
+ * Every other intent kind is returned untouched — none of them has ever had a
+ * field added, and a normalizer that guessed at future ones would be inventing
+ * history rather than reading it.
+ */
+function readIntent(intent: AutomationCommandIntent): AutomationCommandIntent {
+  if (intent.kind !== "automation.create" && intent.kind !== "automation.update") return intent;
+  return { ...intent, trigger: parseAutomationTrigger(intent.trigger) };
+}
+
+/**
+ * A stored receipt result, read in the same vocabulary as {@link readIntent}.
+ *
+ * A successful create/update receipt carries the whole {@link Automation} it
+ * wrote, so a receipt older than the Trigger holds a record with no `trigger`
+ * field. Replaying it verbatim would answer a caller with an Automation that
+ * is missing a required part of the type — a shape no live write can produce
+ * and no reader is prepared for. The degrade direction is the shared parser's,
+ * stated once in `automation.ts`: an unreadable or absent Trigger becomes
+ * "Nothing else", which only ever stops something from starting on its own.
+ *
+ * The projection tables are already read this way (`automations-repo.ts`), so
+ * this is the receipt half of one rule, not a second policy.
+ */
+function readResult(result: AutomationReceiptResult): AutomationReceiptResult {
+  if (result.kind !== "automation.created" && result.kind !== "automation.updated") return result;
+  return {
+    ...result,
+    automation: {
+      ...result.automation,
+      trigger: parseAutomationTrigger(result.automation.trigger),
+    },
+  };
 }
 
 /** Stable structural comparison for an idempotency key's immutable intent. */

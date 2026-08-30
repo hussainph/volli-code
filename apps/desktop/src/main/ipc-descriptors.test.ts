@@ -2713,6 +2713,9 @@ describe("AUTOMATION_IPC descriptor table", () => {
     commandId: COMMAND_ID,
     name: "Review",
     instructions: "/review go",
+    // Carried as a value, never omitted: "Nothing else" is a union member so a
+    // JSON transport can spell the default (docs/BOUNDARIES.md rule 3).
+    trigger: { kind: "none" },
     runtime: null,
   };
 
@@ -2762,6 +2765,37 @@ describe("AUTOMATION_IPC descriptor table", () => {
         guard([
           { projectId: "p1", ...DRAFT, runtime: { providerId: "anthropic", modelId: "opus" } },
         ]),
+      ).toBe(false);
+    });
+
+    it("judges the Trigger's wire GRAMMAR, and leaves its meaning to the parser", () => {
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "none" } }])).toBe(true);
+      // OMITTED is refused. "Only when I run it" is a complete answer with a
+      // union member of its own, so absence is a second spelling of it that a
+      // JSON transport could not carry — the door takes the value instead.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: undefined }])).toBe(false);
+      const { trigger: _dropped, ...withoutTrigger } = DRAFT;
+      expect(guard([{ projectId: "p1", ...withoutTrigger }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["doing"] } }]),
+      ).toBe(true);
+      // Which column names are real, and whether the list collapses, is the
+      // shared parser's job on the way in — so an unknown name passes HERE.
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["shipped"] } }]),
+      ).toBe(true);
+      // Not a record at all: a string, a number, null, an array. This is the
+      // shape the parser cannot be asked to rescue, so the door refuses it.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: "columns" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: 7 }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: null }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: ["doing"] }])).toBe(false);
+      // A record, but not a Trigger this build can read.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: {} }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule" } }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: "doing" } }]),
       ).toBe(false);
     });
 
@@ -2838,6 +2872,45 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-arming-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arming-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arming request");
+    });
+  });
+
+  describe("volli:automation-arm", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arm"];
+
+    it("takes a project, a real column and an Automation — or null to disarm", () => {
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing", automationId: "a1" }]),
+      ).toBe(true);
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing", automationId: null }]),
+      ).toBe(true);
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "shipped", automationId: "a1" }]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, projectId: "p1", automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, status: "doing", automationId: "a1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arm request");
+    });
+  });
+
   describe("volli:automation-runs-for-project", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-project"];
 
@@ -2902,7 +2975,7 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(9);
+      expect(AUTOMATION_CHANNELS).toHaveLength(11);
     });
   });
 });

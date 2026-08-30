@@ -1288,6 +1288,59 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 031: the column Trigger and the column's own Arming (VC-112,
+ * VC-128).
+ *
+ * Two different things land here on purpose.
+ *
+ * `automations.trigger_spec` is part of the RECORD: which columns this
+ * Automation is offered in. It is JSON for the same reason `runtime` is — the
+ * Trigger is a small closed union today and gains a schedule arm in VC-130,
+ * and a union is a value, not a column per arm. `NULL` is "Nothing else", which
+ * is the default for a new Automation and a complete answer rather than an
+ * inert one. The column is `trigger_spec` and not `trigger` because `TRIGGER`
+ * is SQL's own keyword and every future hand-written query would have to quote
+ * it.
+ *
+ * `automation_column_arming` is NOT part of the record. It is the column's
+ * machine-local choice of which offered Automation it fires on its own — the
+ * PROJECTION half of an ordinary Automation command (`automation.set-arming`),
+ * exactly as `app_state`'s enabled set is the projection half of
+ * `automation.set-enabled`. The intent rides the ledger like every other write;
+ * what stays here is the answer, and it never travels: a project directory
+ * cannot carry it, and when the record moves to an account this does not go
+ * with it. A composite PRIMARY KEY is how "a column arms at most one
+ * Automation, or none" is a schema fact rather than a convention — the write is
+ * an upsert on `(project_id, status)` and there is no shape in which a second
+ * row could exist to disagree with the first. Both foreign keys cascade, so a
+ * deleted Automation or a forgotten project leaves no arming behind to point at
+ * a corpse.
+ *
+ * Nothing here is retroactive, and nothing here could be: an arming row records
+ * that a column is armed FROM NOW, and the only thing that ever starts a Run is
+ * an arrival observed afterwards. There is no sweep of what is already sitting
+ * in the column, and no column in this table from which one could be written.
+ */
+const MIGRATION_031_TRIGGER_COLUMN = `
+ALTER TABLE automations ADD COLUMN trigger_spec TEXT
+  CHECK (trigger_spec IS NULL OR json_valid(trigger_spec));
+`;
+
+const MIGRATION_031_COLUMN_ARMING = `
+CREATE TABLE IF NOT EXISTS automation_column_arming (
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL CHECK (status <> ''),
+  automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  armed_at      INTEGER NOT NULL,
+  PRIMARY KEY (project_id, status)
+);
+CREATE INDEX IF NOT EXISTS idx_automation_arming_automation
+  ON automation_column_arming(automation_id);
+`;
+
+const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGRATION_031_COLUMN_ARMING}`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1438,7 +1491,30 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session delegation grants — birth-frozen scoped control grants and fan-out claims",
     sql: MIGRATION_030_SESSION_DELEGATION_GRANTS,
   },
+  {
+    version: 31,
+    name: "automations — the column Trigger on the record, and the column's machine-local arming",
+    sql: MIGRATION_031_AUTOMATION_TRIGGERS,
+    apply: applyMigration031AutomationTriggers,
+  },
 ];
+
+/**
+ * Migration 031's reconciler. `ALTER TABLE … ADD COLUMN` is the one statement
+ * in this file that cannot be written idempotently in SQL, and three sibling
+ * automations branches (VC-127, VC-128, VC-130) are in flight against the same
+ * table — exactly the situation the 026 comment above describes, where a
+ * developer database ran a parallel branch's version 31 and would otherwise
+ * carry a `user_version` that says it is up to date while missing half this
+ * schema. Probing per half converges every lineage on the same schema.
+ */
+function applyMigration031AutomationTriggers(db: Database.Database): void {
+  const columns = db.pragma("table_info(automations)") as { name: string }[];
+  if (!columns.some((column) => column.name === "trigger_spec")) {
+    db.exec(MIGRATION_031_TRIGGER_COLUMN);
+  }
+  db.exec(MIGRATION_031_COLUMN_ARMING);
+}
 
 /**
  * Migration 024's reconciler — see the doc on

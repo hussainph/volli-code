@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
+import { DEFAULT_AUTHORITY_POLICY, NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { AutomationRun, ModelSelection, RuntimeSessionIdentity } from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
@@ -503,6 +503,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
       projectId: input.projectId,
       name: input.name,
       instructions: "Sweep this Ticket and report.",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
     if (!created.ok) throw new Error(created.error);

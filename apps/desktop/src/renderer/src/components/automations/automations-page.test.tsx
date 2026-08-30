@@ -12,6 +12,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
@@ -50,6 +51,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
     projectId: "p1",
     name: "Review sweep",
     instructions: "/review",
+    trigger: NO_AUTOMATION_TRIGGER,
     runtime: null,
     createdAt: 1,
     updatedAt: 1,
@@ -190,6 +192,20 @@ describe("the page", () => {
 
     expect(text()).toContain("Only when I run it");
     expect(text()).toContain("Default model");
+  });
+
+  it("prints a column Trigger's own columns rather than claiming manual-only", async () => {
+    // This is the surface that AUTHORS the Trigger (VC-127), so a row that said
+    // "Only when I run it" over a record naming Doing would be the page
+    // contradicting the form one click away.
+    await mount({
+      automations: [
+        automation({ trigger: { kind: "columns", columns: ["doing", "needs_review"] } }),
+      ],
+    });
+
+    expect(text()).toContain("Ticket enters Doing, Needs Review");
+    expect(text()).not.toContain("Only when I run it");
   });
 
   it("shows a pinned Runtime as one model-and-reasoning pair", async () => {

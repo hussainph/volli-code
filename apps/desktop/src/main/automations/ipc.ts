@@ -9,6 +9,8 @@
  * Electron-shaped product API.
  */
 import type {
+  AutomationArmingsResult,
+  AutomationArmResult,
   AutomationDeleteResult,
   AutomationEnablementResult,
   AutomationIpcChannel,
@@ -75,6 +77,11 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       ok: true,
       runs: service.runsForTicket(input.ticketId),
     }),
+
+    "volli:automation-arming-list": async (input): Promise<AutomationArmingsResult> =>
+      service.armings(input.projectId),
+
+    "volli:automation-arm": async (input): Promise<AutomationArmResult> => service.arm(input),
 
     "volli:automation-runs-for-project": (input): AutomationRunsResult =>
       service.runsForProject(input.projectId),

@@ -149,6 +149,12 @@ export default defineConfig(({ mode }) => ({
         // refusal opens Model Access, which toasts, and what success opens —
         // pure precisely so the gate can reach the classification.
         "src/components/automations/run-automation-model.ts",
+        // And whether a Run starts at all (VC-128). This is the armed column's
+        // entire safety argument as arithmetic: what counts as an arrival, and
+        // whether a window that woke may fire. A missed branch here is a Run a
+        // person did not ask for, which is the one failure this feature cannot
+        // have — so it is gated rather than left to the view that renders it.
+        "src/components/automations/armed-move-model.ts",
         // What the Automations page SAYS (VC-127). In the gate because a Run
         // is durable evidence: it records the RESOLVED model and reasoning so
         // the pin/inherit decision is self-correcting, and a label that

@@ -1,10 +1,16 @@
 /**
  * Automations V1 (VC-112, tracer VC-126): the record's domain vocabulary.
  *
- * An Automation is a saved, named way of starting work — its Instructions and
- * its Runtime, with Triggers arriving in a later slice. One Run opens one
- * fresh chat Session; the Run row remembers which Automation and which
- * *resolved* model and reasoning produced that Session.
+ * An Automation is a saved, named way of starting work — its Trigger, its
+ * Instructions and its Runtime. One Run opens one fresh chat Session; the Run
+ * row remembers which Automation and which *resolved* model and reasoning
+ * produced that Session.
+ *
+ * VC-128 adds the column Trigger and the column's own Arming beside it. They
+ * are deliberately two different things and this file is where the difference
+ * is stated once: a Trigger is a property of the *record* (which columns this
+ * Automation is offered in), while Arming is a property of the *column*
+ * (which single offered Automation that column fires on its own).
  *
  * Pure and shared on purpose, like `model-access-policy.ts` beside it: main
  * stores these records and validates writes; the renderer's editor reads the
@@ -14,6 +20,7 @@
  */
 
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
+import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
 
 /**
  * Where an Automation is listed: every project, or exactly one (VC-112,
@@ -43,6 +50,68 @@ export function isAutomationRuntimePin(runtime: AutomationRuntime): runtime is M
 }
 
 /**
+ * What starts an Automation besides a person (VC-112, "Triggers").
+ *
+ * `none` is the default for a new Automation and a complete answer rather than
+ * an inert one — run by hand is universal, so the Trigger says only what *else*
+ * starts it. `columns` is VC-128's arm: a Ticket entering one of the named
+ * columns. A schedule arm joins this union in VC-130; widening a union is
+ * append-only, which is why the Trigger is spelled as one from the start.
+ *
+ * VC-112 rules one Trigger per Automation, so this is a single value and never
+ * a list. The columns *inside* a column Trigger are plural because "the same
+ * work in Doing and in Needs Review" is one Automation, not two.
+ */
+export type AutomationTrigger =
+  | { kind: "none" }
+  | { kind: "columns"; columns: readonly TicketStatus[] };
+
+/** The Trigger a new Automation gets, and the one an unreadable stored value degrades to. */
+export const NO_AUTOMATION_TRIGGER: AutomationTrigger = { kind: "none" };
+
+/**
+ * Reads a stored/transported Trigger, degrading anything unreadable to "Nothing
+ * else".
+ *
+ * Deliberately the OPPOSITE stance to {@link AutomationRuntime}, and for a
+ * reason worth stating: an unreadable Runtime must not become `null`, because
+ * `null` still RUNS — it would silently change an Automation's execution policy
+ * and then start a Session under it. An unreadable Trigger degrading to `none`
+ * only ever *stops* something from starting on its own, and every Automation
+ * remains runnable by hand. Failing toward "fires nothing" is the only safe
+ * direction for a value that decides when work begins without a person.
+ *
+ * Duplicates and unknown column names are dropped, and the result is ordered by
+ * {@link TICKET_STATUSES} so board order is the record's order too.
+ */
+export function parseAutomationTrigger(raw: unknown): AutomationTrigger {
+  if (typeof raw !== "object" || raw === null) return NO_AUTOMATION_TRIGGER;
+  const kind = (raw as { kind?: unknown }).kind;
+  if (kind !== "columns") return NO_AUTOMATION_TRIGGER;
+  const columns = (raw as { columns?: unknown }).columns;
+  if (!Array.isArray(columns)) return NO_AUTOMATION_TRIGGER;
+  const named = TICKET_STATUSES.filter((status) =>
+    columns.some((candidate) => isTicketStatus(candidate) && candidate === status),
+  );
+  // A column Trigger naming nothing is not a column Trigger. Collapsing it here
+  // means no surface has to spell "columns, but empty" as a third state.
+  return named.length === 0 ? NO_AUTOMATION_TRIGGER : { kind: "columns", columns: named };
+}
+
+/** The columns a Trigger names, in board order — empty for every non-column Trigger. */
+export function automationTriggerColumns(trigger: AutomationTrigger): readonly TicketStatus[] {
+  return trigger.kind === "columns" ? trigger.columns : [];
+}
+
+/** Whether this Automation is offered in `status` — i.e. its Trigger names that column. */
+export function automationTriggersColumn(
+  automation: Pick<Automation, "trigger">,
+  status: TicketStatus,
+): boolean {
+  return automationTriggerColumns(automation.trigger).includes(status);
+}
+
+/**
  * The saved record. `id` is a UUID — never a local counter, never anything
  * machine-derived (docs/BOUNDARIES.md standing rule 1): when the record moves
  * from local SQLite to an account, that is a database migration, not a format
@@ -61,6 +130,12 @@ export interface Automation {
    * already carries the Ticket's context.
    */
   instructions: string;
+  /**
+   * What starts this Automation besides a person. A column Trigger makes it
+   * *offered* in the columns it names; whether any of those columns actually
+   * fires it on arrival is that column's own Arming, not this field.
+   */
+  trigger: AutomationTrigger;
   /**
    * The Runtime: one pinned model-and-reasoning selection, or `null` to
    * inherit through the project's runtime preferences and then the global
@@ -155,6 +230,7 @@ export type AutomationRunRefusalCode =
 export interface AutomationDraft {
   name: string;
   instructions: string;
+  trigger: AutomationTrigger;
   runtime: ModelSelection | null;
 }
 
@@ -205,4 +281,109 @@ export function automationPinProblem(
     return `This model does not support reasoning level "${pin.reasoningLevel}" (valid: ${model.reasoningLevels.join(", ")}).`;
   }
   return null;
+}
+
+/* ------------------------------------------------- arming (VC-128) -------- */
+
+/**
+ * One column's Arming: the single Automation it fires on its own when a Ticket
+ * arrives there by Deliberate move.
+ *
+ * Arming is a property of the COLUMN, not of the Automation, which is why this
+ * is its own record keyed by `(projectId, status)` rather than a flag on
+ * {@link Automation}: one Automation may be armed in one column and merely
+ * offered in another, and neither column's choice is visible in the record they
+ * both point at.
+ *
+ * It is machine-local by construction: it is the choice ONE machine made about
+ * one column, so it is absent from git, from a project directory, and from the
+ * record VC-112 says will one day move to an account — a new machine sees the
+ * Automations and fires nothing until someone turns something on there.
+ *
+ * Machine-local names where the ANSWER lives, not how it is written. Arming a
+ * column is user intent that decides whether work starts without a person, so
+ * the write is an ordinary durable command with an event and a receipt (the
+ * host's `automation.set-arming`); only this projection stays local. The same
+ * split governs an Automation's enabled set, and the two switches are
+ * deliberately one pattern.
+ */
+export interface ColumnArming {
+  projectId: string;
+  status: TicketStatus;
+  automationId: string;
+  /**
+   * Epoch milliseconds. Evidence of when this column was armed, and the reason
+   * arming can be shown as an act rather than a static flag. It is NOT consulted
+   * to decide whether a Run starts: arming is not retroactive because the only
+   * thing that ever starts a Run is an arrival observed after the fact, never a
+   * sweep of the tickets already sitting in the column.
+   */
+  armedAt: number;
+}
+
+/**
+ * The Automations `status` offers, armed one first (CONTEXT, "Offered list").
+ *
+ * Membership is the record's Trigger; order is the Arming plus whatever order
+ * the caller was handed (main lists name-ordered, project's own before global).
+ * The digit accelerators and hand-dragged ranking are VC-132's; this is the
+ * list they will rank.
+ */
+export function offeredAutomationsForColumn(
+  automations: readonly Automation[],
+  status: TicketStatus,
+  armedAutomationId: string | null,
+): readonly Automation[] {
+  const offered = automations.filter((automation) => automationTriggersColumn(automation, status));
+  const armed = offered.find((automation) => automation.id === armedAutomationId);
+  if (armed === undefined) return offered;
+  return [armed, ...offered.filter((automation) => automation.id !== armed.id)];
+}
+
+/**
+ * The Automation `status` fires on its own, or `null` for an unarmed column.
+ *
+ * Two facts must both hold, and this is the one place that is stated: the
+ * column names an Automation, and that Automation still exists AND still offers
+ * itself here. Dropping the column from a Trigger therefore disarms it without
+ * a second write to keep in step — a stale arming row is inert rather than a
+ * surprise, which matters because the row outlives an edit made on this machine
+ * and an Automation edited on any surface.
+ */
+export function armedAutomationFor(
+  automations: readonly Automation[],
+  armings: readonly ColumnArming[],
+  status: TicketStatus,
+): Automation | null {
+  const arming = armings.find((candidate) => candidate.status === status);
+  if (arming === undefined) return null;
+  const automation = automations.find((candidate) => candidate.id === arming.automationId);
+  if (automation === undefined) return null;
+  return automationTriggersColumn(automation, status) ? automation : null;
+}
+
+/**
+ * How long an armed column waits before it starts its Run, in milliseconds
+ * (VC-112, "Board interaction").
+ *
+ * 3500 ms is the whole safety story for an act nobody confirmed: long enough to
+ * read the sentence and reach the one control, short enough that a deliberate
+ * move does not feel held up. Exactly one control lives in this window —
+ * Cancel, which keeps the move and starts nothing. Sending the Ticket back is
+ * the board's ordinary undo and is deliberately not offered here: two buttons
+ * inside 3.5 seconds is a choice nobody can make in time.
+ */
+export const ARMED_RUN_DELAY_MS = 3500;
+
+/**
+ * Whether a committed move is an ARRIVAL in `to` — the only thing an Arming
+ * ever reacts to.
+ *
+ * A reorder inside one column is not an arrival, so a card dragged up its own
+ * column can never start a Run however armed that column is. Stated here rather
+ * than at the drag, because every Deliberate move — drag, context menu, the
+ * ticket rail's status pill — must answer it identically.
+ */
+export function isColumnArrival(from: TicketStatus, to: TicketStatus): boolean {
+  return from !== to;
 }

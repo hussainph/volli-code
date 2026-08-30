@@ -21,10 +21,13 @@
  */
 import { create } from "zustand";
 import {
+  armedAutomationFor,
   errorMessage,
   isAutomationRuntimePin,
   type Automation,
   type AutomationRun,
+  type ColumnArming,
+  type TicketStatus,
 } from "@volli/shared";
 
 import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/contract";
@@ -54,6 +57,13 @@ export interface AutomationEditorTarget {
 interface AutomationsState {
   /** projectId → its listable Automations (own + global), name-ordered by main. */
   byProject: Record<string, readonly Automation[]>;
+  /**
+   * projectId → its armed columns (VC-128). A separate slice from
+   * {@link AutomationsState.byProject} and a separate read, because arming is a
+   * property of the column and of THIS machine: it is never a field on an
+   * Automation that could be carried along with the record.
+   */
+  armingByProject: Record<string, readonly ColumnArming[]>;
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
   /**
@@ -66,6 +76,16 @@ interface AutomationsState {
    * switched on here — whether or not anyone ever asked.
    */
   enabledIds: readonly string[];
+  /**
+   * Whether {@link AutomationsState.enabledIds} has ever been READ, as opposed
+   * to resting at its empty default.
+   *
+   * The two are indistinguishable in the set itself — "nothing switched on
+   * here" and "never asked here" are deliberately one value (VC-112) — and a
+   * caller that must not act on a guess needs to tell them apart. Only
+   * {@link AutomationsState.ensureLoaded} reads this.
+   */
+  enablementRead: boolean;
   editor: AutomationEditorTarget | null;
   /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
   refresh(projectId: string): Promise<void>;
@@ -73,6 +93,34 @@ interface AutomationsState {
   refreshRuns(projectId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Toasts on failure. */
   refreshEnablement(): Promise<void>;
+  /** Re-fetches one project's armed columns and replaces the cache. Toasts on failure. */
+  refreshArming(projectId: string): Promise<void>;
+  /**
+   * Arms one column with one offered Automation, or disarms it with
+   * `automationId: null`. Resolves the refusal message, or `null` on success
+   * (the answer carries the project's whole new arming set, so nothing is
+   * re-fetched afterwards).
+   */
+  arm(input: {
+    projectId: string;
+    status: TicketStatus;
+    automationId: string | null;
+  }): Promise<string | null>;
+  /**
+   * Fills whichever of this project's three caches has never landed, and
+   * resolves once they all have (VC-128).
+   *
+   * For the one caller that cannot answer from an empty cache: a Deliberate
+   * move arriving before the board's own reads resolved would otherwise be
+   * classified as unarmed and never reconsidered, so a Ticket dropped a
+   * heartbeat after the board mounted — or moved by `volli ticket move` into a
+   * window that never opened this project — would silently miss its Run.
+   *
+   * Only ever FILLS: a cache that has landed is left alone, so this is not a
+   * second refresh policy competing with the board's own read-on-mount. In
+   * flight is shared rather than repeated — a burst of arrivals is one read.
+   */
+  ensureLoaded(projectId: string): Promise<void>;
   openEditor(projectId: string): void;
   /** Opens the editor on an existing record. The only authoring surface (VC-112). */
   editAutomation(projectId: string, automation: Automation): void;
@@ -102,10 +150,19 @@ interface AutomationsState {
 
 /** Factory so tests get isolated instances (the store module's own convention). */
 export function createAutomationsStore() {
+  /**
+   * projectId → the cache-filling read in flight for it, so simultaneous
+   * arrivals share one instead of each starting their own. Module-local to this
+   * instance rather than store state: a promise is not something anything
+   * renders, and it must not survive the factory that made it.
+   */
+  const warming = new Map<string, Promise<void>>();
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
+    armingByProject: {},
     runsByProject: {},
     enabledIds: [],
+    enablementRead: false,
     editor: null,
 
     async refresh(projectId) {
@@ -118,6 +175,41 @@ export function createAutomationsStore() {
         set((state) => ({ byProject: { ...state.byProject, [projectId]: result.automations } }));
       } catch (error) {
         toastError(`Couldn't load automations: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshArming(projectId) {
+      try {
+        const result = await window.api.automations.armings({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load armed columns: ${result.error}`);
+          return;
+        }
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [projectId]: result.armings },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load armed columns: ${errorMessage(error)}`);
+      }
+    },
+
+    async arm(input) {
+      try {
+        const result = await window.api.automations.arm({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          ...input,
+        });
+        // A refusal is resolved rather than toasted, like a save's: the menu
+        // that asked is still on screen and is where the correction belongs.
+        if (!result.ok) return result.error;
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [input.projectId]: result.armings },
+        }));
+        return null;
+      } catch (error) {
+        return errorMessage(error);
       }
     },
 
@@ -141,9 +233,31 @@ export function createAutomationsStore() {
           toastError(`Couldn't read which automations are on: ${result.error}`);
           return;
         }
-        set({ enabledIds: result.enabledAutomationIds });
+        set({ enabledIds: result.enabledAutomationIds, enablementRead: true });
       } catch (error) {
         toastError(`Couldn't read which automations are on: ${errorMessage(error)}`);
+      }
+    },
+
+    async ensureLoaded(projectId) {
+      const inFlight = warming.get(projectId);
+      if (inFlight !== undefined) return inFlight;
+      const state = get();
+      const reads: Promise<void>[] = [];
+      if (state.byProject[projectId] === undefined) reads.push(state.refresh(projectId));
+      if (state.armingByProject[projectId] === undefined)
+        reads.push(state.refreshArming(projectId));
+      if (!state.enablementRead) reads.push(state.refreshEnablement());
+      if (reads.length === 0) return;
+      const job = Promise.all(reads).then(() => undefined);
+      warming.set(projectId, job);
+      try {
+        await job;
+      } finally {
+        // Cleared whatever happened. Each read toasts its own failure and
+        // leaves its cache empty, so the next arrival tries again rather than
+        // inheriting a refusal nobody can see any more.
+        warming.delete(projectId);
       }
     },
 
@@ -211,6 +325,14 @@ export function createAutomationsStore() {
             listed.map((listing) => listing.name),
           ),
           instructions: automation.instructions,
+          // The Trigger is copied like every other field. "Same work, different
+          // Trigger" is the reason Duplicate exists (VC-112's tripwire), and a
+          // copy that silently arrived with no Trigger would answer that by
+          // making the person re-author the half they came here to keep. Note
+          // what is NOT copied with it: Arming belongs to the column, not to
+          // the record, so the copy is offered wherever its Trigger names and
+          // fires nowhere until a column arms it (VC-128).
+          trigger: automation.trigger,
           // An unreadable stored Runtime is not copied as itself — the copy
           // inherits instead, which is the only Runtime we can promise is
           // valid. Its source keeps the corrupt row, visible on the page.
@@ -268,3 +390,37 @@ export function createAutomationsStore() {
 }
 
 export const useAutomationsStore = createAutomationsStore();
+
+const NO_AUTOMATIONS: readonly Automation[] = [];
+const NO_ARMINGS: readonly ColumnArming[] = [];
+
+/** One project's listable Automations — a frozen empty array before its first read. */
+export function selectAutomations(
+  state: AutomationsState,
+  projectId: string,
+): readonly Automation[] {
+  return state.byProject[projectId] ?? NO_AUTOMATIONS;
+}
+
+/** One project's armed columns — a frozen empty array before its first read. */
+export function selectArmings(state: AutomationsState, projectId: string): readonly ColumnArming[] {
+  return state.armingByProject[projectId] ?? NO_ARMINGS;
+}
+
+/**
+ * The Automation a column fires on its own, resolved through the shared rule
+ * rather than by reading the arming row directly — a row naming a deleted
+ * Automation, or one whose Trigger no longer offers this column, is inert.
+ * Every surface that asks "is this column armed?" asks here.
+ */
+export function selectArmedAutomation(
+  state: AutomationsState,
+  projectId: string,
+  status: TicketStatus,
+): Automation | null {
+  return armedAutomationFor(
+    selectAutomations(state, projectId),
+    selectArmings(state, projectId),
+    status,
+  );
+}

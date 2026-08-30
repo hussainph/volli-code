@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { ModelSelection } from "@volli/shared";
 
 import {
+  clearColumnArming,
   createAutomation,
   deleteAutomation,
   getAutomation,
   latestRunForTicket,
   listAutomationsForProject,
+  listColumnArmings,
   listRunsForProject,
   listRunsForTicket,
   recordAutomationRun,
+  setColumnArming,
   updateAutomation,
 } from "./automations-repo";
 import { insertProject } from "./projects-repo";
@@ -49,7 +53,13 @@ describe("automations repo", () => {
     const { project } = seeded();
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Review", instructions: "/review go", runtime: null },
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       1000,
     );
     expect(automation.id).toMatch(UUID_PATTERN);
@@ -62,7 +72,13 @@ describe("automations repo", () => {
     const { project } = seeded();
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Pinned", instructions: "x", runtime: PIN },
+      {
+        projectId: project.id,
+        name: "Pinned",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: PIN,
+      },
       1000,
     );
     expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual(PIN);
@@ -82,24 +98,48 @@ describe("automations repo", () => {
     const { project } = seeded();
     createAutomation(
       ctx.db,
-      { projectId: null, name: "A global", instructions: "x", runtime: null },
+      {
+        projectId: null,
+        name: "A global",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       1,
     );
     createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Zed", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Zed",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       2,
     );
     createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Alpha", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Alpha",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       3,
     );
     const other = testProject();
     insertProject(ctx.db, other);
     createAutomation(
       ctx.db,
-      { projectId: other.id, name: "Elsewhere", instructions: "x", runtime: null },
+      {
+        projectId: other.id,
+        name: "Elsewhere",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       4,
     );
 
@@ -114,23 +154,35 @@ describe("automations repo", () => {
     const { project } = seeded();
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Before", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Before",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       1000,
     );
     const updated = updateAutomation(
       ctx.db,
       automation.id,
-      { name: "After", instructions: "y", runtime: PIN },
+      { name: "After", instructions: "y", trigger: NO_AUTOMATION_TRIGGER, runtime: PIN },
       2000,
     );
     expect(updated).toMatchObject({
       name: "After",
       instructions: "y",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: PIN,
       updatedAt: 2000,
     });
     expect(
-      updateAutomation(ctx.db, "missing", { name: "n", instructions: "i", runtime: null }, 1),
+      updateAutomation(
+        ctx.db,
+        "missing",
+        { name: "n", instructions: "i", trigger: NO_AUTOMATION_TRIGGER, runtime: null },
+        1,
+      ),
     ).toBeUndefined();
   });
 
@@ -138,7 +190,13 @@ describe("automations repo", () => {
     const { project, ticket, session } = seeded();
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Doomed", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Doomed",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       1000,
     );
     const run = recordAutomationRun(
@@ -158,7 +216,13 @@ describe("automation runs repo", () => {
     const { project, ticket, session } = seeded();
     const automation = createAutomation(
       ctx.db,
-      { projectId: project.id, name: "Review", instructions: "x", runtime: null },
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       500,
     );
     const first = recordAutomationRun(
@@ -199,7 +263,13 @@ describe("automation runs repo", () => {
     // Global Ownership: listable in both projects, but its Run happened in one.
     const global = createAutomation(
       ctx.db,
-      { projectId: null, name: "Sweep", instructions: "x", runtime: null },
+      {
+        projectId: null,
+        name: "Sweep",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
       500,
     );
 
@@ -256,5 +326,230 @@ describe("automation runs repo", () => {
       .prepare("UPDATE automation_runs SET reasoning_level = 'galactic' WHERE id = ?")
       .run(run.id);
     expect(latestRunForTicket(ctx.db, ticket.id)?.model.reasoningLevel).toBe("galactic");
+  });
+});
+
+describe("column Trigger and arming (migration 031)", () => {
+  it("round-trips a column Trigger, and stores 'Nothing else' as SQL NULL", () => {
+    const { project } = seeded();
+    const triggered = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Sweep",
+        instructions: "/review",
+        trigger: { kind: "columns", columns: ["doing", "done"] },
+        runtime: null,
+      },
+      1000,
+    );
+    expect(getAutomation(ctx.db, triggered.id)?.trigger).toEqual({
+      kind: "columns",
+      columns: ["doing", "done"],
+    });
+
+    const untriggered = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "By hand",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    expect(
+      ctx.db.prepare("SELECT trigger_spec FROM automations WHERE id = ?").get(untriggered.id),
+    ).toEqual({ trigger_spec: null });
+    expect(getAutomation(ctx.db, untriggered.id)?.trigger).toEqual(NO_AUTOMATION_TRIGGER);
+  });
+
+  it("reads an unreadable stored Trigger as firing nothing, never as a guess", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Sweep",
+        instructions: "/review",
+        trigger: { kind: "columns", columns: ["doing"] },
+        runtime: null,
+      },
+      1000,
+    );
+    // A hand-edited row from a future build. Unlike a corrupted Runtime — which
+    // must stay explicitly invalid, because inherit would still RUN — a Trigger
+    // nobody can read may only ever cost a Run that starts on its own.
+    ctx.db
+      .prepare("UPDATE automations SET trigger_spec = ? WHERE id = ?")
+      .run('{"kind":"phase-of-the-moon"}', automation.id);
+    expect(getAutomation(ctx.db, automation.id)?.trigger).toEqual(NO_AUTOMATION_TRIGGER);
+  });
+
+  it("rewrites the Trigger on update like every other editable field", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Sweep",
+        instructions: "/review",
+        trigger: { kind: "columns", columns: ["doing"] },
+        runtime: null,
+      },
+      1000,
+    );
+    updateAutomation(
+      ctx.db,
+      automation.id,
+      {
+        name: "Sweep",
+        instructions: "/review",
+        trigger: { kind: "columns", columns: ["needs_review"] },
+        runtime: null,
+      },
+      2000,
+    );
+    expect(getAutomation(ctx.db, automation.id)?.trigger).toEqual({
+      kind: "columns",
+      columns: ["needs_review"],
+    });
+  });
+
+  it("holds a column to at most one arming, whatever order the writes arrive in", () => {
+    const { project } = seeded();
+    const first = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "A",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    const second = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "B",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: first.id },
+      1000,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: second.id },
+      2000,
+    );
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([
+      { projectId: project.id, status: "doing", automationId: second.id, armedAt: 2000 },
+    ]);
+  });
+
+  it("arms columns independently, and disarms one without touching the other", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "A",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      1000,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "done", automationId: automation.id },
+      1000,
+    );
+
+    clearColumnArming(ctx.db, { projectId: project.id, status: "doing" });
+    // Disarming an unarmed column is silent: the end state is the point.
+    clearColumnArming(ctx.db, { projectId: project.id, status: "backlog" });
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([
+      { projectId: project.id, status: "done", automationId: automation.id, armedAt: 1000 },
+    ]);
+  });
+
+  it("drops an arming with the Automation it names, leaving nothing pointing at a corpse", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "A",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      1000,
+    );
+
+    deleteAutomation(ctx.db, automation.id);
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([]);
+  });
+
+  it("ignores an arming on a column this build has no name for", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "A",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    // Only reachable from a future build or a hand edit, and inert either way:
+    // an arming on a column that does not exist can never fire.
+    ctx.db
+      .prepare(
+        "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES (?, 'shipped', ?, 1)",
+      )
+      .run(project.id, automation.id);
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([]);
+
+    // Closed per ROW, not per project. Each row names its own column in its own
+    // primary key, so an unreadable one can only ever be about a column this
+    // build does not have — voiding the rest would disarm columns we can read
+    // perfectly, which is a bigger lie than dropping the one we cannot.
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      2000,
+    );
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([
+      { projectId: project.id, status: "doing", automationId: automation.id, armedAt: 2000 },
+    ]);
   });
 });

@@ -20,6 +20,8 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationTrigger,
+  ColumnArming,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -1399,6 +1401,17 @@ export interface AutomationCreateInput {
   projectId: string | null;
   name: string;
   instructions: string;
+  /**
+   * Which columns offer this Automation (VC-128).
+   *
+   * Required, and carried as the union's explicit `{ kind: "none" }` rather
+   * than left off: docs/BOUNDARIES.md rule 3 keeps RPC payloads JSON-safe, and
+   * an optional field says "Nothing else" only on a transport that survives
+   * `undefined` — Electron's structured clone does, JSON does not, so the
+   * spelling that means the default has to be a value. The union already has a
+   * member for it, which is why `none` exists at all.
+   */
+  trigger: AutomationTrigger;
   /** The pinned selection, whole, or `null` to inherit. */
   runtime: ModelSelection | null;
 }
@@ -1410,7 +1423,28 @@ export interface AutomationUpdateInput {
   automationId: string;
   name: string;
   instructions: string;
+  /** Rewritten whole like every other editable field, and present like it too. */
+  trigger: AutomationTrigger;
   runtime: ModelSelection | null;
+}
+
+/**
+ * Arming one column, or disarming it with `automationId: null` (VC-128).
+ *
+ * A `commandId` like every write above it, and for the reason
+ * {@link AutomationSetEnabledInput} states: the PROJECTION this lands in is
+ * machine-local (the `automation_column_arming` table, which never travels with
+ * a project), while the INTENT is an ordinary durable command — arming decides
+ * whether work starts without a person, and docs/BOUNDARIES.md rule 5 governs
+ * exactly that. A retry repeats the same command and replays its receipt rather
+ * than arming twice.
+ */
+export interface AutomationArmInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  automationId: string | null;
 }
 
 export interface AutomationIdInput {
@@ -1475,6 +1509,14 @@ export type AutomationResult = Result<{
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** Every armed column in the project — the whole truth, so a caller reconstructs nothing. */
+export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationArmResult = Result<{
+  armings: ColumnArming[];
+  receipt: AutomationCommandReceipt;
+}>;
 
 /**
  * A run's answer: the durable Run (holding the fresh Session's id and the
@@ -1515,6 +1557,13 @@ export interface VolliAutomationIpcContract {
     args: [input: TicketIdInput];
     result: AutomationRunsResult;
   };
+  /** One project's armed columns — machine-local, never listed with the record. */
+  "volli:automation-arming-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationArmingsResult;
+  };
+  /** Arms one column with one offered Automation, or disarms it. */
+  "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmResult };
   /**
    * Every Run in this project, newest first — the Automations page's Run
    * history (VC-127). Scoped through each Run's own durable evidence (the
@@ -1763,6 +1812,13 @@ export type VolliIpcEvent =
   // so every window can surface the automated de-escalation where the mover is
   // looking (a toast with a jump-to-ticket action) — never silently.
   | "volli:sessions-interrupted"
+  // An explicit `volli ticket move` COMMITTED a status change (VC-128).
+  // CONTEXT.md defines a Deliberate move as a human drag or an explicit CLI
+  // move, with the same semantics either way — so this is how the second one
+  // reaches the renderer's one arrival door. It announces a durable fact main
+  // already wrote; it is not a mutation channel, and nothing acts on it except
+  // the armed-column window. See {@link TicketMovedNotice}.
+  | "volli:ticket-moved"
   // A Session was retitled by main rather than by a person (VC-81's auto-title
   // model call). Every other retitle originates in the renderer, which moves
   // its own labels optimistically; this one has no such writer, and
@@ -1899,6 +1955,28 @@ export interface DataChangedEvent {
   projectId?: string;
   /** Advisory hint at what changed — never the basis of a reader's refire decision. */
   kind?: DataChangeKind;
+}
+
+/**
+ * A Deliberate move main committed for a caller that is not this renderer — an
+ * explicit `volli ticket move` over the agent socket (VC-128).
+ *
+ * The renderer's own moves never arrive here: they already know their own
+ * before/after and report through the board store. This carries what a
+ * renderer cannot reconstruct — which column the Ticket LEFT — because
+ * `volli:data-changed` only says "re-read", and by the time it has, the old
+ * status is gone. Without it an armed column could never tell an arrival from
+ * a Ticket that was already there.
+ *
+ * Same-column moves are never announced: the CLI treats them as an idempotent
+ * no-op, and a no-op is not an arrival.
+ */
+export interface TicketMovedNotice {
+  projectId: string;
+  ticketId: string;
+  /** The column it left — the fact a re-read cannot recover. */
+  from: TicketStatus;
+  to: TicketStatus;
 }
 
 /**

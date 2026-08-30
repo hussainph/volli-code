@@ -50,12 +50,12 @@ import {
 } from "@volli/shared";
 
 import {
-  MANUAL_TRIGGER_LABEL,
   groupByOwnership,
   runAutomationLabel,
   runModelLabel,
   runModelTitle,
   runtimeLabel,
+  triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorDialog } from "./automation-editor";
 import { openRunSession, runAutomationFromListing } from "./run-automation";
@@ -283,7 +283,10 @@ function AutomationRowItem({
         primary={automation.name}
         secondary={
           <span className="flex min-w-0 items-center gap-1">
-            <span className="truncate">{MANUAL_TRIGGER_LABEL}</span>
+            {/* The record's own Trigger, not a constant: a row whose Trigger
+                names columns says so, because this is the page that authors
+                the field. */}
+            <span className="truncate">{triggerLabel(automation.trigger)}</span>
             <span aria-hidden>·</span>
             <span className="truncate">{runtimeLabel(automation.runtime)}</span>
             {enabled ? null : (
