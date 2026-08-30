@@ -72,6 +72,7 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
     ticketId: "t1",
     sessionId: "s1",
     model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    attendance: "attended",
     createdAt: 10,
     ...overrides,
   };

@@ -1,8 +1,13 @@
-import { parseAutomationTrigger, sameAutomationRunRequestIdentity } from "@volli/shared";
+import {
+  parseAutomationRunAttendance,
+  parseAutomationTrigger,
+  sameAutomationRunRequestIdentity,
+} from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationRunAttendance,
   AutomationRunRequestIdentity,
   AutomationSkippedOccurrence,
   AutomationSkipReason,
@@ -192,6 +197,18 @@ export interface AutomationRunPlan {
    * it was: a bound Run with no override (see {@link readRunPlan}).
    */
   request: AutomationRunRequestIdentity;
+  /**
+   * Whether a person was at the door that asked for this Run (VC-133).
+   *
+   * On the PLAN and not only on the completed Run because the plan is the half
+   * that is durable first: a Run whose process died before its Session work
+   * finished is replayed from here by {@link AutomationRunner.recover}, and the
+   * replay must reach the same notification behaviour as the original request.
+   *
+   * A plan written before VC-133 has no such field and is read as `attended` —
+   * the silent answer. See {@link readRunPlan}.
+   */
+  attendance: AutomationRunAttendance;
   /** The composer's expansion at request time, never re-expanded on recovery. */
   text: string;
   resources: readonly PromptResource[];
@@ -355,6 +372,8 @@ export interface AutomationEngine {
     projectId: string;
     /** `null` targets the Project, which is what a schedule Run does. */
     ticketId: string | null;
+    /** Whether a person was at the door that asked (VC-133). */
+    attendance: AutomationRunAttendance;
     text: string;
     resources: readonly PromptResource[];
   }): Promise<AutomationCommandOutcome<AutomationRunPlan>>;
@@ -835,6 +854,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         ticketId: input.ticketId,
         runtime: input.runtime,
         request: input.request,
+        attendance: input.attendance,
         text: input.text,
         resources: input.resources,
         sessionOperationId: ports.nextId(),
@@ -862,6 +882,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             !sameAutomationRunRequestIdentity(plan.request, input.request) ||
             plan.text !== input.text ||
             !sameJson(plan.resources, input.resources)
+            // `attendance` is deliberately NOT compared. It is a fact about the
+            // DOOR rather than about the work, so two requests that differ only
+            // there are still the same Run, and the stored plan's answer wins on
+            // every replay. Comparing it would also break upgrade day exactly
+            // the way VC-128's widened Trigger did: a schedule Run accepted by
+            // an older build normalizes to `attended` on read, so the
+            // scheduler's own `unattended` retry of its own occurrence would be
+            // refused as "a different intent" for that occurrence forever.
           ) {
             throw new AutomationEngineConflictError(
               `Automation command ${input.commandId} was already accepted with different intent`,
@@ -987,6 +1015,10 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           ticketId: plan.ticketId,
           sessionId: input.sessionId,
           model: input.model,
+          // Copied from the plan rather than taken from the completing caller:
+          // the door that decided it is long gone by now, and the plan is the
+          // durable record of what it said.
+          attendance: plan.attendance,
           createdAt: now,
         };
         const delivery: AutomationRunDelivery = {
@@ -1257,8 +1289,15 @@ function readIntent(intent: AutomationCommandIntent): AutomationCommandIntent {
  */
 function readRunPlan(plan: AutomationRunPlan): AutomationRunPlan {
   const request: AutomationRunRequestIdentity | undefined = plan.request;
-  if (request !== undefined) return plan;
-  return { ...plan, request: { instructions: null, modelOverride: null } };
+  return {
+    ...plan,
+    request: request ?? { instructions: null, modelOverride: null },
+    // VC-133's field, read the same way and for the same reason: a plan older
+    // than attendance cannot say which door took it, and `attended` is the
+    // answer that stays quiet rather than notifying about work nobody is
+    // waiting on. See `AUTOMATION_RUN_ATTENDANCE`.
+    attendance: parseAutomationRunAttendance(plan.attendance),
+  };
 }
 
 /**

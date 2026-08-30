@@ -189,6 +189,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -262,6 +263,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
     if (!outcome.ok) throw new Error(outcome.error);
@@ -298,6 +300,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -305,6 +308,8 @@ describe("createAutomationRunner", () => {
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "openai", modelId: "gpt-5" },
       reasoningLevel: "medium",
+      // And recorded rather than validated: see the unavailable-pin case below.
+      whenUnavailable: "record",
     });
   });
 
@@ -318,6 +323,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
@@ -354,6 +360,7 @@ describe("createAutomationRunner", () => {
       ticketId: h.ticketId,
       text: "Persisted instructions",
       resources: [],
+      attendance: "attended",
     });
     expect(accepted.ok).toBe(true);
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
@@ -378,6 +385,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
     // The plan, not today's editable record, owns a retry. Deleting the
@@ -390,6 +398,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -424,6 +433,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
 
@@ -434,6 +444,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
   });
@@ -451,6 +462,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -460,7 +472,53 @@ describe("createAutomationRunner", () => {
     expect(h.creates).toEqual([]);
   });
 
-  it("keeps a later-unavailable pin on the existing Session failure path and records no Run projection", async () => {
+  it("opens a Session for a pin that has become unavailable, instead of refusing at the door", async () => {
+    // VC-112: "a pinned model that has since become unavailable does not
+    // silently fall back — let the Session fail through the existing error
+    // path rather than building a second failure surface", and VC-133: that
+    // Run "lands in `error` and is covered by the same rule".
+    //
+    // Neither is reachable from a door-time refusal, because a refusal creates
+    // nothing to land in `error` and nothing to notify about. So this door
+    // asks the Session facade to RECORD the Runtime, and the attach raises the
+    // `configuration_invalid` Attention that is `error`. The unattended doors
+    // are why it matters: a refusal returned to the schedule timer or to
+    // another Session's tool call is a sentence nobody reads.
+    const h = harness();
+    const automation = await savedAutomation(h, {
+      runtime: { providerId: "retired-provider", modelId: "retired-model", reasoningLevel: "high" },
+    });
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    expect(h.creates[0]?.modelOverride).toEqual({
+      model: { providerId: "retired-provider", modelId: "retired-model" },
+      reasoningLevel: "high",
+      whenUnavailable: "record",
+    });
+    // A Run row exists, bound to a Session — which is the thing a person can
+    // open, the thing the dot reads, and the thing the notification names.
+    // (What that recorded selection then IS, the Session facade answers, and
+    // `sessions.test.ts` pins it; this fake echoes its own resolved model.)
+    const [run] = listRunsForTicket(ctx.db, h.ticketId);
+    expect(run?.sessionId).toBe("session-1");
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
+  });
+
+  it("still speaks plainly if the Session facade refuses an unavailable model anyway", async () => {
+    // The door no longer asks for validation, but `Sessions` is a port: an
+    // implementation that refuses regardless must still produce this Run
+    // vocabulary rather than a `RUN_FAILED` shrug, and the refusal must be
+    // terminal so a lost response replays the receipt instead of minting a
+    // second Session.
     const h = harness({
       sessions: {
         create: async () => {
@@ -488,16 +546,16 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
-    // A lost response retries the same terminal receipt, not a generic
-    // RUN_IN_FLIGHT refusal and not another Session-create attempt.
     await expect(
       h.runner.run({
         commandId,
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
@@ -511,6 +569,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "unbound", instructions: "/review src/a.ts once" },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -544,6 +603,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "unbound", instructions: "   \n " },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
 
     expect(outcome).toMatchObject({ ok: false, code: "INSTRUCTIONS_REQUIRED" });
@@ -562,6 +622,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -570,6 +631,7 @@ describe("createAutomationRunner", () => {
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoningLevel: "high",
+      whenUnavailable: "record",
     });
     // ...and the record keeps the Runtime it was saved with.
     expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({
@@ -587,12 +649,14 @@ describe("createAutomationRunner", () => {
       target: { kind: "unbound", instructions: "sweep" },
       ticketId: h.ticketId,
       modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      attendance: "attended",
     });
     await h.runner.settled();
 
     expect(h.creates[0]?.modelOverride).toEqual({
       model: { providerId: "anthropic", modelId: "claude-opus" },
       reasoningLevel: "high",
+      whenUnavailable: "record",
     });
   });
 
@@ -604,6 +668,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "unbound", instructions: "sweep" } as const,
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended" as const,
     };
 
     const first = await h.runner.run(request);
@@ -628,6 +693,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -637,6 +703,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "unbound", instructions: "something else entirely" },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     expect(h.creates).toHaveLength(1);
@@ -653,6 +720,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "unbound", instructions: "sweep the diff" },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -662,6 +730,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "unbound", instructions: "sweep the WHOLE repository" },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     // The first Run stands, alone: a conflict starts nothing and undoes nothing.
@@ -681,6 +750,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -692,6 +762,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     // And dropping the override entirely is a different request too.
@@ -701,6 +772,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: null,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     expect(h.creates).toHaveLength(1);
@@ -719,6 +791,7 @@ describe("createAutomationRunner", () => {
         modelId: "claude-opus",
         reasoningLevel: "high",
       } as const,
+      attendance: "attended" as const,
     };
 
     const first = await h.runner.run(request);
@@ -775,6 +848,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -789,6 +863,7 @@ describe("createAutomationRunner", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: h.ticketId,
         modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     expect(h.creates).toHaveLength(1);
@@ -807,6 +882,7 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -825,6 +901,7 @@ describe("createAutomationRunner", () => {
       commandId: randomUUID(),
       automationId: automation.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -854,12 +931,14 @@ describe("createAutomationRunner", () => {
       commandId,
       automationId: automation.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
     const second = await h.runner.runForProject({
       commandId,
       automationId: automation.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
 
@@ -877,11 +956,17 @@ describe("createAutomationRunner", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
 
     await expect(
-      h.runner.runForProject({ commandId, automationId: automation.id, projectId: h.projectId }),
+      h.runner.runForProject({
+        commandId,
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "attended",
+      }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
   });
 
@@ -893,6 +978,7 @@ describe("createAutomationRunner", () => {
         commandId: randomUUID(),
         automationId: automation.id,
         projectId: "no-such-project",
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "PROJECT_NOT_FOUND" });
     expect(h.creates).toEqual([]);
@@ -914,6 +1000,7 @@ describe("createAutomationRunner", () => {
         commandId: randomUUID(),
         automationId: created.value.id,
         projectId: h.projectId,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "AUTOMATION_NOT_IN_PROJECT" });
   });
@@ -926,6 +1013,7 @@ describe("createAutomationRunner", () => {
       commandId: randomUUID(),
       automationId: automation.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
     activity = "working";
@@ -935,6 +1023,7 @@ describe("createAutomationRunner", () => {
         commandId: randomUUID(),
         automationId: automation.id,
         projectId: h.projectId,
+        attendance: "attended",
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
   });
@@ -950,6 +1039,7 @@ describe("createAutomationRunner", () => {
       commandId: randomUUID(),
       automationId: first.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
     activity = "working";
@@ -958,9 +1048,152 @@ describe("createAutomationRunner", () => {
       commandId: randomUUID(),
       automationId: second.id,
       projectId: h.projectId,
+      attendance: "attended",
     });
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
     expect(h.creates).toHaveLength(2);
+  });
+});
+
+describe("Run attendance (VC-133)", () => {
+  it("carries the door's answer onto the durable plan and the completed Run", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    const outcome = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    expect(outcome.run.attendance).toBe("unattended");
+    // On the PLAN as well as the Run: the plan is durable first, and it is what
+    // a crash recovery replays after the door that knew this is gone.
+    expect((await h.engine.runPlan(commandId))?.attendance).toBe("unattended");
+    expect(listRunsForTicket(ctx.db, h.ticketId)[0]?.attendance).toBe("unattended");
+  });
+
+  it("keeps the Project door's two callers apart", async () => {
+    // Same Automation, same schedule, same Project Session — and a person at
+    // one of the two doors. This is why attendance cannot be derived from the
+    // Automation's Trigger.
+    const h = harness();
+    const automation = await savedAutomation(h);
+
+    const scheduled = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+    expect(scheduled.ok && scheduled.run.attendance).toBe("unattended");
+
+    const byHand = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    expect(byHand.ok && byHand.run.attendance).toBe("attended");
+  });
+
+  it("recovers a crashed unattended Run as unattended", async () => {
+    // The reason this is durable at all. `recover()` replays an accepted plan
+    // in a LATER process; an in-memory set of unattended Session ids would have
+    // answered "attended" here, silently and only after a crash.
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    await h.engine.acceptRun({
+      commandId,
+      automation: { id: automation.id, name: automation.name },
+      runtime: null,
+      request: { instructions: null, modelOverride: null },
+      projectId: h.projectId,
+      ticketId: h.ticketId,
+      attendance: "unattended",
+      text: "sweep",
+      resources: [],
+    });
+
+    await h.runner.recover();
+    await h.runner.settled();
+
+    expect(listRunsForTicket(ctx.db, h.ticketId)[0]?.attendance).toBe("unattended");
+  });
+
+  it("replays a plan older than attendance as attended", async () => {
+    // The upgrade-day case. A plan written before VC-133 has no such field;
+    // reading it literally would put `undefined` on a Run. Written as a legacy
+    // ROW rather than by ageing a current one, because the ledger enforces
+    // command immutability with a trigger — which is the guarantee that makes
+    // normalizing on READ the only available answer.
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const legacyPlan = {
+      commandId,
+      runId: randomUUID(),
+      automationId: automation.id,
+      automationName: automation.name,
+      projectId: h.projectId,
+      ticketId: h.ticketId,
+      runtime: null,
+      request: { instructions: null, modelOverride: null },
+      text: "sweep",
+      resources: [],
+      sessionOperationId: randomUUID(),
+      messageCommandId: randomUUID(),
+      messageId: randomUUID(),
+    };
+    ctx.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run(commandId, JSON.stringify({ kind: "automation.run", plan: legacyPlan }), 1000);
+
+    expect(Object.hasOwn(legacyPlan, "attendance")).toBe(false);
+    expect((await h.engine.runPlan(commandId))?.attendance).toBe("attended");
+  });
+
+  it("does not refuse a retry whose door disagrees with the stored plan", async () => {
+    // Attendance is a fact about the DOOR, not about the work, so it is
+    // deliberately outside the replay-identity comparison. Comparing it would
+    // break upgrade day exactly the way VC-128's widened Trigger did: a legacy
+    // schedule plan normalizes to `attended`, and the scheduler's own retry of
+    // that occurrence would then be refused as a different intent, forever.
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    const first = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    const replayed = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(first.ok && replayed.ok).toBe(true);
+    if (!first.ok || !replayed.ok) throw new Error("refused");
+    // Same Run, and the stored plan's answer wins rather than the retry's.
+    expect(replayed.run).toEqual(first.run);
+    expect(replayed.run.attendance).toBe("attended");
   });
 });

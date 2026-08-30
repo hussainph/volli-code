@@ -17,6 +17,7 @@ import {
   listRunsForProject,
   listRunsForTicket,
   listSkippedOccurrencesForProject,
+  readAutomationRunAttendance,
   recordAutomationRun,
   setColumnArming,
   updateAutomation,
@@ -780,5 +781,126 @@ describe("column Trigger and arming (migration 031)", () => {
     });
     deleteAutomation(ctx.db, automation.id);
     expect(listSkippedOccurrencesForProject(ctx.db, project.id)).toEqual([]);
+  });
+});
+
+describe("Run attendance (VC-133)", () => {
+  it("round-trips both answers, and reads back by Session", () => {
+    const { project, ticket, session } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    const run = recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: PIN,
+        attendance: "unattended",
+      },
+      2000,
+    );
+
+    expect(run.attendance).toBe("unattended");
+    expect(listRunsForTicket(ctx.db, ticket.id)[0]?.attendance).toBe("unattended");
+    expect(readAutomationRunAttendance(ctx.db, session.id)).toBe("unattended");
+  });
+
+  it("records a Run whose door said nothing as attended, never as a guess", () => {
+    // The legacy/test-support caller. Silence is the safe answer: an
+    // `unattended` guess would notify about work somebody is watching.
+    const { project, ticket, session } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    const run = recordAutomationRun(
+      ctx.db,
+      { automationId: automation.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      2000,
+    );
+    expect(run.attendance).toBe("attended");
+    expect(readAutomationRunAttendance(ctx.db, session.id)).toBe("attended");
+  });
+
+  it("answers null for a Session no Run owns", () => {
+    // A chat a person opened, and VC-131's pre-Run crash window alike. The
+    // notification rule reads both as "do not notify".
+    const { session } = seeded();
+    expect(readAutomationRunAttendance(ctx.db, session.id)).toBeNull();
+  });
+
+  it("reads a row written before the column existed as attended", () => {
+    // Migration 033 adds the column nullable rather than backfilling a default,
+    // so a pre-VC-133 row really is NULL here. The degrade happens on READ,
+    // which is what keeps the column's meaning and the rule in one place.
+    const { project, ticket, session } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: PIN,
+        attendance: "unattended",
+      },
+      2000,
+    );
+    ctx.db.prepare("UPDATE automation_runs SET attendance = NULL").run();
+
+    expect(readAutomationRunAttendance(ctx.db, session.id)).toBe("attended");
+    expect(listRunsForTicket(ctx.db, ticket.id)[0]?.attendance).toBe("attended");
+  });
+
+  it("refuses a word the vocabulary does not have", () => {
+    // The CHECK constraint, so a hand-edited database cannot introduce a third
+    // answer the reader would then have to interpret.
+    const { project, ticket, session } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+    recordAutomationRun(
+      ctx.db,
+      { automationId: automation.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
+      2000,
+    );
+    expect(() => ctx.db.prepare("UPDATE automation_runs SET attendance = 'maybe'").run()).toThrow(
+      /CHECK constraint failed/,
+    );
   });
 });

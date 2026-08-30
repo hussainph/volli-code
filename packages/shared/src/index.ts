@@ -54,6 +54,8 @@ export * from "./terminal";
 export * from "./ghostty-config";
 export * from "./session";
 export * from "./session-provenance";
+export * from "./session-need";
+export * from "./notification-preferences";
 export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
