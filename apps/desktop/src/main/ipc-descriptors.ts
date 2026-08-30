@@ -1205,13 +1205,14 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     invalidError: "Invalid automation enablement request",
   },
   "volli:automation-set-enabled": {
-    // No `commandId`, unlike every write above it: this is machine-local
-    // operating state rather than a durable command, so a repeated request is
-    // idempotent by shape (`enabled` is the value, not a toggle) and has no
-    // receipt to replay. `enablement.ts` states why it is not in the ledger.
+    // A `commandId` like every other write: the projection is machine-local
+    // (`enablement.ts`), the INTENT is a durable command with an event and a
+    // receipt (docs/BOUNDARIES.md rule 5). `enabled` is a value rather than a
+    // toggle, so a replayed command is also the same end state.
     guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
+      typeof args[0]["commandId"] === "string" &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",

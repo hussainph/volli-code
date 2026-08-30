@@ -7,17 +7,21 @@
  *
  *   1. A fourth nav row exists beside Home and Configure, and clicking it
  *      lands on a page — not on a room inside Home.
- *   2. The page lists both project-owned and global Automations.
- *   3. The row's switch disables an Automation, writes NOTHING into the
- *      project's git repo, and does not lock it: a disabled Automation is
- *      still runnable by hand, because the Trigger says only what ELSE starts
- *      one. "Never travels with the project" is a claim about the repository,
- *      so the repository is what gets checked, on both sides of the click.
- *   4. Duplicate is one explicit click that yields a second, distinguishable
+ *   2. The New form opens EMPTY behind a `/skill` placeholder, on the manual
+ *      Trigger and an inherited Runtime — and creating through it works, for
+ *      both Ownerships, so the page lists its own and the global ones.
+ *   3. The row's switch turns an Automation ON for this machine and off
+ *      again, and writes NOTHING into the project's git repo. "Never travels
+ *      with the project" is a claim about the repository, so the repository
+ *      is what gets checked, on both sides of the click.
+ *   4. An Automation the switch has NOT turned on is still runnable by hand
+ *      from this page — through the row's own Run control, on a Ticket chosen
+ *      here — and fails only for the ordinary missing-model reason.
+ *   5. Duplicate is one explicit click that yields a second, distinguishable
  *      record carrying the same work, and lands on the copy's own form.
- *   5. A row opens the ONE authoring form, and an edit through it sticks.
- *   6. Delete asks once and removes the record — there is no archive.
- *   7. The Run-history door is project-scoped and guards its id.
+ *   6. A row opens the ONE authoring form, and an edit through it sticks.
+ *   7. Delete asks once and removes the record — there is no archive.
+ *   8. The Run-history door is project-scoped and guards its id.
  *
  * Every act above goes through the CONTROL a person would use, not the IPC
  * door underneath it. The doors are the tracer smoke's subject; whether the
@@ -49,6 +53,18 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-autom
 const { attempt, must, summarize } = createRunner();
 
 console.log("scratch:", scratch, "\n");
+
+/** Waits for a switch to actually READ as on or off, not merely to be clicked. */
+async function expectAriaChecked(locator, value) {
+  await locator
+    .page()
+    .waitForFunction(
+      ({ selector, expected }) =>
+        document.querySelector(selector)?.getAttribute("aria-checked") === expected,
+      { selector: `[aria-label="${await locator.getAttribute("aria-label")}"]`, expected: value },
+      { timeout: 10000 },
+    );
+}
 
 /** Everything git can see in the repo: tracked changes plus untracked files. */
 async function repoFootprint(repoDir) {
@@ -83,32 +99,32 @@ try {
       status: "todo",
     });
     if (!ticket.ok) return { fail: ticket.error };
-    const own = await window.api.automations.create({
-      commandId: crypto.randomUUID(),
-      projectId: project.id,
-      name: "Review sweep",
-      instructions: "/review the change set",
-      runtime: null,
-    });
-    const global = await window.api.automations.create({
-      commandId: crypto.randomUUID(),
-      projectId: null,
-      name: "Nightly sweep",
-      instructions: "/tdd",
-      runtime: null,
-    });
-    if (!own.ok || !global.ok) return { fail: "seed automations refused" };
-    return {
-      projectId: project.id,
-      ticketId: ticket.ticket.id,
-      ownId: own.automation.id,
-      globalId: global.automation.id,
-    };
+    return { projectId: project.id, ticketId: ticket.ticket.id };
   });
-  await must(0, "a project, a ticket and two Automations exist", async () => ({
+  await must(0, "a project and a ticket exist", async () => ({
     ok: seeded.fail === undefined,
-    detail: seeded.fail ?? `own=${seeded.ownId} global=${seeded.globalId}`,
+    detail: seeded.fail ?? `project=${seeded.projectId} ticket=${seeded.ticketId}`,
   }));
+
+  /** Every Automation this project lists, by name, straight from the record. */
+  async function listedNames() {
+    return page.evaluate(async (projectId) => {
+      const listed = await window.api.automations.list({ projectId });
+      return listed.ok ? listed.automations.map((a) => a.name) : [listed.error];
+    }, seeded.projectId);
+  }
+
+  /** The id of one listed Automation, for the machine-local set's own check. */
+  async function listedId(name) {
+    return page.evaluate(
+      async ({ projectId, name: wanted }) => {
+        const listed = await window.api.automations.list({ projectId });
+        if (!listed.ok) return null;
+        return listed.automations.find((a) => a.name === wanted)?.id ?? null;
+      },
+      { projectId: seeded.projectId, name },
+    );
+  }
 
   await must(1, "a fourth nav row opens the Automations page", async () => {
     const nav = page.getByRole("button", { name: "Automations", exact: true }).first();
@@ -118,7 +134,47 @@ try {
     return { ok: true, detail: "nav → page" };
   });
 
-  await attempt(2, "the page lists project-owned and global Automations", async () => {
+  await must(
+    2,
+    "the New form opens empty behind a /skill placeholder, on the ruled defaults",
+    async () => {
+      // Creation goes through the FORM, not the door under it: the criterion is
+      // about what a new Automation opens on, and only the form can answer it.
+      await page.getByRole("button", { name: "New Automation" }).first().click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByText("New Automation").waitFor({ timeout: 15000 });
+      const instructions = dialog.getByLabel("Instructions");
+      const opensEmpty = (await instructions.inputValue()) === "";
+      const placeholder = await instructions.getAttribute("placeholder");
+      const body = await dialog.innerText();
+      const ok =
+        opensEmpty &&
+        (placeholder ?? "").includes("/skill") &&
+        body.includes("Only when I run it") &&
+        body.includes("Default model");
+      if (ok) {
+        await dialog.getByLabel("Name").fill("Review sweep");
+        await instructions.fill("Review the change set");
+        await dialog.getByRole("button", { name: "Create automation" }).click();
+        await page.getByText("Review sweep").first().waitFor({ timeout: 15000 });
+      }
+      return {
+        ok,
+        detail: `empty=${opensEmpty} placeholder=${JSON.stringify(placeholder)} ${body.replaceAll("\n", " ").slice(0, 200)}`,
+      };
+    },
+  );
+
+  await attempt(3, "the same form creates a global one, and the page lists both", async () => {
+    await page.getByRole("button", { name: "New Automation" }).first().click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Name").fill("Nightly sweep");
+    await dialog.getByLabel("Instructions").fill("Run the nightly sweep");
+    // Ownership decides WHERE it is listed, and is editable on create only.
+    await dialog.getByRole("button", { name: "All projects" }).click();
+    await dialog.getByRole("button", { name: "Create automation" }).click();
+    await page.getByText("Nightly sweep").first().waitFor({ timeout: 15000 });
+
     // Lowercased because `innerText` reports the RENDERED text and the section
     // eyebrows are `uppercase` in CSS. This probe is about which Automations
     // are listed under which Ownership, not about letter case.
@@ -134,58 +190,66 @@ try {
   });
 
   await attempt(
-    3,
-    "a new Automation defaults to the manual Trigger and an inherited Runtime",
-    async () => {
-      const body = await page.locator("body").innerText();
-      const ok = body.includes("Only when I run it") && body.includes("Default model");
-      return { ok, detail: ok ? "manual Trigger + inherited Runtime" : body.slice(0, 400) };
-    },
-  );
-
-  await attempt(
     4,
-    "the row's switch disables it, and writes nothing into the git repo",
+    "the switch turns it on for this machine and off again, touching no git repo",
     async () => {
       // Through the CONTROL, not the door: "local to this machine" is a promise
       // about what a person's click does, and the repo is checked on both sides
       // of it because "never travels with the project" is a claim about the
       // repository rather than about the database.
-      await page.getByLabel("Enabled on this machine: Review sweep").click();
-      await page.getByText("Won\u2019t start on its own").waitFor({ timeout: 10000 });
-      const stored = await page.evaluate(async () => window.api.automations.enablement());
+      //
+      // It starts OFF: VC-112 rules that a machine fires nothing until someone
+      // turns something on there, so the resting row says so.
+      const ownId = await listedId("Review sweep");
+      const control = page.getByLabel("Enabled on this machine: Review sweep");
+      const restingState = await control.getAttribute("aria-checked");
+      await page.getByText("Won\u2019t start on its own").first().waitFor({ timeout: 10000 });
+
+      await control.click();
+      await expectAriaChecked(control, "true");
+      const on = await page.evaluate(async () => window.api.automations.enablement());
       const footprint = await repoFootprint(repoDir);
+
+      // And back off, because a switch that only travels one way is half a
+      // switch — the arm the first review found untested.
+      await control.click();
+      await expectAriaChecked(control, "false");
+      const off = await page.evaluate(async () => window.api.automations.enablement());
+
       return {
         ok:
-          stored.ok &&
-          stored.disabledAutomationIds.includes(seeded.ownId) &&
+          restingState === "false" &&
+          on.ok &&
+          on.enabledAutomationIds.includes(ownId) &&
+          off.ok &&
+          !off.enabledAutomationIds.includes(ownId) &&
           footprint === cleanRepo,
-        detail: `${JSON.stringify(stored.disabledAutomationIds)} repo=${JSON.stringify(footprint)} was=${JSON.stringify(cleanRepo)}`,
+        detail: `resting=${restingState} on=${JSON.stringify(on.enabledAutomationIds)} off=${JSON.stringify(off.enabledAutomationIds)} repo=${JSON.stringify(footprint)} was=${JSON.stringify(cleanRepo)}`,
       };
     },
   );
 
   await attempt(
     5,
-    "a disabled Automation stays runnable by hand \u2014 the switch is not a lock",
+    "an Automation that is off still runs by hand, from this page's own control",
     async () => {
       // VC-112: run by hand is universal, and the Trigger says only what ELSE
-      // starts an Automation. So a disabled record must still reach the Run
-      // door and fail there for the ordinary reason (no default model on this
-      // profile), never be refused for being off.
-      const outcome = await page.evaluate(
-        async ({ ownId, ticketId }) =>
-          window.api.automations.run({
-            commandId: crypto.randomUUID(),
-            automationId: ownId,
-            ticketId,
-          }),
-        seeded,
-      );
-      return {
-        ok: !outcome.ok && outcome.code === "MODEL_REQUIRED",
-        detail: JSON.stringify(outcome).slice(0, 200),
-      };
+      // starts an Automation. So a record nobody switched on must still reach
+      // the Run door through the page — and fail there for the ordinary reason
+      // (no default model on this profile), never be refused for being off.
+      // The recovery for that reason is Model Access, so Settings opening on it
+      // IS the evidence that the click reached the door.
+      await page.getByLabel("Run Review sweep").click();
+      const chooser = page.getByRole("dialog");
+      await chooser.getByText("Run \u201cReview sweep\u201d on").waitFor({ timeout: 10000 });
+      await chooser.getByRole("button", { name: /Probe ticket/ }).click();
+      const settings = page.getByRole("navigation", { name: "Settings categories" });
+      await settings.waitFor({ timeout: 20000 });
+      // Back to the page: Settings is a surface, not an overlay, and every nav
+      // click closes it.
+      await page.getByRole("button", { name: "Automations", exact: true }).first().click();
+      await page.getByRole("heading", { name: "Automations" }).waitFor({ timeout: 15000 });
+      return { ok: true, detail: "ran from the row, refused for the missing model" };
     },
   );
 
@@ -202,14 +266,11 @@ try {
       const named = await dialog.getByLabel("Name").inputValue();
       const instructions = await dialog.getByLabel("Instructions").inputValue();
       await page.keyboard.press("Escape");
-      const names = await page.evaluate(async (projectId) => {
-        const listed = await window.api.automations.list({ projectId });
-        return listed.ok ? listed.automations.map((a) => a.name) : [listed.error];
-      }, seeded.projectId);
+      const names = await listedNames();
       return {
         ok:
           named === "Review sweep (copy)" &&
-          instructions === "/review the change set" &&
+          instructions === "Review the change set" &&
           names.includes("Review sweep") &&
           names.includes("Review sweep (copy)"),
         detail: `name=${named} instructions=${instructions} list=${names.join(" | ")}`,
@@ -228,18 +289,16 @@ try {
     await name.fill("Review sweep v2");
     await dialog.getByRole("button", { name: "Save changes" }).click();
     await page.getByText("Review sweep v2").waitFor({ timeout: 10000 });
-    const names = await page.evaluate(async (projectId) => {
-      const listed = await window.api.automations.list({ projectId });
-      return listed.ok ? listed.automations.map((a) => a.name) : [listed.error];
-    }, seeded.projectId);
+    const names = await listedNames();
     return { ok: names.includes("Review sweep v2"), detail: names.join(" | ") };
   });
 
   await attempt(8, "the Run-history door answers for this project and guards the id", async () => {
     // A Run needs a live model and spends tokens, so this probe stops at the
     // door \u2014 the same line `automations-smoke.mjs` draws. What the door OWES
-    // (project scoping through the Ticket, newest-first order, the resolved
-    // model) is pinned in `automations-repo.test.ts` and the page test.
+    // (project scoping through the Run's own Session, newest-first order, the
+    // resolved model, and a door that survives its Ticket) is pinned in
+    // `automations-repo.test.ts` and the page test.
     const outcome = await page.evaluate(async (projectId) => {
       const mine = await window.api.automations.runsForProject({ projectId });
       const stranger = await window.api.automations.runsForProject({
@@ -265,10 +324,7 @@ try {
       const confirm = page.getByRole("alertdialog");
       await confirm.getByText("Can\u2019t be undone").waitFor({ timeout: 10000 });
       await confirm.getByRole("button", { name: "Delete" }).click();
-      const names = await page.evaluate(async (projectId) => {
-        const listed = await window.api.automations.list({ projectId });
-        return listed.ok ? listed.automations.map((a) => a.name) : [listed.error];
-      }, seeded.projectId);
+      const names = await listedNames();
       return {
         ok: !names.includes("Review sweep v2") && names.includes("Nightly sweep"),
         detail: names.join(" | "),

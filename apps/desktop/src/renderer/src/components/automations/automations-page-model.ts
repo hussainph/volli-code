@@ -50,17 +50,24 @@ export function ownershipLabel(automation: Pick<Automation, "projectId">): strin
 }
 
 /**
- * The Runtime, in one line.
+ * A model and its reasoning level, in one line — the one spelling of the pair.
  *
  * Model and reasoning travel together (VC-112), so they are printed together
- * or not at all — there is deliberately no spelling of this that shows one
- * without the other, because a type that could would be a type that can name
- * a pair no model offers.
+ * or not at all: there is deliberately no spelling of this that shows one
+ * without the other, because a type that could would be a type that can name a
+ * pair no model offers. One formatter rather than one per caller, so a pinned
+ * Runtime and the Run it produced cannot drift into two typographies of the
+ * same fact.
  */
+function modelPairLabel(pair: { modelId: string; reasoningLevel: string }): string {
+  return `${pair.modelId} · ${pair.reasoningLevel}`;
+}
+
+/** The Runtime, in one line: the inherited default, a pin, or a corrupt row saying so. */
 export function runtimeLabel(runtime: AutomationRuntime): string {
   if (runtime === null) return "Default model";
   if (!isAutomationRuntimePin(runtime)) return "Unreadable runtime";
-  return `${runtime.modelId} · ${runtime.reasoningLevel}`;
+  return modelPairLabel(runtime);
 }
 
 /**
@@ -71,12 +78,12 @@ export function runtimeLabel(runtime: AutomationRuntime): string {
  * exactly as recorded rather than as today's default.
  */
 export function runModelLabel(run: Pick<AutomationRun, "model">): string {
-  return `${run.model.modelId} · ${run.model.reasoningLevel}`;
+  return modelPairLabel(run.model);
 }
 
 /** The provider behind that model, for the row's title attribute. */
 export function runModelTitle(run: Pick<AutomationRun, "model">): string {
-  return `${run.model.providerId} / ${run.model.modelId} · ${run.model.reasoningLevel}`;
+  return `${run.model.providerId} / ${modelPairLabel(run.model)}`;
 }
 
 /**
@@ -131,16 +138,14 @@ export function duplicateName(name: string, taken: readonly string[]): string {
 }
 
 /**
- * Whether a Run row is a door back to its Session, and where it opens.
+ * Every Run is a door back to its Session, including one whose Ticket is gone.
  *
- * A Run whose Ticket was deleted keeps its Session — `automation_runs`
- * orphans `ticket_id` exactly as `sessions.ticket_id` does — but the ticket
- * workspace that Session lived in is gone, so the row states the Run and
- * stops being clickable rather than navigating somewhere that no longer
- * exists.
+ * There is deliberately no predicate here saying otherwise. `automation_runs`
+ * orphans `ticket_id` exactly as `sessions.ticket_id` does, and a project's
+ * history is scoped through the Run's Session rather than through a live
+ * Ticket — so a Run outlives its Ticket, keeps its row, and still opens the
+ * Session it started. Where that Session opens is `run-automation.ts`'s
+ * `openRunSession`: the ticket workspace when there is a Ticket, and Home —
+ * the project's own place for a Session that belongs to no Ticket — when there
+ * is not. The same is true of a Run that never named one (VC-130).
  */
-export function runDoor(
-  run: Pick<AutomationRun, "sessionId" | "ticketId">,
-): { sessionId: string; ticketId: string } | null {
-  return run.ticketId === null ? null : { sessionId: run.sessionId, ticketId: run.ticketId };
-}

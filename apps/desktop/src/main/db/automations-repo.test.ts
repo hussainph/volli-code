@@ -188,7 +188,7 @@ describe("automation runs repo", () => {
     expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([]);
   });
 
-  it("scopes a project's Run history through the Ticket, newest first", () => {
+  it("scopes a project's Run history through the Run's own Session, newest first", () => {
     const { project, ticket, session } = seeded();
     const other = testProject();
     insertProject(ctx.db, other);
@@ -228,20 +228,21 @@ describe("automation runs repo", () => {
     expect(listRunsForProject(ctx.db, other.id)).toEqual([elsewhere]);
   });
 
-  it("drops a Run whose Ticket was deleted rather than filing it under a project", () => {
+  it("keeps a Run whose Ticket was deleted — the Session is what files it", () => {
     const { project, ticket, session } = seeded();
-    recordAutomationRun(
+    const recorded = recordAutomationRun(
       ctx.db,
       { automationId: null, ticketId: ticket.id, sessionId: session.id, model: PIN },
       1000,
     );
-    expect(listRunsForProject(ctx.db, project.id)).toHaveLength(1);
+    expect(listRunsForProject(ctx.db, project.id)).toEqual([recorded]);
 
     // `automation_runs.ticket_id` orphans on delete, exactly as
-    // `sessions.ticket_id` does; the Session stays reachable, the project
-    // filing does not.
+    // `sessions.ticket_id` does. The Run, its resolved model and its Session
+    // door all survive that, so the history row does too — it simply stops
+    // naming a Ticket.
     ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run(ticket.id);
-    expect(listRunsForProject(ctx.db, project.id)).toEqual([]);
+    expect(listRunsForProject(ctx.db, project.id)).toEqual([{ ...recorded, ticketId: null }]);
   });
 
   it("preserves an out-of-vocabulary historical reasoning level exactly", () => {

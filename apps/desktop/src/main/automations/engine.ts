@@ -32,6 +32,17 @@ export type AutomationCommandIntent =
       runtime: ModelSelection | null;
     }
   | { kind: "automation.delete"; automationId: string }
+  /**
+   * Switching one Automation on or off ON THIS MACHINE.
+   *
+   * A durable command like every other product write (docs/BOUNDARIES.md rule
+   * 5): it is user intent that changes whether an Automation fires, so it is
+   * recorded, evented and receipted rather than poked into storage through a
+   * raw channel. What is machine-local is the PROJECTION it writes — see
+   * `enablement.ts`. This event names a host rather than the Automation, so a
+   * future account-side record inherits the record's history and not this.
+   */
+  | { kind: "automation.set-enabled"; automationId: string; enabled: boolean }
   | { kind: "automation.run"; plan: AutomationRunPlan };
 
 /**
@@ -55,6 +66,13 @@ export type AutomationReceiptResult =
   | { kind: "automation.created"; automation: Automation }
   | { kind: "automation.updated"; automation: Automation }
   | { kind: "automation.deleted"; automationId: string }
+  /** The whole new machine-local set, so a caller never reconstructs what it believes. */
+  | {
+      kind: "automation.enablement.set";
+      automationId: string;
+      enabled: boolean;
+      enabledAutomationIds: string[];
+    }
   | { kind: "automation.not-found"; automationId: string }
   | { kind: "automation.run.accepted"; plan: AutomationRunPlan }
   | { kind: "automation.run.completed"; run: AutomationRun }
@@ -113,6 +131,11 @@ export interface AutomationLedgerTransaction {
   insertAutomation(automation: Automation): Awaitable<void>;
   updateAutomation(automation: Automation): Awaitable<void>;
   deleteAutomation(automationId: string): Awaitable<boolean>;
+
+  /** The machine-local projection of "switched on here" — `enablement.ts` owns its storage. */
+  enabledAutomationIds(): Awaitable<readonly string[]>;
+  /** Replaces that set whole, inside the same transaction as the event that decided it. */
+  putEnabledAutomationIds(ids: readonly string[], recordedAt: number): Awaitable<readonly string[]>;
 
   getRun(runId: string): Awaitable<AutomationRun | null>;
   insertRun(run: AutomationRun): Awaitable<void>;
@@ -176,6 +199,14 @@ export interface AutomationEngine {
     commandId: string;
     automationId: string;
   }): Promise<AutomationCommandOutcome<void>>;
+  /** Switches one Automation on or off on this machine; answers with the whole set. */
+  setEnabled(input: {
+    commandId: string;
+    automationId: string;
+    enabled: boolean;
+  }): Promise<AutomationCommandOutcome<string[]>>;
+  /** That set, read back — the machine-local projection, never a record field. */
+  enabledAutomationIds(): Promise<string[]>;
   acceptRun(input: {
     commandId: string;
     automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
@@ -439,6 +470,71 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         await recordReceipt(tx, completed);
         return { ok: true, value: undefined, receipt: publicReceipt(completed) };
       });
+    },
+
+    async setEnabled(input) {
+      const intent: AutomationCommandIntent = {
+        kind: "automation.set-enabled",
+        automationId: input.automationId,
+        enabled: input.enabled,
+      };
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await existingCommand(tx, input.commandId, intent);
+        if (existing !== null) {
+          return replay(tx, input.commandId, "automation.enablement.set", (result) =>
+            result.kind === "automation.enablement.set" ? result.enabledAutomationIds : null,
+          );
+        }
+        const now = ports.now();
+        const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
+        await tx.insertCommand(command);
+        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        // The switch names a record, so a record that is gone cannot hold one:
+        // the same refusal update and delete give, with the same receipt to
+        // replay. It also keeps the stored set from collecting ids for
+        // Automations nothing lists.
+        const target = await tx.getAutomation(input.automationId);
+        if (target === null) {
+          const rejected = receipt(
+            command.id,
+            "rejected",
+            { kind: "automation.not-found", automationId: input.automationId },
+            now,
+          );
+          await recordReceipt(tx, rejected);
+          return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
+        }
+        const current = new Set(await tx.enabledAutomationIds());
+        if (input.enabled) current.add(input.automationId);
+        else current.delete(input.automationId);
+        const enabledAutomationIds = [...current].toSorted();
+        await tx.appendEvent(
+          event(
+            command.id,
+            "automation.enablement.changed",
+            { automationId: input.automationId, enabled: input.enabled, enabledAutomationIds },
+            now,
+          ),
+        );
+        await tx.putEnabledAutomationIds(enabledAutomationIds, now);
+        const completed = receipt(
+          command.id,
+          "completed",
+          {
+            kind: "automation.enablement.set",
+            automationId: input.automationId,
+            enabled: input.enabled,
+            enabledAutomationIds,
+          },
+          now,
+        );
+        await recordReceipt(tx, completed);
+        return { ok: true, value: enabledAutomationIds, receipt: publicReceipt(completed) };
+      });
+    },
+
+    async enabledAutomationIds() {
+      return ports.ledger.transaction(async (tx) => [...(await tx.enabledAutomationIds())]);
     },
 
     async acceptRun(input) {

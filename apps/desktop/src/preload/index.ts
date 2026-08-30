@@ -62,6 +62,7 @@ import type {
   AutomationRunStartResult,
   AutomationsResult,
   AutomationSetEnabledInput,
+  AutomationSetEnabledResult,
   AutomationUpdateInput,
   CliDoctorInput,
   CliDoctorResult,
@@ -722,10 +723,10 @@ const api = {
     /** Every Run on this project's Tickets, newest first — the page's history. */
     runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-project", input),
-    /** Which Automations are switched off on this machine (VC-127). */
+    /** Which Automations are switched on on this machine (VC-127). */
     enablement: (): Promise<AutomationEnablementResult> => invoke("volli:automation-enablement"),
-    /** Switches one on or off here; answers with the whole new disabled set. */
-    setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationEnablementResult> =>
+    /** Switches one on or off here; answers with the whole new enabled set. */
+    setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationSetEnabledResult> =>
       invoke("volli:automation-set-enabled", input),
   },
   /**

@@ -12,11 +12,21 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Automation, AutomationRun } from "@volli/shared";
+import type { Automation, AutomationRun, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
+import { openRunSession, runAutomationFromListing } from "./run-automation";
 import { useAutomationsStore } from "@renderer/stores/automations";
+import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
+
+// The Run glue is the palette's too, and it is where a Run's no-redirect
+// landing is decided; what this file owns is whether the PAGE calls it, and
+// with which Automation and which Ticket.
+vi.mock("./run-automation", () => ({
+  openRunSession: vi.fn(),
+  runAutomationFromListing: vi.fn(),
+}));
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -47,6 +57,26 @@ function automation(overrides: Partial<Automation> = {}): Automation {
   };
 }
 
+const TICKET = {
+  id: "t1",
+  projectId: "p1",
+  ticketNumber: 12,
+  title: "Ship the page",
+  body: "",
+  status: "todo",
+  priority: "medium",
+  labels: [],
+  usesWorktree: true,
+  harnessId: null,
+  worktreePath: null,
+  branch: null,
+  baseBranch: null,
+  archivedAt: null,
+  sortOrder: 0,
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Ticket;
+
 function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
   return {
     id: "run-1",
@@ -73,12 +103,16 @@ const doors = {
 async function mount(seed: {
   automations?: Automation[];
   runs?: AutomationRun[];
-  disabled?: string[];
+  enabled?: string[];
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
-  doors.enablement.mockResolvedValue({ ok: true, disabledAutomationIds: seed.disabled ?? [] });
-  doors.setEnabled.mockResolvedValue({ ok: true, disabledAutomationIds: ["automation-1"] });
+  doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
+  doors.setEnabled.mockResolvedValue({
+    ok: true,
+    enabledAutomationIds: ["automation-1"],
+    receipt: {},
+  });
   doors.create.mockResolvedValue({ ok: true, automation: automation({ id: "automation-2" }) });
   doors.delete.mockResolvedValue({ ok: true, receipt: {} });
   Object.defineProperty(window, "api", {
@@ -104,14 +138,24 @@ function button(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+/** Types into a controlled input the way React's own event system sees it. */
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
+  vi.mocked(openRunSession).mockReset();
+  vi.mocked(runAutomationFromListing).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
+  useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
     byProject: {},
     runsByProject: {},
-    disabledIds: [],
+    enabledIds: [],
     editor: null,
   });
 });
@@ -169,13 +213,20 @@ describe("the page", () => {
 });
 
 describe("enable and disable", () => {
-  it("is a switch per row, and says what being off actually means", async () => {
-    await mount({ automations: [automation()], disabled: ["automation-1"] });
+  it("is off until this machine says otherwise, and says what off means", async () => {
+    // VC-112: a machine fires nothing until someone turns something on there.
+    await mount({ automations: [automation()] });
 
     expect(text()).toContain("Won’t start on its own");
   });
 
-  it("writes through the machine-local door and adopts the set it answers with", async () => {
+  it("drops that line once the switch is on here", async () => {
+    await mount({ automations: [automation()], enabled: ["automation-1"] });
+
+    expect(text()).not.toContain("Won’t start on its own");
+  });
+
+  it("writes through the command door and adopts the set it answers with", async () => {
     await mount({ automations: [automation()] });
 
     await act(async () => {
@@ -183,10 +234,11 @@ describe("enable and disable", () => {
     });
 
     expect(doors.setEnabled).toHaveBeenCalledWith({
+      commandId: expect.stringMatching(/-/) as unknown as string,
       automationId: "automation-1",
-      enabled: false,
+      enabled: true,
     });
-    expect(useAutomationsStore.getState().disabledIds).toEqual(["automation-1"]);
+    expect(useAutomationsStore.getState().enabledIds).toEqual(["automation-1"]);
   });
 });
 
@@ -206,6 +258,49 @@ describe("the row's own actions", () => {
       projectId: "p1",
       automation: record,
     });
+  });
+});
+
+describe("running by hand", () => {
+  it("runs on a Ticket chosen here, without navigating away from the page", async () => {
+    // VC-112: every Automation is runnable by hand from every surface that
+    // lists it. The page lists them and has no Ticket of its own, so it asks.
+    // The row is also switched OFF on this machine — the switch governs what
+    // starts an Automation BESIDES a person, and is never a lock.
+    await mount({ automations: [automation()] });
+
+    await act(async () => {
+      button("Run Review sweep").click();
+    });
+    expect(document.body.textContent).toContain("Run “Review sweep” on");
+
+    const ticketRow = [...document.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes("Ship the page"),
+    );
+    await act(async () => {
+      ticketRow?.click();
+    });
+
+    expect(runAutomationFromListing).toHaveBeenCalledWith({
+      automationId: "automation-1",
+      automationName: "Review sweep",
+      ticketId: "t1",
+      ticketDisplayId: "VC-12",
+    });
+  });
+
+  it("narrows the Tickets it offers to what was typed", async () => {
+    await mount({ automations: [automation()] });
+
+    await act(async () => {
+      button("Run Review sweep").click();
+    });
+    const find = document.querySelector('[aria-label="Find a ticket"]') as HTMLInputElement;
+    await act(async () => {
+      setInputValue(find, "nothing like this");
+    });
+
+    expect(document.body.textContent).toContain("No tickets here.");
   });
 });
 
@@ -232,5 +327,39 @@ describe("run history", () => {
     await mount({ runs: [run({ automationId: null, automationName: null })] });
 
     expect(text()).toContain("Run once");
+  });
+
+  it("opens the Session a Run created, on the Ticket it ran on", async () => {
+    await mount({ runs: [run()] });
+
+    const row = [...document.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes("claude-opus"),
+    );
+    await act(async () => {
+      row?.click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("stays a door once the Ticket is gone — the Session outlived it", async () => {
+    await mount({ runs: [run({ ticketId: null })] });
+
+    const row = [...document.querySelectorAll("button")].find((candidate) =>
+      candidate.textContent?.includes("claude-opus"),
+    );
+    await act(async () => {
+      row?.click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: null,
+    });
   });
 });

@@ -430,30 +430,40 @@ describe("run history", () => {
 });
 
 describe("enablement", () => {
-  it("reads the machine-local disabled set", async () => {
+  it("reads the machine-local enabled set, and starts with nothing on", async () => {
     stubApi({
-      enablement: () => Promise.resolve({ ok: true, disabledAutomationIds: ["automation-1"] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
     });
     const store = createAutomationsStore();
 
+    // VC-112: a machine fires nothing until someone turns something on there,
+    // so the resting state is the empty set rather than "everything".
+    expect(store.getState().enabledIds).toEqual([]);
     await store.getState().refreshEnablement();
 
-    expect(store.getState().disabledIds).toEqual(["automation-1"]);
+    expect(store.getState().enabledIds).toEqual(["automation-1"]);
   });
 
-  it("adopts the whole set the write answers with, never a local guess", async () => {
+  it("writes a durable command and adopts the whole set it answers with", async () => {
     stubApi({
       setEnabled: () =>
-        Promise.resolve({ ok: true, disabledAutomationIds: ["automation-1", "automation-2"] }),
+        Promise.resolve({
+          ok: true,
+          enabledAutomationIds: ["automation-1", "automation-2"],
+          receipt: {},
+        }),
     });
     const store = createAutomationsStore();
 
-    await store.getState().setEnabled("automation-2", false);
+    await store.getState().setEnabled("automation-2", true);
 
-    expect(store.getState().disabledIds).toEqual(["automation-1", "automation-2"]);
+    expect(store.getState().enabledIds).toEqual(["automation-1", "automation-2"]);
     expect(window.api.automations.setEnabled).toHaveBeenCalledWith({
+      // The switch rides the command seam like every other write; only its
+      // projection is machine-local (docs/BOUNDARIES.md rule 5).
+      commandId: expect.stringMatching(/-/) as unknown as string,
       automationId: "automation-2",
-      enabled: false,
+      enabled: true,
     });
   });
 
@@ -473,7 +483,7 @@ describe("enablement", () => {
       "Couldn't change that automation: no db",
       expect.anything(),
     );
-    expect(store.getState().disabledIds).toEqual([]);
+    expect(store.getState().enabledIds).toEqual([]);
 
     stubApi({
       enablement: () => Promise.reject(new Error("ipc gone")),

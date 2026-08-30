@@ -1,5 +1,8 @@
 /**
- * Whether an Automation is switched on ON THIS MACHINE (VC-127).
+ * Whether an Automation is switched on ON THIS MACHINE (VC-127) — the
+ * machine-local PROJECTION half. The intent that changes it is an ordinary
+ * Automation command (`engine.ts`, `automation.set-enabled`); this module owns
+ * only where the answer is stored and how it is read back.
  *
  * Three decisions are worth stating, because each is the reason this is not a
  * column on `automations`:
@@ -10,21 +13,32 @@
  *     as a column's arming, which that ruling also declares per machine. It
  *     therefore rides `app_state`, beside the global runtime-preferences
  *     record VC-112 cites, and there is no path by which a project directory
- *     could carry it to a second machine.
- *  2. **It is not a durable command.** `docs/BOUNDARIES.md` rule 5 asks new
- *     DOMAIN surfaces to take command → event → projection shape. The record
- *     does exactly that (`engine.ts`). This is operating state about a host,
- *     not a fact about the Automation, so putting it in the ledger would make
- *     a per-machine switch part of the history a future account-side record
- *     inherits — precisely the coupling the ruling removes.
- *  3. **Only the DISABLED set is stored.** Absent means enabled: a person who
- *     has never touched the switch has not said "off", and a set of `true`s
- *     would leave "never asked" and "on" indistinguishable. It also means the
- *     resting state costs zero rows.
+ *     could carry it to a second machine. When the record moves to an account,
+ *     THIS does not go with it: it names a host, not the Automation.
+ *  2. **Machine-local is not a licence to skip the seam.** `docs/BOUNDARIES.md`
+ *     rule 5 asks new domain surfaces to take command → event → projection
+ *     shape, and this switch is user intent that changes whether an Automation
+ *     fires. So the write is a durable command with an immutable event and a
+ *     receipt, exactly like create/update/delete; what is machine-local is the
+ *     PROJECTION TARGET, which is this file. That split is the reusable
+ *     pattern for every other per-machine Automation switch (a column's
+ *     arming, VC-128).
+ *  3. **The ENABLED set is what is stored, and absent means off.** VC-112:
+ *     "A new machine sees the Skills and fires nothing until someone turns
+ *     something on there." A machine that has never been asked has not said
+ *     yes, so it must be indistinguishable from a machine that said no — and
+ *     the only shape where that is true by construction is the set of ids
+ *     somebody switched ON here. The resting state is still zero rows.
  *
- * What it governs: what starts an Automation BESIDES a person. Running by
- * hand is universal (VC-112), so a disabled Automation stays runnable from
+ * What it governs: what starts an Automation BESIDES a person. Running by hand
+ * is universal (VC-112), so an Automation that is off stays runnable from
  * every surface that lists it and simply never fires on its own.
+ *
+ * One id in this set can outlive the record it names — deleting an Automation
+ * does not sweep it — and that is inert rather than a leak: ids are UUIDs and
+ * are never reused, the set is only ever consulted for records something is
+ * already listing, and the command that writes it refuses an Automation that
+ * does not exist, so nothing can add a name that never had a record.
  */
 import type Database from "better-sqlite3";
 
@@ -32,10 +46,10 @@ import { getAppState, setAppState } from "../db/app-state-repo";
 
 /**
  * The `app_state` key. A frozen string: it names durable rows, so changing it
- * would not error — it would silently switch every disabled Automation back
- * on, which is the failure mode nobody would notice until one fired.
+ * would not error — it would silently switch every enabled Automation back
+ * off, which is the failure mode nobody would notice until one did not fire.
  */
-export const AUTOMATIONS_DISABLED_KEY = "volli:automations-disabled";
+export const AUTOMATIONS_ENABLED_KEY = "volli:automations-enabled";
 
 /**
  * The stored ids, deduped and sorted.
@@ -43,11 +57,11 @@ export const AUTOMATIONS_DISABLED_KEY = "volli:automations-disabled";
  * Tolerant on read for the reason durable history is (CLAUDE.md): this row
  * outlives the build that wrote it, and a hand-edited or future-shaped blob
  * must not be able to brick the page that reads it. Anything unparseable, or
- * parseable but not an array of strings, reads as "nothing disabled" — the
- * resting state — rather than throwing.
+ * parseable but not an array of strings, reads as "nothing switched on here" —
+ * the resting state, and the safe one: a corrupt row can only fail closed.
  */
-export function disabledAutomationIds(db: Database.Database): string[] {
-  const stored = getAppState(db, AUTOMATIONS_DISABLED_KEY);
+export function enabledAutomationIds(db: Database.Database): string[] {
+  const stored = getAppState(db, AUTOMATIONS_ENABLED_KEY);
   if (stored === undefined) return [];
   let parsed: unknown;
   try {
@@ -60,22 +74,21 @@ export function disabledAutomationIds(db: Database.Database): string[] {
 }
 
 /**
- * Records one switch and answers with the whole new set.
+ * Replaces the set whole.
  *
- * Whole-set answers rather than an ack, so a caller never has to reconstruct
- * what it now believes from what it just asked for. Sorted and deduped on
- * write as well as read, so the stored bytes for a given set are stable and
- * two writes that mean the same thing produce the same row.
+ * Sorted and deduped on write as well as on read, so the stored bytes for a
+ * given set are stable and two writes that mean the same thing produce the
+ * same row. The arithmetic of "which set" belongs to the command that decided
+ * it, not here — this is the projection's writer, and it is called inside the
+ * ledger transaction that appended the event, so the row and the history move
+ * together or neither does.
  */
-export function setAutomationEnabled(
+export function putEnabledAutomationIds(
   db: Database.Database,
-  input: { automationId: string; enabled: boolean },
+  ids: readonly string[],
   now: number,
 ): string[] {
-  const current = new Set(disabledAutomationIds(db));
-  if (input.enabled) current.delete(input.automationId);
-  else current.add(input.automationId);
-  const next = [...current].toSorted();
-  setAppState(db, AUTOMATIONS_DISABLED_KEY, JSON.stringify(next), now);
+  const next = [...new Set(ids)].toSorted();
+  setAppState(db, AUTOMATIONS_ENABLED_KEY, JSON.stringify(next), now);
   return next;
 }

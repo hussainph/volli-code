@@ -1,7 +1,7 @@
 /**
  * The renderer's cache of the Automations a project can list (its own plus
  * every global one — `api.automations.list`), its Run history, the
- * machine-local disabled set, and the one piece of app-level view state the
+ * machine-local enabled set, and the one piece of app-level view state the
  * feature owns: whether the editor dialog is open, for which project, and on
  * which record.
  *
@@ -57,17 +57,21 @@ interface AutomationsState {
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
   /**
-   * Which Automations are switched off ON THIS MACHINE. Not keyed by project:
+   * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
    * property of this host rather than of any project it can be listed in.
+   *
+   * Absent means off (VC-112: a machine fires nothing until someone turns
+   * something on there), so an id this set does not name has not been
+   * switched on here — whether or not anyone ever asked.
    */
-  disabledIds: readonly string[];
+  enabledIds: readonly string[];
   editor: AutomationEditorTarget | null;
   /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
   refresh(projectId: string): Promise<void>;
   /** Re-fetches one project's Run history, newest first. Toasts on failure. */
   refreshRuns(projectId: string): Promise<void>;
-  /** Re-reads the machine-local disabled set. Toasts on failure. */
+  /** Re-reads the machine-local enabled set. Toasts on failure. */
   refreshEnablement(): Promise<void>;
   openEditor(projectId: string): void;
   /** Opens the editor on an existing record. The only authoring surface (VC-112). */
@@ -88,7 +92,11 @@ interface AutomationsState {
   duplicate(projectId: string, automation: Automation): Promise<void>;
   /** Deletes the record. There is no archive — for a Skill, git is the archive. */
   remove(projectId: string, automation: Automation): Promise<void>;
-  /** Switches one Automation on or off on this machine. */
+  /**
+   * Switches one Automation on or off on this machine, through the same
+   * command door every other write uses — only the projection it lands in is
+   * machine-local.
+   */
   setEnabled(automationId: string, enabled: boolean): Promise<void>;
 }
 
@@ -97,7 +105,7 @@ export function createAutomationsStore() {
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
     runsByProject: {},
-    disabledIds: [],
+    enabledIds: [],
     editor: null,
 
     async refresh(projectId) {
@@ -133,7 +141,7 @@ export function createAutomationsStore() {
           toastError(`Couldn't read which automations are on: ${result.error}`);
           return;
         }
-        set({ disabledIds: result.disabledAutomationIds });
+        set({ enabledIds: result.enabledAutomationIds });
       } catch (error) {
         toastError(`Couldn't read which automations are on: ${errorMessage(error)}`);
       }
@@ -165,8 +173,8 @@ export function createAutomationsStore() {
         // A global Automation is listable everywhere, but the only cached list
         // guaranteed on screen is the project the dialog was opened under —
         // other projects re-read on their next palette open.
-        const homeProjectId = input.projectId ?? get().editor?.projectId;
-        if (homeProjectId !== undefined) await get().refresh(homeProjectId);
+        const refreshProjectId = input.projectId ?? get().editor?.projectId;
+        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
         return null;
       } catch (error) {
         return errorMessage(error);
@@ -181,8 +189,8 @@ export function createAutomationsStore() {
           commandId: commandId ?? crypto.randomUUID(),
         });
         if (!result.ok) return result.error;
-        const homeProjectId = get().editor?.projectId;
-        if (homeProjectId !== undefined) await get().refresh(homeProjectId);
+        const refreshProjectId = get().editor?.projectId;
+        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
         return null;
       } catch (error) {
         return errorMessage(error);
@@ -240,12 +248,18 @@ export function createAutomationsStore() {
 
     async setEnabled(automationId, enabled) {
       try {
-        const result = await window.api.automations.setEnabled({ automationId, enabled });
+        const result = await window.api.automations.setEnabled({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          automationId,
+          enabled,
+        });
         if (!result.ok) {
           toastError(`Couldn't change that automation: ${result.error}`);
           return;
         }
-        set({ disabledIds: result.disabledAutomationIds });
+        set({ enabledIds: result.enabledAutomationIds });
       } catch (error) {
         toastError(`Couldn't change that automation: ${errorMessage(error)}`);
       }

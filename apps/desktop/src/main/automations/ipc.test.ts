@@ -8,6 +8,7 @@ import type {
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  AutomationSetEnabledResult,
   Result,
 } from "../../ipc/contract";
 
@@ -25,7 +26,7 @@ vi.mock("electron", () => ({
 
 import { registerAutomationIpcHandlers } from "./ipc";
 import { createAutomationEngine } from "./engine";
-import { disabledAutomationIds, setAutomationEnabled } from "./enablement";
+import { enabledAutomationIds } from "./enablement";
 import type { AutomationRunner } from "./run";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
@@ -109,8 +110,6 @@ function setup(
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
-    disabledAutomationIds: () => disabledAutomationIds(ctx.db),
-    setAutomationEnabled: (input) => setAutomationEnabled(ctx.db, input, 5_000),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
   });
@@ -374,44 +373,113 @@ describe("automation IPC", () => {
     ).toEqual({ ok: false, error: "Unknown project" });
   });
 
-  it("carries machine-local enablement without minting a command or a receipt", async () => {
-    const { mutations } = setup();
+  it("switches an Automation on for this machine through a durable command", async () => {
+    const { project, mutations } = setup();
+    const one = createAutomation(
+      ctx.db,
+      { projectId: project.id, name: "One", instructions: "x", runtime: null },
+      1,
+    );
+    const two = createAutomation(
+      ctx.db,
+      { projectId: null, name: "Two", instructions: "x", runtime: null },
+      1,
+    );
 
+    // VC-112: a machine fires nothing until someone turns something on there,
+    // so a record nobody has switched on here is absent from the set.
     expect(await call<AutomationEnablementResult>("volli:automation-enablement")).toEqual({
       ok: true,
-      disabledAutomationIds: [],
+      enabledAutomationIds: [],
     });
 
-    expect(
-      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
-        automationId: "automation-2",
-        enabled: false,
-      }),
-    ).toEqual({ ok: true, disabledAutomationIds: ["automation-2"] });
-    expect(
-      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
-        automationId: "automation-1",
-        enabled: false,
-      }),
-    ).toEqual({ ok: true, disabledAutomationIds: ["automation-1", "automation-2"] });
+    const first = await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+      commandId: "11111111-1111-1111-1111-111111111111",
+      automationId: one.id,
+      enabled: true,
+    });
+    expect(first).toMatchObject({
+      ok: true,
+      enabledAutomationIds: [one.id],
+      // BOUNDARIES rule 5: the intent is a command with a receipt, even though
+      // the projection it writes is machine-local.
+      receipt: { status: "completed" },
+    });
+    await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+      commandId: "22222222-2222-2222-2222-222222222222",
+      automationId: two.id,
+      enabled: true,
+    });
 
-    // It survives the round trip through app_state, and switching one back on
-    // removes exactly that id.
+    // It survives the round trip through the machine-local projection, and
+    // switching one back off removes exactly that id.
     expect(await call<AutomationEnablementResult>("volli:automation-enablement")).toEqual({
       ok: true,
-      disabledAutomationIds: ["automation-1", "automation-2"],
+      enabledAutomationIds: [one.id, two.id].toSorted(),
     });
+    expect(enabledAutomationIds(ctx.db)).toEqual([one.id, two.id].toSorted());
     expect(
-      await call<AutomationEnablementResult>("volli:automation-set-enabled", {
-        automationId: "automation-1",
-        enabled: true,
+      await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+        commandId: "33333333-3333-3333-3333-333333333333",
+        automationId: one.id,
+        enabled: false,
       }),
-    ).toEqual({ ok: true, disabledAutomationIds: ["automation-2"] });
+    ).toMatchObject({ ok: true, enabledAutomationIds: [two.id] });
 
     // No `volli:data-changed` fan-out: no projection of the RECORD moved.
     expect(mutations).toEqual([]);
+  });
+
+  it("replays one enablement command rather than flipping the switch twice", async () => {
+    const { project } = setup();
+    const automation = createAutomation(
+      ctx.db,
+      { projectId: project.id, name: "One", instructions: "x", runtime: null },
+      1,
+    );
+    const request = {
+      commandId: "44444444-4444-4444-4444-444444444444",
+      automationId: automation.id,
+      enabled: true,
+    };
+
+    const accepted = await call<AutomationSetEnabledResult>(
+      "volli:automation-set-enabled",
+      request,
+    );
+    // Somebody else switched it off in between; the retry must answer with its
+    // own recorded outcome rather than re-deciding the set.
+    await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+      commandId: "55555555-5555-5555-5555-555555555555",
+      automationId: automation.id,
+      enabled: false,
+    });
+    const replayed = await call<AutomationSetEnabledResult>(
+      "volli:automation-set-enabled",
+      request,
+    );
+
+    expect(replayed).toEqual(accepted);
+    expect(enabledAutomationIds(ctx.db)).toEqual([]);
+  });
+
+  it("refuses a switch for a record that is gone, and guards the wire shape", async () => {
+    setup();
+
     expect(
-      await call<Result>("volli:automation-set-enabled", { automationId: "a", enabled: "yes" }),
+      await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+        commandId: "66666666-6666-6666-6666-666666666666",
+        automationId: "no-such-automation",
+        enabled: true,
+      }),
+    ).toMatchObject({ ok: false, error: "Unknown automation", receipt: { status: "rejected" } });
+    expect(enabledAutomationIds(ctx.db)).toEqual([]);
+
+    expect(
+      await call<Result>("volli:automation-set-enabled", {
+        automationId: "a",
+        enabled: true,
+      }),
     ).toEqual({ ok: false, error: "Invalid automation enablement request" });
   });
 });

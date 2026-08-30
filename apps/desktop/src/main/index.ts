@@ -120,7 +120,6 @@ import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import type { AutomationRunner } from "./automations/run";
 import { createAutomationService } from "./automations/service";
-import { disabledAutomationIds, setAutomationEnabled } from "./automations/enablement";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
@@ -1121,10 +1120,6 @@ app.whenReady().then(async () => {
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
-          // Machine-local operating state, deliberately outside the ledger
-          // (see `automations/enablement.ts`).
-          disabledAutomationIds: () => disabledAutomationIds(sessionDb),
-          setAutomationEnabled: (input) => setAutomationEnabled(sessionDb, input, Date.now()),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),

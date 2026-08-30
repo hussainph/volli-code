@@ -16,9 +16,6 @@ export interface AutomationServiceDeps {
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
   runsForProject(projectId: string): AutomationRun[];
-  /** The machine-local disabled set; see `enablement.ts` for why it is not a record field. */
-  disabledAutomationIds(): string[];
-  setAutomationEnabled(input: { automationId: string; enabled: boolean }): string[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
 }
@@ -38,6 +35,11 @@ export type AutomationDeleteOutcome =
 export type AutomationRunHistoryOutcome =
   | { ok: true; runs: AutomationRun[] }
   | { ok: false; error: string };
+
+/** The whole machine-local set after the write, plus the receipt that changed it. */
+export type AutomationEnablementOutcome =
+  | { ok: true; enabledAutomationIds: string[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
 /**
  * The host-facing Automation application service. It owns validation against
@@ -81,18 +83,31 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     },
 
     /**
-     * Machine-local enablement (VC-127). Deliberately not routed through the
-     * command ledger — `enablement.ts` states why — so these two are plain
-     * reads and writes of host operating state, with no receipt to mint and
-     * no `onMutation` broadcast: no other window's projection of the RECORD
-     * changed, and the page that asked already has the answer it needs.
+     * Which Automations are switched on ON THIS MACHINE (VC-127).
+     *
+     * Absent means off: VC-112 rules that a machine fires nothing until
+     * someone turns something on there, so "never asked here" and "said no
+     * here" are deliberately one state — see `enablement.ts`.
      */
-    disabledAutomationIds(): string[] {
-      return deps.disabledAutomationIds();
+    enabledAutomationIds(): Promise<string[]> {
+      return deps.engine.enabledAutomationIds();
     },
 
-    setEnabled(input: { automationId: string; enabled: boolean }): string[] {
-      return deps.setAutomationEnabled(input);
+    /**
+     * Flips one switch. A durable command like every other product write
+     * (docs/BOUNDARIES.md rule 5): what is machine-local is where the
+     * projection LANDS, not whether the intent is recorded. No `onMutation`
+     * fan-out — nothing about the shared record moved, and another window's
+     * list is unchanged by a switch belonging to this host.
+     */
+    async setEnabled(input: {
+      commandId: string;
+      automationId: string;
+      enabled: boolean;
+    }): Promise<AutomationEnablementOutcome> {
+      const outcome = await deps.engine.setEnabled(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, enabledAutomationIds: outcome.value, receipt: outcome.receipt };
     },
 
     async create(input: {

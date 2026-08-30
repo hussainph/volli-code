@@ -8,7 +8,6 @@ import {
   groupByOwnership,
   ownershipLabel,
   runAutomationLabel,
-  runDoor,
   runModelLabel,
   runModelTitle,
   runtimeLabel,
@@ -92,16 +91,6 @@ describe("a Run prints its own evidence", () => {
   it("keeps the Automation name a deleted record left behind", () => {
     expect(runAutomationLabel(run())).toBe("Review");
     expect(runAutomationLabel(run({ automationId: null, automationName: null }))).toBe("Run once");
-  });
-});
-
-describe("runDoor", () => {
-  it("opens the Session on the Ticket the Run happened to", () => {
-    expect(runDoor(run())).toEqual({ sessionId: "s1", ticketId: "t1" });
-  });
-
-  it("is no door at all once the Ticket is gone", () => {
-    expect(runDoor(run({ ticketId: null }))).toBeNull();
   });
 });
 

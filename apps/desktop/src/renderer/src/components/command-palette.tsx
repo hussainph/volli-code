@@ -4,7 +4,6 @@ import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
@@ -250,26 +249,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ))}
             {selectedProjectId !== null ? (
               <Command.Item
-                key="automation-new"
-                value="new automation create automation"
-                keywords={["new", "create", "automation"]}
+                key="automations-page"
+                value="automations new automation create automation"
+                keywords={["new", "create", "automation", "edit", "page"]}
                 onSelect={() => {
-                  // Lands on the Automations page first, then opens the form.
-                  // Only that page authors (VC-112), so a palette entry is a
-                  // shortcut TO it rather than a second place to create one —
-                  // and the new record appears in the list behind the dialog
-                  // instead of vanishing into a surface nobody was looking at.
+                  // NAVIGATION, not authoring. The palette runs Automations
+                  // (above) and goes to the page that authors them; it does
+                  // not open the form itself, because only that page authors
+                  // (VC-112) and a create summoned from anywhere is a second
+                  // authoring surface wearing a palette row.
                   useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
-                  useAutomationsStore.getState().openEditor(selectedProjectId);
                   finishNavigation();
                 }}
                 className={PALETTE_ROW}
               >
-                <PlusIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">New Automation…</span>
+                  <span className="truncate text-ui font-medium">Automations</span>
                   <span className="truncate text-label text-muted-foreground">
-                    Name it, write Instructions, choose a Runtime
+                    New, edit, duplicate
                   </span>
                 </span>
               </Command.Item>

@@ -242,26 +242,30 @@ export function listRunsForTicket(db: Database.Database, ticketId: string): Auto
 }
 
 /**
- * Every Run on one project's Tickets, newest first — the Automations page's
- * Run history (VC-127).
+ * Every Run in one project, newest first — the Automations page's Run history
+ * (VC-127).
  *
- * The join is through the Ticket, not through the Automation, and that is the
- * whole scoping decision: a global Automation is listable in every project,
- * but a Run it produced happened to ONE Ticket in ONE project, and showing it
- * in a second project's history would be a door into work done elsewhere.
+ * The scope comes from the Run's OWN durable evidence: the Session it opened,
+ * whose `project_id` is `NOT NULL` and was written when the Run was recorded.
+ * Not through the Automation — a global Automation is listable in every
+ * project, but a Run it produced happened in ONE of them, and listing it in a
+ * second project's history would be a door into work done elsewhere.
  *
- * A Run whose Ticket was deleted (`ticket_id IS NULL`, the orphaning
- * `sessions.ticket_id` also allows) therefore falls out of every project's
- * history rather than landing in an arbitrary one. Its Session is still
- * reachable everywhere Sessions are listed; what is gone is the project that
- * would have filed it.
+ * Deliberately not an inner join on live Tickets either. `automation_runs`
+ * orphans `ticket_id` exactly as `sessions.ticket_id` does, so a Ticket delete
+ * would erase a Run from every project's history while its Session, its
+ * resolved model and its first message all survive — history that quietly
+ * disappears is worse than history that names something gone. The same
+ * evidence is what lets a Run that names no Ticket at all (VC-112's
+ * project-target schedule Runs, VC-130) be filed here without a second
+ * scoping rule.
  */
 export function listRunsForProject(db: Database.Database, projectId: string): AutomationRun[] {
   const rows = prepared<[string], AutomationRunRow>(
     db,
     `SELECT automation_runs.* FROM automation_runs
-       JOIN tickets ON tickets.id = automation_runs.ticket_id
-      WHERE tickets.project_id = ?
+       JOIN sessions ON sessions.id = automation_runs.session_id
+      WHERE sessions.project_id = ?
       ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
   ).all(projectId);
   return rows.map(mapRun);
