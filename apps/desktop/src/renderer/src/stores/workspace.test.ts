@@ -2821,6 +2821,24 @@ describe("split view — Home (VC-202)", () => {
     expect(homeSplit(store)?.focusedPaneId).toBe("n1");
   });
 
+  it("keeps the active tab when a BACKGROUND tab closes under an empty focused pane", () => {
+    // The Board fallback above exists for a close that took the surface's
+    // ACTIVE tab. A background close (a sidebar row's ×) must not steal the
+    // surface out from under a still-valid active while an empty ⌘\ pane
+    // holds focus — deviation #6's rule, asserted from the close side
+    // (validation V2).
+    const store = splitStore();
+    store.getState().setHomeActiveTab("project-a", "chat:c1");
+    store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["terminal-1", "chat:c1"],
+    });
+
+    store.getState().removeHomeTabFromSplit("project-a", "terminal-1");
+
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("chat:c1");
+    expect(homeSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
   it("moves a tab into another pane, focusing it and bringing it forward", () => {
     const store = splitStore();
     store.getState().splitHomePane("project-a", SPLIT_VIEW_ROOT_PANE_ID, "right", {
@@ -3184,6 +3202,39 @@ describe("split view — the ticket workspace (VC-202)", () => {
     expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
       TICKET_BODY_TAB_ID,
     );
+    expect(ticketSplit(store)?.focusedPaneId).toBe("n1");
+  });
+
+  it("falls back to the Body tab when the close under an empty focused pane took the ACTIVE", () => {
+    // The other side of the background rule below: this close DID take the
+    // surface's active tab, so the permanent-tab fallback is the honest
+    // answer — the same one an unsplit close gives.
+    const store = splitStore();
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "session-9");
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["session-9"],
+    });
+
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "session-9");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe(
+      TICKET_BODY_TAB_ID,
+    );
+  });
+
+  it("keeps the active tab when a BACKGROUND session closes under an empty focused pane", () => {
+    // The Home twin's rule, one scope down (validation V2): the Body fallback
+    // is for a close that took the active tab, not for a rail row closing a
+    // background session while an empty ⌘\ pane holds focus.
+    const store = splitStore();
+    store.getState().setTicketActiveTab("project-a", "ticket-1", "chat:c1");
+    store.getState().splitTicketPane("project-a", "ticket-1", SPLIT_VIEW_ROOT_PANE_ID, "right", {
+      surfaceTabIds: ["session-9", "chat:c1"],
+    });
+
+    store.getState().removeTicketTabFromSplit("project-a", "ticket-1", "session-9");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]?.active).toBe("chat:c1");
     expect(ticketSplit(store)?.focusedPaneId).toBe("n1");
   });
 

@@ -2155,7 +2155,16 @@ export function createWorkspaceStore(
             if (split === null) return state;
             const next = removeTab(split, tabId);
             if (next === split) return state;
-            const active = activeTabInSplitView(next) ?? HOME_BOARD_TAB_ID;
+            // The focused pane's front tab wins when it has one. When it does
+            // not (an EMPTY focused pane — the ⌘\ state), the permanent-tab
+            // fallback applies only if this close took the surface's active
+            // tab: a BACKGROUND close must not steal the surface out from
+            // under a still-valid active (validation V2, and deviation #6's
+            // rule — an empty focused pane leaves the surface active alone).
+            const front = activeTabInSplitView(next);
+            const active =
+              front ??
+              (current.homeActiveTab === tabId ? HOME_BOARD_TAB_ID : current.homeActiveTab);
             return patchWorkspace(state, projectId, {
               homeActiveTab: active,
               homeTabHistory: visitHomeTab(
@@ -2175,12 +2184,15 @@ export function createWorkspaceStore(
             const split = existing.splitView!;
             const next = removeTab(split, tabId);
             if (next === split) return state;
+            // See the Home twin above: the permanent-tab fallback applies only
+            // when this close took the surface's active tab (validation V2).
+            const front = activeTabInSplitView(next);
             return patchWorkspace(state, projectId, {
               ticketTabs: {
                 ...current.ticketTabs,
                 [ticketId]: {
                   ...existing,
-                  active: activeTabInSplitView(next) ?? BODY_TAB_ID,
+                  active: front ?? (existing.active === tabId ? BODY_TAB_ID : existing.active),
                   ...ticketSplitWrite(next),
                 },
               },

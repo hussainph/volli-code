@@ -53,9 +53,21 @@ function positionOver(box: HTMLElement, anchor: HTMLElement): void {
  */
 export function TerminalViewportBox({
   anchor,
+  onPointerDownCapture,
   children,
 }: {
   anchor: HTMLElement | null;
+  /**
+   * A pointer landed anywhere in this box — the terminal canvas included.
+   *
+   * The box is a positioned SIBLING of the pane grid, not a child of any
+   * pane's cell, so the cell's own pointer-down capture never sees clicks
+   * into a live terminal; a host that must keep pane focus honest raises it
+   * from here instead (VC-202 validation, V1). Capture-phase for the same
+   * reason the cell's is: the terminal below takes the event for its own
+   * engine focus, and it must keep it.
+   */
+  onPointerDownCapture?: (event: React.PointerEvent<HTMLDivElement>) => void;
   children: React.ReactNode;
 }) {
   const boxRef = React.useRef<HTMLDivElement>(null);
@@ -89,6 +101,7 @@ export function TerminalViewportBox({
       data-slot="terminal-viewport-box"
       className="absolute z-10"
       style={{ display: "none" }}
+      onPointerDownCapture={onPointerDownCapture}
     >
       {children}
     </div>

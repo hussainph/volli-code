@@ -7,6 +7,7 @@ import {
   useTerminalViewports,
 } from "@renderer/components/sessions/terminal-viewport-box";
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
+import { paneIdForElement } from "@renderer/components/split/split-view-grid";
 import { createTerminalSplit } from "@renderer/components/sessions/session-create";
 import { useNewSessionShortcut } from "@renderer/hooks/use-new-session-shortcut";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -20,6 +21,7 @@ import {
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
@@ -330,7 +332,23 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
                 const published = viewports.get(tab.sessionId);
                 const anchor = published?.ownerId === ownerId ? published.anchor : null;
                 return (
-                  <TerminalViewportBox key={tab.sessionId} anchor={anchor}>
+                  <TerminalViewportBox
+                    key={tab.sessionId}
+                    anchor={anchor}
+                    // The pane-focus half of a click into this terminal: the box
+                    // is a positioned sibling of Home's grid, so the cell's own
+                    // capture never sees it (validation V1). The climb starts
+                    // from the ANCHOR, which lives inside the pane's cell; a
+                    // hidden box has no anchor and cannot be clicked, and while
+                    // unsplit the action is an identity write — so firing
+                    // unconditionally is safe.
+                    onPointerDownCapture={() => {
+                      const paneId = paneIdForElement(anchor);
+                      if (paneId !== null) {
+                        useWorkspaceStore.getState().focusHomePane(ownerId, paneId);
+                      }
+                    }}
+                  >
                     <SessionSplitLayout
                       ownerId={ownerId}
                       tab={tab}

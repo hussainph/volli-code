@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The plane, drawn once for both cases.
  *
@@ -18,7 +19,7 @@ import {
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { SplitViewGrid } from "./split-view-grid";
+import { paneIdForElement, SplitViewGrid } from "./split-view-grid";
 
 const BODY = "doc";
 
@@ -113,5 +114,21 @@ describe("SplitViewGrid", () => {
 
     expect(html).toContain('role="separator"');
     expect(html).toContain('aria-label="Resize left and right panes"');
+  });
+
+  it("climbs from a node to the pane cell holding it, and says null outside one", () => {
+    // The terminal viewport boxes' seam (validation V1): they are positioned
+    // SIBLINGS of the grid, so they raise pane focus by climbing from the
+    // anchor they were given. Zen's full-bleed anchor has no cell above it —
+    // the climb must say so rather than invent one, which is what makes
+    // firing it unconditionally safe.
+    const cell = document.createElement("div");
+    cell.setAttribute("data-pane-id", "p9");
+    const anchor = document.createElement("div");
+    cell.append(anchor);
+
+    expect(paneIdForElement(anchor)).toBe("p9");
+    expect(paneIdForElement(document.createElement("div"))).toBe(null);
+    expect(paneIdForElement(null)).toBe(null);
   });
 });

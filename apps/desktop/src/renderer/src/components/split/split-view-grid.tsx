@@ -55,6 +55,21 @@ export interface SplitViewGridProps {
   onResizeSplit(splitId: string, ratio: number): void;
 }
 
+/**
+ * The pane a DOM node sits in, read off the cell's own `data-pane-id`.
+ *
+ * The seam for surfaces that must raise pane focus from OUTSIDE the grid's
+ * subtree: a live terminal is not a child of its pane's cell — it is a viewport
+ * box positioned OVER the pane's anchor (the keep-alive seam) — so the cell's
+ * own pointer-down capture never sees a click into it. The box's host climbs
+ * from the anchor it published instead, and this is the climb, kept beside the
+ * attribute so the two cannot drift. `null` outside any pane — zen's
+ * full-bleed anchor included, which is what makes "fire it always" safe.
+ */
+export function paneIdForElement(element: Element | null): string | null {
+  return element?.closest("[data-pane-id]")?.getAttribute("data-pane-id") ?? null;
+}
+
 export function SplitViewGrid({
   view,
   renderStrip,

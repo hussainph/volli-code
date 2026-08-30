@@ -6,6 +6,7 @@ import {
   TerminalViewportBox,
   useTerminalViewports,
 } from "@renderer/components/sessions/terminal-viewport-box";
+import { paneIdForElement } from "@renderer/components/split/split-view-grid";
 import {
   createTerminalSplit,
   resumeTicketSession,
@@ -51,7 +52,23 @@ export function TicketTerminalOverlay({
             const anchor = published?.ownerId === ownerId ? published.anchor : null;
             const scope = tab.scope;
             return (
-              <TerminalViewportBox key={tab.sessionId} anchor={anchor}>
+              <TerminalViewportBox
+                key={tab.sessionId}
+                anchor={anchor}
+                // The pane-focus half of a click into this terminal — see the
+                // project-scope twin in sessions-layer.tsx (validation V1).
+                // Same climb from the anchor, one scope down: the ticket's own
+                // focus action, which is an identity write while unsplit.
+                onPointerDownCapture={() => {
+                  if (scope.kind !== "ticket") return;
+                  const paneId = paneIdForElement(anchor);
+                  if (paneId !== null) {
+                    useWorkspaceStore
+                      .getState()
+                      .focusTicketPane(scope.projectId, scope.ticketId, paneId);
+                  }
+                }}
+              >
                 <div className="absolute inset-0" onKeyDownCapture={onShortcut}>
                   <SessionSplitLayout
                     ownerId={ownerId}

@@ -37,6 +37,10 @@
  *      (VC-189) — the surface's one drag context did not change the drop.
  *  11. And the same chord splits HOME, which is the other surface — a wiring
  *      check, since both draw the same grid over the same store twins.
+ *  12. A click INTO a live terminal focuses its pane. The terminal is a
+ *      viewport box overlaid on the pane's anchor, not a child of its cell, so
+ *      this is the one pointer path the grid's own capture cannot see — the
+ *      box raises it (validation V1).
  *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -663,6 +667,72 @@ async function main() {
           panes[0]?.empty === false,
         detail: JSON.stringify(
           panes.map((pane) => ({ label: pane.label, empty: pane.empty, focused: pane.focused })),
+        ),
+      };
+    });
+
+    // ---- 12. A click INTO a live terminal focuses its pane ------------------
+    //
+    // The terminal is not a child of its pane's cell — it is a viewport box
+    // positioned OVER the pane's anchor (the keep-alive seam), so the cell's
+    // own pointer-down capture never sees this click; the box raises pane
+    // focus itself (validation finding V1). Without that wiring the ring, the
+    // rail and every surface chord keep reading the OTHER pane while you type
+    // in this one — for exactly the tab kind this product centres on.
+    await attempt(12, "clicking a live terminal's canvas focuses the pane under it", async () => {
+      // Check 11 left Home split with an empty, focused second pane. Wait for
+      // the split to SETTLE (the keyboard split's own focus handoff — check
+      // 6's discipline), then boot a terminal into it, retrying the row click
+      // for the same first-trusted-click reason check 6 documents.
+      await waitUntil(
+        "focus to land in Home's new pane",
+        async () => (await readFocus(page)).slot === "pane-empty-row",
+        { timeout: 4000 },
+      ).catch(() => false);
+      let withTerminal = await readPanes(page);
+      for (let tries = 0; tries < 3 && (withTerminal[1]?.tabs.length ?? 0) === 0; tries += 1) {
+        await paneMenuRow(page, "New terminal").click({ timeout: 8000 });
+        withTerminal = await waitUntil(
+          "the terminal tab to land in Home's second pane",
+          async () => {
+            const seen = await readPanes(page);
+            return seen.length === 2 && (seen[1]?.tabs.length ?? 0) > 0 ? seen : null;
+          },
+          { timeout: 6000 },
+        ).catch(() => readPanes(page));
+      }
+      const paneId = withTerminal[1]?.paneId;
+      if (withTerminal.length !== 2 || (withTerminal[1]?.tabs.length ?? 0) === 0 || !paneId) {
+        return { ok: false, detail: `no terminal landed: ${JSON.stringify(withTerminal)}` };
+      }
+      // Hand focus to the PRIMARY pane through its own tab: the Board tab is
+      // the primary pane's permanent claim, so selecting it runs the same
+      // write-through every strip click takes, which focuses that pane.
+      await page.getByRole("tab", { name: "Board", exact: true }).first().click();
+      const primaryTookFocus = await waitUntil(
+        "the primary pane to take focus from its tab",
+        async () => (await readPanes(page))[0]?.focused === true,
+        { timeout: 4000 },
+      ).catch(() => false);
+      if (primaryTookFocus === false) {
+        return { ok: false, detail: "primary pane never took focus from its Board tab" };
+      }
+      // Now click INSIDE the second pane's content — the terminal's canvas,
+      // which is the viewport box overlaid on that pane's anchor.
+      const box = await paneBox(page, paneId);
+      await page.mouse.click(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
+      const after = await waitUntil(
+        "focus to move to the terminal's pane",
+        async () => {
+          const seen = await readPanes(page);
+          return seen.find((pane) => pane.paneId === paneId)?.focused === true ? seen : null;
+        },
+        { timeout: 4000 },
+      ).catch(() => readPanes(page));
+      return {
+        ok: after.find((pane) => pane.paneId === paneId)?.focused === true,
+        detail: JSON.stringify(
+          after.map((pane) => ({ id: pane.paneId, focused: pane.focused, tabs: pane.tabs })),
         ),
       };
     });
