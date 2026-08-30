@@ -35,6 +35,8 @@
  *      joins it, and the surface collapses back to one plane.
  *  10. A within-strip reorder still means what it meant before there were panes
  *      (VC-189) — the surface's one drag context did not change the drop.
+ *  11. And the same chord splits HOME, which is the other surface — a wiring
+ *      check, since both draw the same grid over the same store twins.
  *
  * Every assertion polls (expect-style waits); no bare sleep stands in for a
  * condition (the few fixed sleeps only pace UI settling, never assert).
@@ -630,6 +632,38 @@ async function main() {
       return {
         ok: after[0] === before[0] && after[1] === before[2] && after[2] === before[1],
         detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+      };
+    });
+    // ---- 11. The other surface ---------------------------------------------
+    //
+    // Home splits through the same grid, the same store twins and the same
+    // chord, so this is a WIRING check rather than a second feature: the chord
+    // has to resolve Home when Home is what is in front, and Home's plane has
+    // to be the thing that splits.
+    await attempt(11, "⌘\\ splits HOME too, once Home is the surface in front", async () => {
+      await page.keyboard.press("Escape");
+      await waitUntil("the board", async () => (await cardById(page, displayId).count()) === 1, {
+        timeout: 6000,
+      });
+      await page.keyboard.press("Meta+\\");
+      const panes = await waitUntil(
+        "two panes on Home",
+        async () => {
+          const seen = await readPanes(page);
+          return seen.length === 2 ? seen : null;
+        },
+        { timeout: 6000 },
+      ).catch(() => readPanes(page));
+      return {
+        ok:
+          panes.length === 2 &&
+          panes[1]?.focused === true &&
+          panes[1]?.empty === true &&
+          // The Board rides in the primary pane, which is why it is not empty.
+          panes[0]?.empty === false,
+        detail: JSON.stringify(
+          panes.map((pane) => ({ label: pane.label, empty: pane.empty, focused: pane.focused })),
+        ),
       };
     });
   } finally {
