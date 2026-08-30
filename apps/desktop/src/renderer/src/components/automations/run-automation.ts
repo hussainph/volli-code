@@ -16,7 +16,12 @@
  *    decision 2's no-redirect rule — so the finished Run becomes a toast whose
  *    action is the door (the shape VC-128's armed window also uses).
  */
-import { errorMessage } from "@volli/shared";
+import {
+  automationRunRetryKey,
+  errorMessage,
+  type AutomationRunTarget,
+  type ModelSelection,
+} from "@volli/shared";
 import { toast } from "sonner";
 
 import { runAutomationAction, type RunAutomationAction } from "./run-automation-model";
@@ -30,16 +35,29 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
 
+/** One Run request, as every caller in the renderer spells it. */
+export interface RunRequest {
+  target: AutomationRunTarget;
+  ticketId: string;
+  /** This invocation's Runtime, or `null` to resolve it the ordinary way. */
+  modelOverride: ModelSelection | null;
+}
+
 /**
  * The one Run call. Answers the classified action, or `null` when the
  * transport itself failed — that arm has already toasted, because a person is
  * waiting on a Session and no other surface will tell them.
  */
-async function startRun(input: {
-  automationId: string;
-  ticketId: string;
-}): Promise<RunAutomationAction | null> {
-  const retryKey = `${input.automationId}\u0000${input.ticketId}`;
+async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+  // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
+  // — the record or the Unbound Run's own words, the Ticket, and this
+  // invocation's model override. Running the same work on a different model is
+  // a second Run, so it must not FIND the first one's durable command id: an
+  // override left out of this key would reuse that id, and main would answer
+  // the second press with the first Run's receipt. Main compares the same
+  // identity durably (`sameAutomationRunRequestIdentity`), so the two halves of
+  // "the same Run" are one statement rather than two that agree by luck.
+  const retryKey = automationRunRetryKey(input);
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
@@ -148,10 +166,16 @@ export async function runAutomationForProject(input: {
   }
 }
 
-export async function runAutomationOnTicket(input: {
-  automationId: string;
-  ticketId: string;
-}): Promise<void> {
+/**
+ * Run on the Ticket the person is looking at, and open the Session.
+ *
+ * The palette's "run by name", and the ticket rail's own button (VC-129): in
+ * both, the person asked for this Run with the Ticket already in front of them,
+ * so the fresh Session opens as that Ticket's tab rather than announcing itself
+ * in a toast. It is not the listing surfaces' no-redirect case — nothing is
+ * taken away, because the Session lands beside the rail that started it.
+ */
+export async function runAutomationOnTicket(input: RunRequest): Promise<void> {
   const action = await startRun(input);
   if (action === null) return;
   switch (action.kind) {
@@ -173,8 +197,8 @@ export async function runAutomationOnTicket(input: {
 
 /**
  * Run one Automation from a surface that LISTS it (VC-112: running by hand is
- * universal, and every listing surface can do it). The Automations page is the
- * caller today.
+ * universal, and every listing surface can do it). The Automations page and the
+ * board card's own context menu are the callers today.
  *
  * It never navigates. The person is on a page of records, quite possibly
  * running a second one next, and a Session that seizes the window is VC-13
@@ -188,10 +212,19 @@ export async function runAutomationFromListing(input: {
   automationName: string;
   ticketId: string;
   ticketDisplayId: string;
+  /**
+   * This invocation's Runtime, or `null` to resolve it the ordinary way.
+   * Required rather than optional: every listing surface has to say whether it
+   * offers the per-invocation override (VC-112 puts it on the deliberate
+   * surfaces only), and an omitted field would let a new caller inherit an
+   * answer it never gave.
+   */
+  modelOverride: ModelSelection | null;
 }): Promise<void> {
   const action = await startRun({
-    automationId: input.automationId,
+    target: { kind: "automation", automationId: input.automationId },
     ticketId: input.ticketId,
+    modelOverride: input.modelOverride,
   });
   if (action === null) return;
   switch (action.kind) {

@@ -1,10 +1,12 @@
 import {
   automationOwnership,
   displayTicketId,
+  sessionProvenanceOf,
   type Automation,
   type AutomationOwnership,
   type ChatSessionRecord,
   type Project,
+  type SessionProvenance,
   type Ticket,
 } from "@volli/shared";
 
@@ -30,6 +32,14 @@ export interface CommandPaletteSessionItem {
   scope: SessionScope;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
+  /**
+   * Who started this Session (VC-131). The palette is the app's one GLOBAL
+   * Session listing — every project's, in one list — so it is the surface where
+   * a Run's Session is most easily mistaken for one a person opened, and
+   * "everywhere a Session appears" includes it. Resolved here rather than at
+   * the row so the two kinds below cannot answer differently.
+   */
+  provenance: SessionProvenance;
 }
 
 export interface CommandPaletteItems {
@@ -49,6 +59,13 @@ export function buildCommandPaletteItems(
   selectedProjectId: string | null,
   chatSessions: readonly ChatSessionRecord[] = [],
   residentChatTitles: Readonly<Record<string, string>> = {},
+  /**
+   * Who started each Session, keyed by Session id and **sparse** — a miss is
+   * the resting case. Defaulted so a caller that has not read it yet marks
+   * nothing rather than guessing, which is the same failure direction every
+   * other surface takes.
+   */
+  provenance: Readonly<Record<string, SessionProvenance>> = {},
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -100,6 +117,7 @@ export function buildCommandPaletteItems(
             ? null
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
+        provenance: sessionProvenanceOf(provenance, tab.sessionId),
       });
     }
   }
@@ -126,6 +144,7 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      provenance: sessionProvenanceOf(provenance, record.sessionId),
     });
   }
 

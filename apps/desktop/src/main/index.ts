@@ -83,6 +83,7 @@ import {
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -689,10 +690,19 @@ app.whenReady().then(async () => {
   // every window. Wrapping HERE is what makes that claim true: this is the only
   // construction site, so there is no unwatched engine for a caller to hold.
   // See `session-control/activity-watch.ts`.
+  //
+  // The handle is captured into a const first because `dbHandle` is a `let`
+  // that a later branch may reassign: a narrowing on it does not survive into
+  // the callback below, and this is the one place that callback needs it.
+  const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
   const sessionActivityWatch =
-    dbHandle.ok === true
-      ? watchSessionActivity(createDesktopSessionEngine(dbHandle.db), {
+    watchedDb !== null
+      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
           publish: broadcastSessionActivity,
+          // Read on the push path as well as the fetch path, so a Run's bolt
+          // survives its Session's first turn (VC-131): the renderer upserts
+          // the whole row, so a push without provenance would erase the mark.
+          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;

@@ -527,8 +527,10 @@ async function main() {
         await waitFileText(page, 'export const cleanAgent = "adopted";', false);
         const after = await waitStableFileViewState(page, "cursor to settle after external write");
         const tabsAfter = await readTicketTabs(page, ticketId);
-        const updated = await waitUntil("Updated marker after inspected external write", async () =>
-          (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
+        const updated = await waitUntil(
+          "Updated marker after inspected external write",
+          async () =>
+            (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
         );
 
         const sameTabs = JSON.stringify(tabsBefore) === JSON.stringify(tabsAfter);

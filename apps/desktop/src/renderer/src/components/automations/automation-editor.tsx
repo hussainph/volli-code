@@ -543,8 +543,14 @@ function AutomationEditorForm({
  * The Instructions box: a plain textarea wearing the stack's caret binding,
  * wired exactly as the chat's own textarea wires it — `handleKeyDown` first
  * (the picker's keys are its own), `trackCaret` on change, select and keyup.
+ *
+ * EXPORTED for the ticket rail's Run once form (VC-129), which sends the same
+ * Instructions through the same expansion at launch and would otherwise re-wire
+ * this binding a second time. That is not a second authoring surface: an
+ * Unbound Run saves nothing and has nothing to name, so what travels is the
+ * BOX, never the editor around it.
  */
-function InstructionsTextarea({
+export function InstructionsTextarea({
   value,
   onValueChange,
 }: {

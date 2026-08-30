@@ -54,7 +54,7 @@ import type {
 import { ticketForDisplayId } from "./agent-dispatch/resolution";
 import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
-import type { RunAutomationOutcome } from "./automations/run";
+import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type {
   TicketSessionDelegation,
@@ -92,11 +92,7 @@ export interface AutomationToolPort {
   /** Automations this project lists: its own plus every global one, in the app's order. */
   list(projectId: string): readonly Automation[];
   /** The one Run door. Its refusals are this door's refusals, unedited. */
-  run(input: {
-    commandId: string;
-    automationId: string;
-    ticketId: string;
-  }): Promise<RunAutomationOutcome>;
+  run(input: AutomationRunRequest): Promise<RunAutomationOutcome>;
 }
 
 /**
@@ -551,8 +547,13 @@ async function runAutomationTool(
     // random one: the Automation command ledger deduplicates on this, so a
     // replayed tool call lands one Run, one Session and one first message.
     commandId: `${session.sessionId}:${request.toolCallId}`,
-    automationId: found.automation.id,
+    // The verb runs a SAVED Automation by name (VC-134). Unbound Runs and
+    // per-invocation overrides are deliberate human surfaces (VC-112) and are
+    // not part of this bundle's authority, so the target is always a record and
+    // the Runtime is always the one that record resolves.
+    target: { kind: "automation", automationId: found.automation.id },
     ticketId: resolvedTicket.ticket.id,
+    modelOverride: null,
   });
   if (!outcome.ok) {
     // The Run door's refusals are already sentences about this request — a Run

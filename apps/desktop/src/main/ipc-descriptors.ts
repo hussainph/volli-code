@@ -1151,6 +1151,14 @@ function isAutomationTriggerShape(value: unknown): boolean {
   return value["kind"] === "columns" && Array.isArray(value["columns"]);
 }
 
+/** What a Run names: a saved Automation, or an Unbound Run's own Instructions. */
+function isAutomationRunTargetShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value["kind"] === "automation") return typeof value["automationId"] === "string";
+  if (value["kind"] === "unbound") return typeof value["instructions"] === "string";
+  return false;
+}
+
 /** The editable fields every automation write carries, shape-checked once. */
 function isAutomationDraftShape(value: Record<string, unknown>): boolean {
   return (
@@ -1202,12 +1210,18 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     invalidError: "Invalid automation delete request",
   },
   "volli:automation-run": {
+    // The target is a union at the door, not a nullable id: a request naming an
+    // Automation and a request carrying its own Instructions (VC-129) are two
+    // shapes, and one that is somehow both never reaches the runner. Wire SHAPE
+    // only, as ever — whether the Instructions say anything is the domain's own
+    // rule (`unboundRunProblem`), stated once and re-checked by main.
     guard: (args): args is IpcArgs<"volli:automation-run"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
       isAutomationCommandId(args[0]["commandId"]) &&
-      typeof args[0]["automationId"] === "string" &&
-      typeof args[0]["ticketId"] === "string",
+      isAutomationRunTargetShape(args[0]["target"]) &&
+      typeof args[0]["ticketId"] === "string" &&
+      (args[0]["modelOverride"] === null || isModelSelectionShape(args[0]["modelOverride"])),
     invalidError: "Invalid automation run request",
   },
   "volli:automation-runs-for-ticket": {

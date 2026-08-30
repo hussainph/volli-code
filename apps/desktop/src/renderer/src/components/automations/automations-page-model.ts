@@ -49,6 +49,20 @@ import type {
 export const MANUAL_TRIGGER_LABEL = "Only when I run it";
 
 /**
+ * What a switched-off Automation says where it is OFFERED in a menu row — the
+ * column bolt's list (VC-128) and the ticket rail's own (VC-129).
+ *
+ * The Automations page states the same fact in a whole sentence under the name
+ * ("Won't start on its own"), because a page row has a line to spend on it. A
+ * menu row does not: the note rides beside the name in a 224px popover, so the
+ * two words that fit are the two that get printed. What must not vary is the
+ * PRESENTATION rule they both follow — an Automation that is off is still
+ * listed, still offered and still runnable by hand (VC-112), so it is never
+ * dimmed, never hidden, and never silently missing from a menu.
+ */
+export const SWITCHED_OFF_NOTE = "Switched off";
+
+/**
  * The Trigger, in one line: what starts this Automation BESIDES a person.
  *
  * A row that named its own Trigger "Only when I run it" while the record said

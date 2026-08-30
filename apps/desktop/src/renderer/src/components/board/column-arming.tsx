@@ -39,6 +39,7 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import { SWITCHED_OFF_NOTE } from "@renderer/components/automations/automations-page-model";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -153,7 +154,7 @@ export function ColumnArmingButton({
                     something on there.) */}
                 {enabledIds.includes(automation.id) ? null : (
                   <span className="ml-auto shrink-0 text-label text-muted-foreground">
-                    Switched off
+                    {SWITCHED_OFF_NOTE}
                   </span>
                 )}
               </DropdownMenuRadioItem>

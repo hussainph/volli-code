@@ -28,27 +28,22 @@ let root: Root | null = null;
 
 function api() {
   return {
-    create: vi.fn(
-      async (input: { relPath: string }): Promise<FileMutationResult> => ({
-        ok: true,
-        relPath: input.relPath,
-      }),
-    ),
-    createDirectory: vi.fn(
-      async (input: { relPath: string }): Promise<FileMutationResult> => ({
-        ok: true,
-        relPath: input.relPath,
-      }),
-    ),
-    rename: vi.fn(
-      async (input: { toRelPath: string }): Promise<FileMutationResult> => ({
-        ok: true,
-        relPath: input.toRelPath,
-      }),
-    ),
-    duplicate: vi.fn(
-      async (): Promise<FileMutationResult> => ({ ok: true, relPath: "src/row copy.tsx" }),
-    ),
+    create: vi.fn(async (input: { relPath: string }): Promise<FileMutationResult> => ({
+      ok: true,
+      relPath: input.relPath,
+    })),
+    createDirectory: vi.fn(async (input: { relPath: string }): Promise<FileMutationResult> => ({
+      ok: true,
+      relPath: input.relPath,
+    })),
+    rename: vi.fn(async (input: { toRelPath: string }): Promise<FileMutationResult> => ({
+      ok: true,
+      relPath: input.toRelPath,
+    })),
+    duplicate: vi.fn(async (): Promise<FileMutationResult> => ({
+      ok: true,
+      relPath: "src/row copy.tsx",
+    })),
     delete: vi.fn(async (): Promise<Result> => ({ ok: true })),
   };
 }

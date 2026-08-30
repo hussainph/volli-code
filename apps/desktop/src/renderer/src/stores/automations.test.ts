@@ -15,6 +15,7 @@ import {
   selectArmedAutomation,
   selectArmings,
   selectAutomations,
+  selectTicketRuns,
 } from "./automations";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -54,6 +55,7 @@ function stubApi(impl: {
   delete?: () => Promise<unknown>;
   runsForProject?: () => Promise<unknown>;
   skipsForProject?: () => Promise<unknown>;
+  runsForTicket?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
   armings?: () => Promise<unknown>;
@@ -74,6 +76,7 @@ function stubApi(impl: {
         skipsForProject: vi.fn(
           impl.skipsForProject ?? (() => Promise.resolve({ ok: true, skips: [] })),
         ),
+        runsForTicket: vi.fn(impl.runsForTicket ?? (() => Promise.resolve({ ok: true, runs: [] }))),
         // The stored set is the ENABLED one (`automations/enablement.ts`), so
         // the resting default here is an empty enabled set: nothing on.
         enablement: vi.fn(
@@ -292,6 +295,51 @@ describe("refreshArming", () => {
       expect.stringContaining("ipc gone"),
       expect.anything(),
     );
+  });
+});
+
+describe("a planning read's own answer", () => {
+  it("says whether the cache now holds THIS read, not merely that it settled", async () => {
+    // What a slice cannot say for itself. Each of the three refreshes resolves
+    // its landing, so a caller re-reading on arrival (VC-129's rail) can tell a
+    // value just confirmed from one that only survived a failed re-read.
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+
+    expect(await store.getState().refresh("p1")).toBe(true);
+    expect(await store.getState().refreshArming("p1")).toBe(true);
+    expect(await store.getState().refreshEnablement()).toBe(true);
+  });
+
+  it("answers false for a refused or thrown read, and leaves the warm value alone", async () => {
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+    await store.getState().refresh("p1");
+    await store.getState().refreshArming("p1");
+    await store.getState().refreshEnablement();
+
+    stubApi({
+      list: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+      armings: () => Promise.reject(new Error("ipc gone")),
+      enablement: () => Promise.resolve({ ok: false, error: "no db" }),
+    });
+
+    expect(await store.getState().refresh("p1")).toBe(false);
+    expect(await store.getState().refreshArming("p1")).toBe(false);
+    expect(await store.getState().refreshEnablement()).toBe(false);
+    // The stale values are still there, still looking landed — which is exactly
+    // why the boolean is the only honest signal a failed re-read leaves.
+    expect(store.getState().byProject["p1"]).toEqual([automation()]);
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(store.getState().enabledIds).toEqual(["automation-1"]);
   });
 });
 
@@ -854,5 +902,57 @@ describe("ensureLoaded", () => {
     await store.getState().ensureLoaded("p1");
 
     expect(window.api.automations.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("refreshTicketRuns", () => {
+  it("caches one Ticket's Runs under that Ticket, beside the project's own history", async () => {
+    const listed = [run(), run({ id: "run-2", automationId: null, automationName: null })];
+    stubApi({ runsForTicket: () => Promise.resolve({ ok: true, runs: listed }) });
+    const store = createAutomationsStore();
+
+    // The rail's read and the page's read are separate slices on purpose: a
+    // Ticket's rail must not depend on a project history nobody opened.
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(store.getState().runsByTicket["t1"]).toEqual(listed);
+    expect(store.getState().runsByProject["p1"]).toBeUndefined();
+    expect(selectTicketRuns(store.getState(), "t1")).toEqual(listed);
+  });
+
+  it("toasts a refusal and leaves the cache empty", async () => {
+    stubApi({ runsForTicket: () => Promise.resolve({ ok: false, error: "Unknown ticket" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(store.getState().runsByTicket["t1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load this ticket's runs: Unknown ticket",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a transport failure the same way", async () => {
+    stubApi({ runsForTicket: () => Promise.reject(new Error("ipc gone")) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshTicketRuns("t1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load this ticket's runs: ipc gone",
+      expect.anything(),
+    );
+  });
+
+  it("answers one frozen empty list before the first read", () => {
+    const store = createAutomationsStore();
+
+    const first = selectTicketRuns(store.getState(), "t1");
+
+    expect(first).toEqual([]);
+    // The same reference, so a rail subscribing to it does not re-render on
+    // every unrelated store update while the cache is cold.
+    expect(selectTicketRuns(store.getState(), "t2")).toBe(first);
   });
 });

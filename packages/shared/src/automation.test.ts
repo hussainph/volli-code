@@ -7,6 +7,9 @@ import {
   automationDraftProblem,
   automationOwnership,
   automationPinProblem,
+  automationRunRequestIdentity,
+  automationRunRetryKey,
+  automationRunTargetId,
   automationScheduleProblem,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -17,6 +20,9 @@ import {
   offeredAutomationsForColumn,
   parseAutomationSkipReason,
   parseAutomationTrigger,
+  sameAutomationRunRequestIdentity,
+  UNBOUND_RUN_LABEL,
+  unboundRunProblem,
   type Automation,
   type AutomationTrigger,
   type ColumnArming,
@@ -360,5 +366,160 @@ describe("isColumnArrival", () => {
 describe("ARMED_RUN_DELAY_MS", () => {
   it("is the 3500 ms VC-112 ruled, stated once for every surface", () => {
     expect(ARMED_RUN_DELAY_MS).toBe(3500);
+  });
+});
+
+describe("automationRunTargetId", () => {
+  it("names the Automation a bound Run runs", () => {
+    expect(automationRunTargetId({ kind: "automation", automationId: "a1" })).toBe("a1");
+  });
+
+  it("names none for an Unbound Run, which is what its own record stores", () => {
+    expect(automationRunTargetId({ kind: "unbound", instructions: "/sweep" })).toBeNull();
+  });
+});
+
+describe("unboundRunProblem", () => {
+  it("accepts Instructions with something in them", () => {
+    expect(unboundRunProblem("/sweep the diff")).toBeNull();
+  });
+
+  it("refuses blank Instructions, as the saved record's own rule does", () => {
+    expect(unboundRunProblem("")).toContain("Write Instructions");
+    expect(unboundRunProblem("   \n\t ")).toContain("Write Instructions");
+  });
+});
+
+describe("UNBOUND_RUN_LABEL", () => {
+  it("is the one name an Unbound Run wears on every surface", () => {
+    expect(UNBOUND_RUN_LABEL).toBe("Run once");
+  });
+});
+
+describe("one Run request's identity", () => {
+  const OPUS = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" } as const;
+  const GPT = { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" } as const;
+
+  it("reads a bound Run as its record plus this invocation's override", () => {
+    expect(
+      automationRunRequestIdentity({
+        target: { kind: "automation", automationId: "a1" },
+        modelOverride: OPUS,
+      }),
+    ).toEqual({ instructions: null, modelOverride: OPUS });
+  });
+
+  it("reads an Unbound Run as the words it carries", () => {
+    expect(
+      automationRunRequestIdentity({
+        target: { kind: "unbound", instructions: "/sweep" },
+        modelOverride: null,
+      }),
+    ).toEqual({ instructions: "/sweep", modelOverride: null });
+  });
+
+  it("is the same intent when both halves match", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: "/sweep", modelOverride: OPUS },
+        { instructions: "/sweep", modelOverride: { ...OPUS } },
+      ),
+    ).toBe(true);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: null },
+        { instructions: null, modelOverride: null },
+      ),
+    ).toBe(true);
+  });
+
+  it("is a different intent when the Instructions changed", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: "/sweep", modelOverride: null },
+        { instructions: "/sweep twice", modelOverride: null },
+      ),
+    ).toBe(false);
+  });
+
+  it("is a different intent when the override changed, in either direction", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: GPT },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: { ...OPUS, reasoningLevel: "low" } },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: null },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: null },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { ...OPUS, modelId: "claude-sonnet" } },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { ...OPUS, providerId: "openai" } },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+  });
+
+  it("files a retry under the whole intent, never under the Ticket alone", () => {
+    const bound = { kind: "automation", automationId: "a1" } as const;
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null })).toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null }),
+    );
+    // A different model is a second Run, so it must not find the first one's id.
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null }),
+    );
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: GPT }),
+    );
+    // Edited Instructions are a second Run for the same reason.
+    expect(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    ).not.toBe(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep twice" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    );
+    // And the same words on ANOTHER Ticket are another Run again.
+    expect(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    ).not.toBe(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t2",
+        modelOverride: null,
+      }),
+    );
   });
 });

@@ -502,6 +502,10 @@ function RunOnTicketDialog({
                         automationName: automation.name,
                         ticketId: ticket.id,
                         ticketDisplayId,
+                        // The page runs the record as saved. Its per-invocation
+                        // override lives where a person picks one Ticket and
+                        // stops — the rail and the ticket context menu.
+                        modelOverride: null,
                       });
                     }}
                   />

@@ -844,9 +844,10 @@ async function main() {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       // Root items for a fresh no-worktree ticket: Move to, Priority, Labels
-      // (VC-27), Archive. Resume/Remove-worktree only appear with a session.
+      // (VC-27), Automations (VC-129 — run one without opening the Ticket),
+      // Archive. Resume/Remove-worktree only appear with a session.
       const ok =
-        rootCount === 4 &&
+        rootCount === 5 &&
         rootRowsWithIcons === rootCount &&
         moveCount === 4 &&
         moveRowsWithIcons === moveCount &&

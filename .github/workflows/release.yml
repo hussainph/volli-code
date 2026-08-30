@@ -335,8 +335,8 @@ jobs:
           echo "created $([ "$draft" = true ] && echo draft || echo "live pre-release") release for $REF_NAME"
 
       # Mirrors ci.yml. run-install triggers apps/desktop's postinstall
-      # (rebuild:native + cache:node-sqlite) — proven to survive on the macOS
-      # image by ci.yml's desktop-smoke lane.
+      # (rebuild:native) — proven to survive on the macOS image by ci.yml's
+      # desktop-smoke lane.
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
         with:

@@ -10,18 +10,23 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
-import type { SkillReference } from "@volli/shared";
+import { sessionProvenanceHoverLine, type SkillReference } from "@volli/shared";
 
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   runOnLivePanes,
   terminalTabDot,
   terminalTabState,
 } from "@renderer/components/sessions/terminal-tab-state";
-import type { TicketTabStatus } from "@renderer/components/ticket/ticket-tabs";
+import {
+  tabTitleWithProvenance,
+  type TicketTabStatus,
+} from "@renderer/components/ticket/ticket-tabs";
+import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -244,6 +249,10 @@ export function HomeTabStrip({
         // them is what each tab DRAWS and what its menu offers, never how the
         // strip reports a selection, a close, or a rename.
         const shared = {
+          // Home's Sessions are the project's own, and provenance is read per
+          // project — the same store, and the same answer, the ticket strip and
+          // the sidebar read (VC-131).
+          projectId,
           active,
           tabStop,
           dragId: descriptor.id,
@@ -267,6 +276,7 @@ export function HomeTabStrip({
           <ChatTab
             key={descriptor.id}
             {...shared}
+            sessionId={descriptor.sessionId}
             title={descriptor.title}
             status={descriptor.status}
             onSelect={() => onSelect(descriptor)}
@@ -389,6 +399,8 @@ function HomeFileTab({
 }
 
 interface KindTabProps {
+  /** The project whose Session listing answers who started this tab's Session. */
+  projectId: string;
   active: boolean;
   tabStop: boolean;
   /** This tab's id, for the strip's sortable (VC-189). */
@@ -417,7 +429,7 @@ function sharedTabProps(
     onStartRename,
     onCommitRename,
     onCancelRename,
-  }: Omit<KindTabProps, "onSelect">,
+  }: Omit<KindTabProps, "onSelect" | "projectId">,
 ): Pick<TabProps, "active" | "tabStop" | "dragId" | "renaming" | "onClose" | "onDoubleClick"> {
   return {
     active,
@@ -430,8 +442,9 @@ function sharedTabProps(
 }
 
 /** One terminal tab: a live PTY tree, with the warm-park tier's vocabulary on it. */
-function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
+function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { tab: SessionTab }) {
   const parkState = useSessionsStore((state) => state.parkState);
+  const provenance = useSessionProvenance(projectId, tab.sessionId);
   // The derivation moved to `terminal-tab-state.ts` so the ticket strip could
   // read it too — it was the reason a ticket's terminal tab used to say nothing
   // about being parked or dead. Nothing about the reading changed.
@@ -461,15 +474,19 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
           label={tab.title}
           // Exited tabs read as muted; a parked (and live) tab explains itself
           // on hover.
-          title={
+          title={tabTitleWithProvenance(
             exited
               ? `Exited (${exitCode})`
               : parked
                 ? "Terminal is parked to save memory. Select to wake it."
-                : tab.title
-          }
+                : tab.title,
+            sessionProvenanceHoverLine(provenance),
+          )}
           labelClassName={exited ? "line-through" : undefined}
           status={dot ?? undefined}
+          // Between the liveness dot and the label, exactly where the ticket
+          // strip and the sidebar put it: one Session, one place to look.
+          badge={<SessionProvenanceMark provenance={provenance} rowTitle={tab.title} />}
           leading={
             // size-3, the same as the chat bubble that shares this slot and the
             // same as the ticket strip's moon — one leading glyph size now that
@@ -546,11 +563,14 @@ function TerminalTab({ tab, onSelect, ...shell }: KindTabProps & { tab: SessionT
  * open or to hand memory back from.
  */
 function ChatTab({
+  projectId,
+  sessionId,
   title,
   status,
   onSelect,
   ...shell
-}: KindTabProps & { title: string; status: TicketTabStatus }) {
+}: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
+  const provenance = useSessionProvenance(projectId, sessionId);
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -560,9 +580,13 @@ function ChatTab({
           // The waiting dot's one line of hover, in the sidebar's own words: a
           // tab is the only place that dot stands with nothing beside it to say
           // what it means.
-          title={status === "waiting" ? `${title}\nWaiting for you` : title}
+          title={tabTitleWithProvenance(
+            status === "waiting" ? `${title}\nWaiting for you` : title,
+            sessionProvenanceHoverLine(provenance),
+          )}
           onActivate={onSelect}
           status={status}
+          badge={<SessionProvenanceMark provenance={provenance} rowTitle={title} />}
           // A landing auto-title reveals here word by word (VC-81); terminal
           // and board tabs stay static.
           revealLabel
