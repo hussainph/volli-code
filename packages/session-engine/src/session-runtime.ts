@@ -201,7 +201,23 @@ interface FailAttachInput {
   code: string;
   detail: string;
   attachmentId?: string;
-  attentionKind?: AttachFailureAttentionKind;
+  /**
+   * REQUIRED, since VC-220: an attach that failed always leaves the Session
+   * saying so.
+   *
+   * It was optional, and the two failures that named nothing — a location that
+   * could not be prepared, and an adapter that threw something other than a
+   * {@link NativeAttachmentError} — wrote `attachment.failed` into history and
+   * raised no Attention at all. `sessionPersonNeed` reads Attentions, so such a
+   * Session projected as plain `idle`: indistinguishable from a chat nobody has
+   * typed into. An Automation Run that met one opened its Session, could not
+   * deliver its Instructions, and left no error state for VC-133's notification
+   * rule to fire on — the empty Session VC-220 was reported for.
+   *
+   * Non-optional so the compiler asks the question at every new failure site:
+   * what does a person see when the attach fails this way?
+   */
+  attentionKind: AttachFailureAttentionKind;
 }
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
@@ -830,6 +846,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
+        // Where a Session runs is part of how it is configured, and a worktree
+        // that cannot be prepared is that configuration failing — the same
+        // Attention an unavailable pinned model raises, and cleared by the same
+        // successful attach once the directory can be made.
+        attentionKind: "configuration_invalid",
       });
     }
 
@@ -859,7 +880,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
-        attentionKind: nativeFailure?.attentionKind,
+        // An adapter that threw without naming a kind still failed to bind, and
+        // nothing but a fresh attach can disprove it. `adapter_unrecoverable`
+        // is what that is, and reading it as "no Attention" was how a broken
+        // attach came to look like a quiet one.
+        attentionKind: nativeFailure?.attentionKind ?? "adapter_unrecoverable",
       });
     }
 
@@ -1041,31 +1066,24 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    const attention =
-      input.attentionKind === undefined
-        ? null
-        : await this.ports.engine.observe({
-            id: this.#id("event"),
-            sessionId: input.request.sessionId,
-            occurredAt: this.ports.clock.now(),
-            provenance: adapterProvenance(input.adapter, input.location.venue),
-            kind: "attention.raised",
-            attention: {
-              id: freshAttachAttentionId(
-                input.request.sessionId,
-                input.adapter.id,
-                input.attentionKind,
-              ),
-              // The attachment attempt is already a closed fact. This Attention
-              // belongs to the Session until a fresh attach succeeds, rather
-              // than pretending a failed binding can receive recovery work.
-              attachmentId: null,
-              kind: input.attentionKind,
-              detail: input.detail,
-              diagnostic: null,
-            },
-          });
-    await this.#publish(attention === null ? [failed] : [failed, attention]);
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.request.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(input.adapter, input.location.venue),
+      kind: "attention.raised",
+      attention: {
+        id: freshAttachAttentionId(input.request.sessionId, input.adapter.id, input.attentionKind),
+        // The attachment attempt is already a closed fact. This Attention
+        // belongs to the Session until a fresh attach succeeds, rather
+        // than pretending a failed binding can receive recovery work.
+        attachmentId: null,
+        kind: input.attentionKind,
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,

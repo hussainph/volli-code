@@ -5,6 +5,7 @@ import type {
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
+import { sessionPersonNeed } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -1345,11 +1346,13 @@ describe("SessionRuntime native adapter contract", () => {
     // not there is the failure the reader gets per prompt instead of once, and
     // wearing the harness's name for a missing path rather than this one.
     const detail = "Couldn't prepare the worktree at /w/VC-12 — fatal: invalid reference";
+    let unpreparable = true;
     const { runtime, adapter } = composition({
       locations: {
         resolve: async () => ({ directory: "/w/VC-12", venue }),
         prepare: async () => {
-          throw new Error(detail);
+          if (unpreparable) throw new Error(detail);
+          return { directory: "/w/VC-12", venue };
         },
         reaffirm: stillThere,
       },
@@ -1374,10 +1377,68 @@ describe("SessionRuntime native adapter contract", () => {
       receipt: { status: "rejected", code: "location_unavailable", detail },
     });
     expect(adapter.attaches).toBe(0);
-    expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
+    const { projection } = await runtime.snapshot({ sessionId: session.sessionId });
+    expect(projection).toMatchObject({
       liveExecutor: null,
       attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
     });
+
+    // VC-220. This used to end at the line above: `attachment.failed` in
+    // history, and no Attention at all. `sessionPersonNeed` reads Attentions,
+    // so the Session projected as plain `idle` — a Run that met this opened a
+    // Session it could never deliver Instructions to, and nothing anywhere
+    // said so. Where a Session runs is part of how it is configured, so an
+    // unpreparable directory is `configuration_invalid`, and the detail it
+    // carries is the sentence a person can act on.
+    expect(projection.attention.active).toMatchObject([
+      { attachmentId: null, kind: "configuration_invalid", detail },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+
+    // And it clears on the attach that disproves it, like every other
+    // attach-failure Attention — a repaired worktree leaves no scar.
+    unpreparable = false;
+    await runtime.command({
+      commandId: "prepared-attach",
+      sessionId: session.sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(
+      (await runtime.snapshot({ sessionId: session.sessionId })).projection.attention.active,
+    ).toHaveLength(0);
+  });
+
+  it("leaves a failure Attention when the adapter refuses without naming one", async () => {
+    // The other half of VC-220's silence. A `NativeAttachmentError` names the
+    // kind it wants a person to see; anything else the adapter throws named
+    // nothing, and "nothing" was read as "raise no Attention" — so an attach
+    // that failed left a Session indistinguishable from one nobody has typed
+    // into. An adapter that threw did not bind, and only a fresh attach can
+    // disprove that, which is what `adapter_unrecoverable` says.
+    const { runtime, adapter } = composition();
+    const session = await runtime.command({
+      commandId: "plain-throw-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+    adapter.attachFailure = new Error("native server refused the binding");
+
+    await expect(
+      runtime.command({
+        commandId: "plain-throw-attach",
+        sessionId: session.sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "rejected", code: "attach_failed" } });
+
+    const { projection } = await runtime.snapshot({ sessionId: session.sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "native server refused the binding",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
   });
 
   it("binds and records the directory it prepared, not the one it resolved", async () => {

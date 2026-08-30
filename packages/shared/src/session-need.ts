@@ -46,6 +46,15 @@
  * refusal would have left nothing for this predicate to answer about — which
  * is exactly the gap that shipped first and had to be closed.
  *
+ * The model was only ever one way for an attach to fail, and it was the only
+ * one that said so (VC-220). An unpreparable worktree and an adapter that threw
+ * without naming a kind each wrote `attachment.failed` and raised nothing, so
+ * this predicate answered `null` for a Session that could not run at all — an
+ * Automation Run that met one was an empty chat and a silence. Every attach
+ * failure now raises one of the kinds below (`session-runtime.ts`'s
+ * `#failAttach`), so "the Session's plumbing failed" is a question this can
+ * always answer.
+ *
  * Pure and transport-free like its neighbours: the host reads a projection it
  * already holds and asks this one question of it.
  */
