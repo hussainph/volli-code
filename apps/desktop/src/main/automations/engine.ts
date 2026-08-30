@@ -1,8 +1,11 @@
-import { parseAutomationTrigger } from "@volli/shared";
+import { parseAutomationTrigger, sameAutomationRunRequestIdentity } from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationRunRequestIdentity,
+  AutomationSkippedOccurrence,
+  AutomationSkipReason,
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
@@ -87,7 +90,34 @@ export type AutomationCommandIntent =
       status: TicketStatus;
       rankedAutomationIds: readonly string[];
     }
+  /**
+   * Recording a due time that passed without a Run (VC-130).
+   *
+   * A durable command like every other product write (docs/BOUNDARIES.md rule
+   * 5), and it earns that shape twice over. It is a fact a surface lists, names
+   * and acts on — "Run now" from the Run history — rather than the scheduler's
+   * private bookkeeping; and its command id is DERIVED from the occurrence
+   * (`<automationId>:skip:<dueAt>`), so a host that crashes between noticing a
+   * gap and committing it records the same skip once on the next launch rather
+   * than a second row for the same missed evening.
+   *
+   * What stays out of the ledger is the cursor that says how far this machine
+   * has evaluated (`schedule-cursor.ts`): that is host-local operating state,
+   * not a fact about the record.
+   */
+  | { kind: "automation.record-skip"; skip: AutomationSkipIntent }
   | { kind: "automation.run"; plan: AutomationRunPlan };
+
+/** Everything a skip needs but its own id, which the core mints. */
+export interface AutomationSkipIntent {
+  automationId: string;
+  automationName: string;
+  projectId: string;
+  /** The LATEST due time this gap covered. */
+  dueAt: number;
+  missedCount: number;
+  reason: AutomationSkipReason;
+}
 
 /**
  * Every fact the Automation core writes. The SQLite adapter gives this an
@@ -133,6 +163,7 @@ export type AutomationReceiptResult =
       rankedAutomationIds: string[];
       orders: ColumnAutomationOrder[];
     }
+  | { kind: "automation.skip.recorded"; skip: AutomationSkippedOccurrence }
   | { kind: "automation.not-found"; automationId: string }
   | { kind: "automation.run.accepted"; plan: AutomationRunPlan }
   | { kind: "automation.run.completed"; run: AutomationRun }
@@ -144,12 +175,50 @@ export interface AutomationRunPlan {
   commandId: string;
   /** UUID minted with the accepted Run command. */
   runId: string;
-  automationId: string;
-  automationName: string;
+  /**
+   * The Automation this Run came from, or `null` for an Unbound Run — one that
+   * carries its own Instructions and names no record (VC-112, "One-time work").
+   * A plan written before VC-129 always names one, and reads unchanged: this is
+   * a widened union, not a changed field.
+   */
+  automationId: string | null;
+  /** That Automation's name at launch; `null` for the same reason as above. */
+  automationName: string | null;
   projectId: string;
-  ticketId: string;
-  /** A whole pin or inherit, captured when the Run was requested. */
+  /**
+   * The Ticket this Run was requested on, or `null` when it named none.
+   *
+   * The Target, in the only spelling the Session layer has: `ticketId !== null`
+   * IS the Role a Session is born under. A column Trigger and every by-hand Run
+   * name a Ticket; a schedule names the Project (VC-112), so its plan carries
+   * `null` and mints a Project Session. Widened rather than replaced by a
+   * `target` union on purpose — this shape is stored in an append-only ledger,
+   * and every plan written before VC-130 already spells its Ticket here.
+   */
+  ticketId: string | null;
+  /**
+   * The whole pin this Run starts under, or inherit — captured when the Run was
+   * requested. It is the Automation's own Runtime unless the invocation
+   * overrode it (VC-112's per-invocation override), and the plan deliberately
+   * does not record which of the two it was: what a Run owes the future is the
+   * model it RESOLVED, and that lands on the Run itself.
+   */
   runtime: ModelSelection | null;
+  /**
+   * What the CALLER asked for, beside what this plan resolved (VC-129): an
+   * Unbound Run's own Instructions, and this invocation's model override.
+   *
+   * The durable half of the retry identity. Neither is recoverable from the
+   * fields around it — every Unbound Run has `automationId: null`, and
+   * `runtime` is the RESOLVED pin, which an override and a record's own
+   * Runtime can produce alike. Without it a second request under one command
+   * id could carry different Instructions or a different model and still read
+   * as a retry of the first.
+   *
+   * A plan written before VC-129 has no such field, and is read as the request
+   * it was: a bound Run with no override (see {@link readRunPlan}).
+   */
+  request: AutomationRunRequestIdentity;
   /** The composer's expansion at request time, never re-expanded on recovery. */
   text: string;
   resources: readonly PromptResource[];
@@ -219,6 +288,9 @@ export interface AutomationLedgerTransaction {
     input: { projectId: string; status: TicketStatus; automationId: string | null },
     recordedAt: number,
   ): Awaitable<readonly ColumnArming[]>;
+
+  /** Records one Skipped occurrence, inside the transaction that evented it. */
+  insertSkippedOccurrence(skip: AutomationSkippedOccurrence): Awaitable<void>;
 
   getRun(runId: string): Awaitable<AutomationRun | null>;
   insertRun(run: AutomationRun): Awaitable<void>;
@@ -310,11 +382,26 @@ export interface AutomationEngine {
   }): Promise<AutomationCommandOutcome<ColumnAutomationOrder[]>>;
   /** Every arranged column in one project — the machine-local projection, read back. */
   columnOrders(projectId: string): Promise<ColumnAutomationOrder[]>;
+  /**
+   * Records a due time that passed without a Run (VC-130). Idempotent on the
+   * caller's command id, which the scheduler derives from the occurrence — so
+   * the same missed evening cannot be recorded twice.
+   */
+  recordSkip(input: {
+    commandId: string;
+    skip: AutomationSkipIntent;
+  }): Promise<AutomationCommandOutcome<AutomationSkippedOccurrence>>;
   acceptRun(input: {
     commandId: string;
-    automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
+    /** The Automation being run, or `null` for an Unbound Run. */
+    automation: Pick<Automation, "id" | "name"> | null;
+    /** The resolved Runtime for this invocation — an override, a pin, or inherit. */
+    runtime: ModelSelection | null;
+    /** What the caller asked for, which is what a retry is compared against. */
+    request: AutomationRunRequestIdentity;
     projectId: string;
-    ticketId: string;
+    /** `null` targets the Project, which is what a schedule Run does. */
+    ticketId: string | null;
     text: string;
     resources: readonly PromptResource[];
   }): Promise<AutomationCommandOutcome<AutomationRunPlan>>;
@@ -800,7 +887,79 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
       return ports.ledger.transaction(async (tx) => [...(await tx.columnOrders(projectId))]);
     },
 
+    async recordSkip(input) {
+      const intent: AutomationCommandIntent = {
+        kind: "automation.record-skip",
+        skip: input.skip,
+      };
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await existingCommand(tx, input.commandId, intent);
+        if (existing !== null) {
+          return replay(tx, input.commandId, "automation.skip.recorded", (result) =>
+            result.kind === "automation.skip.recorded" ? result.skip : null,
+          );
+        }
+        const now = ports.now();
+        const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
+        await tx.insertCommand(command);
+        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        // A skip names a record, so a record that is gone cannot have missed
+        // anything: the same refusal and the same replayable receipt every other
+        // write gives. It also keeps the projection's foreign key satisfiable —
+        // a skip offers "Run now", and there would be nothing left to run.
+        const target = await tx.getAutomation(input.skip.automationId);
+        if (target === null) {
+          const rejected = receipt(
+            command.id,
+            "rejected",
+            { kind: "automation.not-found", automationId: input.skip.automationId },
+            now,
+          );
+          await recordReceipt(tx, rejected);
+          return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
+        }
+        const skip: AutomationSkippedOccurrence = {
+          id: ports.nextId(),
+          automationId: input.skip.automationId,
+          automationName: input.skip.automationName,
+          projectId: input.skip.projectId,
+          dueAt: input.skip.dueAt,
+          missedCount: input.skip.missedCount,
+          reason: input.skip.reason,
+          recordedAt: now,
+        };
+        await tx.appendEvent(event(command.id, "automation.skip.recorded", { skip }, now));
+        await tx.insertSkippedOccurrence(skip);
+        const completed = receipt(
+          command.id,
+          "completed",
+          { kind: "automation.skip.recorded", skip },
+          now,
+        );
+        await recordReceipt(tx, completed);
+        return { ok: true, value: skip, receipt: publicReceipt(completed) };
+      });
+    },
+
     async acceptRun(input) {
+      // One spelling of the plan for both the in-flight rejection below and the
+      // accepted path under it: two constructions of the same durable record is
+      // how a field added to one of them quietly goes missing from the other.
+      const draftPlan = (): AutomationRunPlan => ({
+        commandId: input.commandId,
+        runId: ports.nextId(),
+        automationId: input.automation?.id ?? null,
+        automationName: input.automation?.name ?? null,
+        projectId: input.projectId,
+        ticketId: input.ticketId,
+        runtime: input.runtime,
+        request: input.request,
+        text: input.text,
+        resources: input.resources,
+        sessionOperationId: ports.nextId(),
+        messageCommandId: ports.nextId(),
+        messageId: ports.nextId(),
+      });
       return ports.ledger.transaction(async (tx) => {
         // First find a replay by command id. It must outrank the Ticket guard:
         // a network retry of the accepted Run is the same Run, not a second
@@ -812,13 +971,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
               `Automation command ${input.commandId} was already used for ${existing.intent.kind}`,
             );
           }
-          const plan = existing.intent.plan;
+          const plan = readRunPlan(existing.intent.plan);
           if (
-            plan.automationId !== input.automation.id ||
-            plan.automationName !== input.automation.name ||
+            plan.automationId !== (input.automation?.id ?? null) ||
+            plan.automationName !== (input.automation?.name ?? null) ||
             plan.projectId !== input.projectId ||
             plan.ticketId !== input.ticketId ||
-            !sameJson(plan.runtime, input.automation.runtime) ||
+            !sameJson(plan.runtime, input.runtime) ||
+            !sameAutomationRunRequestIdentity(plan.request, input.request) ||
             plan.text !== input.text ||
             !sameJson(plan.resources, input.resources)
           ) {
@@ -852,22 +1012,9 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           return { ok: true, value: plan, receipt: publicReceipt(latest), replayed: true };
         }
         const pending = await tx.listRecoverableRunPlans();
-        if (pending.some((plan) => plan.ticketId === input.ticketId)) {
+        if (pending.some((plan) => sameRunTarget(plan, input))) {
           const now = ports.now();
-          const plan: AutomationRunPlan = {
-            commandId: input.commandId,
-            runId: ports.nextId(),
-            automationId: input.automation.id,
-            automationName: input.automation.name,
-            projectId: input.projectId,
-            ticketId: input.ticketId,
-            runtime: input.automation.runtime,
-            text: input.text,
-            resources: input.resources,
-            sessionOperationId: ports.nextId(),
-            messageCommandId: ports.nextId(),
-            messageId: ports.nextId(),
-          };
+          const plan = draftPlan();
           const command: AutomationCommand = {
             id: input.commandId,
             intent: { kind: "automation.run", plan },
@@ -895,20 +1042,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         }
 
         const now = ports.now();
-        const plan: AutomationRunPlan = {
-          commandId: input.commandId,
-          runId: ports.nextId(),
-          automationId: input.automation.id,
-          automationName: input.automation.name,
-          projectId: input.projectId,
-          ticketId: input.ticketId,
-          runtime: input.automation.runtime,
-          text: input.text,
-          resources: input.resources,
-          sessionOperationId: ports.nextId(),
-          messageCommandId: ports.nextId(),
-          messageId: ports.nextId(),
-        };
+        const plan = draftPlan();
         const command: AutomationCommand = {
           id: input.commandId,
           intent: { kind: "automation.run", plan },
@@ -936,7 +1070,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             `Automation Run command ${input.commandId} was not accepted`,
           );
         }
-        const { plan } = command.intent;
+        const plan = readRunPlan(command.intent.plan);
         const existing = await tx.getRun(plan.runId);
         if (existing !== null) {
           if (
@@ -1066,7 +1200,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             `Automation command ${commandId} was already used for ${command.intent.kind}`,
           );
         }
-        return command.intent.plan;
+        return readRunPlan(command.intent.plan);
       });
     },
 
@@ -1089,14 +1223,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           case "automation.run.accepted":
             return {
               ok: true,
-              value: { plan: command.intent.plan, run: null },
+              value: { plan: readRunPlan(command.intent.plan), run: null },
               receipt: publicReceipt(latest),
               replayed: true,
             };
           case "automation.run.completed":
             return {
               ok: true,
-              value: { plan: command.intent.plan, run: latest.result.run },
+              value: { plan: readRunPlan(command.intent.plan), run: latest.result.run },
               receipt: publicReceipt(latest),
               replayed: true,
             };
@@ -1117,7 +1251,9 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async recoverableRunPlans() {
-      return ports.ledger.transaction((tx) => tx.listRecoverableRunPlans());
+      return ports.ledger.transaction(async (tx) =>
+        (await tx.listRecoverableRunPlans()).map(readRunPlan),
+      );
     },
 
     async pendingDeliveriesForSession(sessionId) {
@@ -1145,6 +1281,36 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
       });
     },
   };
+}
+
+/**
+ * Whether an accepted plan and a new request are Runs at the SAME target — the
+ * question behind `RUN_IN_FLIGHT`.
+ *
+ * A Ticket answers it by itself: VC-112 rules that a Ticket has at most one Run
+ * in flight, whichever Automation started it. A Run that names no Ticket has no
+ * such subject, so it asks the nearest true question instead — the same
+ * schedule, in the same project — which keeps one daily sweep from stacking on
+ * itself while leaving two different schedules free to fire in the same minute.
+ * Written as one predicate because the alternative is two guards that drift.
+ */
+function sameRunTarget(
+  plan: Pick<AutomationRunPlan, "ticketId" | "projectId" | "automationId">,
+  next: {
+    ticketId: string | null;
+    projectId: string;
+    /** `null` for an Unbound Run (VC-129), which always names a Ticket. */
+    automation: Pick<Automation, "id"> | null;
+  },
+): boolean {
+  if (next.ticketId !== null) return plan.ticketId === next.ticketId;
+  // A Run with no Ticket competes with itself in one project (VC-130): the
+  // schedule is the subject, so the record it names is part of the identity.
+  return (
+    plan.ticketId === null &&
+    plan.projectId === next.projectId &&
+    plan.automationId === (next.automation?.id ?? null)
+  );
 }
 
 function publicReceipt(stored: StoredAutomationReceipt): AutomationCommandReceipt {
@@ -1187,8 +1353,31 @@ function terminalReceipt(
  * history rather than reading it.
  */
 function readIntent(intent: AutomationCommandIntent): AutomationCommandIntent {
+  if (intent.kind === "automation.run") return { ...intent, plan: readRunPlan(intent.plan) };
   if (intent.kind !== "automation.create" && intent.kind !== "automation.update") return intent;
   return { ...intent, trigger: parseAutomationTrigger(intent.trigger) };
+}
+
+/**
+ * A stored Run plan, read in TODAY's vocabulary — the same rule
+ * {@link readIntent} states for the Trigger, applied to the field VC-129 added.
+ *
+ * The ledger is append-only and older than the Unbound Run: a plan written
+ * before VC-129 carries no `request` at all. Every plan of that age was a bound
+ * Run started from a record, with no per-invocation override to spend — that is
+ * not a guess, it is the only Run the code of the time could accept — so it is
+ * read as the request it was. Reading it literally would instead compare a
+ * retry against `undefined` and refuse the caller's own command as a different
+ * one, which is exactly the upgrade-day bug the Trigger normalizer exists to
+ * avoid.
+ *
+ * A plan is never written back through this: normalization is about how an old
+ * row is UNDERSTOOD, and the row itself stays whatever it was recorded as.
+ */
+function readRunPlan(plan: AutomationRunPlan): AutomationRunPlan {
+  const request: AutomationRunRequestIdentity | undefined = plan.request;
+  if (request !== undefined) return plan;
+  return { ...plan, request: { instructions: null, modelOverride: null } };
 }
 
 /**

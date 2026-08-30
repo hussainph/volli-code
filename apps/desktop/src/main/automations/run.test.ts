@@ -8,12 +8,22 @@ import {
 import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
+import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
 import type { AutomationRunnerDeps } from "./run";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
-import { getAutomation, listRunsForTicket, recordAutomationRun } from "../db/automations-repo";
+import {
+  getAutomation,
+  listAutomationsForProject,
+  listProjectRunsForAutomation,
+  listRunsForTicket,
+  recordAutomationRun,
+} from "../db/automations-repo";
+import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
-import { openTestDb, testProject, testTicket } from "../db/test-helpers";
+import { readSessionProvenance } from "../db/session-provenance-repo";
+import { insertSession } from "../session-control/test-support";
+import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
 import { StructuredSessionsError } from "../session-runtime/sessions";
@@ -97,7 +107,9 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
       const found = ticketId === ticket.id ? ticket : undefined;
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
     },
+    findProject: (candidate) => candidate === project.id,
     listRunsForTicket: (ticketId) => listRunsForTicket(ctx.db, ticketId),
+    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -105,6 +117,11 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
         if (sessionId === undefined) {
           sessionId = `session-${++nextSession}`;
           sessionsByOperation.set(input.operationId, sessionId);
+          // The fake facade mints the Session ROW as well as the id, because a
+          // Run that names no Ticket is scoped to its project through exactly
+          // this row (`listProjectRunsForAutomation`) — a fake that skipped it
+          // would leave the schedule's own single-flight guard untestable.
+          insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
         }
         return { sessionId, model: RESOLVED };
       },
@@ -169,8 +186,9 @@ describe("createAutomationRunner", () => {
 
     const outcome = await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
 
@@ -207,6 +225,68 @@ describe("createAutomationRunner", () => {
     expect(h.delivered[0]?.messageId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
+  // VC-131's fourth acceptance criterion, end to end across the two pieces that
+  // make it true: the Run door hands `mint` the `automation` Actor, and `mint`
+  // records the launch on the Ticket. Production wires those together in
+  // `index.ts` (`recordSessionStarted: recordSessionStartedOnce`), so the fake
+  // Session facade here does the same thing with the actor it is handed rather
+  // than asserting on the argument alone — an argument nobody wrote down is not
+  // a timeline entry.
+  it("records each Run's launch on the Ticket timeline, with the automation Actor", async () => {
+    const h = harness({
+      sessions: {
+        create: async (input) => {
+          const sessionId = `session-${input.operationId}`;
+          if (input.ticketId !== null) {
+            recordSessionStartedOnce(ctx.db, {
+              ticketId: input.ticketId,
+              sessionId,
+              now: 42_000,
+              actor: input.actor ?? { kind: "user" },
+            });
+          }
+          return { sessionId, model: RESOLVED };
+        },
+        attach: async (input) => ({
+          sessionId: input.sessionId,
+          state: "ready" as const,
+          receipt: null,
+          throughSequence: 0,
+        }),
+      },
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+    if (!outcome.ok) throw new Error(outcome.error);
+
+    const started = listTicketEvents(ctx.db, h.ticketId).filter(
+      (event) => event.payload.kind === "session_started",
+    );
+    expect(started).toHaveLength(1);
+    expect(started[0]?.actor).toBe("automation");
+    expect(started[0]?.payload).toEqual({
+      kind: "session_started",
+      sessionId: outcome.run.sessionId,
+    });
+
+    // And the same launch, read back as the mark every listing draws. The bolt
+    // and the timeline entry are two readings of one Run, which is the point of
+    // deriving provenance from the records rather than storing it a third time.
+    expect(
+      readSessionProvenance(ctx.db, {
+        sessionId: outcome.run.sessionId,
+        ticketId: h.ticketId,
+      }),
+    ).toEqual({ kind: "automation", automationName: "Two-opinion review" });
+  });
+
   it("passes a pinned Runtime whole — model and reasoning together", async () => {
     const h = harness();
     const automation = await savedAutomation(h, {
@@ -215,8 +295,9 @@ describe("createAutomationRunner", () => {
 
     const outcome = await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
 
@@ -234,8 +315,9 @@ describe("createAutomationRunner", () => {
 
     const outcome = await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
@@ -265,7 +347,9 @@ describe("createAutomationRunner", () => {
     const automation = await savedAutomation(h);
     const accepted = await h.engine.acceptRun({
       commandId: randomUUID(),
-      automation: { id: automation.id, name: automation.name, runtime: null },
+      automation: { id: automation.id, name: automation.name },
+      runtime: null,
+      request: { instructions: null, modelOverride: null },
       projectId: h.projectId,
       ticketId: h.ticketId,
       text: "Persisted instructions",
@@ -291,8 +375,9 @@ describe("createAutomationRunner", () => {
 
     const first = await h.runner.run({
       commandId,
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
     // The plan, not today's editable record, owns a retry. Deleting the
@@ -302,8 +387,9 @@ describe("createAutomationRunner", () => {
     activity = "working";
     const replay = await h.runner.run({
       commandId,
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
 
@@ -333,12 +419,22 @@ describe("createAutomationRunner", () => {
     );
 
     await expect(
-      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+      h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
 
     activities.set("older", null);
     await expect(
-      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+      h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
   });
 
@@ -350,7 +446,12 @@ describe("createAutomationRunner", () => {
       .run('{"providerId":"anthropic"}', automation.id);
 
     await expect(
-      h.runner.run({ commandId: randomUUID(), automationId: automation.id, ticketId: h.ticketId }),
+      h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
     ).resolves.toMatchObject({
       ok: false,
       code: "RUN_FAILED",
@@ -382,14 +483,315 @@ describe("createAutomationRunner", () => {
 
     const commandId = randomUUID();
     await expect(
-      h.runner.run({ commandId, automationId: automation.id, ticketId: h.ticketId }),
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
     ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
     // A lost response retries the same terminal receipt, not a generic
     // RUN_IN_FLIGHT refusal and not another Session-create attempt.
     await expect(
-      h.runner.run({ commandId, automationId: automation.id, ticketId: h.ticketId }),
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
     ).resolves.toMatchObject({ ok: false, code: "MODEL_UNAVAILABLE" });
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
+  });
+
+  it("runs UNBOUND Instructions that name no Automation and leave no record behind", async () => {
+    const h = harness();
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "unbound", instructions: "/review src/a.ts once" },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    // Names no Automation, in the Run and in the Session it opened. The only
+    // name either wears is the constant every surface prints for one.
+    expect(outcome.run).toMatchObject({
+      automationId: null,
+      automationName: null,
+      ticketId: h.ticketId,
+      sessionId: "session-1",
+    });
+    expect(h.creates[0]).toMatchObject({ title: "Run once", actor: { kind: "automation" } });
+    // Nothing to name, disable or delete afterwards: the record table is
+    // untouched, and the Run is the whole of what was saved.
+    expect(listAutomationsForProject(ctx.db, h.projectId)).toEqual([]);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([outcome.run]);
+    // Its Instructions still go through the composer's own grammar.
+    const composer = expandCommandInvocation("/review src/a.ts once", [TEMPLATE], [SKILL]);
+    expect(h.delivered).toEqual([
+      expect.objectContaining({ text: composer.text, resources: composer.resources }),
+    ]);
+  });
+
+  it("refuses an Unbound Run with nothing to say, and mints no Session for it", async () => {
+    const h = harness();
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "unbound", instructions: "   \n " },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: "INSTRUCTIONS_REQUIRED" });
+    expect(h.creates).toEqual([]);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
+  });
+
+  it("spends a per-invocation override on this Run and stores it nowhere", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h, {
+      runtime: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "medium" },
+    });
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    // The Session is born on the override, not on the record's own pin...
+    expect(h.creates[0]?.modelOverride).toEqual({
+      model: { providerId: "anthropic", modelId: "claude-opus" },
+      reasoningLevel: "high",
+    });
+    // ...and the record keeps the Runtime it was saved with.
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({
+      providerId: "openai",
+      modelId: "gpt-5",
+      reasoningLevel: "medium",
+    });
+  });
+
+  it("gives an Unbound Run the override it names, and inherit without one", async () => {
+    const h = harness();
+
+    await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "unbound", instructions: "sweep" },
+      ticketId: h.ticketId,
+      modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    });
+    await h.runner.settled();
+
+    expect(h.creates[0]?.modelOverride).toEqual({
+      model: { providerId: "anthropic", modelId: "claude-opus" },
+      reasoningLevel: "high",
+    });
+  });
+
+  it("replays one Unbound Run command instead of starting a second Session", async () => {
+    const h = harness();
+    const commandId = randomUUID();
+    const request = {
+      commandId,
+      target: { kind: "unbound", instructions: "sweep" } as const,
+      ticketId: h.ticketId,
+      modelOverride: null,
+    };
+
+    const first = await h.runner.run(request);
+    await h.runner.settled();
+    const replayed = await h.runner.run(request);
+    await h.runner.settled();
+
+    expect(first.ok && replayed.ok).toBe(true);
+    if (!first.ok || !replayed.ok) throw new Error("refused");
+    expect(replayed.run).toEqual(first.run);
+    expect(h.creates).toHaveLength(1);
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([first.run]);
+  });
+
+  it("refuses to reuse one command id for a different target", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "unbound", instructions: "something else entirely" },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("refuses to reuse one command id for DIFFERENT Unbound Instructions", async () => {
+    // Both Runs name no Automation, so the record alone cannot tell them apart:
+    // what distinguishes them is the only thing either of them said.
+    const h = harness();
+    const commandId = randomUUID();
+
+    const first = await h.runner.run({
+      commandId,
+      target: { kind: "unbound", instructions: "sweep the diff" },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "unbound", instructions: "sweep the WHOLE repository" },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    // The first Run stands, alone: a conflict starts nothing and undoes nothing.
+    expect(h.creates).toHaveLength(1);
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("refused");
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([first.run]);
+  });
+
+  it("refuses to reuse one command id for a different per-invocation override", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    });
+    await h.runner.settled();
+
+    // Same Automation, same Ticket, another model — a second Run, and it must
+    // not be answered with the first one's Session.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    // And dropping the override entirely is a different request too.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("replays the receipt when the SAME override is retried under one command id", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const request = {
+      commandId,
+      target: { kind: "automation", automationId: automation.id } as const,
+      ticketId: h.ticketId,
+      modelOverride: {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      } as const,
+    };
+
+    const first = await h.runner.run(request);
+    await h.runner.settled();
+    const replayed = await h.runner.run(request);
+    await h.runner.settled();
+
+    expect(first.ok && replayed.ok).toBe(true);
+    if (!first.ok || !replayed.ok) throw new Error("refused");
+    expect(replayed.run).toEqual(first.run);
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("reads a plan written before the request identity existed as the request it was", async () => {
+    // The ledger is append-only and older than VC-129: a plan accepted then
+    // carries no `request` at all, so this seeds one exactly as that release
+    // would have left it — an accepted command whose Session never got minted.
+    // Its caller's retry must still replay, rather than be told its own command
+    // id belongs to a different Run.
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const legacyPlan = {
+      commandId,
+      runId: randomUUID(),
+      automationId: automation.id,
+      automationName: automation.name,
+      projectId: h.projectId,
+      ticketId: h.ticketId,
+      runtime: null,
+      text: "Persisted instructions",
+      resources: [],
+      sessionOperationId: randomUUID(),
+      messageCommandId: randomUUID(),
+      messageId: randomUUID(),
+    } as unknown as AutomationRunPlan;
+    await new SqliteAutomationLedger(ctx.db).transaction(async (tx) => {
+      await tx.insertCommand({
+        id: commandId,
+        intent: { kind: "automation.run", plan: legacyPlan },
+        createdAt: 1,
+      });
+      await tx.appendReceipt({
+        id: randomUUID(),
+        commandId,
+        status: "accepted",
+        result: { kind: "automation.run.accepted", plan: legacyPlan },
+        recordedAt: 1,
+      });
+    });
+
+    const replayed = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    expect(replayed).toMatchObject({ ok: true });
+    if (!replayed.ok) throw new Error("refused");
+    expect(replayed.run).toMatchObject({ id: legacyPlan.runId, automationId: automation.id });
+    // Read as the request it was, not as a wildcard: a retry that now names an
+    // override is a different Run under the same id, and still refuses.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    expect(h.creates).toHaveLength(1);
   });
 
   it("keeps literal Instructions when the prompt supply cannot be read", async () => {
@@ -402,13 +804,163 @@ describe("createAutomationRunner", () => {
 
     await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: h.ticketId,
+      modelOverride: null,
     });
     await h.runner.settled();
 
     expect(h.delivered[0]?.text).toBe(automation.instructions);
     expect(h.delivered[0]?.resources).toEqual([]);
     expect(h.logs.join("\n")).toMatch(/prompt supply/);
+  });
+
+  /* ------------------------- the Project as the Target (VC-130) --------- */
+
+  it("opens a PROJECT Session for a Run that names no Ticket", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("refused");
+    // `ticketId: null` IS the Project Role in the Session layer, so a schedule
+    // Run is a Project Session by construction rather than by a second flag.
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      projectId: h.projectId,
+      ticketId: null,
+      title: "Two-opinion review",
+      actor: { kind: "automation" },
+    });
+    expect(outcome.run).toMatchObject({ ticketId: null, sessionId: "session-1" });
+    // It is filed in the project's history through its Session, and it is not
+    // on any Ticket's rail.
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
+    // The Instructions still arrive, by the same durable delivery intent.
+    expect(h.delivered).toHaveLength(1);
+  });
+
+  it("replays a retried Project Run rather than opening a second Session", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const first = await h.runner.runForProject({
+      commandId,
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    const second = await h.runner.runForProject({
+      commandId,
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+
+    if (!first.ok || !second.ok) throw new Error("refused");
+    expect(second.run).toEqual(first.run);
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("refuses a Project Run whose command id was accepted for another Target", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    await expect(
+      h.runner.runForProject({ commandId, automationId: automation.id, projectId: h.projectId }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+  });
+
+  it("refuses a project this host does not have", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: "no-such-project",
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "PROJECT_NOT_FOUND" });
+    expect(h.creates).toEqual([]);
+  });
+
+  it("refuses an Automation owned by another project", async () => {
+    const h = harness();
+    const created = await h.engine.create({
+      commandId: randomUUID(),
+      projectId: "elsewhere",
+      name: "Far away",
+      instructions: "/sweep",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: created.value.id,
+        projectId: h.projectId,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "AUTOMATION_NOT_IN_PROJECT" });
+  });
+
+  it("does not stack a schedule on itself while an earlier Run is still working", async () => {
+    let activity: "working" | "idle" = "idle";
+    const h = harness({ readSessionActivity: async () => activity });
+    const automation = await savedAutomation(h);
+    await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    activity = "working";
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+  });
+
+  it("lets a DIFFERENT schedule fire in the same project and minute", async () => {
+    // The single-flight subject for a Run with no Ticket is the schedule
+    // itself, not the project: two Automations due at 09:00 are two Runs.
+    let activity: "working" | "idle" = "idle";
+    const h = harness({ readSessionActivity: async () => activity });
+    const first = await savedAutomation(h, { name: "First" });
+    const second = await savedAutomation(h, { name: "Second" });
+    await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: first.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    activity = "working";
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: second.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    expect(outcome.ok).toBe(true);
+    expect(h.creates).toHaveLength(2);
   });
 });

@@ -2790,9 +2790,36 @@ describe("AUTOMATION_IPC descriptor table", () => {
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: 7 }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: null }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: ["doing"] }])).toBe(false);
+      // A schedule (VC-130) passes as a SHAPE; whether its zone is one this
+      // build's ICU knows, and whether its hour is on the clock, is the shared
+      // parser's job on the way in — the same division the columns get above.
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: {
+              kind: "schedule",
+              schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+            },
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: { kind: "schedule", schedule: { preset: "daily", timeZone: "Mars/Olympus" } },
+          },
+        ]),
+      ).toBe(true);
       // A record, but not a Trigger this build can read.
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: {} }])).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule", schedule: "daily" } }]),
+      ).toBe(false);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns" } }])).toBe(false);
       expect(
         guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: "doing" } }]),
@@ -2843,13 +2870,99 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("volli:automation-run", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-run"];
 
-    it("requires a UUID command plus both target halves — the Automation and the Ticket", () => {
-      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1" }])).toBe(true);
-      expect(guard([{ automationId: "a1" }])).toBe(false);
-      expect(guard([{ commandId: "counter-1", automationId: "a1", ticketId: "t1" }])).toBe(false);
-      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1" }])).toBe(false);
+    const bound = { kind: "automation", automationId: "a1" };
+
+    it("requires a UUID command, a whole target and the Ticket", () => {
+      expect(
+        guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(true);
+      expect(guard([{ target: bound, ticketId: "t1", modelOverride: null }])).toBe(false);
+      expect(
+        guard([{ commandId: "counter-1", target: bound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1", modelOverride: null }])).toBe(false);
+      // The pre-VC-129 spelling, which named the Automation beside the Ticket:
+      // a target is a union now, and a bare id is not one of its members.
+      expect(
+        guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
+    });
+
+    it("takes an Unbound Run's own Instructions, and no other target kind", () => {
+      const unbound = { kind: "unbound", instructions: "/sweep" };
+      expect(
+        guard([{ commandId: COMMAND_ID, target: unbound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(true);
+      // An Unbound Run with nothing to say passes the SHAPE and is refused by
+      // the domain rule instead (`unboundRunProblem`) — the door judges wire
+      // shape only, as it does for every other automation write.
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "unbound", instructions: "" },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "unbound", instructions: 7 },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "schedule" },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([{ commandId: COMMAND_ID, target: null, ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
+    });
+
+    it("takes a whole per-invocation model override, or none", () => {
+      const modelOverride = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+      expect(guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1", modelOverride }])).toBe(
+        true,
+      );
+      // Half a pair is not an override: a reasoning level is a property of the
+      // model that offers it (VC-112), so neither half travels alone.
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: bound,
+            ticketId: "t1",
+            modelOverride: { providerId: "anthropic", modelId: "opus" },
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: bound,
+            ticketId: "t1",
+            modelOverride: { ...modelOverride, reasoningLevel: "turbo" },
+          },
+        ]),
+      ).toBe(false);
+      // Absent is not null: an optional property would admit `undefined`, which
+      // an HTTP transport would mangle (docs/BOUNDARIES.md rule 3).
+      expect(guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1" }])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {
@@ -3057,7 +3170,10 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(13);
+      // 11 through VC-128, plus VC-130's two (the project's Skipped
+      // occurrences, and the Run door whose Target is the Project) and
+      // VC-132's two (reading and writing a column's own order).
+      expect(AUTOMATION_CHANNELS).toHaveLength(15);
     });
   });
 });

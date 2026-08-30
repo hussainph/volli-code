@@ -20,6 +20,8 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationRunTarget,
+  AutomationSkippedOccurrence,
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
@@ -1479,11 +1481,48 @@ export interface AutomationIdInput {
   automationId: string;
 }
 
+/**
+ * One Run request: which Ticket, what it runs, and what it runs it on.
+ *
+ * `target` is the union rather than a nullable `automationId` beside nullable
+ * Instructions, so an Unbound Run (VC-129) is a Run this shape can spell and a
+ * Run that is somehow both, or neither, is one it cannot. Both fields are
+ * REQUIRED and explicitly nullable where they can be absent — an optional
+ * property admits `undefined`, which the Electron transport carries and an HTTP
+ * one would mangle (docs/BOUNDARIES.md rule 3).
+ */
 export interface AutomationRunInput {
   /** Caller-minted UUID: a transport retry repeats this exact command. */
   commandId: string;
-  automationId: string;
+  /** The saved Automation to run, or an Unbound Run's own Instructions. */
+  target: AutomationRunTarget;
   ticketId: string;
+  /**
+   * The Runtime THIS invocation runs on, or `null` to resolve the ordinary way
+   * — the Automation's own pin, then the project's preferences, then the global
+   * record (VC-112). A per-invocation override is never stored: the Run records
+   * the model it RESOLVED, which is the only durable evidence either way.
+   */
+  modelOverride: ModelSelection | null;
+}
+
+/**
+ * Running an Automation against a PROJECT rather than a Ticket (VC-130).
+ *
+ * Its own input and its own channel rather than a nullable `ticketId` on the
+ * one above: the two are different Targets with different Session Roles, and a
+ * nullable field on the wire would let a caller ask for a Project Session by
+ * FORGETTING something. docs/BOUNDARIES.md rule 3 wants the shape to say what
+ * it means, so the shape that means "the Project" names a project.
+ *
+ * The renderer reaches it from a Skipped occurrence's "Run now" — a schedule
+ * that did not fire, started by hand, at the Target it would have used.
+ */
+export interface AutomationRunForProjectInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  projectId: string;
 }
 
 /**
@@ -1535,6 +1574,8 @@ export type AutomationResult = Result<{
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
 /** Every armed column in the project — the whole truth, so a caller reconstructs nothing. */
 export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
 
@@ -1585,7 +1626,10 @@ export interface VolliAutomationIpcContract {
   "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
   /** A record delete — Runs retain their Automation id/name snapshot. */
   "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
-  /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
+  /**
+   * Runs one Automation — or one Unbound Run's own Instructions (VC-129) — by
+   * hand on a Ticket: one fresh chat Session, one Run row, either way.
+   */
   "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
   /** A Ticket's Runs, newest first. */
   "volli:automation-runs-for-ticket": {
@@ -1626,6 +1670,27 @@ export interface VolliAutomationIpcContract {
   "volli:automation-set-enabled": {
     args: [input: AutomationSetEnabledInput];
     result: AutomationSetEnabledResult;
+  };
+  /**
+   * Every due time this project's schedules missed, newest first (VC-130).
+   *
+   * A read of its own beside `volli:automation-runs-for-project`, because a
+   * skip and a Run are different records with different actions — a Run opens
+   * its Session, a skip offers to start one. The page interleaves them by time;
+   * merging them on the wire would need a discriminant nothing else wants.
+   */
+  "volli:automation-skips-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationSkipsResult;
+  };
+  /**
+   * Runs an Automation against the PROJECT: one fresh Project Session, one Run
+   * row naming no Ticket. The schedule's own Target, reachable by hand so a
+   * Skipped occurrence is recoverable (VC-112).
+   */
+  "volli:automation-run-for-project": {
+    args: [input: AutomationRunForProjectInput];
+    result: AutomationRunStartResult;
   };
 }
 

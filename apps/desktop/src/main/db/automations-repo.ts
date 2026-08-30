@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 import {
   isTicketStatus,
   NO_AUTOMATION_TRIGGER,
+  parseAutomationSkipReason,
   parseAutomationTrigger,
   parseSessionModel,
 } from "@volli/shared";
@@ -24,6 +25,7 @@ import type {
   Automation,
   AutomationRun,
   AutomationRuntime,
+  AutomationSkippedOccurrence,
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
@@ -69,6 +71,17 @@ interface AutomationRunRow {
   model_id: string;
   reasoning_level: string;
   created_at: number;
+}
+
+interface AutomationSkipRow {
+  id: string;
+  automation_id: string;
+  automation_name: string;
+  project_id: string;
+  due_at: number;
+  missed_count: number;
+  reason: string;
+  recorded_at: number;
 }
 
 function parseJsonColumn(value: string): unknown {
@@ -162,6 +175,23 @@ export function getAutomation(db: Database.Database, id: string): Automation | u
   return row ? mapAutomation(row) : undefined;
 }
 
+/**
+ * Every Automation on this machine, in no project's order (VC-130).
+ *
+ * The scheduler's own read, and the one place a project-blind list is right:
+ * a timer serves every project at once, and asking per project would make the
+ * set of schedules a function of which projects a window happens to have open.
+ * Filtering to the ones that carry a schedule is the caller's, because the
+ * Trigger is a JSON value rather than a column to index.
+ */
+export function listAllAutomations(db: Database.Database): Automation[] {
+  const rows = prepared<[], AutomationRow>(
+    db,
+    "SELECT * FROM automations ORDER BY created_at, id",
+  ).all();
+  return rows.map(mapAutomation);
+}
+
 export interface AutomationWrite {
   /** `null` is global Ownership. */
   projectId: string | null;
@@ -230,7 +260,8 @@ export interface AutomationRunWrite {
   automationId: string | null;
   /** Snapshot at launch; omitted only by legacy test/support callers. */
   automationName?: string | null;
-  ticketId: string;
+  /** `null` is a Run that named no Ticket — a schedule's project Target (VC-130). */
+  ticketId: string | null;
   sessionId: string;
   /** The RESOLVED selection the Session was born with, never the reference. */
   model: ResolvedAutomationModel;
@@ -320,6 +351,30 @@ export function listRunsForProject(db: Database.Database, projectId: string): Au
       WHERE sessions.project_id = ?
       ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
   ).all(projectId);
+  return rows.map(mapRun);
+}
+
+/**
+ * One Automation's Runs inside one project, newest first (VC-130).
+ *
+ * The single-flight guard for a Run that names no Ticket. A ticket Run asks
+ * "is anything already working on this Ticket"; a schedule Run has no Ticket to
+ * ask about, so it asks the nearest true question instead — is an earlier Run
+ * of THIS schedule, in THIS project, still working. Scoped through the Run's
+ * own Session like the project history above it, for the same reason: a global
+ * Automation is listable everywhere but each Run happened in one project.
+ */
+export function listProjectRunsForAutomation(
+  db: Database.Database,
+  input: { automationId: string; projectId: string },
+): AutomationRun[] {
+  const rows = prepared<[string, string], AutomationRunRow>(
+    db,
+    `SELECT automation_runs.* FROM automation_runs
+       JOIN sessions ON sessions.id = automation_runs.session_id
+      WHERE automation_runs.automation_id = ? AND sessions.project_id = ?
+      ORDER BY automation_runs.created_at DESC, automation_runs.id DESC`,
+  ).all(input.automationId, input.projectId);
   return rows.map(mapRun);
 }
 
@@ -440,7 +495,7 @@ export function clearColumnArming(
   );
 }
 
-/* -------------------------------------- column order (migration 032) ------ */
+/* -------------------------------------- column order (migration 033) ------ */
 
 /**
  * The ORDER projection (VC-132) — the third table under the pattern the two
@@ -524,4 +579,80 @@ export function setColumnOrder(
      ON CONFLICT (project_id, status)
        DO UPDATE SET ranked_ids = excluded.ranked_ids, ordered_at = excluded.ordered_at`,
   ).run(input.projectId, input.status, JSON.stringify([...input.rankedAutomationIds]), now);
+}
+
+/* ------------------------------ skipped occurrences (migration 032) ------- */
+
+/**
+ * A recorded skip, read in today's vocabulary.
+ *
+ * The reason degrades to `unknown` rather than to `app-closed`, and the
+ * asymmetry with the Trigger beside it is the point: an unreadable Trigger
+ * degrades to firing nothing, which costs a Run nobody sees; an unreadable
+ * REASON must still read as a skip, because the one thing VC-112 forbids is a
+ * skip that looks like a silence. Asserting "the app was closed" would be
+ * inventing a cause; saying so plainly is not.
+ */
+function mapSkip(row: AutomationSkipRow): AutomationSkippedOccurrence {
+  return {
+    id: row.id,
+    automationId: row.automation_id,
+    automationName: row.automation_name,
+    projectId: row.project_id,
+    dueAt: row.due_at,
+    missedCount: row.missed_count,
+    reason: parseAutomationSkipReason(parseJsonColumn(row.reason)),
+    recordedAt: row.recorded_at,
+  };
+}
+
+/**
+ * Records one Skipped occurrence — the projection's hand, called from inside
+ * the ledger transaction that recorded the intent, never from a handler.
+ */
+export function insertSkippedOccurrence(
+  db: Database.Database,
+  skip: AutomationSkippedOccurrence,
+): void {
+  prepared(
+    db,
+    `INSERT INTO automation_skipped_occurrences
+      (id, automation_id, automation_name, project_id, due_at, missed_count, reason, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    skip.id,
+    skip.automationId,
+    skip.automationName,
+    skip.projectId,
+    skip.dueAt,
+    skip.missedCount,
+    JSON.stringify(skip.reason),
+    skip.recordedAt,
+  );
+}
+
+/** One project's Skipped occurrences, newest due time first — the page's history. */
+export function listSkippedOccurrencesForProject(
+  db: Database.Database,
+  projectId: string,
+): AutomationSkippedOccurrence[] {
+  const rows = prepared<[string], AutomationSkipRow>(
+    db,
+    `SELECT * FROM automation_skipped_occurrences
+      WHERE project_id = ?
+      ORDER BY due_at DESC, id DESC`,
+  ).all(projectId);
+  return rows.map(mapSkip);
+}
+
+/** One recorded skip by id — the ledger's read-back after it writes one. */
+export function getSkippedOccurrence(
+  db: Database.Database,
+  id: string,
+): AutomationSkippedOccurrence | undefined {
+  const row = prepared<[string], AutomationSkipRow>(
+    db,
+    "SELECT * FROM automation_skipped_occurrences WHERE id = ?",
+  ).get(id);
+  return row === undefined ? undefined : mapSkip(row);
 }

@@ -161,6 +161,13 @@ export default defineConfig(({ mode }) => ({
         // silently re-derived one from today's catalogue would erase exactly
         // that — with nothing on screen to show it had happened.
         "src/components/automations/automations-page-model.ts",
+        // And what the TICKET RAIL offers (VC-129): which Automation one press
+        // starts, and what a per-invocation override is allowed to name. In
+        // the gate because both are rules about records the button is not — an
+        // arming row that no longer offers its column must not press, and an
+        // override naming a model without a level it can run is a Run that
+        // fails at the Session mint with nothing on screen to explain it.
+        "src/components/automations/ticket-rail-automations-model.ts",
         // The drop/paste decision (VC-106) is a pure `.ts` beside the views
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.

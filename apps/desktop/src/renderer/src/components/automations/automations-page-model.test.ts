@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun } from "@volli/shared";
+import type { Automation, AutomationRun, AutomationSkippedOccurrence } from "@volli/shared";
 
 import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
+  automationHistory,
   duplicateName,
   groupByOwnership,
   laneDropRank,
   laneRowId,
+  listingRunTarget,
   parseLaneRowId,
   ownershipLabel,
   runAutomationLabel,
   runModelLabel,
   runModelTitle,
   runtimeLabel,
+  skipCountLabel,
+  skipReasonLabel,
   triggerLabel,
 } from "./automations-page-model";
 
@@ -254,5 +258,122 @@ describe("laneDropRank", () => {
         overId: laneRowId("doing", "c"),
       }),
     ).toBeNull();
+  });
+});
+
+/* ------------------------------- schedules (VC-130) ----------------------- */
+
+function skip(overrides: Partial<AutomationSkippedOccurrence> = {}): AutomationSkippedOccurrence {
+  return {
+    id: "skip-1",
+    automationId: "automation-1",
+    automationName: "Nightly sweep",
+    projectId: "p1",
+    dueAt: 500,
+    missedCount: 1,
+    reason: { kind: "app-closed" },
+    recordedAt: 900,
+    ...overrides,
+  };
+}
+
+describe("triggerLabel for a schedule", () => {
+  it("prints the whole sentence, zone included", () => {
+    // VC-112 requires the stored zone to be shown ALWAYS. A row that printed
+    // "Every day at 21:00" would leave a reader unable to tell whose 21:00.
+    expect(
+      triggerLabel({
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      }),
+    ).toBe("Every day at 21:00 Europe/London");
+    expect(
+      triggerLabel({
+        kind: "schedule",
+        schedule: { preset: "hourly", minute: 5, timeZone: "America/New_York" },
+      }),
+    ).toBe("Every hour at :05 America/New_York");
+    expect(
+      triggerLabel({
+        kind: "schedule",
+        schedule: { preset: "weekly", weekday: "monday", hour: 8, minute: 30, timeZone: "UTC" },
+      }),
+    ).toBe("Every Monday at 08:30 UTC");
+  });
+});
+
+describe("listingRunTarget", () => {
+  it("sends a schedule to the Project and everything else to a Ticket", () => {
+    // VC-112's second scope axis: the Trigger decides the Target. A schedule
+    // names the Project, so running one by hand opens the Project Session it
+    // would have opened rather than asking which Ticket.
+    expect(
+      listingRunTarget({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    ).toBe("project");
+    expect(listingRunTarget({ trigger: NO_AUTOMATION_TRIGGER })).toBe("ticket");
+    expect(listingRunTarget({ trigger: { kind: "columns", columns: ["doing"] } })).toBe("ticket");
+  });
+});
+
+describe("automationHistory", () => {
+  it("interleaves Runs and Skipped occurrences, newest first", () => {
+    const early = run({ id: "run-early", createdAt: 100 });
+    const late = run({ id: "run-late", createdAt: 900 });
+    const missed = skip({ dueAt: 500 });
+    expect(automationHistory([late, early], [missed]).map((entry) => entry.at)).toEqual([
+      900, 500, 100,
+    ]);
+    expect(automationHistory([late], [missed])[1]).toEqual({
+      kind: "skip",
+      at: 500,
+      skip: missed,
+    });
+  });
+
+  it("files a skip at its DUE time, not at the moment it was noticed", () => {
+    // An app opened on Monday records Friday's miss on Monday. Filing it under
+    // Monday would sit it above Runs that really did happen in between.
+    const monday = run({ id: "run-monday", createdAt: 800 });
+    const missed = skip({ dueAt: 100, recordedAt: 1_000 });
+    expect(automationHistory([monday], [missed]).map((entry) => entry.kind)).toEqual([
+      "run",
+      "skip",
+    ]);
+  });
+
+  it("is empty when nothing has happened at all", () => {
+    expect(automationHistory([], [])).toEqual([]);
+  });
+});
+
+describe("skipReasonLabel", () => {
+  it("says Skipped in every arm, so a skip is never a silence", () => {
+    expect(skipReasonLabel(skip())).toBe("Skipped — Volli wasn’t running");
+    // A machine asleep at 21:00 with the app open is not a closed app, and the
+    // row says what was observed rather than a cause it cannot know.
+    expect(skipReasonLabel(skip({ reason: { kind: "not-observed" } }))).toBe(
+      "Skipped — Volli didn’t wake in time",
+    );
+    expect(
+      skipReasonLabel(
+        skip({ reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." } }),
+      ),
+    ).toBe("Skipped — Choose a model.");
+    // The cause may be unreadable; that something did not run must not be.
+    expect(skipReasonLabel(skip({ reason: { kind: "unknown" } }))).toBe(
+      "Skipped — reason unreadable",
+    );
+  });
+});
+
+describe("skipCountLabel", () => {
+  it("stays quiet for the ordinary single miss and states a real gap", () => {
+    expect(skipCountLabel({ missedCount: 1 })).toBe("");
+    expect(skipCountLabel({ missedCount: 50 })).toBe("50 occurrences");
   });
 });

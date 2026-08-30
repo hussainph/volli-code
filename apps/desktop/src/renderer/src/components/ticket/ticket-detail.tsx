@@ -776,17 +776,15 @@ export function TicketDetail({
   // `kind`, not id, so the plane and content branch generically.
   const composedTabs: TicketTabDescriptor[] = [
     { id: BODY_TAB_ID, kind: "body", label: displayId },
-    ...openFiles.map(
-      (tab): TicketTabDescriptor => ({
-        id: `file:${tab.relPath}`,
-        kind: "file",
-        label: baseNameOf(tab.relPath),
-        relPath: tab.relPath,
-        preview: !tab.pinned,
-        badge: fileSources[tab.relPath] === "worktree" ? "worktree" : undefined,
-        dirty: dirtyFiles.has(tab.relPath),
-      }),
-    ),
+    ...openFiles.map((tab): TicketTabDescriptor => ({
+      id: `file:${tab.relPath}`,
+      kind: "file",
+      label: baseNameOf(tab.relPath),
+      relPath: tab.relPath,
+      preview: !tab.pinned,
+      badge: fileSources[tab.relPath] === "worktree" ? "worktree" : undefined,
+      dirty: dirtyFiles.has(tab.relPath),
+    })),
     ...openDiffs.map((relPath): TicketTabDescriptor => {
       const meta = diffMeta[relPath];
       return {
@@ -798,21 +796,17 @@ export function TicketDetail({
         dirty: dirtyFiles.has(relPath),
       };
     }),
-    ...(sessionTabs ?? []).map(
-      (tab): TicketTabDescriptor => ({
-        id: tab.sessionId,
-        kind: "session",
-        label: tab.title,
-      }),
-    ),
-    ...openChatIds.map(
-      (sessionId, index): TicketTabDescriptor => ({
-        id: chatTabId(sessionId),
-        kind: "chat",
-        label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-        status: chatStatuses[index],
-      }),
-    ),
+    ...(sessionTabs ?? []).map((tab): TicketTabDescriptor => ({
+      id: tab.sessionId,
+      kind: "session",
+      label: tab.title,
+    })),
+    ...openChatIds.map((sessionId, index): TicketTabDescriptor => ({
+      id: chatTabId(sessionId),
+      kind: "chat",
+      label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index],
+    })),
   ];
   // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one
   // thing that can interleave a file tab with a chat tab, and the Body tab at

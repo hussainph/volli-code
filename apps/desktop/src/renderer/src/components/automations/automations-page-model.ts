@@ -22,15 +22,18 @@
 import {
   automationOwnership,
   automationTriggerColumns,
+  automationTriggerSchedule,
   columnRankAfterLaneDrop,
   isAutomationRuntimePin,
   isTicketStatus,
+  scheduleSentence,
   TICKET_STATUS_LABELS,
 } from "@volli/shared";
 import type {
   Automation,
   AutomationRun,
   AutomationRuntime,
+  AutomationSkippedOccurrence,
   AutomationTrigger,
   TicketStatus,
 } from "@volli/shared";
@@ -47,6 +50,20 @@ import type {
  * *else* starts an Automation.
  */
 export const MANUAL_TRIGGER_LABEL = "Only when I run it";
+
+/**
+ * What a switched-off Automation says where it is OFFERED in a menu row — the
+ * column bolt's list (VC-128) and the ticket rail's own (VC-129).
+ *
+ * The Automations page states the same fact in a whole sentence under the name
+ * ("Won't start on its own"), because a page row has a line to spend on it. A
+ * menu row does not: the note rides beside the name in a 224px popover, so the
+ * two words that fit are the two that get printed. What must not vary is the
+ * PRESENTATION rule they both follow — an Automation that is off is still
+ * listed, still offered and still runnable by hand (VC-112), so it is never
+ * dimmed, never hidden, and never silently missing from a menu.
+ */
+export const SWITCHED_OFF_NOTE = "Switched off";
 
 /**
  * The Trigger, in one line: what starts this Automation BESIDES a person.
@@ -67,6 +84,12 @@ export const MANUAL_TRIGGER_LABEL = "Only when I run it";
  * every project cannot have one answer to it (VC-128).
  */
 export function triggerLabel(trigger: AutomationTrigger): string {
+  // A schedule prints its whole sentence, ZONE INCLUDED. VC-112 requires the
+  // stored zone to be shown always, and this row is where "always" is most
+  // easily lost: a reader who cannot see the zone cannot tell whether 21:00 is
+  // theirs, and travelling is exactly when that matters.
+  const schedule = automationTriggerSchedule(trigger);
+  if (schedule !== null) return scheduleSentence(schedule);
   const columns = automationTriggerColumns(trigger);
   if (columns.length === 0) return MANUAL_TRIGGER_LABEL;
   // The same verb the editor's second choice uses, finished by the columns —
@@ -252,3 +275,97 @@ export function laneDropRank(input: {
  * the project's own place for a Session that belongs to no Ticket — when there
  * is not. The same is true of a Run that never named one (VC-130).
  */
+
+/**
+ * What a by-hand Run from a listing surface is aimed at — VC-112's second scope
+ * axis, decided by the Trigger.
+ *
+ * The rule it encodes is the ticket's own: a schedule Run's Target is the
+ * Project, so it opens a Project Session. Pressing Play on a scheduled record
+ * therefore runs the Project rather than asking which Ticket — anything else
+ * would make the by-hand Run a different piece of work from the one the
+ * schedule starts, on the surface a person uses to check what the schedule
+ * does. Every other Trigger names a Ticket and the page asks for one.
+ *
+ * A pure function beside the page for the gate's sake: this is the only place
+ * the Target is chosen in the renderer, and choosing it wrong is a Session
+ * opened at the wrong scope with nothing on screen to say so.
+ */
+export function listingRunTarget(automation: Pick<Automation, "trigger">): "project" | "ticket" {
+  return automationTriggerSchedule(automation.trigger) === null ? "ticket" : "project";
+}
+
+/* --------------------------------- Skipped occurrences (VC-130) ----------- */
+
+/**
+ * One row of the Run history: something that ran, or a due time that did not.
+ *
+ * They share the history because they are the same story told in order — what
+ * this project's Automations have been doing — and VC-112 requires a skip to be
+ * startable "from the Run history". They stay two KINDS because they are two
+ * records with two actions: a Run opens the Session it made, a skip offers to
+ * start the one it did not. Flattening them into one row shape would need a
+ * null Session id, which is how a skip quietly starts looking like a broken Run.
+ */
+export type AutomationHistoryEntry =
+  | { kind: "run"; at: number; run: AutomationRun }
+  | { kind: "skip"; at: number; skip: AutomationSkippedOccurrence };
+
+/**
+ * The project's Runs and Skipped occurrences in one list, newest first.
+ *
+ * A skip is filed at its DUE time rather than at the moment it was recorded,
+ * and that is the whole reason this is a function rather than two lists
+ * rendered one after the other: an app opened on Monday records Friday's miss
+ * on Monday, and a history that filed it under Monday would sit it above Runs
+ * that really did happen in between. What the reader wants to place is when the
+ * work was supposed to happen.
+ */
+export function automationHistory(
+  runs: readonly AutomationRun[],
+  skips: readonly AutomationSkippedOccurrence[],
+): AutomationHistoryEntry[] {
+  const entries: AutomationHistoryEntry[] = [
+    ...runs.map((run) => ({ kind: "run" as const, at: run.createdAt, run })),
+    ...skips.map((skip) => ({ kind: "skip" as const, at: skip.dueAt, skip })),
+  ];
+  return entries.toSorted((left, right) => right.at - left.at);
+}
+
+/**
+ * What a Skipped occurrence says it is — the sentence that keeps a skip from
+ * looking like a silence (VC-112).
+ *
+ * Every arm leads with the word "Skipped", including the one whose stored
+ * reason this build cannot read: the CAUSE may be unknown, but the fact that
+ * something did not run is exactly what must never be quiet.
+ */
+export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason">): string {
+  switch (skip.reason.kind) {
+    case "app-closed":
+      return "Skipped — Volli wasn’t running";
+    // Said as what was observed rather than as a cause: the app WAS running and
+    // still did not reach the due time — a sleeping machine, a busy one, a
+    // suspended process. Printing "Volli wasn't running" here would be a
+    // sentence the reader could disprove.
+    case "not-observed":
+      return "Skipped — Volli didn’t wake in time";
+    case "run-refused":
+      return `Skipped — ${skip.reason.error}`;
+    case "unknown":
+      return "Skipped — reason unreadable";
+  }
+}
+
+/**
+ * How many occurrences one skip row stands for, when it stands for more than
+ * one.
+ *
+ * Empty for the ordinary single miss, because "1 occurrence" is noise beside a
+ * row that already says "Skipped". A weekend of an hourly schedule is one row
+ * saying it stood for fifty — the honest number, and the reason "Run now"
+ * starts ONE Run rather than fifty (VC-112: never replayed).
+ */
+export function skipCountLabel(skip: Pick<AutomationSkippedOccurrence, "missedCount">): string {
+  return skip.missedCount > 1 ? `${skip.missedCount} occurrences` : "";
+}

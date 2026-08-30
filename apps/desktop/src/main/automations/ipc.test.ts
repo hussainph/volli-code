@@ -14,6 +14,7 @@ import type {
   AutomationColumnOrdersResult,
   AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
+  AutomationSkipsResult,
   Result,
 } from "../../ipc/contract";
 
@@ -42,6 +43,7 @@ import {
   listAutomationsForProject,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForProject,
   recordAutomationRun,
 } from "../db/automations-repo";
 import { insertProject } from "../db/projects-repo";
@@ -116,6 +118,7 @@ function setup(
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
+    skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
   });
@@ -146,6 +149,8 @@ describe("automation IPC", () => {
       "volli:automation-runs-for-project",
       "volli:automation-enablement",
       "volli:automation-set-enabled",
+      "volli:automation-skips-for-project",
+      "volli:automation-run-for-project",
     ]) {
       expect(await call<Result>(channel, {})).toEqual({
         ok: false,
@@ -292,7 +297,7 @@ describe("automation IPC", () => {
         ok: true,
         run: {
           id: "run-1",
-          automationId: input.automationId,
+          automationId: input.target.kind === "automation" ? input.target.automationId : null,
           automationName: "Review",
           ticketId: input.ticketId,
           sessionId: "session-1",
@@ -300,6 +305,22 @@ describe("automation IPC", () => {
           createdAt: 5_000,
         },
         projectId: "project-1",
+        receipt,
+      }),
+      runForProject: async (input) => ({
+        ok: true,
+        run: {
+          id: "run-project-1",
+          automationId: input.automationId,
+          automationName: "Review",
+          // A schedule Run names no Ticket: its Target is the Project, so the
+          // Session it opens is a Project Session.
+          ticketId: null,
+          sessionId: "session-project-1",
+          model: PIN,
+          createdAt: 5_000,
+        },
+        projectId: input.projectId,
         receipt,
       }),
       resumeDeliveryForSession: async () => undefined,
@@ -310,8 +331,9 @@ describe("automation IPC", () => {
 
     const result = await call<AutomationRunStartResult>("volli:automation-run", {
       commandId: randomUUID(),
-      automationId: "automation-1",
+      target: { kind: "automation", automationId: "automation-1" },
       ticketId: ticket.id,
+      modelOverride: null,
     });
     expect(result).toMatchObject({ ok: true, run: { sessionId: "session-1" }, receipt });
   });
@@ -972,6 +994,314 @@ describe("automation IPC", () => {
         enabled: true,
       }),
     ).toEqual({ ok: false, error: "Invalid automation enablement request" });
+  });
+
+  /* ------------------------------- schedules (VC-130) ------------------- */
+
+  const NIGHTLY = {
+    kind: "schedule" as const,
+    schedule: { preset: "daily" as const, hour: 21, minute: 30, timeZone: "Europe/London" },
+  };
+
+  it("stores a schedule Trigger whole, zone included, and lists it back", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    expect(created).toMatchObject({ ok: true, automation: { trigger: NIGHTLY } });
+    const listed = await call<AutomationsResult>("volli:automation-list", {
+      projectId: project.id,
+    });
+    if (!listed.ok) throw new Error("refused");
+    // The stored zone is part of the record, not a rendering choice: it comes
+    // back exactly as written, whatever this machine's own zone is.
+    expect(listed.automations[0]?.trigger).toEqual(NIGHTLY);
+  });
+
+  it("refuses a schedule this build cannot read, rather than repairing it", async () => {
+    const { project } = setup();
+    // A zone no ICU knows. Degrading to "Nothing else" is the only safe
+    // direction — inventing a zone would start unattended work at a time
+    // nobody chose.
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Broken",
+      instructions: "/sweep",
+      trigger: {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 30, timeZone: "Mars/Olympus" },
+      },
+      runtime: null,
+    });
+    expect(created).toMatchObject({ ok: true, automation: { trigger: NO_AUTOMATION_TRIGGER } });
+  });
+
+  it("refuses a schedule on a globally listed Automation, at the write", async () => {
+    setup();
+    // A schedule Run's Target is the Project, and a global record names none.
+    // The editor blocks Save on the same shared rule; this is main's own door.
+    expect(
+      await call<AutomationResult>("volli:automation-create", {
+        commandId: randomUUID(),
+        projectId: null,
+        name: "Everywhere",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("one project") });
+  });
+
+  it("refuses an update that would put a schedule on a globally listed record", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: null,
+      name: "Everywhere",
+      instructions: "/sweep",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    expect(
+      await call<AutomationResult>("volli:automation-update", {
+        commandId: randomUUID(),
+        automationId: created.automation.id,
+        name: "Everywhere",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("one project") });
+    // And the project-owned one is untouched by the rule.
+    const owned = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly",
+      instructions: "/sweep",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+    if (!owned.ok) throw new Error("refused");
+    expect(
+      await call<AutomationResult>("volli:automation-update", {
+        commandId: randomUUID(),
+        automationId: owned.automation.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      }),
+    ).toMatchObject({ ok: true, automation: { trigger: NIGHTLY } });
+  });
+
+  it("gives an update for a record that is gone the not-found refusal, not the Ownership one", async () => {
+    setup();
+    expect(
+      await call<AutomationResult>("volli:automation-update", {
+        commandId: randomUUID(),
+        automationId: randomUUID(),
+        name: "Gone",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      }),
+    ).toMatchObject({ ok: false, error: "Unknown automation" });
+  });
+
+  it("replays a create carrying a schedule, through the same normalizer", async () => {
+    // The widening is append-only, so the upgrade rule VC-128 established has
+    // to hold for the new arm too: a retry of the same command with the same
+    // schedule replays rather than conflicting.
+    const { project } = setup();
+    const commandId = randomUUID();
+    const request = {
+      commandId,
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    };
+    const created = await call<AutomationResult>("volli:automation-create", request);
+    const replayed = await call<AutomationResult>("volli:automation-create", request);
+    expect(replayed).toEqual(created);
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automations").get()).toEqual({ n: 1 });
+  });
+
+  it("lists a project's Skipped occurrences, and guards the project id", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+
+    // A schedule that has never missed anything is an empty list, not a
+    // refusal — and it is project-guarded like every other history read, so an
+    // unknown id says so rather than showing a convincing blank history.
+    expect(
+      await call<AutomationSkipsResult>("volli:automation-skips-for-project", {
+        projectId: project.id,
+      }),
+    ).toEqual({ ok: true, skips: [] });
+    expect(await call<Result>("volli:automation-skips-for-project", { projectId: "nope" })).toEqual(
+      {
+        ok: false,
+        error: "Unknown project",
+      },
+    );
+    expect(await call<Result>("volli:automation-skips-for-project", {})).toEqual({
+      ok: false,
+      error: "Invalid automation skips request",
+    });
+  });
+
+  it("records a Skipped occurrence through the ledger, and replays a retried one", async () => {
+    const { project, engine } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    const skip = {
+      automationId: created.automation.id,
+      automationName: created.automation.name,
+      projectId: project.id,
+      dueAt: 9_000,
+      missedCount: 3,
+      reason: { kind: "app-closed" as const },
+    };
+    // The command id the scheduler derives from the occurrence, so a crash
+    // between noticing the gap and committing it records ONE row.
+    const commandId = `${created.automation.id}:skip:9000`;
+    const recorded = await engine.recordSkip({ commandId, skip });
+    expect(recorded).toMatchObject({ ok: true, receipt: { status: "completed" } });
+    const replayed = await engine.recordSkip({ commandId, skip });
+    expect(replayed).toMatchObject({ ok: true, replayed: true });
+    if (!recorded.ok || !replayed.ok) throw new Error("refused");
+    expect(replayed.value).toEqual(recorded.value);
+    expect(
+      ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_skipped_occurrences").get(),
+    ).toEqual({ n: 1 });
+
+    const listed = await call<AutomationSkipsResult>("volli:automation-skips-for-project", {
+      projectId: project.id,
+    });
+    expect(listed).toMatchObject({
+      ok: true,
+      skips: [{ automationName: "Nightly sweep", missedCount: 3, reason: { kind: "app-closed" } }],
+    });
+    // And the event is in the immutable history beside every other write.
+    expect(
+      ctx.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM automation_events WHERE kind = 'automation.skip.recorded'",
+        )
+        .get(),
+    ).toEqual({ n: 1 });
+  });
+
+  it("refuses a skip naming a record that is gone", async () => {
+    const { project, engine } = setup();
+    expect(
+      await engine.recordSkip({
+        commandId: randomUUID(),
+        skip: {
+          automationId: randomUUID(),
+          automationName: "Ghost",
+          projectId: project.id,
+          dueAt: 1,
+          missedCount: 1,
+          reason: { kind: "app-closed" },
+        },
+      }),
+    ).toMatchObject({ ok: false, error: "Unknown automation", receipt: { status: "rejected" } });
+  });
+
+  it("runs an Automation against the Project, and guards that door's shape", async () => {
+    const receipt = {
+      id: randomUUID(),
+      commandId: randomUUID(),
+      status: "completed" as const,
+      recordedAt: 5_000,
+    };
+    const runner: AutomationRunner = {
+      run: async () => ({ ok: false, code: "RUN_FAILED", error: "not this door" }),
+      runForProject: async (input) => ({
+        ok: true,
+        run: {
+          id: "run-project-1",
+          automationId: input.automationId,
+          automationName: "Nightly sweep",
+          // No Ticket: a schedule Run's Target is the Project, so the Session
+          // it opens is a Project Session.
+          ticketId: null,
+          sessionId: "session-project-1",
+          model: PIN,
+          createdAt: 5_000,
+        },
+        projectId: input.projectId,
+        receipt,
+      }),
+      resumeDeliveryForSession: async () => undefined,
+      recover: async () => undefined,
+      settled: async () => undefined,
+    };
+    const { project } = setup({ runner });
+
+    expect(
+      await call<AutomationRunStartResult>("volli:automation-run-for-project", {
+        commandId: randomUUID(),
+        automationId: "automation-1",
+        projectId: project.id,
+      }),
+    ).toMatchObject({ ok: true, run: { ticketId: null, sessionId: "session-project-1" } });
+
+    // The Target is named rather than implied, so a request that forgot it is
+    // refused at the door instead of quietly becoming a Project Session.
+    expect(
+      await call<Result>("volli:automation-run-for-project", {
+        commandId: randomUUID(),
+        automationId: "automation-1",
+      }),
+    ).toEqual({ ok: false, error: "Invalid automation run request" });
+    expect(
+      await call<Result>("volli:automation-run-for-project", {
+        commandId: "c1",
+        automationId: "automation-1",
+        projectId: project.id,
+      }),
+    ).toEqual({ ok: false, error: "Invalid automation run request" });
+  });
+
+  it("says so when the Session runtime is down, on the Project door too", async () => {
+    const { project } = setup();
+    expect(
+      await call<AutomationRunStartResult>("volli:automation-run-for-project", {
+        commandId: randomUUID(),
+        automationId: "automation-1",
+        projectId: project.id,
+      }),
+    ).toEqual({
+      ok: false,
+      code: "RUN_FAILED",
+      error: "The Session runtime is not available this launch.",
+    });
   });
 });
 

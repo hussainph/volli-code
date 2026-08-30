@@ -7,7 +7,12 @@ import {
   automationDraftProblem,
   automationOwnership,
   automationPinProblem,
+  automationRunRequestIdentity,
+  automationRunRetryKey,
+  automationRunTargetId,
+  automationScheduleProblem,
   automationTriggerColumns,
+  automationTriggerSchedule,
   automationTriggersColumn,
   columnRankAfterLaneDrop,
   effectiveArmedAutomationFor,
@@ -17,8 +22,13 @@ import {
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
+  parseAutomationSkipReason,
   parseAutomationTrigger,
+  sameAutomationRunRequestIdentity,
+  UNBOUND_RUN_LABEL,
+  unboundRunProblem,
   type Automation,
+  type AutomationTrigger,
   type ColumnArming,
 } from "./automation";
 
@@ -159,14 +169,127 @@ describe("parseAutomationTrigger", () => {
       "columns",
       [],
       {},
-      // A Trigger this build has no arm for — a schedule, once VC-130 ships and
-      // an older build reads a newer record.
-      { kind: "schedule" },
+      // A Trigger kind this build has no arm for at all.
+      { kind: "webhook" },
       // The right kind carrying the wrong shape.
       { kind: "columns" },
       { kind: "columns", columns: "doing" },
+      { kind: "schedule" },
+      { kind: "schedule", schedule: { preset: "daily", hour: 9, minute: 0 } },
+      // A zone this build's ICU cannot resolve. Repairing it would start
+      // unattended work at a time nobody chose.
+      {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 9, minute: 0, timeZone: "Mars/Olympus" },
+      },
     ]) {
       expect(parseAutomationTrigger(raw)).toEqual(NO_AUTOMATION_TRIGGER);
+    }
+  });
+
+  it("reads a schedule Trigger and keeps its stored zone (VC-130)", () => {
+    expect(
+      parseAutomationTrigger({
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      }),
+    ).toEqual({
+      kind: "schedule",
+      schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+    });
+  });
+});
+
+describe("automationTriggerSchedule", () => {
+  const schedule = {
+    preset: "weekly",
+    weekday: "monday",
+    hour: 8,
+    minute: 0,
+    timeZone: "UTC",
+  } as const;
+
+  it("answers the schedule a Trigger carries, and null for every other arm", () => {
+    expect(automationTriggerSchedule({ kind: "schedule", schedule })).toEqual(schedule);
+    expect(automationTriggerSchedule(NO_AUTOMATION_TRIGGER)).toBeNull();
+    expect(automationTriggerSchedule({ kind: "columns", columns: ["doing"] })).toBeNull();
+  });
+
+  it("leaves a schedule Trigger out of every column question", () => {
+    // The two arms are not interchangeable: a schedule names the Project, so
+    // it is offered in no column and can arm none.
+    const scheduled = automation({ trigger: { kind: "schedule", schedule } });
+    expect(automationTriggerColumns(scheduled.trigger)).toEqual([]);
+    expect(automationTriggersColumn(scheduled, "doing")).toBe(false);
+    expect(offeredAutomationsForColumn([scheduled], "doing")).toEqual([]);
+    expect(armedAutomationFor([scheduled], [arming()], "doing")).toBeNull();
+  });
+});
+
+describe("automationScheduleProblem", () => {
+  const scheduled: AutomationTrigger = {
+    kind: "schedule",
+    schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+  };
+
+  it("accepts a schedule on a project-owned Automation", () => {
+    expect(automationScheduleProblem({ projectId: "p1", trigger: scheduled })).toBeNull();
+  });
+
+  it("refuses a schedule on a globally listed Automation, and names the way out", () => {
+    // A schedule Run's Target is the Project, and a global record belongs to
+    // none: firing in every project would be the launch backlog VC-130 forbids.
+    const problem = automationScheduleProblem({ projectId: null, trigger: scheduled });
+    expect(problem).toMatch(/one project/);
+    expect(problem).toMatch(/Duplicate/);
+  });
+
+  it("has nothing to say about the other Triggers, at either Ownership", () => {
+    expect(
+      automationScheduleProblem({ projectId: null, trigger: NO_AUTOMATION_TRIGGER }),
+    ).toBeNull();
+    expect(
+      automationScheduleProblem({
+        projectId: null,
+        trigger: { kind: "columns", columns: ["doing"] },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("parseAutomationSkipReason", () => {
+  it("reads the three reasons a schedule actually records", () => {
+    expect(parseAutomationSkipReason({ kind: "app-closed" })).toEqual({ kind: "app-closed" });
+    // The app WAS running and still did not reach the due time — a sleeping
+    // machine, a suspended process. Its own reason, because recording it as
+    // "app-closed" would be recording something false.
+    expect(parseAutomationSkipReason({ kind: "not-observed" })).toEqual({ kind: "not-observed" });
+    expect(
+      parseAutomationSkipReason({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" }),
+    ).toEqual({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" });
+  });
+
+  it("keeps a refusal code this build no longer knows, verbatim", () => {
+    // Historical evidence, like a Run's recorded reasoning level: printed as
+    // recorded rather than rewritten into today's vocabulary.
+    expect(
+      parseAutomationSkipReason({ kind: "run-refused", code: "QUOTA_EXHAUSTED", error: "Later" }),
+    ).toEqual({ kind: "run-refused", code: "QUOTA_EXHAUSTED", error: "Later" });
+  });
+
+  it("still reads as a skip when the reason itself is unreadable", () => {
+    // Never invented as "app-closed": the cause is unknown, but a skip that
+    // degraded into a silence is the one outcome VC-112 forbids.
+    for (const raw of [
+      null,
+      "app-closed",
+      {},
+      { kind: "nope" },
+      { kind: "run-refused" },
+      { kind: "run-refused", code: 7, error: "x" },
+      { kind: "run-refused", code: "X", error: null },
+    ]) {
+      expect(parseAutomationSkipReason(raw)).toEqual({ kind: "unknown" });
     }
   });
 });
@@ -389,5 +512,160 @@ describe("isColumnArrival", () => {
 describe("ARMED_RUN_DELAY_MS", () => {
   it("is the 3500 ms VC-112 ruled, stated once for every surface", () => {
     expect(ARMED_RUN_DELAY_MS).toBe(3500);
+  });
+});
+
+describe("automationRunTargetId", () => {
+  it("names the Automation a bound Run runs", () => {
+    expect(automationRunTargetId({ kind: "automation", automationId: "a1" })).toBe("a1");
+  });
+
+  it("names none for an Unbound Run, which is what its own record stores", () => {
+    expect(automationRunTargetId({ kind: "unbound", instructions: "/sweep" })).toBeNull();
+  });
+});
+
+describe("unboundRunProblem", () => {
+  it("accepts Instructions with something in them", () => {
+    expect(unboundRunProblem("/sweep the diff")).toBeNull();
+  });
+
+  it("refuses blank Instructions, as the saved record's own rule does", () => {
+    expect(unboundRunProblem("")).toContain("Write Instructions");
+    expect(unboundRunProblem("   \n\t ")).toContain("Write Instructions");
+  });
+});
+
+describe("UNBOUND_RUN_LABEL", () => {
+  it("is the one name an Unbound Run wears on every surface", () => {
+    expect(UNBOUND_RUN_LABEL).toBe("Run once");
+  });
+});
+
+describe("one Run request's identity", () => {
+  const OPUS = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" } as const;
+  const GPT = { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" } as const;
+
+  it("reads a bound Run as its record plus this invocation's override", () => {
+    expect(
+      automationRunRequestIdentity({
+        target: { kind: "automation", automationId: "a1" },
+        modelOverride: OPUS,
+      }),
+    ).toEqual({ instructions: null, modelOverride: OPUS });
+  });
+
+  it("reads an Unbound Run as the words it carries", () => {
+    expect(
+      automationRunRequestIdentity({
+        target: { kind: "unbound", instructions: "/sweep" },
+        modelOverride: null,
+      }),
+    ).toEqual({ instructions: "/sweep", modelOverride: null });
+  });
+
+  it("is the same intent when both halves match", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: "/sweep", modelOverride: OPUS },
+        { instructions: "/sweep", modelOverride: { ...OPUS } },
+      ),
+    ).toBe(true);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: null },
+        { instructions: null, modelOverride: null },
+      ),
+    ).toBe(true);
+  });
+
+  it("is a different intent when the Instructions changed", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: "/sweep", modelOverride: null },
+        { instructions: "/sweep twice", modelOverride: null },
+      ),
+    ).toBe(false);
+  });
+
+  it("is a different intent when the override changed, in either direction", () => {
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: GPT },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: { ...OPUS, reasoningLevel: "low" } },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: null },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: null },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { ...OPUS, modelId: "claude-sonnet" } },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { ...OPUS, providerId: "openai" } },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+  });
+
+  it("files a retry under the whole intent, never under the Ticket alone", () => {
+    const bound = { kind: "automation", automationId: "a1" } as const;
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null })).toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null }),
+    );
+    // A different model is a second Run, so it must not find the first one's id.
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null }),
+    );
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: GPT }),
+    );
+    // Edited Instructions are a second Run for the same reason.
+    expect(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    ).not.toBe(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep twice" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    );
+    // And the same words on ANOTHER Ticket are another Run again.
+    expect(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    ).not.toBe(
+      automationRunRetryKey({
+        target: { kind: "unbound", instructions: "/sweep" },
+        ticketId: "t2",
+        modelOverride: null,
+      }),
+    );
   });
 });

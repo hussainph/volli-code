@@ -3,6 +3,7 @@ import { isAutomationRuntimePin } from "@volli/shared";
 import type {
   Automation,
   AutomationRun,
+  AutomationSkippedOccurrence,
   ColumnArming,
   ColumnAutomationOrder,
   PromptResource,
@@ -13,6 +14,7 @@ import {
   clearColumnArming,
   getAutomation,
   getAutomationRun,
+  insertSkippedOccurrence,
   listColumnArmings,
   listColumnOrders,
   setColumnArming,
@@ -280,6 +282,15 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
   ): readonly ColumnAutomationOrder[] {
     setColumnOrder(this.db, input, recordedAt);
     return listColumnOrders(this.db, input.projectId);
+  }
+
+  /**
+   * The Skipped-occurrence projection (VC-130). Written here, inside the same
+   * transaction as the event that decided it, so a due time that passed and
+   * the history of it having passed commit together or neither does.
+   */
+  insertSkippedOccurrence(skip: AutomationSkippedOccurrence): void {
+    insertSkippedOccurrence(this.db, skip);
   }
 
   getRun(runId: string): AutomationRun | null {

@@ -1,13 +1,16 @@
 import {
   automationDraftProblem,
   automationPinProblem,
+  automationScheduleProblem,
   automationTriggersColumn,
+  NO_AUTOMATION_TRIGGER,
   parseAutomationTrigger,
 } from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationSkippedOccurrence,
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
@@ -25,8 +28,20 @@ export interface AutomationServiceDeps {
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
   runsForProject(projectId: string): AutomationRun[];
+  skipsForProject(projectId: string): AutomationSkippedOccurrence[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
+  /**
+   * Something about the set of Automations this host may fire on its own
+   * changed — a record written or deleted, or a switch flipped (VC-130).
+   *
+   * Separate from {@link AutomationServiceDeps.onMutation}, which tells OTHER
+   * WINDOWS that the shared record moved. This one tells THIS HOST's timer to
+   * re-read, and the two are deliberately different fan-outs: the switch is
+   * machine-local and broadcasts nothing, yet it is exactly what decides
+   * whether a schedule may fire here.
+   */
+  onAutomationsChanged?(): void;
 }
 
 export type AutomationReadOutcome =
@@ -65,6 +80,11 @@ export type AutomationRunHistoryOutcome =
   | { ok: true; runs: AutomationRun[] }
   | { ok: false; error: string };
 
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipHistoryOutcome =
+  | { ok: true; skips: AutomationSkippedOccurrence[] }
+  | { ok: false; error: string };
+
 /** The whole machine-local set after the write, plus the receipt that changed it. */
 export type AutomationEnablementOutcome =
   | { ok: true; enabledAutomationIds: string[]; receipt: AutomationCommandReceipt }
@@ -96,10 +116,19 @@ export function createAutomationService(deps: AutomationServiceDeps) {
   async function writeProblem(input: {
     name: string;
     instructions: string;
+    /** The Ownership this write lands under — a create's choice, an update's record. */
+    projectId: string | null;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<string | null> {
     const draft = automationDraftProblem(input);
     if (draft !== null) return draft;
+    // The Ownership/Trigger rule, checked here as well as in the editor: a
+    // schedule Run's Target is the Project, so a record listed in every project
+    // has no Project to be the Target of (VC-112, VC-130). One shared function,
+    // so the form's blocked Save and this refusal are one policy.
+    const scheduled = automationScheduleProblem(input);
+    if (scheduled !== null) return scheduled;
     if (input.runtime === null) return null;
     if (deps.inspectModelAccess === undefined) {
       return "Model Access is unavailable, so a pinned model cannot be validated. Save without a pin, or retry after relaunch.";
@@ -234,6 +263,19 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     },
 
     /**
+     * This project's Skipped occurrences (VC-130) — the due times that passed
+     * without a Run, read beside {@link runsForProject} and project-guarded for
+     * the same reason. A separate read rather than one merged list, because
+     * they are different records with different actions: a Run opens its
+     * Session, a skip offers "Run now". The page interleaves them by time; the
+     * transport does not pretend they are one kind.
+     */
+    skipsForProject(projectId: string): AutomationSkipHistoryOutcome {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, skips: deps.skipsForProject(projectId) };
+    },
+
+    /**
      * Which Automations are switched on ON THIS MACHINE (VC-127).
      *
      * Absent means off: VC-112 rules that a machine fires nothing until
@@ -258,6 +300,9 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     }): Promise<AutomationEnablementOutcome> {
       const outcome = await deps.engine.setEnabled(input);
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      // The switch is what decides whether a schedule may fire here, so the
+      // timer hears about it even though no other window does.
+      if (!outcome.replayed) deps.onAutomationsChanged?.();
       return { ok: true, enabledAutomationIds: outcome.value, receipt: outcome.receipt };
     },
 
@@ -289,6 +334,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
         deps.onMutation?.(
           outcome.value.projectId === null ? {} : { projectId: outcome.value.projectId },
         );
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, automation: outcome.value, receipt: outcome.receipt };
     },
@@ -304,7 +350,18 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       // Same replay rule as create: validation guards a new command, never
       // hides an already-accepted receipt behind changed Model Access.
       if (!(await deps.engine.hasCommand(input.commandId))) {
-        const problem = await writeProblem(input);
+        // Ownership is identity on update, so a schedule is judged against the
+        // RECORD's own scope rather than anything the caller sent. A record
+        // that is GONE owes the engine's "Unknown automation" instead —
+        // answering "can't be listed in all projects" about a record listed
+        // nowhere would be the more confusing lie — so its Trigger is not
+        // judged here at all.
+        const prior = deps.findAutomation(input.automationId);
+        const problem = await writeProblem({
+          ...input,
+          projectId: prior?.projectId ?? null,
+          trigger: prior === undefined ? NO_AUTOMATION_TRIGGER : input.trigger,
+        });
         if (problem !== null) return { ok: false, error: problem };
       }
       const outcome = await deps.engine.update({
@@ -317,6 +374,8 @@ export function createAutomationService(deps: AutomationServiceDeps) {
         deps.onMutation?.(
           outcome.value.projectId === null ? {} : { projectId: outcome.value.projectId },
         );
+        // An edit can add a schedule, retime one, or take one away.
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, automation: outcome.value, receipt: outcome.receipt };
     },
@@ -338,6 +397,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
               ? {}
               : { projectId: existing.projectId },
         );
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, receipt: outcome.receipt };
     },

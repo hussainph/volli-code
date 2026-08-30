@@ -45,12 +45,22 @@ export const REQUIRED_NODE_RANGE = "^24.13.0";
  * Matched as substrings against the message: the first two are Node's own
  * wording for a version-mismatched addon, the rest are how a build that never
  * happened (an install under a Node that could not compile it) surfaces.
+ *
+ * `better_sqlite3.node` still catches the missing-binary case under v13, which
+ * loads a bundled N-API prebuild instead of building one (VC-213): when that
+ * prebuild is absent `lib/binding.js` falls back to the node-gyp location and
+ * throws naming `build/Release/better_sqlite3.node`, exactly as v12 did.
+ * Verified by hiding the prebuild and reading the message.
+ *
+ * "Could not locate the bindings file" left with the v13 bump instead. It was
+ * the `bindings` package's wording, and `bindings` was better-sqlite3's
+ * dependency — v13 depends on `node-addon-api` alone, so no module in this tree
+ * can produce that sentence any more.
  */
 const NATIVE_MODULE_SIGNATURES = [
   "NODE_MODULE_VERSION",
   "was compiled against a different Node.js version",
   "ERR_DLOPEN_FAILED",
-  "Could not locate the bindings file",
   "better_sqlite3.node",
 ] as const;
 

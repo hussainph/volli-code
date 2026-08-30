@@ -63,12 +63,14 @@ import type {
   AutomationEnablementResult,
   AutomationIdInput,
   AutomationResult,
+  AutomationRunForProjectInput,
   AutomationRunInput,
   AutomationRunsResult,
   AutomationRunStartResult,
   AutomationsResult,
   AutomationSetEnabledInput,
   AutomationSetEnabledResult,
+  AutomationSkipsResult,
   AutomationUpdateInput,
   CliDoctorInput,
   CliDoctorResult,
@@ -772,6 +774,16 @@ const api = {
     /** Every Run on this project's Tickets, newest first — the page's history. */
     runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-project", input),
+    /**
+     * Every due time this project's schedules missed (VC-130). Read beside the
+     * Runs rather than merged into them: a skip is a different record with a
+     * different action — it offers to start the Run that did not happen.
+     */
+    skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-project", input),
+    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
+      invoke("volli:automation-run-for-project", input),
     /** Which Automations are switched on on this machine (VC-127). */
     enablement: (): Promise<AutomationEnablementResult> => invoke("volli:automation-enablement"),
     /** Switches one on or off here; answers with the whole new enabled set. */

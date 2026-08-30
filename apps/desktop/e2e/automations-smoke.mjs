@@ -79,9 +79,9 @@ try {
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
-      // Every write carries a Trigger, and "Nothing else" is a VALUE rather
-      // than an absent field (VC-128, docs/BOUNDARIES.md rule 3) — the door
-      // refuses a draft that leaves it off.
+      // Required since VC-128, and carried as the union's explicit member
+      // rather than left off: an optional field says "Nothing else" only on a
+      // transport that survives `undefined` (docs/BOUNDARIES.md rule 3).
       trigger: { kind: "none" },
       runtime: null,
     });
@@ -182,8 +182,11 @@ try {
         async ({ automationId, ticketId }) => {
           const run = await window.api.automations.run({
             commandId: crypto.randomUUID(),
-            automationId,
+            // A Run names its target since VC-129: a saved Automation here, or
+            // an Unbound Run's own Instructions.
+            target: { kind: "automation", automationId },
             ticketId,
+            modelOverride: null,
           });
           const runs = await window.api.automations.runsForTicket({ ticketId });
           const sessions = await window.api.sessions.listForTicket({ ticketId });

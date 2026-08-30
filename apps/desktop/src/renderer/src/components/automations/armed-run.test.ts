@@ -191,7 +191,13 @@ describe("the delay", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({ automationId: "a1", ticketId: "t1" }),
+      expect.objectContaining({
+        target: { kind: "automation", automationId: "a1" },
+        ticketId: "t1",
+        // Never on the drag path (VC-112) — an armed column's Run takes the
+        // Runtime its record resolves, and nothing overrides it from a drop.
+        modelOverride: null,
+      }),
     );
     expect(useArmedRunStore.getState().pending).toEqual({});
   });
@@ -380,7 +386,9 @@ describe("what the ⌥ picker named", () => {
     expect(run).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ automationId: "a2" }));
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({ target: { kind: "automation", automationId: "a2" } }),
+    );
   });
 
   it("is cancelled by the same one control", async () => {

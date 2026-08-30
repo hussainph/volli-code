@@ -41,6 +41,7 @@ import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 
 import {
@@ -48,20 +49,29 @@ import {
   displayTicketId,
   type Automation,
   type AutomationRun,
+  type AutomationSkippedOccurrence,
   type Ticket,
 } from "@volli/shared";
 
 import {
+  automationHistory,
   groupByOwnership,
+  listingRunTarget,
   runAutomationLabel,
   runModelLabel,
   runModelTitle,
   runtimeLabel,
+  skipCountLabel,
+  skipReasonLabel,
   triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorDialog } from "./automation-editor";
 import { AutomationLanes } from "./automation-lanes";
-import { openRunSession, runAutomationFromListing } from "./run-automation";
+import {
+  openRunSession,
+  runAutomationFromListing,
+  runAutomationForProject,
+} from "./run-automation";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import {
   AlertDialog,
@@ -95,6 +105,7 @@ import { useBoardStore } from "@renderer/stores/board";
 
 const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
+const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
 const NO_TICKETS: readonly Ticket[] = [];
 
 export function AutomationsPage() {
@@ -132,12 +143,14 @@ function AutomationsSurface({
 }) {
   const automations = useAutomationsStore((state) => state.byProject[projectId] ?? NO_AUTOMATIONS);
   const runs = useAutomationsStore((state) => state.runsByProject[projectId] ?? NO_RUNS);
+  const skips = useAutomationsStore((state) => state.skipsByProject[projectId] ?? NO_SKIPS);
   const openEditor = useAutomationsStore((state) => state.openEditor);
   const closeEditor = useAutomationsStore((state) => state.closeEditor);
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshRuns = useAutomationsStore((state) => state.refreshRuns);
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
   const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
+  const refreshSkips = useAutomationsStore((state) => state.refreshSkips);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
 
   // Read on arrival rather than subscribed: the record moves only through this
@@ -148,6 +161,9 @@ function AutomationsSurface({
   React.useEffect(() => {
     void refresh(projectId);
     void refreshRuns(projectId);
+    // The scheduler broadcasts a planning change when it records a skip, so a
+    // due time missed while this page is open lands here without a reload.
+    void refreshSkips(projectId);
     // The lanes compose the same four machine-local reads the drag does, so a
     // digit printed here is the digit that works mid-drag — which is only true
     // if the arming and the order arrive with the list.
@@ -159,6 +175,7 @@ function AutomationsSurface({
     planningVersion,
     refresh,
     refreshRuns,
+    refreshSkips,
     refreshArming,
     refreshOrder,
     refreshEnablement,
@@ -210,7 +227,7 @@ function AutomationsSurface({
             />
           </>
         )}
-        <RunHistory projectId={projectId} ticketPrefix={ticketPrefix} runs={runs} />
+        <RunHistory projectId={projectId} ticketPrefix={ticketPrefix} runs={runs} skips={skips} />
       </div>
       {/* The one authoring form, mounted by the one authoring surface. */}
       <AutomationEditorDialog />
@@ -333,6 +350,18 @@ function AutomationRowItem({
               aria-label={`Run ${automation.name}`}
               onClick={(event) => {
                 event.stopPropagation();
+                // The Trigger decides the Target (VC-112). A schedule names the
+                // Project, so its Play opens the Project Session the schedule
+                // itself would open rather than asking which Ticket — the
+                // by-hand Run and the automatic one are the same work.
+                if (listingRunTarget(automation) === "project") {
+                  void runAutomationForProject({
+                    automationId: automation.id,
+                    automationName: automation.name,
+                    projectId,
+                  });
+                  return;
+                }
                 setChoosingTicket(true);
               }}
             >
@@ -496,6 +525,10 @@ function RunOnTicketDialog({
                         automationName: automation.name,
                         ticketId: ticket.id,
                         ticketDisplayId,
+                        // The page runs the record as saved. Its per-invocation
+                        // override lives where a person picks one Ticket and
+                        // stops — the rail and the ticket context menu.
+                        modelOverride: null,
                       });
                     }}
                   />
@@ -513,27 +546,104 @@ function RunOnTicketDialog({
  * Run history, newest first. Each Run names its Automation and the model and
  * reasoning it RESOLVED at launch, and is a door back to its Session — which
  * is the whole reason a Run is a record and not a log line.
+ *
+ * Skipped occurrences are interleaved here rather than filed in a lane of
+ * their own, because VC-112 requires exactly that: a skip "offers Run now from
+ * the Run history", and a skip and a silence must never look the same. A
+ * schedule that fired on Monday and did not on Tuesday tells one story, and
+ * two lists would make the reader assemble it.
  */
 function RunHistory({
   projectId,
   ticketPrefix,
   runs,
+  skips,
 }: {
   projectId: string;
   ticketPrefix: string;
   runs: readonly AutomationRun[];
+  skips: readonly AutomationSkippedOccurrence[];
 }) {
+  const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
   return (
     <section className="flex flex-col gap-1">
       <SectionHeading className="h-6 leading-6">Runs</SectionHeading>
-      {runs.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="py-2 text-sm text-muted-foreground">Nothing has run in this project yet.</p>
       ) : (
-        runs.map((run) => (
-          <RunRow key={run.id} projectId={projectId} ticketPrefix={ticketPrefix} run={run} />
-        ))
+        entries.map((entry) =>
+          entry.kind === "run" ? (
+            <RunRow
+              key={entry.run.id}
+              projectId={projectId}
+              ticketPrefix={ticketPrefix}
+              run={entry.run}
+            />
+          ) : (
+            <SkippedRow key={entry.skip.id} skip={entry.skip} />
+          ),
+        )
       )}
     </section>
+  );
+}
+
+/**
+ * One Skipped occurrence: a due time that passed without a Run, and the
+ * control that starts it now.
+ *
+ * It wears a different mark from a Run and says what went wrong in its own
+ * line, so it can never be mistaken for work that happened. "Run now" starts
+ * ONE Run at the Target the schedule would have used — the Project — whatever
+ * number of occurrences this row stands for: a missed occurrence is never
+ * replayed (VC-112), and this is the by-hand recovery that ruling promises
+ * instead.
+ */
+function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
+  const count = skipCountLabel(skip);
+  return (
+    <ListRow
+      density="two-line"
+      // Inert as a row: a skip opened no Session, so there is nowhere for the
+      // row itself to go. Its one act is the control, which is why the control
+      // is on it rather than a click nothing would answer.
+      onActivate={null}
+      leading={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}
+      primary={skip.automationName}
+      secondary={
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{skipReasonLabel(skip)}</span>
+          {count === "" ? null : (
+            <>
+              <span aria-hidden>·</span>
+              <span className="shrink-0">{count}</span>
+            </>
+          )}
+        </span>
+      }
+      actions={
+        <Button
+          size="sm"
+          variant="secondary"
+          aria-label={`Run ${skip.automationName} now`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void runAutomationForProject({
+              automationId: skip.automationId,
+              automationName: skip.automationName,
+              projectId: skip.projectId,
+            });
+          }}
+        >
+          Run now
+        </Button>
+      }
+      trailing={
+        <span className="shrink-0 text-label text-muted-foreground">
+          {relativeTime(skip.dueAt)}
+        </span>
+      }
+    />
   );
 }
 

@@ -33,6 +33,7 @@ import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import type { SkillReference, Ticket } from "@volli/shared";
 
+import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketUsageRailBlock } from "@renderer/components/usage/usage-rail";
@@ -176,6 +177,12 @@ export function TicketRail({
                 absent card (cost turned off, or nothing metered on this Ticket)
                 leaves no gap behind it rather than sixteen pixels of dead rail. */}
             <TicketUsageRailBlock ticketId={ticket.id} />
+            {/* What can be STARTED on this Ticket, between what it cost and who
+                is working on it (VC-129). Above the Sessions roster because it
+                is an act and the roster is a record of acts — and because the
+                Runs it lists are the doors into the Sessions listed under it.
+                The rail never authors: this block runs and links to the page. */}
+            <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
             <TicketSessionsPanel
               ticketId={ticket.id}
               creating={creating}

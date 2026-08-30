@@ -13,10 +13,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, Ticket } from "@volli/shared";
+import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import { openRunSession, runAutomationFromListing } from "./run-automation";
+import {
+  openRunSession,
+  runAutomationFromListing,
+  runAutomationForProject,
+} from "./run-automation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
@@ -28,6 +32,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
   runAutomationFromListing: vi.fn(),
+  runAutomationForProject: vi.fn(),
 }));
 
 let root: Root | null = null;
@@ -93,9 +98,24 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
   };
 }
 
+function skip(overrides: Partial<AutomationSkippedOccurrence> = {}): AutomationSkippedOccurrence {
+  return {
+    id: "skip-1",
+    automationId: "automation-1",
+    automationName: "Nightly sweep",
+    projectId: "p1",
+    dueAt: 5,
+    missedCount: 1,
+    reason: { kind: "app-closed" },
+    recordedAt: 40,
+    ...overrides,
+  };
+}
+
 const doors = {
   list: vi.fn(),
   runsForProject: vi.fn(),
+  skipsForProject: vi.fn(),
   enablement: vi.fn(),
   setEnabled: vi.fn(),
   create: vi.fn(),
@@ -109,6 +129,7 @@ const doors = {
 async function mount(seed: {
   automations?: Automation[];
   runs?: AutomationRun[];
+  skips?: AutomationSkippedOccurrence[];
   enabled?: string[];
   armings?: { projectId: string; status: string; automationId: string; armedAt: number }[];
   orders?: {
@@ -120,6 +141,7 @@ async function mount(seed: {
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
+  doors.skipsForProject.mockResolvedValue({ ok: true, skips: seed.skips ?? [] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
   doors.armings.mockResolvedValue({ ok: true, armings: seed.armings ?? [] });
   doors.columnOrders.mockResolvedValue({ ok: true, orders: seed.orders ?? [] });
@@ -181,6 +203,7 @@ beforeEach(() => {
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationFromListing).mockReset();
+  vi.mocked(runAutomationForProject).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
@@ -188,6 +211,7 @@ beforeEach(() => {
     armingByProject: {},
     orderByProject: {},
     runsByProject: {},
+    skipsByProject: {},
     enabledIds: [],
     editor: null,
   });
@@ -333,6 +357,7 @@ describe("running by hand", () => {
       automationName: "Review sweep",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
+      modelOverride: null,
     });
   });
 
@@ -524,5 +549,106 @@ describe("the lane view", () => {
     expect(
       document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
     ).toBe("2");
+  });
+});
+
+describe("schedules (VC-130)", () => {
+  const NIGHTLY = {
+    kind: "schedule" as const,
+    schedule: { preset: "daily" as const, hour: 21, minute: 0, timeZone: "Europe/London" },
+  };
+
+  it("runs a scheduled record at the PROJECT, without asking for a Ticket", async () => {
+    // VC-112: the Trigger decides the Target, and a schedule names the Project.
+    // Pressing Play here therefore opens the Project Session the schedule
+    // itself would open — the by-hand Run and the automatic one are the same
+    // work, and a Ticket dialog would quietly make them two.
+    await mount({
+      automations: [automation({ name: "Nightly sweep", trigger: NIGHTLY })],
+    });
+
+    await act(async () => {
+      button("Run Nightly sweep").click();
+    });
+
+    expect(document.body.textContent).not.toContain("Run “Nightly sweep” on");
+    expect(runAutomationFromListing).not.toHaveBeenCalled();
+    expect(runAutomationForProject).toHaveBeenCalledTimes(1);
+    expect(runAutomationForProject).toHaveBeenCalledWith({
+      automationId: "automation-1",
+      automationName: "Nightly sweep",
+      projectId: "p1",
+    });
+  });
+
+  it("still asks which Ticket for a record whose Trigger is not a schedule", async () => {
+    // The other side of the same rule, so the branch cannot rot: only a
+    // schedule takes the Project door.
+    await mount({ automations: [automation()] });
+
+    await act(async () => {
+      button("Run Review sweep").click();
+    });
+
+    expect(document.body.textContent).toContain("Run “Review sweep” on");
+    expect(runAutomationForProject).not.toHaveBeenCalled();
+  });
+
+  it("says a skip the app was open for did not claim the app was closed", async () => {
+    // A sleeping machine is not a closed app, and the history must not say it
+    // was: the reason recorded is what was observed.
+    await mount({ skips: [skip({ reason: { kind: "not-observed" } })] });
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Volli didn’t wake in time");
+    expect(text()).not.toContain("Volli wasn’t running");
+  });
+
+  it("prints a scheduled row's whole sentence, zone included", async () => {
+    await mount({ automations: [automation({ trigger: NIGHTLY })] });
+    // The stored zone is shown ALWAYS (VC-112) — a row that hid it would leave
+    // a reader unable to tell whose 21:00 this is.
+    expect(text()).toContain("Every day at 21:00 Europe/London");
+    expect(text()).not.toContain("Only when I run it");
+  });
+
+  it("shows a Skipped occurrence in the Run history, never as a silence", async () => {
+    await mount({
+      automations: [automation({ trigger: NIGHTLY })],
+      runs: [run({ createdAt: 1 })],
+      skips: [skip({ dueAt: 5, missedCount: 3 })],
+    });
+
+    expect(text()).toContain("Nightly sweep");
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Volli wasn’t running");
+    // One row per gap, saying how wide the gap was.
+    expect(text()).toContain("3 occurrences");
+  });
+
+  it("offers Run now on a skip, and starts ONE Run at the Project", async () => {
+    await mount({ skips: [skip({ missedCount: 50 })] });
+
+    await act(async () => {
+      button("Run Nightly sweep now").click();
+    });
+
+    // Fifty missed occurrences, one Run: a missed occurrence is never replayed
+    // (VC-112), and this is the by-hand recovery offered instead.
+    expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledWith({
+      automationId: "automation-1",
+      automationName: "Nightly sweep",
+      projectId: "p1",
+    });
+  });
+
+  it("says a refused Run was refused, and quotes the reason", async () => {
+    await mount({
+      skips: [
+        skip({ reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." } }),
+      ],
+    });
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Choose a model.");
   });
 });

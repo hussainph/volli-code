@@ -1342,7 +1342,51 @@ CREATE INDEX IF NOT EXISTS idx_automation_arming_automation
 const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGRATION_031_COLUMN_ARMING}`;
 
 /**
- * Migration 032: the column's own ORDER for its Offered list (VC-112, VC-132).
+ * Migration 032: Skipped occurrences (VC-112, VC-130).
+ *
+ * A due time that passed without a Run, recorded. It is a TABLE rather than a
+ * log line because VC-112 requires a skip to offer "Run now" from the Run
+ * history afterwards — so it has to be something a surface can list, name and
+ * act on — and because "a skip and a silence must never look the same" is only
+ * true if the skip survives the process that noticed it.
+ *
+ * It is part of the RECORD's history, filed beside `automation_runs` and
+ * scoped the same way: by the project the Run would have happened in. It is
+ * therefore NOT the scheduler's machine-local operating state — that is the
+ * cursor in `app_state` (`automations/schedule-cursor.ts`), which says only how
+ * far THIS host has evaluated and never travels. The two are deliberately
+ * different tiers: what was missed is history, how far a machine got is not.
+ *
+ * `automation_id` cascades because a skip names a live schedule to re-run; with
+ * the record deleted there is no schedule left to run now, and the Runs that
+ * did happen keep their own snapshot rows. `due_at` holds the LATEST due time a
+ * gap covered and `missed_count` how wide it was — one row per gap, because an
+ * hourly schedule and a closed weekend would otherwise bury the history in
+ * fifty rows offering fifty buttons that must not all be pressed.
+ *
+ * `reason` is JSON for the reason `runtime` and `trigger_spec` are: it is a
+ * small closed union today (the app was closed; the Run door refused) and a
+ * union is a value, not a column per arm.
+ */
+const MIGRATION_032_SCHEDULE_SKIPS = `
+CREATE TABLE IF NOT EXISTS automation_skipped_occurrences (
+  id              TEXT PRIMARY KEY,
+  automation_id   TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  automation_name TEXT NOT NULL CHECK (automation_name <> ''),
+  project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  due_at          INTEGER NOT NULL,
+  missed_count    INTEGER NOT NULL CHECK (missed_count >= 1),
+  reason          TEXT NOT NULL CHECK (json_valid(reason)),
+  recorded_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_skips_project
+  ON automation_skipped_occurrences(project_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_automation_skips_automation
+  ON automation_skipped_occurrences(automation_id, due_at);
+`;
+
+/**
+ * Migration 033: the column's own ORDER for its Offered list (VC-112, VC-132).
  *
  * The third table under one pattern, and the pattern is worth restating because
  * this is the row that most looks like part of the record and is not. What a
@@ -1365,14 +1409,13 @@ const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGR
  * rather than a dangling reference — and a JSON array cannot cascade anyway.
  * The project key does cascade, like the arming beside it.
  *
- * Numbered 32 with two sibling automations branches (VC-130, VC-133) in flight
- * against the same number, exactly as 026 and 031 record before it: a version
- * is a position in an already-applied history, so whichever lands second
- * renumbers rather than sharing. The reconciler probes for the same reason 031
- * does — a developer database that ran a parallel 32 must still converge on
- * this schema.
+ * Renumbered from 32, which VC-130's Skipped occurrences reached main first —
+ * the third time this file has recorded that (025, 027). A version is a
+ * position in an already-applied history, not a name: two migrations claiming
+ * one number would leave whichever profile ran the other silently missing this
+ * table, at a `user_version` that says it is up to date.
  */
-const MIGRATION_032_COLUMN_ORDER = `
+const MIGRATION_033_COLUMN_ORDER = `
 CREATE TABLE IF NOT EXISTS automation_column_order (
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   status      TEXT NOT NULL CHECK (status <> ''),
@@ -1540,8 +1583,13 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 32,
+    name: "automations — Skipped occurrences, the record of a due time that passed without a Run",
+    sql: MIGRATION_032_SCHEDULE_SKIPS,
+  },
+  {
+    version: 33,
     name: "automations — the column's machine-local order for its Offered list",
-    sql: MIGRATION_032_COLUMN_ORDER,
+    sql: MIGRATION_033_COLUMN_ORDER,
   },
 ];
 

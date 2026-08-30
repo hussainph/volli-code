@@ -543,15 +543,13 @@ function HomeTabs({
   const composed: HomeTabDescriptor[] = [
     HOME_BOARD_TAB,
     ...terminalTabs.map((tab): HomeTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab })),
-    ...chatIds.map(
-      (sessionId, index): HomeTabDescriptor => ({
-        kind: "chat",
-        id: chatTabId(sessionId),
-        sessionId,
-        title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-        status: chatStatuses[index] ?? "idle",
-      }),
-    ),
+    ...chatIds.map((sessionId, index): HomeTabDescriptor => ({
+      kind: "chat",
+      id: chatTabId(sessionId),
+      sessionId,
+      title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index] ?? "idle",
+    })),
     ...fileTabs.map((tab, index): HomeTabDescriptor => {
       const label = fileLabels[index] ?? { name: tab.relPath, hint: null };
       return {

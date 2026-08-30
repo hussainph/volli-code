@@ -55,6 +55,7 @@ import {
   useAutomationsStore,
   selectArmedAutomation,
   selectArmings,
+  selectPlanningLoaded,
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -160,14 +161,9 @@ export function noteDeliberateMove(input: DeliberateMove): void {
   clearWindow(input.ticketId);
   const token = ++nextArrival;
   arrivals.set(input.ticketId, token);
-  const automations = useAutomationsStore.getState();
   // The warm path stays synchronous — no await, no frame — because that is
   // every move on a board a person is already looking at.
-  if (
-    automations.byProject[input.projectId] !== undefined &&
-    automations.armingByProject[input.projectId] !== undefined &&
-    automations.enablementRead
-  ) {
+  if (selectPlanningLoaded(useAutomationsStore.getState(), input.projectId)) {
     classify(input, token);
     return;
   }
@@ -274,8 +270,11 @@ async function start(pending: PendingArmedRun): Promise<void> {
         // A durable retry identity, minted once per window. A window fires at
         // most once, so it needs no cross-call memory of its own.
         commandId: crypto.randomUUID(),
-        automationId: pending.automationId,
+        target: { kind: "automation", automationId: pending.automationId },
         ticketId: pending.ticketId,
+        // No override on the drag path, ever (VC-112): this Run belongs to a
+        // card someone dropped, and the Runtime is the one the record resolves.
+        modelOverride: null,
       }),
     );
   } catch (error) {
