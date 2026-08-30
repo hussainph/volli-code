@@ -39,6 +39,13 @@
  * that passes neither mounts no `DndContext` at all and is byte-for-byte the
  * fixed strip it was. What order a drop MEANS is `tab-reorder.ts`; where that
  * order is kept is the workspace store's `tabOrder` overlay.
+ *
+ * SINCE VC-202 a strip may also arrange inside a SURFACE that owns several of
+ * them ({@link TabStripSurface}): a split plane draws one strip per pane, and a
+ * tab has to be able to travel from one to another and onto the plane's drop
+ * zones — which is one gesture, so it must be one `DndContext`. A strip inside
+ * such a surface registers its sortable into that context and mounts none of
+ * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
@@ -96,6 +103,35 @@ const TabVariantContext = React.createContext<TabVariant>("folder");
  * nothing with dnd-kit rather than registering a disabled sortable.
  */
 const TabReorderContext = React.createContext(false);
+
+/**
+ * Whether an ancestor owns this strip's drag (VC-202).
+ *
+ * A surface that draws several strips — a split plane, one strip per pane —
+ * mounts ONE `DndContext` around all of them and the plane they sit over, so a
+ * tab can be carried from one strip to another or onto a drop zone. Inside
+ * one, a strip contributes only its `SortableContext`: no second context, no
+ * sensors of its own, and no modifiers (the surface draws the travel with a
+ * `DragOverlay` ghost instead, because a strip that scrolls would clip a tab
+ * dragged out of it).
+ *
+ * Default `false` — every strip that is nobody's pane (Settings, the lab, a
+ * fixture) keeps its own context and its own axis modifiers, unchanged.
+ */
+const TabStripSurfaceContext = React.createContext(false);
+
+/**
+ * Marks the subtree whose strips register into the caller's own `DndContext`.
+ * Rendered by `split/split-dnd.tsx`, which is also what supplies that context.
+ */
+export function TabStripSurface({ children }: { children: React.ReactNode }) {
+  return <TabStripSurfaceContext.Provider value>{children}</TabStripSurfaceContext.Provider>;
+}
+
+/** Whether a strip drawn here belongs to a surface-level drag context. */
+export function useTabStripSurface(): boolean {
+  return React.useContext(TabStripSurfaceContext);
+}
 
 // ---------------------------------------------------------------------------
 // Focus, in the DOM
@@ -192,6 +228,8 @@ export function TabStrip({
   ...props
 }: TabStripProps) {
   const folder = variant === "folder";
+  // A surface above us already owns the gesture — see TabStripSurfaceContext.
+  const inSurface = React.useContext(TabStripSurfaceContext);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -267,7 +305,8 @@ export function TabStrip({
     </div>
   );
 
-  return reorder === undefined ? strip : <TabStripDnd reorder={reorder}>{strip}</TabStripDnd>;
+  if (reorder === undefined || inSurface) return strip;
+  return <TabStripDnd reorder={reorder}>{strip}</TabStripDnd>;
 }
 
 /** The sortable list itself, and the flag that tells a tab it may register. */
@@ -458,15 +497,24 @@ export function Tab({ dragId, ...props }: TabProps) {
  */
 function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
   const reducedMotion = useReducedMotion();
+  const inSurface = React.useContext(TabStripSurfaceContext);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: dragId,
     // `null` is dnd-kit's own "do not animate": under reduced motion the
     // siblings jump to their new places instead of sliding (same gate the board
     // card takes).
     transition: reducedMotion ? null : TAB_SORT_TRANSITION,
+    // What the surface's `DragOverlay` ghost draws (VC-202). The label rather
+    // than the descriptor: the ghost is the tab's own drawing, and the tab's
+    // own drawing is what this component already is.
+    data: { tabLabel: props.label },
   });
   const renamingNow = props.renaming !== null && props.renaming !== undefined;
   const ref = useComposedTabRef(setNodeRef, props.ref);
+  // Inside a surface the TRAVEL is the ghost's (a strip scrolls, so a tab
+  // dragged out of one would be clipped by it). The tab stays in its slot and
+  // recedes, which is also what says where it came from.
+  const ghosted = inSurface && isDragging;
 
   return (
     <TabShell
@@ -481,12 +529,12 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
       aria-describedby={attributes["aria-describedby"]}
       style={{
         ...props.style,
-        transform: CSS.Transform.toString(transform),
+        transform: ghosted ? undefined : CSS.Transform.toString(transform),
         transition: transition ?? undefined,
       }}
       // Above its neighbours while it travels, so the tab being dragged is not
       // drawn under the ones it is passing.
-      className={cn(isDragging && "z-10", props.className)}
+      className={cn(isDragging && "z-10", ghosted && "opacity-40", props.className)}
       drag={renamingNow ? null : { listeners, dragging: isDragging }}
     />
   );
@@ -661,6 +709,49 @@ function TabShell({
     </div>
   );
 }
+
+/**
+ * THE TAB IN FLIGHT (VC-202) — what a surface's `DragOverlay` draws while a tab
+ * is being carried between panes.
+ *
+ * The tab's own drawing, so nothing about the object changes on the way: same
+ * shell, same folder silhouette, drawn ACTIVE because the tab in your hand is
+ * by definition the one you are looking at. Two things are added and they are
+ * the whole treatment — `scale-[1.02]`, just enough to say "picked up" without
+ * the ghost measuring differently from the slot it will land in, and
+ * `shadow-overlay`, the token every lifted surface in this app takes.
+ *
+ * No transition on either: the ghost is created at its final size, and
+ * animating a thing whose whole job is to follow the pointer would put it
+ * behind the pointer. It draws no close, takes no focus and is inert.
+ */
+export function TabDragGhost({
+  label,
+  variant = "folder",
+}: {
+  label: string;
+  variant?: TabVariant;
+}) {
+  return (
+    <TabVariantContext.Provider value={variant}>
+      <TabShell
+        // Hidden from AT: the strip the tab came from still lists it, and
+        // dnd-kit narrates the drag itself through its own live region — a
+        // second `role="tab"` outside any tablist would be a third voice.
+        aria-hidden
+        data-testid="tab-drag-ghost"
+        label={label}
+        active
+        tabStop={false}
+        closable={false}
+        className="scale-[1.02] cursor-grabbing shadow-overlay"
+        onActivate={noop}
+      />
+    </TabVariantContext.Provider>
+  );
+}
+
+function noop(): void {}
 
 /**
  * The hover-revealed close, and the unsaved dot it becomes.

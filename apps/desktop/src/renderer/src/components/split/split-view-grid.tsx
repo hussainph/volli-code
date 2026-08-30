@@ -42,6 +42,13 @@ export interface SplitViewGridProps {
   renderStrip(pane: ResolvedSplitViewPane): React.ReactNode;
   /** What the pane's front tab draws — or its empty-pane menu. */
   renderContent(pane: ResolvedSplitViewPane): React.ReactNode;
+  /**
+   * Anything drawn OVER the pane's content and under nothing: the drop zones
+   * (VC-202 §4). Rendered inside the content box rather than the whole cell, so
+   * a pane's own strip is never covered by them — a pointer on a strip is a
+   * reorder, and that gesture must reach the strip.
+   */
+  renderOverlay?(pane: ResolvedSplitViewPane): React.ReactNode;
   /** A click landed in this pane. */
   onFocusPane(paneId: string): void;
   /** A divider moved: the branch it divides, and the first child's new share. */
@@ -52,6 +59,7 @@ export function SplitViewGrid({
   view,
   renderStrip,
   renderContent,
+  renderOverlay,
   onFocusPane,
   onResizeSplit,
 }: SplitViewGridProps) {
@@ -62,6 +70,7 @@ export function SplitViewGrid({
       paneCount={view.panes.length}
       renderStrip={renderStrip}
       renderContent={renderContent}
+      renderOverlay={renderOverlay}
       onFocusPane={onFocusPane}
       onResizeSplit={onResizeSplit}
     />
@@ -109,6 +118,7 @@ function SplitViewCell({
   paneCount,
   renderStrip,
   renderContent,
+  renderOverlay,
   onFocusPane,
 }: SplitViewNodeProps & { pane: ResolvedSplitViewPane }) {
   const split = paneCount > 1;
@@ -130,7 +140,13 @@ function SplitViewCell({
       )}
     >
       {renderStrip(pane)}
-      {renderContent(pane)}
+      {/* The content box, and the one thing allowed to cover it. A box of its
+          own rather than the cell, so an overlay's `inset-0` means "the pane's
+          content" and not "the content and the strip above it". */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {renderContent(pane)}
+        {renderOverlay?.(pane)}
+      </div>
     </div>
   );
 }

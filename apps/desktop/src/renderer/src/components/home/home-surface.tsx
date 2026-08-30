@@ -86,6 +86,14 @@ import {
   startProjectTerminal,
 } from "@renderer/components/sessions/session-create";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
+import { SplitDnd } from "@renderer/components/split/split-dnd";
+import {
+  splitDropEdge,
+  type SplitDragPayload,
+  type SplitDropOperation,
+  type SplitDropZone,
+} from "@renderer/components/split/split-drop";
+import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
 import { paneStripLabel, paneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
@@ -353,6 +361,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // Home is unsplit, which is what keeps the unsplit path untouched.
   const moveHomeTabInPane = useWorkspaceStore((state) => state.moveHomeTabInPane);
+  const splitHomePane = useWorkspaceStore((state) => state.splitHomePane);
+  const moveHomeTabToPane = useWorkspaceStore((state) => state.moveHomeTabToPane);
   const focusHomePane = useWorkspaceStore((state) => state.focusHomePane);
   const setHomeSplitRatio = useWorkspaceStore((state) => state.setHomeSplitRatio);
   const closeHomePane = useWorkspaceStore((state) => state.closeHomePane);
@@ -440,6 +450,73 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       else moveHomeTabInPane(selectedId, paneId, movedId, ids);
     },
     [moveHomeTab, moveHomeTabInPane, selectedId, splitView],
+  );
+
+  /**
+   * A tab let go somewhere on Home (VC-202 §4). What the drop MEANS was decided
+   * by `split-drop.ts`; this is the three store writes it can ask for, and the
+   * one thing only the surface knows — the strip as it stands, which the first
+   * split records as the primary pane's claim.
+   */
+  const applySplitDrop = React.useCallback(
+    (operation: SplitDropOperation) => {
+      if (selectedId === null) return;
+      if (operation.kind === "reorder") {
+        reorderInPane(operation.paneId, operation.movedId, operation.ids);
+        return;
+      }
+      if (operation.kind === "move") {
+        moveHomeTabToPane(selectedId, operation.tabId, operation.paneId);
+        return;
+      }
+      splitHomePane(selectedId, operation.paneId, operation.edge, {
+        tabId: operation.tabId,
+        surfaceTabIds: orderedTabIds,
+      });
+    },
+    [moveHomeTabToPane, orderedTabIds, reorderInPane, selectedId, splitHomePane],
+  );
+
+  /**
+   * A Session or file row dragged out of a sidebar and dropped on a pane.
+   *
+   * The tab has to EXIST before a pane can hold it, so the payload is opened
+   * first through the same door its own row would have used — which is why a
+   * chat is adopted here and a terminal is not: only an open terminal may be
+   * dragged (its tab is what the pane takes), while a chat Session is durable
+   * and its tab is minted on arrival. The assignment is then the same
+   * split-or-move a tab drop makes.
+   */
+  const handleNativeDrop = React.useCallback(
+    (payload: SplitDragPayload, paneId: string, zone: SplitDropZone) => {
+      if (selectedId === null) return;
+      let tabId: string | null = null;
+      if (payload.type === "file") {
+        previewHomeFile(selectedId, payload.relPath);
+        tabId = fileTabId(payload.relPath);
+      } else if (payload.kind === "chat") {
+        const chat = useChatSessionsStore.getState();
+        chat.adoptChatSession(payload.sessionId);
+        chat.openChatTab(selectedId, payload.sessionId);
+        tabId = chatTabId(payload.sessionId);
+      } else if (terminalTabs.some((tab) => tab.sessionId === payload.sessionId)) {
+        // A terminal row drags only while its tab is open; if it closed
+        // mid-drag there is nothing to place.
+        tabId = payload.sessionId;
+      }
+      if (tabId === null) return;
+      const edge = splitDropEdge(zone);
+      if (edge === null) {
+        moveHomeTabToPane(selectedId, tabId, paneId);
+        return;
+      }
+      splitHomePane(selectedId, paneId, edge, {
+        tabId,
+        // Including the tab just opened: this render's list predates it.
+        surfaceTabIds: [...orderedTabIds, tabId],
+      });
+    },
+    [moveHomeTabToPane, orderedTabIds, previewHomeFile, selectedId, splitHomePane, terminalTabs],
   );
 
   /**
@@ -560,7 +637,20 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     ) : null;
 
   return (
-    <>
+    // ONE drag context for the whole surface (VC-202 §4): Home's strip, its
+    // panes and their drop zones are one gesture, and the strip is rendered
+    // here while the grid is handed to the layer below — so the context has to
+    // sit above both. A ticket workspace nests its OWN inside this one, which
+    // is what keeps a ticket tab from ever being dropped on Home.
+    <SplitDnd
+      origin={{ scope: "project", projectId: selectedId ?? "", ticketId: null }}
+      panes={split.panes.map((pane) => ({
+        paneId: pane.id,
+        tabIds: pane.tabIds.filter((id) => !isHomeBoardTab(id)),
+      }))}
+      onTabDrop={applySplitDrop}
+      onNativeDrop={handleNativeDrop}
+    >
       {stripVisible && selectedId !== null ? (
         // The surface's own strip is the PRIMARY pane's strip — the pane that
         // holds the permanent Board tab and never moves, which is what lets the
@@ -640,6 +730,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                 )
               }
               renderContent={paneContent}
+              renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
               onFocusPane={(paneId) => {
                 if (selectedId !== null) focusHomePane(selectedId, paneId);
               }}
@@ -674,7 +765,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         onCancel={fileWorkspace.cancelClose}
         onChoose={fileWorkspace.chooseClose}
       />
-    </>
+    </SplitDnd>
   );
 }
 

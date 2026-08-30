@@ -28,6 +28,8 @@ import { errorMessage, type DirEntry, type Ticket, type NamedBlobLink } from "@v
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
+import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
+import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
 import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
 import type { NavigatorEntryKind } from "@renderer/components/files/navigator-mutations";
@@ -136,6 +138,25 @@ function FileMutationMenuItems({
   );
 }
 
+/**
+ * What a navigator row would open on a pane, or `null` for a row that is not a
+ * file. The SCOPE is read off the panel's own props: this list is the ticket's
+ * worktree when it has a ticket and the Main checkout when it does not
+ * (`home-files-panel.tsx` renders the same list without one), which is exactly
+ * the distinction a drop needs to resolve the path against.
+ */
+function fileRowDragPayload(
+  projectId: string,
+  ticketId: string | undefined,
+  relPath: string,
+  kind: "file" | "directory" | "reference",
+): SplitDragPayload | null {
+  if (kind === "directory") return null;
+  return ticketId === undefined
+    ? { type: "file", scope: "project", projectId, ticketId: null, relPath }
+    : { type: "file", scope: "ticket", projectId, ticketId, relPath };
+}
+
 function FileRow({
   projectId,
   ticketId,
@@ -173,6 +194,12 @@ function FileRow({
       // interactive control and preview the file on every click into the field.
       onActivate={renaming ? null : onActivate}
       onDoubleClick={renaming ? undefined : onPin}
+      // Draggable onto a pane (VC-202 §4), which opens the same preview a click
+      // does — just somewhere the person chose. A DIRECTORY is not a surface,
+      // and a row being renamed is not a target: the pointer is in its field.
+      {...splitDragSourceProps(
+        renaming ? null : fileRowDragPayload(projectId, ticketId, relPath, kind),
+      )}
       leading={<Icon className="size-4 shrink-0 text-muted-foreground" />}
       primary={
         renaming ? (

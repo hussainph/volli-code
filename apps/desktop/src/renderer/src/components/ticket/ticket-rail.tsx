@@ -180,6 +180,7 @@ export function TicketRail({
               <TicketUsageRailBlock ticketId={ticket.id} />
             </div>
             <TicketSessionsPanel
+              projectId={projectId}
               ticketId={ticket.id}
               creating={creating}
               onNewSession={onNewSession}

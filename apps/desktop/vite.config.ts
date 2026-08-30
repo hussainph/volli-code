@@ -254,6 +254,12 @@ export default defineConfig(({ mode }) => ({
         // which no view test would catch.
         "src/components/split/split-tab-partition.ts",
         "src/components/split/terminal-viewport-registry.ts",
+        // And what a drop on the plane MEANS (VC-202 §4) — the same argument
+        // `tab-reorder.ts` makes one scope down. Three things nobody could see
+        // were wrong from a screenshot: which zone a pointer is in, whether a
+        // dragged Session may land on this surface at all (a ticket-A chat must
+        // not open on Home), and which store write a drop is.
+        "src/components/split/split-drop.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.

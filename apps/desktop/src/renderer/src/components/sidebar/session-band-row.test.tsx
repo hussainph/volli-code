@@ -67,6 +67,7 @@ function render(subject: ActiveSessionRow): string {
     <SidebarProvider>
       <ActiveBandRow
         row={subject}
+        projectId="proj-1"
         ticketPrefix="VC"
         now={120_000}
         selected={false}
@@ -259,6 +260,7 @@ describe("PreviousBandRow identity", () => {
       <SidebarProvider>
         <PreviousBandRow
           row={previous}
+          projectId="proj-1"
           ticketPrefix="VC"
           now={60_000}
           selected={false}

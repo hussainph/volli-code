@@ -39,6 +39,8 @@ import type {
   SessionAttention,
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
+import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
+import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
@@ -138,6 +140,38 @@ function KindGlyph({ kind }: { kind: SessionRowKind }) {
 }
 
 /**
+ * WHAT THIS ROW WOULD OPEN, if it were dropped on a pane (VC-202 §4) — or
+ * `null` for a row that is not a door.
+ *
+ * A CHAT always drags: the Session is durable, so dropping it adopts it and
+ * mints its tab wherever it lands, exactly as clicking the row would. A
+ * TERMINAL drags only while it is open, and the reason is the same one that
+ * makes its row inert when it is not — the tab IS the terminal, and a pane
+ * cannot hold a PTY that has exited.
+ *
+ * The scope travels with it because the drop cannot infer it: this band lists
+ * every Session in the project, ticketed and not, and by the time one is over a
+ * pane its row is the only thing that still knows which surface it belongs to.
+ */
+function sessionRowDragPayload(
+  row: ActiveSessionRow | PreviousSessionRow,
+  projectId: string,
+): SplitDragPayload | null {
+  const target = row.target;
+  if (target === null) return null;
+  const ticketId = row.ticket?.id ?? null;
+  const origin =
+    ticketId === null
+      ? ({ scope: "project", projectId, ticketId: null } as const)
+      : ({ scope: "ticket", projectId, ticketId } as const);
+  if (target.kind === "chat") {
+    return { ...origin, type: "session", kind: "chat", sessionId: target.sessionId };
+  }
+  // A terminal target's `tabId` is its tab — which is the thing a pane holds.
+  return { ...origin, type: "session", kind: "terminal", sessionId: target.tabId };
+}
+
+/**
  * Why a human is needed. `blocked` is the agent's own voluntary `volli session`
  * signal and carries its words; `waiting` is the involuntary channel, which
  * knows only that someone is needed — so a chat's `waitingOn` is what turns
@@ -193,12 +227,15 @@ function stateLine(row: ActiveSessionRow): string {
  */
 export const ActiveBandRow = React.memo(function ActiveBandRow({
   row,
+  projectId,
   ticketPrefix,
   now,
   selected,
   onSelect,
 }: {
   row: ActiveSessionRow;
+  /** Whose project this band belongs to — half of a drag payload's scope. */
+  projectId: string;
   ticketPrefix: string;
   /** The clock the last-activity age is read against. */
   now: number;
@@ -214,6 +251,9 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
         size="lg"
         isActive={selected}
         onClick={() => onSelect(row)}
+        // Draggable onto a pane (VC-202): the same door, opened somewhere
+        // specific. A row with no live target does not drag.
+        {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
         // The source label's new home, now that the ticket's status holds the
         // meta line's first slot. Native `title` rather than the button's
         // `tooltip` prop: that one is Radix and `hidden` unless the sidebar is
@@ -288,6 +328,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
  */
 export const PreviousBandRow = React.memo(function PreviousBandRow({
   row,
+  projectId,
   ticketPrefix,
   now,
   selected,
@@ -295,6 +336,8 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   showIdentity = true,
 }: {
   row: PreviousSessionRow;
+  /** Whose project this band belongs to — half of a drag payload's scope. */
+  projectId: string;
   ticketPrefix: string;
   /**
    * The clock the age below is read against. It advances on the next instant
@@ -324,6 +367,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         size="sm"
         isActive={selected}
         onClick={() => onSelect(row)}
+        {...splitDragSourceProps(sessionRowDragPayload(row, projectId))}
         // `px-2` is gone rather than kept: the button's own `p-2` is already
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.

@@ -46,6 +46,7 @@ import {
   resolveChatRelaunch,
   CHAT_TAB_FALLBACK_LABEL,
 } from "@renderer/components/ticket/ticket-chat-tab";
+import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
@@ -61,6 +62,14 @@ import { useAttachments } from "@renderer/hooks/use-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
+import { SplitDnd } from "@renderer/components/split/split-dnd";
+import {
+  splitDropEdge,
+  type SplitDragPayload,
+  type SplitDropOperation,
+  type SplitDropZone,
+} from "@renderer/components/split/split-drop";
+import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
 import { paneStripLabel, partitionPaneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
@@ -184,6 +193,8 @@ export function TicketDetail({
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // this workspace is unsplit, which is what keeps the unsplit path untouched.
   const moveTicketTabInPane = useWorkspaceStore((state) => state.moveTicketTabInPane);
+  const splitTicketPane = useWorkspaceStore((state) => state.splitTicketPane);
+  const moveTicketTabToPane = useWorkspaceStore((state) => state.moveTicketTabToPane);
   const focusTicketPane = useWorkspaceStore((state) => state.focusTicketPane);
   const setTicketSplitRatio = useWorkspaceStore((state) => state.setTicketSplitRatio);
   const closeTicketPane = useWorkspaceStore((state) => state.closeTicketPane);
@@ -1141,6 +1152,71 @@ export function TicketDetail({
     else moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids);
   }
 
+  /**
+   * A tab let go somewhere on this workspace (VC-202 §4). What the drop MEANS
+   * was decided by `split-drop.ts`; this is the three store writes it can ask
+   * for, and the one thing only the surface knows — the strip as it stands,
+   * which the first split of a workspace records as the primary pane's claim.
+   */
+  function applySplitDrop(operation: SplitDropOperation): void {
+    if (operation.kind === "reorder") {
+      reorderInPane(operation.paneId, operation.movedId, operation.ids);
+      return;
+    }
+    if (operation.kind === "move") {
+      moveTicketTabToPane(projectId, ticket.id, operation.tabId, operation.paneId);
+      return;
+    }
+    splitTicketPane(projectId, ticket.id, operation.paneId, operation.edge, {
+      tabId: operation.tabId,
+      surfaceTabIds: tabs.map((tab) => tab.id),
+    });
+  }
+
+  /**
+   * A Session or file row dragged out of a rail and dropped on a pane.
+   *
+   * The tab has to EXIST before a pane can hold it, so the payload is opened
+   * first through the same door its own row would have used — which is why a
+   * chat is adopted here and a terminal is not: only an open terminal may be
+   * dragged (its tab is what the pane takes), while a chat Session is durable
+   * and its tab is minted on arrival. The pane assignment is then the same
+   * split-or-move a tab drop makes.
+   */
+  function handleNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void {
+    const tabId = openDroppedPayload(payload);
+    if (tabId === null) return;
+    const edge = splitDropEdge(zone);
+    if (edge === null) {
+      moveTicketTabToPane(projectId, ticket.id, tabId, paneId);
+      return;
+    }
+    splitTicketPane(projectId, ticket.id, paneId, edge, {
+      tabId,
+      // Including the tab just opened: this render's `tabs` predates it.
+      surfaceTabIds: [...tabs.map((tab) => tab.id), tabId],
+    });
+  }
+
+  /** Opens what a native payload names, and answers with the tab id it landed in. */
+  function openDroppedPayload(payload: SplitDragPayload): string | null {
+    if (payload.type === "file") {
+      previewTicketFile(projectId, ticket.id, payload.relPath);
+      return fileTabId(payload.relPath);
+    }
+    if (payload.kind === "chat") {
+      const chat = useChatSessionsStore.getState();
+      chat.adoptChatSession(payload.sessionId);
+      chat.openChatTab(ticket.id, payload.sessionId);
+      return chatTabId(payload.sessionId);
+    }
+    // A terminal row is only draggable while its tab is open; if it closed
+    // mid-drag there is nothing to place, and inventing a tab for a PTY that
+    // may be gone is worse than the drop doing nothing.
+    const open = sessionTabs?.some((candidate) => candidate.sessionId === payload.sessionId);
+    return open === true ? payload.sessionId : null;
+  }
+
   /** What one pane's front tab draws — or, for a pane holding nothing, its menu. */
   function paneContent(pane: ResolvedSplitViewPane): React.ReactNode {
     const tab = tabs.find((candidate) => candidate.id === pane.activeTabId);
@@ -1241,7 +1317,20 @@ export function TicketDetail({
   }
 
   return (
-    <>
+    // ONE drag context for the whole workspace (VC-202 §4): the strips, the
+    // panes and their drop zones are one gesture. Nested inside Home's own —
+    // this view is rendered by `home-surface.tsx` — and that nesting is what
+    // keeps a ticket tab from ever being dropped on Home: the inner context is
+    // the only one this subtree's strips register into.
+    <SplitDnd
+      origin={{ scope: "ticket", projectId, ticketId: ticket.id }}
+      panes={split.panes.map((pane) => ({
+        paneId: pane.id,
+        tabIds: pane.tabIds.filter((id) => id !== BODY_TAB_ID),
+      }))}
+      onTabDrop={applySplitDrop}
+      onNativeDrop={handleNativeDrop}
+    >
       <div className="flex min-h-0 flex-1 flex-col">
         {/* One full-width tab row above both the main column and the rail (the
           browser-window metaphor). The active tab fuses with the content plane
@@ -1300,6 +1389,7 @@ export function TicketDetail({
                 )
               }
               renderContent={paneContent}
+              renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
               onFocusPane={(paneId) => focusTicketPane(projectId, ticket.id, paneId)}
               onResizeSplit={(splitId, ratio) =>
                 setTicketSplitRatio(projectId, ticket.id, splitId, ratio)
@@ -1373,7 +1463,7 @@ export function TicketDetail({
           void resolvePendingClose(choice);
         }}
       />
-    </>
+    </SplitDnd>
   );
 }
 
