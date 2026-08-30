@@ -52,11 +52,14 @@ function stubApi(impl: {
         runsForProject: vi.fn(
           impl.runsForProject ?? (() => Promise.resolve({ ok: true, runs: [] })),
         ),
+        // The stored set is the ENABLED one (`automations/enablement.ts`), so
+        // the resting default here is an empty enabled set: nothing on.
         enablement: vi.fn(
-          impl.enablement ?? (() => Promise.resolve({ ok: true, disabledAutomationIds: [] })),
+          impl.enablement ?? (() => Promise.resolve({ ok: true, enabledAutomationIds: [] })),
         ),
         setEnabled: vi.fn(
-          impl.setEnabled ?? (() => Promise.resolve({ ok: true, disabledAutomationIds: [] })),
+          impl.setEnabled ??
+            (() => Promise.resolve({ ok: true, enabledAutomationIds: [], receipt: {} })),
         ),
       },
     },

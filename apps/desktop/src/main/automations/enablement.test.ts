@@ -34,8 +34,17 @@ describe("enabledAutomationIds", () => {
     }
   });
 
-  it("keeps the strings out of a mixed array rather than failing the whole row", () => {
+  it("fails closed on a MIXED array too, rather than salvaging the readable half", () => {
+    // Half-understood is not understood. Keeping "a1" here would be a guess
+    // about which Automations somebody armed on this machine, and a wrong
+    // guess in that direction fires work nobody asked for; refusing the whole
+    // row can only under-fire, which VC-112 already calls the resting state.
     setAppState(ctx.db, AUTOMATIONS_ENABLED_KEY, JSON.stringify(["a2", 7, null, "a1", "a2"]), 1);
+    expect(enabledAutomationIds(ctx.db)).toEqual([]);
+  });
+
+  it("still reads a wholly well-formed array, deduped and sorted", () => {
+    setAppState(ctx.db, AUTOMATIONS_ENABLED_KEY, JSON.stringify(["a2", "a1", "a2"]), 1);
     expect(enabledAutomationIds(ctx.db)).toEqual(["a1", "a2"]);
   });
 });

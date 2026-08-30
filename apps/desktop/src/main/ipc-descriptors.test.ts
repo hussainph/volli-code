@@ -2870,20 +2870,28 @@ describe("AUTOMATION_IPC descriptor table", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-set-enabled"];
 
     it("needs the target and a BOOLEAN, so a request is a value rather than a toggle", () => {
-      expect(guard([{ commandId: "c1", automationId: "a1", enabled: true }])).toBe(true);
-      expect(guard([{ commandId: "c1", automationId: "a1", enabled: false }])).toBe(true);
-      expect(guard([{ commandId: "c1", automationId: "a1" }])).toBe(false);
-      expect(guard([{ commandId: "c1", automationId: "a1", enabled: "yes" }])).toBe(false);
-      expect(guard([{ commandId: "c1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: true }])).toBe(true);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: false }])).toBe(true);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: "yes" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, enabled: true }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });
 
-    it("carries a commandId like every other write — the switch is a command", () => {
+    it("carries a UUID commandId like every other write — the switch is a command", () => {
       // The PROJECTION is machine-local (`automations/enablement.ts`); the
       // intent is durable, so a lost reply is retried rather than re-decided.
+      // A durable retry identity is a UUID the renderer minted, so a
+      // machine-local counter is refused here exactly as create/update/delete
+      // refuse it — otherwise two hosts could collide on "c1".
       expect(guard([{ automationId: "a1", enabled: true }])).toBe(false);
       expect(guard([{ commandId: 7, automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: "", automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: `${COMMAND_ID}-extra`, automationId: "a1", enabled: true }])).toBe(
+        false,
+      );
     });
 
     it("carries the handler's exact invalid-input message", () => {

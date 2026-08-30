@@ -59,6 +59,15 @@ export const AUTOMATIONS_ENABLED_KEY = "volli:automations-enabled";
  * must not be able to brick the page that reads it. Anything unparseable, or
  * parseable but not an array of strings, reads as "nothing switched on here" —
  * the resting state, and the safe one: a corrupt row can only fail closed.
+ *
+ * WHOLLY closed, and that is the point of the second check. A row half of
+ * whose entries are not strings is a row this build cannot claim to
+ * understand, so salvaging the readable half would be a guess about which
+ * Automations a person switched on — and a wrong guess there FIRES something
+ * nobody armed on this machine. Refusing the whole row instead can only
+ * under-fire, which VC-112 already calls the resting state; the person turns
+ * the switch back on and the next write replaces the row with bytes this
+ * build did write.
  */
 export function enabledAutomationIds(db: Database.Database): string[] {
   const stored = getAppState(db, AUTOMATIONS_ENABLED_KEY);
@@ -70,7 +79,8 @@ export function enabledAutomationIds(db: Database.Database): string[] {
     return [];
   }
   if (!Array.isArray(parsed)) return [];
-  return [...new Set(parsed.filter((id): id is string => typeof id === "string"))].toSorted();
+  if (!parsed.every((id) => typeof id === "string")) return [];
+  return [...new Set(parsed)].toSorted();
 }
 
 /**

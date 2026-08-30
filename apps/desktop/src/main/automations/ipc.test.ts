@@ -394,7 +394,7 @@ describe("automation IPC", () => {
     });
 
     const first = await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
-      commandId: "11111111-1111-1111-1111-111111111111",
+      commandId: "11111111-1111-4111-8111-111111111111",
       automationId: one.id,
       enabled: true,
     });
@@ -406,7 +406,7 @@ describe("automation IPC", () => {
       receipt: { status: "completed" },
     });
     await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
-      commandId: "22222222-2222-2222-2222-222222222222",
+      commandId: "22222222-2222-4222-8222-222222222222",
       automationId: two.id,
       enabled: true,
     });
@@ -420,7 +420,7 @@ describe("automation IPC", () => {
     expect(enabledAutomationIds(ctx.db)).toEqual([one.id, two.id].toSorted());
     expect(
       await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
-        commandId: "33333333-3333-3333-3333-333333333333",
+        commandId: "33333333-3333-4333-8333-333333333333",
         automationId: one.id,
         enabled: false,
       }),
@@ -438,7 +438,7 @@ describe("automation IPC", () => {
       1,
     );
     const request = {
-      commandId: "44444444-4444-4444-4444-444444444444",
+      commandId: "44444444-4444-4444-8444-444444444444",
       automationId: automation.id,
       enabled: true,
     };
@@ -450,7 +450,7 @@ describe("automation IPC", () => {
     // Somebody else switched it off in between; the retry must answer with its
     // own recorded outcome rather than re-deciding the set.
     await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
-      commandId: "55555555-5555-5555-5555-555555555555",
+      commandId: "55555555-5555-4555-8555-555555555555",
       automationId: automation.id,
       enabled: false,
     });
@@ -468,7 +468,7 @@ describe("automation IPC", () => {
 
     expect(
       await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
-        commandId: "66666666-6666-6666-6666-666666666666",
+        commandId: "66666666-6666-4666-8666-666666666666",
         automationId: "no-such-automation",
         enabled: true,
       }),
@@ -477,6 +477,17 @@ describe("automation IPC", () => {
 
     expect(
       await call<Result>("volli:automation-set-enabled", {
+        automationId: "a",
+        enabled: true,
+      }),
+    ).toEqual({ ok: false, error: "Invalid automation enablement request" });
+
+    // The switch is a durable command, so its identity is held to the same
+    // UUID shape create/update/delete are: a machine-local counter is not a
+    // retry identity two hosts can share.
+    expect(
+      await call<Result>("volli:automation-set-enabled", {
+        commandId: "c1",
         automationId: "a",
         enabled: true,
       }),

@@ -1212,7 +1212,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      typeof args[0]["commandId"] === "string" &&
+      isAutomationCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",
