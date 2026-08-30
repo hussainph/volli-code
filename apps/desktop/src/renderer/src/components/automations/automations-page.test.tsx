@@ -194,6 +194,20 @@ describe("the page", () => {
     expect(text()).toContain("Default model");
   });
 
+  it("prints a column Trigger's own columns rather than claiming manual-only", async () => {
+    // This is the surface that AUTHORS the Trigger (VC-127), so a row that said
+    // "Only when I run it" over a record naming Doing would be the page
+    // contradicting the form one click away.
+    await mount({
+      automations: [
+        automation({ trigger: { kind: "columns", columns: ["doing", "needs_review"] } }),
+      ],
+    });
+
+    expect(text()).toContain("Ticket enters Doing, Needs Review");
+    expect(text()).not.toContain("Only when I run it");
+  });
+
   it("shows a pinned Runtime as one model-and-reasoning pair", async () => {
     await mount({
       automations: [

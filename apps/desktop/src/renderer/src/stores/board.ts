@@ -33,7 +33,10 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
-import { noteDeliberateMove } from "@renderer/components/automations/armed-run";
+import {
+  noteDeliberateMove,
+  type DeliberateMove,
+} from "@renderer/components/automations/armed-run";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -345,12 +348,7 @@ function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): v
  * somebody else; `main.tsx` hands those to the same `noteDeliberateMove`. A
  * renderer's own move never arrives that way, so nothing is reported twice.
  */
-export type DeliberateMoveObserver = (move: {
-  projectId: string;
-  ticketId: string;
-  from: TicketStatus;
-  to: TicketStatus;
-}) => void;
+export type DeliberateMoveObserver = (move: DeliberateMove) => void;
 
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
 export function createBoardStore(

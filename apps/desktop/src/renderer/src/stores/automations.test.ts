@@ -1,5 +1,11 @@
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, ColumnArming, ModelSelection } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationTrigger,
+  ColumnArming,
+  ModelSelection,
+} from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
@@ -84,6 +90,9 @@ const ARMING: ColumnArming = {
   armedAt: 5,
 };
 
+/** A record that is OFFERED in one column — the Trigger, never the column's arming. */
+const COLUMNS_TRIGGER: AutomationTrigger = { kind: "columns", columns: ["doing"] };
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -158,9 +167,13 @@ describe("save", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "Review", instructions: "/review go", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "Review",
+      instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
@@ -175,9 +188,13 @@ describe("save", () => {
     const store = createAutomationsStore();
     store.getState().openEditor("p1");
 
-    const problem = await store
-      .getState()
-      .save({ projectId: null, name: "Global", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: null,
+      name: "Global",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
@@ -190,9 +207,13 @@ describe("save", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: null, name: "Global", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: null,
+      name: "Global",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBeNull();
     expect(list).not.toHaveBeenCalled();
@@ -202,9 +223,13 @@ describe("save", () => {
     stubApi({ create: () => Promise.resolve({ ok: false, error: "Name this Automation" }) });
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBe("Name this Automation");
     expect(toast.error).not.toHaveBeenCalled();
@@ -214,9 +239,13 @@ describe("save", () => {
     stubApi({ create: () => Promise.reject(new Error("ipc gone")) });
     const store = createAutomationsStore();
 
-    const problem = await store
-      .getState()
-      .save({ projectId: "p1", name: "n", instructions: "x", runtime: null });
+    const problem = await store.getState().save({
+      projectId: "p1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(problem).toBe("ipc gone");
   });
@@ -371,6 +400,7 @@ describe("update", () => {
       automationId: "automation-1",
       name: "Review sweep",
       instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
 
@@ -384,9 +414,13 @@ describe("update", () => {
     stubApi({ update });
     const store = createAutomationsStore();
 
-    await store
-      .getState()
-      .update({ automationId: "automation-1", name: "n", instructions: "x", runtime: null });
+    await store.getState().update({
+      automationId: "automation-1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ commandId: expect.stringMatching(/-/) }),
@@ -403,6 +437,7 @@ describe("update", () => {
       automationId: "automation-1",
       name: "n",
       instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
 
@@ -417,9 +452,13 @@ describe("update", () => {
     (window.api.automations.list as unknown) = list;
     const store = createAutomationsStore();
 
-    await store
-      .getState()
-      .update({ automationId: "automation-1", name: "n", instructions: "x", runtime: null });
+    await store.getState().update({
+      automationId: "automation-1",
+      name: "n",
+      instructions: "x",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
 
     expect(list).not.toHaveBeenCalled();
   });
@@ -428,17 +467,25 @@ describe("update", () => {
     stubApi({ update: () => Promise.resolve({ ok: false, error: "Name this Automation" }) });
     const store = createAutomationsStore();
     expect(
-      await store
-        .getState()
-        .update({ automationId: "a", name: "", instructions: "x", runtime: null }),
+      await store.getState().update({
+        automationId: "a",
+        name: "",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
     ).toBe("Name this Automation");
 
     stubApi({ update: () => Promise.reject(new Error("ipc gone")) });
     const other = createAutomationsStore();
     expect(
-      await other
-        .getState()
-        .update({ automationId: "a", name: "n", instructions: "x", runtime: null }),
+      await other.getState().update({
+        automationId: "a",
+        name: "n",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      }),
     ).toBe("ipc gone");
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -446,7 +493,7 @@ describe("update", () => {
 
 describe("duplicate", () => {
   it("copies the work under a distinguishable name and opens the copy's form", async () => {
-    const source = automation({ name: "Review" });
+    const source = automation({ name: "Review", trigger: COLUMNS_TRIGGER });
     const copy = automation({ id: "automation-2", name: "Review (copy)" });
     const create = vi.fn(() => Promise.resolve({ ok: true, automation: copy }));
     stubApi({ create, list: () => Promise.resolve({ ok: true, automations: [source, copy] }) });
@@ -460,6 +507,12 @@ describe("duplicate", () => {
         projectId: "p1",
         name: "Review (copy)",
         instructions: source.instructions,
+        // The Trigger travels with the work. A copy created without one would
+        // rewrite a column Trigger to "Nothing else" behind the person's back
+        // — and "same work, different Trigger" is the whole point of Duplicate,
+        // so the field it exists to let you change is the one it must not
+        // silently clear.
+        trigger: COLUMNS_TRIGGER,
         runtime: null,
       }),
     );
@@ -467,6 +520,20 @@ describe("duplicate", () => {
     // something, and the Trigger is what VC-112 expects to change.
     expect(store.getState().editor).toEqual({ projectId: "p1", automation: copy });
     expect(store.getState().byProject["p1"]).toEqual([source, copy]);
+  });
+
+  it("copies a manual Trigger as the value it is, never as an absent field", async () => {
+    const create = vi.fn(() => Promise.resolve({ ok: true, automation: automation() }));
+    stubApi({ create });
+    const store = createAutomationsStore();
+
+    await store.getState().duplicate("p1", automation({ trigger: NO_AUTOMATION_TRIGGER }));
+
+    // Not `toBeUndefined`: "Nothing else" is a union member the transport can
+    // carry, and the create door requires it (docs/BOUNDARIES.md rule 3).
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: NO_AUTOMATION_TRIGGER }),
+    );
   });
 
   it("keeps Ownership, so a global copy is still listed everywhere", async () => {

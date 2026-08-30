@@ -1,3 +1,4 @@
+import { parseAutomationTrigger } from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
@@ -343,7 +344,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
   ): Promise<AutomationCommand | null> {
     const existing = await tx.getCommand(commandId);
     if (existing === null) return null;
-    if (!sameJson(existing.intent, intent)) {
+    if (!sameJson(readIntent(existing.intent), readIntent(intent))) {
       throw new AutomationEngineConflictError(
         `Automation command ${commandId} was already accepted with different intent`,
       );
@@ -364,7 +365,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         `Automation command ${commandId} has no durable receipt`,
       );
     }
-    const value = select(latest.result);
+    const value = select(readResult(latest.result));
     if (value !== null) return { ok: true, value, receipt: publicReceipt(latest), replayed: true };
     if (latest.result.kind === "automation.not-found") {
       return {
@@ -1040,6 +1041,60 @@ function terminalReceipt(
   receipts: readonly StoredAutomationReceipt[],
 ): StoredAutomationReceipt | null {
   return receipts.toReversed().find((receipt) => receipt.status !== "accepted") ?? null;
+}
+
+/**
+ * A stored intent, read in TODAY's vocabulary.
+ *
+ * The ledger is append-only and older than the Trigger (VC-128): a create or
+ * update written before it carries no `trigger` field at all. Two things go
+ * wrong if such a row is read literally, and both are upgrade-day bugs rather
+ * than theory — the first retry after the upgrade is what hits them.
+ *
+ *  - **The retry conflicts instead of replaying.** {@link existingCommand}
+ *    compares intents exactly, so `{name, instructions, runtime}` and
+ *    `{name, instructions, trigger: none, runtime}` read as two different
+ *    intents and the caller is told its own command was already accepted with
+ *    a different one. Normalizing on READ makes the comparison about what the
+ *    intent MEANT: an absent Trigger meant "Nothing else", which is exactly
+ *    what {@link parseAutomationTrigger} answers for it.
+ *  - **Both sides go through it**, because the point is meaning, not spelling:
+ *    a caller re-sending a non-canonical Trigger (unsorted columns, a
+ *    duplicate) is re-sending the same intent, and the record already stored
+ *    the canonical form of it.
+ *
+ * Every other intent kind is returned untouched — none of them has ever had a
+ * field added, and a normalizer that guessed at future ones would be inventing
+ * history rather than reading it.
+ */
+function readIntent(intent: AutomationCommandIntent): AutomationCommandIntent {
+  if (intent.kind !== "automation.create" && intent.kind !== "automation.update") return intent;
+  return { ...intent, trigger: parseAutomationTrigger(intent.trigger) };
+}
+
+/**
+ * A stored receipt result, read in the same vocabulary as {@link readIntent}.
+ *
+ * A successful create/update receipt carries the whole {@link Automation} it
+ * wrote, so a receipt older than the Trigger holds a record with no `trigger`
+ * field. Replaying it verbatim would answer a caller with an Automation that
+ * is missing a required part of the type — a shape no live write can produce
+ * and no reader is prepared for. The degrade direction is the shared parser's,
+ * stated once in `automation.ts`: an unreadable or absent Trigger becomes
+ * "Nothing else", which only ever stops something from starting on its own.
+ *
+ * The projection tables are already read this way (`automations-repo.ts`), so
+ * this is the receipt half of one rule, not a second policy.
+ */
+function readResult(result: AutomationReceiptResult): AutomationReceiptResult {
+  if (result.kind !== "automation.created" && result.kind !== "automation.updated") return result;
+  return {
+    ...result,
+    automation: {
+      ...result.automation,
+      trigger: parseAutomationTrigger(result.automation.trigger),
+    },
+  };
 }
 
 /** Stable structural comparison for an idempotency key's immutable intent. */

@@ -325,6 +325,14 @@ export function createAutomationsStore() {
             listed.map((listing) => listing.name),
           ),
           instructions: automation.instructions,
+          // The Trigger is copied like every other field. "Same work, different
+          // Trigger" is the reason Duplicate exists (VC-112's tripwire), and a
+          // copy that silently arrived with no Trigger would answer that by
+          // making the person re-author the half they came here to keep. Note
+          // what is NOT copied with it: Arming belongs to the column, not to
+          // the record, so the copy is offered wherever its Trigger names and
+          // fires nowhere until a column arms it (VC-128).
+          trigger: automation.trigger,
           // An unreadable stored Runtime is not copied as itself — the copy
           // inherits instead, which is the only Runtime we can promise is
           // valid. Its source keeps the corrupt row, visible on the page.

@@ -1402,10 +1402,16 @@ export interface AutomationCreateInput {
   name: string;
   instructions: string;
   /**
-   * Which columns offer this Automation (VC-128). Omitted is "Nothing else" —
-   * the default for a new Automation and a complete answer, not an unset field.
+   * Which columns offer this Automation (VC-128).
+   *
+   * Required, and carried as the union's explicit `{ kind: "none" }` rather
+   * than left off: docs/BOUNDARIES.md rule 3 keeps RPC payloads JSON-safe, and
+   * an optional field says "Nothing else" only on a transport that survives
+   * `undefined` — Electron's structured clone does, JSON does not, so the
+   * spelling that means the default has to be a value. The union already has a
+   * member for it, which is why `none` exists at all.
    */
-  trigger?: AutomationTrigger;
+  trigger: AutomationTrigger;
   /** The pinned selection, whole, or `null` to inherit. */
   runtime: ModelSelection | null;
 }
@@ -1417,8 +1423,8 @@ export interface AutomationUpdateInput {
   automationId: string;
   name: string;
   instructions: string;
-  /** Rewritten whole like every other editable field; omitted clears it. */
-  trigger?: AutomationTrigger;
+  /** Rewritten whole like every other editable field, and present like it too. */
+  trigger: AutomationTrigger;
   runtime: ModelSelection | null;
 }
 

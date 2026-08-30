@@ -1137,9 +1137,13 @@ function isAutomationCommandId(value: unknown): value is string {
  * — which column names are real, and whether the list collapses to "Nothing
  * else", is the shared parser's job on the way into the record, so this guard
  * never has to be kept in step with the board's columns.
+ *
+ * A MISSING Trigger is refused rather than read as the default. "Nothing else"
+ * has its own union member (`{ kind: "none" }`) precisely so the default is a
+ * value a JSON transport can carry, and a door that also accepted absence would
+ * be the second spelling docs/BOUNDARIES.md rule 3 exists to prevent.
  */
 function isAutomationTriggerShape(value: unknown): boolean {
-  if (value === undefined) return true; // omitted is "Nothing else"
   if (!isRecord(value)) return false;
   if (value["kind"] === "none") return true;
   return value["kind"] === "columns" && Array.isArray(value["columns"]);

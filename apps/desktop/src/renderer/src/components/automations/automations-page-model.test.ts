@@ -12,6 +12,7 @@ import {
   runModelLabel,
   runModelTitle,
   runtimeLabel,
+  triggerLabel,
 } from "./automations-page-model";
 
 function automation(overrides: Partial<Automation> = {}): Automation {
@@ -56,6 +57,26 @@ describe("ownershipLabel", () => {
   it("names the two places an Automation can be listed", () => {
     expect(ownershipLabel(automation())).toBe("This project");
     expect(ownershipLabel(automation({ projectId: null }))).toBe("All projects");
+  });
+});
+
+describe("triggerLabel", () => {
+  it("says the manual sentence when the Trigger names no column", () => {
+    expect(triggerLabel(NO_AUTOMATION_TRIGGER)).toBe(MANUAL_TRIGGER_LABEL);
+  });
+
+  it("names the columns a column Trigger actually names, in the board's own words", () => {
+    expect(triggerLabel({ kind: "columns", columns: ["doing"] })).toBe("Ticket enters Doing");
+    expect(triggerLabel({ kind: "columns", columns: ["doing", "needs_review"] })).toBe(
+      "Ticket enters Doing, Needs Review",
+    );
+  });
+
+  it("degrades a column Trigger that ended up naming nothing to the manual sentence", () => {
+    // The record cannot hold this — the parser collapses it on the way in — but
+    // a row that printed "Ticket enters" with nothing after it would be a page
+    // saying less than nothing, so the label answers for the shape too.
+    expect(triggerLabel({ kind: "columns", columns: [] })).toBe(MANUAL_TRIGGER_LABEL);
   });
 });
 

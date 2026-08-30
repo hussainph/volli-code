@@ -378,6 +378,180 @@ describe("automation IPC", () => {
     expect(cleared).toMatchObject({ ok: true, automation: { trigger: { kind: "none" } } });
   });
 
+  /* ------------------------------ upgrade-era replays (VC-128) ---------- */
+
+  /**
+   * Writes the durable rows the build BEFORE the Trigger wrote: an intent with
+   * no `trigger` key, a completed receipt whose Automation has none either, and
+   * the record itself with a NULL `trigger_spec`.
+   *
+   * Inserted rather than edited into shape, because the ledger's own triggers
+   * refuse to update a command or a receipt — which is the point. History
+   * cannot be migrated into today's vocabulary, so today's reader is what has
+   * to understand yesterday's rows, and this is the only honest way to hand it
+   * one. `automationId` is returned so a test can name the record the replay
+   * must answer with.
+   */
+  function writeLegacyRows(input: {
+    commandId: string;
+    projectId: string;
+    name: string;
+    instructions: string;
+    kind: "create" | "update";
+    automationId?: string;
+  }): string {
+    const automationId = input.automationId ?? randomUUID();
+    const automation = {
+      id: automationId,
+      projectId: input.projectId,
+      name: input.name,
+      instructions: input.instructions,
+      // No `trigger` — this build did not have one.
+      runtime: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    };
+    const intent =
+      input.kind === "create"
+        ? {
+            kind: "automation.create",
+            projectId: input.projectId,
+            name: input.name,
+            instructions: input.instructions,
+            runtime: null,
+          }
+        : {
+            kind: "automation.update",
+            automationId,
+            name: input.name,
+            instructions: input.instructions,
+            runtime: null,
+          };
+    if (input.automationId === undefined) {
+      ctx.db
+        .prepare(
+          `INSERT INTO automations
+             (id, project_id, name, instructions, trigger_spec, runtime, row_version,
+              created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, ?)`,
+        )
+        .run(automationId, input.projectId, input.name, input.instructions, 1_000, 1_000);
+    }
+    ctx.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run(input.commandId, JSON.stringify(intent), 1_000);
+    ctx.db
+      .prepare(
+        `INSERT INTO automation_command_receipts (id, command_id, status, result, recorded_at)
+         VALUES (?, ?, 'completed', ?, ?)`,
+      )
+      .run(
+        randomUUID(),
+        input.commandId,
+        JSON.stringify({
+          kind: input.kind === "create" ? "automation.created" : "automation.updated",
+          automation,
+        }),
+        1_000,
+      );
+    return automationId;
+  }
+
+  it("replays a create written before the Trigger instead of calling the retry a conflict", async () => {
+    const { project } = setup();
+    const commandId = randomUUID();
+    const automationId = writeLegacyRows({
+      commandId,
+      projectId: project.id,
+      name: "Review",
+      instructions: "/review go",
+      kind: "create",
+    });
+
+    // The same durable identity, re-sent by the build that now HAS a Trigger.
+    // Compared literally, the stored intent and this one differ by a field, and
+    // the caller would be told its own command was already accepted with a
+    // different intent — for a record it never chose a Trigger for.
+    const replay = await call<AutomationResult>("volli:automation-create", {
+      commandId,
+      projectId: project.id,
+      name: "Review",
+      instructions: "/review go",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+
+    expect(replay).toMatchObject({ ok: true, automation: { id: automationId } });
+    if (!replay.ok) throw new Error("refused");
+    // And the receipt's own Automation comes back whole: a stored record with
+    // no Trigger reads as "Nothing else", never as a record missing the field.
+    expect(replay.automation.trigger).toEqual(NO_AUTOMATION_TRIGGER);
+    // The replay wrote nothing: one record, one command, one receipt.
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automations").get()).toEqual({ n: 1 });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_commands").get()).toEqual({ n: 1 });
+  });
+
+  it("replays an update written before the Trigger, and answers with a readable record", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    const commandId = randomUUID();
+    writeLegacyRows({
+      commandId,
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/tdd",
+      kind: "update",
+      automationId: created.automation.id,
+    });
+
+    const replay = await call<AutomationResult>("volli:automation-update", {
+      commandId,
+      automationId: created.automation.id,
+      name: "Sweep",
+      instructions: "/tdd",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+
+    expect(replay).toMatchObject({ ok: true, automation: { id: created.automation.id } });
+    if (!replay.ok) throw new Error("refused");
+    expect(replay.automation.trigger).toEqual(NO_AUTOMATION_TRIGGER);
+  });
+
+  it("still refuses a retry that genuinely changed its Trigger", async () => {
+    // Reading an absent Trigger as "Nothing else" is not the same as making the
+    // comparison lenient. A caller re-using one command id for a DIFFERENT
+    // intent is still the conflict it always was.
+    const { project } = setup();
+    const commandId = randomUUID();
+    writeLegacyRows({
+      commandId,
+      projectId: project.id,
+      name: "Review",
+      instructions: "/review go",
+      kind: "create",
+    });
+
+    expect(
+      await call<AutomationResult>("volli:automation-create", {
+        commandId,
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        trigger: { kind: "columns", columns: ["doing"] },
+        runtime: null,
+      }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("different intent") });
+  });
+
   it("arms a column with one offered Automation, replaces it, and disarms it", async () => {
     const { project, mutations } = setup();
     const first = await call<AutomationResult>("volli:automation-create", {

@@ -2713,6 +2713,9 @@ describe("AUTOMATION_IPC descriptor table", () => {
     commandId: COMMAND_ID,
     name: "Review",
     instructions: "/review go",
+    // Carried as a value, never omitted: "Nothing else" is a union member so a
+    // JSON transport can spell the default (docs/BOUNDARIES.md rule 3).
+    trigger: { kind: "none" },
     runtime: null,
   };
 
@@ -2766,9 +2769,13 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
 
     it("judges the Trigger's wire GRAMMAR, and leaves its meaning to the parser", () => {
-      // Omitted is "Only when I run it" — a complete answer, not an unset field.
-      expect(guard([{ projectId: "p1", ...DRAFT }])).toBe(true);
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "none" } }])).toBe(true);
+      // OMITTED is refused. "Only when I run it" is a complete answer with a
+      // union member of its own, so absence is a second spelling of it that a
+      // JSON transport could not carry — the door takes the value instead.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: undefined }])).toBe(false);
+      const { trigger: _dropped, ...withoutTrigger } = DRAFT;
+      expect(guard([{ projectId: "p1", ...withoutTrigger }])).toBe(false);
       expect(
         guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["doing"] } }]),
       ).toBe(true);

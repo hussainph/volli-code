@@ -98,11 +98,12 @@ export function ColumnArmingButton({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
+              size="icon-sm"
               aria-label={label}
               data-column-arming={status}
               data-armed={armed === null ? undefined : armed.id}
               className={cn(
-                "size-6 shrink-0 p-0 transition-opacity duration-150",
+                "shrink-0 transition-opacity duration-150",
                 armed === null
                   ? [
                       "text-muted-foreground opacity-0",
@@ -112,7 +113,7 @@ export function ColumnArmingButton({
                   : "text-foreground",
               )}
             >
-              <LightningIcon className="size-3.5" weight={armed === null ? "regular" : "fill"} />
+              <LightningIcon weight={armed === null ? "regular" : "fill"} />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

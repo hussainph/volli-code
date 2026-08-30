@@ -106,6 +106,20 @@ function ticketDisplayId(projectId: string, ticketId: string): string {
   return displayTicketId(project.ticketPrefix, ticket.ticketNumber);
 }
 
+/**
+ * A committed Deliberate move, as the arrival door takes it: which Ticket, and
+ * the two columns — `from` is what makes an arrival distinguishable from a
+ * reorder, and no re-read can recover it after the fact.
+ *
+ * One declaration for both reporters. The board store's
+ * `DeliberateMoveObserver` is this type rather than a second spelling of it, so
+ * a drag and a `volli ticket move` cannot drift into two shapes of one fact.
+ * The transport's own `TicketMovedNotice` stays declared where the wire is
+ * (`ipc/contract.ts`) and carries these same four fields: it is what MAIN
+ * announces for callers that are not this renderer, which is a narrower fact
+ * than "a Deliberate move happened", and the renderer is the only side that
+ * knows both.
+ */
 export interface DeliberateMove {
   projectId: string;
   ticketId: string;
