@@ -20,6 +20,7 @@
  */
 
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
+import { parseAutomationSchedule, type AutomationSchedule } from "./automation-schedule";
 import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
 
 /**
@@ -55,16 +56,23 @@ export function isAutomationRuntimePin(runtime: AutomationRuntime): runtime is M
  * `none` is the default for a new Automation and a complete answer rather than
  * an inert one — run by hand is universal, so the Trigger says only what *else*
  * starts it. `columns` is VC-128's arm: a Ticket entering one of the named
- * columns. A schedule arm joins this union in VC-130; widening a union is
- * append-only, which is why the Trigger is spelled as one from the start.
+ * columns. `schedule` is VC-130's: a due time in a stored IANA zone. Widening a
+ * union is append-only, which is why the Trigger was spelled as one from the
+ * start — the schedule arm is a third member here and a migration nowhere.
  *
  * VC-112 rules one Trigger per Automation, so this is a single value and never
  * a list. The columns *inside* a column Trigger are plural because "the same
  * work in Doing and in Needs Review" is one Automation, not two.
+ *
+ * The Trigger also decides the TARGET of the Run it starts, which is why the
+ * two arms are not interchangeable: a column Trigger names a Ticket, so its Run
+ * opens a Ticket Session; a schedule names the Project, so its Run opens a
+ * Project Session (VC-112, "Scope — two axes").
  */
 export type AutomationTrigger =
   | { kind: "none" }
-  | { kind: "columns"; columns: readonly TicketStatus[] };
+  | { kind: "columns"; columns: readonly TicketStatus[] }
+  | { kind: "schedule"; schedule: AutomationSchedule };
 
 /** The Trigger a new Automation gets, and the one an unreadable stored value degrades to. */
 export const NO_AUTOMATION_TRIGGER: AutomationTrigger = { kind: "none" };
@@ -87,6 +95,15 @@ export const NO_AUTOMATION_TRIGGER: AutomationTrigger = { kind: "none" };
 export function parseAutomationTrigger(raw: unknown): AutomationTrigger {
   if (typeof raw !== "object" || raw === null) return NO_AUTOMATION_TRIGGER;
   const kind = (raw as { kind?: unknown }).kind;
+  if (kind === "schedule") {
+    // Same stance as the columns below, and it matters more here: an
+    // unreadable schedule — a zone this build's ICU does not know, an hour
+    // outside the clock — must not be repaired into a time nobody chose, since
+    // the repair would start unattended work. `null` from the parser means
+    // this Automation simply fires nothing until someone re-authors it.
+    const schedule = parseAutomationSchedule((raw as { schedule?: unknown }).schedule);
+    return schedule === null ? NO_AUTOMATION_TRIGGER : { kind: "schedule", schedule };
+  }
   if (kind !== "columns") return NO_AUTOMATION_TRIGGER;
   const columns = (raw as { columns?: unknown }).columns;
   if (!Array.isArray(columns)) return NO_AUTOMATION_TRIGGER;
@@ -101,6 +118,11 @@ export function parseAutomationTrigger(raw: unknown): AutomationTrigger {
 /** The columns a Trigger names, in board order — empty for every non-column Trigger. */
 export function automationTriggerColumns(trigger: AutomationTrigger): readonly TicketStatus[] {
   return trigger.kind === "columns" ? trigger.columns : [];
+}
+
+/** The schedule a Trigger carries, or `null` for every non-schedule Trigger. */
+export function automationTriggerSchedule(trigger: AutomationTrigger): AutomationSchedule | null {
+  return trigger.kind === "schedule" ? trigger.schedule : null;
 }
 
 /** Whether this Automation is offered in `status` — i.e. its Trigger names that column. */
@@ -172,9 +194,15 @@ export interface AutomationRun {
   /** The bound Automation's name at launch, retained after record deletion. */
   automationName: string | null;
   /**
-   * The Ticket the Run was invoked on. Nullable for exactly the reason
-   * `sessions.ticket_id` is: deleting a Ticket orphans the record rather than
-   * erasing the provenance of a Session that still exists.
+   * The Ticket the Run was invoked on, or `null` when it named none.
+   *
+   * Two different facts share this one `null`, and they are the same fact from
+   * the Session's point of view — `ticketId !== null` IS the Role a Session was
+   * born under (`main/session-runtime/sessions.ts`). A Ticket deleted after the
+   * Run orphans the reference rather than erasing the provenance of a Session
+   * that still exists; a schedule Run (VC-130) never had one, because its
+   * Target is the Project. One nullable field, one rule, and the Run history
+   * files both through the Session's own project.
    */
   ticketId: string | null;
   sessionId: string;
@@ -221,6 +249,8 @@ export type AutomationRunRefusalCode =
   | "AUTOMATION_NOT_FOUND"
   | "AUTOMATION_NOT_IN_PROJECT"
   | "TICKET_NOT_FOUND"
+  /** A Run that names the Project as its Target, and no such project (VC-130). */
+  | "PROJECT_NOT_FOUND"
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
   | "MODEL_UNAVAILABLE"
@@ -431,6 +461,127 @@ export function automationPinProblem(
     return `This model does not support reasoning level "${pin.reasoningLevel}" (valid: ${model.reasoningLevels.join(", ")}).`;
   }
   return null;
+}
+
+/**
+ * Why a schedule cannot be saved on THIS record, or `null` when it can.
+ *
+ * One rule, and it is a consequence of VC-112 rather than a new constraint: a
+ * schedule Run's Target is the Project, so the schedule has to name which
+ * Project it runs in. A global Automation is *listed* in every project and
+ * belongs to none of them, so a schedule on one could only mean "fire in every
+ * project" — which is a backlog of Runs on every launch, the exact thing
+ * VC-130 forbids — or nothing at all, which is a switch that silently does
+ * nothing. Neither is a product.
+ *
+ * Stated here so the editor's blocked Save and main's write refusal are one
+ * policy rather than two that drift. Ownership is identity on update
+ * (`updateAutomation` takes no `projectId`), so on an existing global record
+ * this is a refusal rather than something the form can fix — which is why the
+ * sentence names the way out: duplicate it into a project.
+ */
+export function automationScheduleProblem(draft: {
+  projectId: string | null;
+  trigger: AutomationTrigger;
+}): string | null {
+  if (draft.trigger.kind !== "schedule" || draft.projectId !== null) return null;
+  return "A schedule runs in one project, so it can't be set on an Automation listed in all projects. Duplicate it into this project first.";
+}
+
+/* -------------------------------- skipped occurrences (VC-130) ------------ */
+
+/**
+ * Why a due time went by without anyone watching it — the two answers the
+ * scheduler's pure policy can reach on its own.
+ *
+ * They are split from the rest of {@link AutomationSkipReason} because they are
+ * derived rather than observed, and each is a CLAIM ABOUT THIS PROCESS that
+ * must be true:
+ *
+ *  - `app-closed` — the due time is older than the moment this host started
+ *    watching, so nothing here could have started it. The ordinary case, and
+ *    the one VC-130 names.
+ *  - `not-observed` — the app was running and still did not reach the due time
+ *    in the grace window: a laptop asleep at 21:00, a machine too busy to run
+ *    a timer, a process suspended by the OS. Its own answer rather than
+ *    `app-closed`, because "Volli wasn't running" would be false, and a
+ *    history that says a false thing about why work did not happen is worse
+ *    than one that says a vague true thing.
+ */
+export type AutomationMissedReason = { kind: "app-closed" } | { kind: "not-observed" };
+
+/**
+ * Why a due time passed without a Run.
+ *
+ * A closed union rather than prose, for the reason every other refusal in this
+ * file is vocabulary: a surface classifies without matching strings. The two
+ * unobserved answers above, plus the one the host observed and the one every
+ * tolerant reader needs:
+ *
+ *  - `run-refused` — the scheduler was awake and asked, and the Run door said
+ *    no (no default model, an earlier Run still working). Recorded because
+ *    VC-112's rule is that a skip and a silence must never look the same, and
+ *    a refusal that only reached a log would be a silence.
+ *  - `unknown` — a stored reason THIS build cannot read. It still reads as a
+ *    skip, which is the half that matters; inventing `app-closed` for it would
+ *    be asserting a cause we do not know.
+ *
+ * `code` stays a bare string on purpose, exactly as a Run's recorded
+ * `reasoningLevel` does: it is historical evidence, and a build that no longer
+ * knows a refusal code must print what happened rather than rewrite it.
+ */
+export type AutomationSkipReason =
+  | AutomationMissedReason
+  | { kind: "run-refused"; code: string; error: string }
+  | { kind: "unknown" };
+
+/**
+ * A due time that passed without a Run, recorded (VC-112, "Skipped
+ * occurrence").
+ *
+ * It is a RECORD rather than a log line for one reason: VC-112 requires a
+ * skip to offer "Run now" from the Run history afterwards, so it has to be
+ * something a surface can list, name and act on. It snapshots the Automation's
+ * name for the same reason a Run does — the history outlives the record.
+ *
+ * `id` is a UUID (docs/BOUNDARIES.md standing rule 1).
+ */
+export interface AutomationSkippedOccurrence {
+  id: string;
+  automationId: string;
+  /** The bound Automation's name when the skip was recorded. */
+  automationName: string;
+  /** The project the schedule would have run in — a schedule Run's Target. */
+  projectId: string;
+  /**
+   * The LATEST due time this skip covers, in epoch milliseconds.
+   *
+   * One row per gap rather than one per occurrence, and `missedCount` says how
+   * wide the gap was. An app closed over a weekend owes an hourly schedule
+   * around fifty rows under the other spelling, which would bury the Run
+   * history it is filed in — and every one of those rows would offer a "Run
+   * now" that must not be pressed fifty times, since replaying is precisely
+   * what VC-112 forbids.
+   */
+  dueAt: number;
+  /** How many occurrences the gap covered; 1 in the ordinary case. */
+  missedCount: number;
+  reason: AutomationSkipReason;
+  /** Epoch milliseconds. */
+  recordedAt: number;
+}
+
+/** A stored/transported skip reason, read in today's vocabulary. */
+export function parseAutomationSkipReason(raw: unknown): AutomationSkipReason {
+  if (typeof raw !== "object" || raw === null) return { kind: "unknown" };
+  const record = raw as Record<string, unknown>;
+  if (record["kind"] === "app-closed") return { kind: "app-closed" };
+  if (record["kind"] === "not-observed") return { kind: "not-observed" };
+  if (record["kind"] !== "run-refused") return { kind: "unknown" };
+  const code = record["code"];
+  const error = record["error"];
+  if (typeof code !== "string" || typeof error !== "string") return { kind: "unknown" };
+  return { kind: "run-refused", code, error };
 }
 
 /* ------------------------------------------------- arming (VC-128) -------- */

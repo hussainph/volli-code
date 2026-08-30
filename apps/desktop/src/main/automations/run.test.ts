@@ -15,13 +15,15 @@ import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
   getAutomation,
   listAutomationsForProject,
+  listProjectRunsForAutomation,
   listRunsForTicket,
   recordAutomationRun,
 } from "../db/automations-repo";
 import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { readSessionProvenance } from "../db/session-provenance-repo";
-import { openTestDb, testProject, testTicket } from "../db/test-helpers";
+import { insertSession } from "../session-control/test-support";
+import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
 import { StructuredSessionsError } from "../session-runtime/sessions";
@@ -105,7 +107,9 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
       const found = ticketId === ticket.id ? ticket : undefined;
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
     },
+    findProject: (candidate) => candidate === project.id,
     listRunsForTicket: (ticketId) => listRunsForTicket(ctx.db, ticketId),
+    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -113,6 +117,11 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
         if (sessionId === undefined) {
           sessionId = `session-${++nextSession}`;
           sessionsByOperation.set(input.operationId, sessionId);
+          // The fake facade mints the Session ROW as well as the id, because a
+          // Run that names no Ticket is scoped to its project through exactly
+          // this row (`listProjectRunsForAutomation`) — a fake that skipped it
+          // would leave the schedule's own single-flight guard untestable.
+          insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
         }
         return { sessionId, model: RESOLVED };
       },
@@ -804,5 +813,154 @@ describe("createAutomationRunner", () => {
     expect(h.delivered[0]?.text).toBe(automation.instructions);
     expect(h.delivered[0]?.resources).toEqual([]);
     expect(h.logs.join("\n")).toMatch(/prompt supply/);
+  });
+
+  /* ------------------------- the Project as the Target (VC-130) --------- */
+
+  it("opens a PROJECT Session for a Run that names no Ticket", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("refused");
+    // `ticketId: null` IS the Project Role in the Session layer, so a schedule
+    // Run is a Project Session by construction rather than by a second flag.
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      projectId: h.projectId,
+      ticketId: null,
+      title: "Two-opinion review",
+      actor: { kind: "automation" },
+    });
+    expect(outcome.run).toMatchObject({ ticketId: null, sessionId: "session-1" });
+    // It is filed in the project's history through its Session, and it is not
+    // on any Ticket's rail.
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
+    // The Instructions still arrive, by the same durable delivery intent.
+    expect(h.delivered).toHaveLength(1);
+  });
+
+  it("replays a retried Project Run rather than opening a second Session", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const first = await h.runner.runForProject({
+      commandId,
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    const second = await h.runner.runForProject({
+      commandId,
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+
+    if (!first.ok || !second.ok) throw new Error("refused");
+    expect(second.run).toEqual(first.run);
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("refuses a Project Run whose command id was accepted for another Target", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    await expect(
+      h.runner.runForProject({ commandId, automationId: automation.id, projectId: h.projectId }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+  });
+
+  it("refuses a project this host does not have", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: "no-such-project",
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "PROJECT_NOT_FOUND" });
+    expect(h.creates).toEqual([]);
+  });
+
+  it("refuses an Automation owned by another project", async () => {
+    const h = harness();
+    const created = await h.engine.create({
+      commandId: randomUUID(),
+      projectId: "elsewhere",
+      name: "Far away",
+      instructions: "/sweep",
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: created.value.id,
+        projectId: h.projectId,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "AUTOMATION_NOT_IN_PROJECT" });
+  });
+
+  it("does not stack a schedule on itself while an earlier Run is still working", async () => {
+    let activity: "working" | "idle" = "idle";
+    const h = harness({ readSessionActivity: async () => activity });
+    const automation = await savedAutomation(h);
+    await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    activity = "working";
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+  });
+
+  it("lets a DIFFERENT schedule fire in the same project and minute", async () => {
+    // The single-flight subject for a Run with no Ticket is the schedule
+    // itself, not the project: two Automations due at 09:00 are two Runs.
+    let activity: "working" | "idle" = "idle";
+    const h = harness({ readSessionActivity: async () => activity });
+    const first = await savedAutomation(h, { name: "First" });
+    const second = await savedAutomation(h, { name: "Second" });
+    await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: first.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    activity = "working";
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: second.id,
+      projectId: h.projectId,
+    });
+    await h.runner.settled();
+    expect(outcome.ok).toBe(true);
+    expect(h.creates).toHaveLength(2);
   });
 });

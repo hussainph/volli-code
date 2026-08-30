@@ -7,11 +7,16 @@ import {
   createAutomation,
   deleteAutomation,
   getAutomation,
+  getSkippedOccurrence,
+  insertSkippedOccurrence,
   latestRunForTicket,
+  listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForProject,
   recordAutomationRun,
   setColumnArming,
   updateAutomation,
@@ -551,5 +556,229 @@ describe("column Trigger and arming (migration 031)", () => {
     expect(listColumnArmings(ctx.db, project.id)).toEqual([
       { projectId: project.id, status: "doing", automationId: automation.id, armedAt: 2000 },
     ]);
+  });
+
+  /* --------------------------- schedules (VC-130) ----------------------- */
+
+  const NIGHTLY = {
+    kind: "schedule" as const,
+    schedule: { preset: "daily" as const, hour: 21, minute: 30, timeZone: "Europe/London" },
+  };
+
+  it("stores a schedule Trigger as JSON and reads it back whole", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    expect(getAutomation(ctx.db, automation.id)?.trigger).toEqual(NIGHTLY);
+  });
+
+  it("degrades a stored schedule this build cannot read to firing nothing", () => {
+    // The safe direction, and the reason it is safe: an unreadable schedule can
+    // only ever cost a Run that would have started on its own, and the record
+    // stays runnable by hand. Repairing it would start work at an invented time.
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    ctx.db.prepare("UPDATE automations SET trigger_spec = ? WHERE id = ?").run(
+      JSON.stringify({
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 30, timeZone: "Mars/Olympus" },
+      }),
+      automation.id,
+    );
+    expect(getAutomation(ctx.db, automation.id)?.trigger).toEqual(NO_AUTOMATION_TRIGGER);
+  });
+
+  it("lists every Automation on this machine, whatever project it belongs to", () => {
+    // The scheduler's read: a timer serves every project at once, so asking
+    // per project would make the set of live schedules depend on which
+    // projects a window happens to have open.
+    const { project } = seeded();
+    const other = testProject({ id: "project-two", path: "/repo/two", ticketPrefix: "OT" });
+    insertProject(ctx.db, other);
+    const draft = { name: "A", instructions: "x", trigger: NIGHTLY, runtime: null };
+    createAutomation(ctx.db, { ...draft, projectId: project.id }, 1000);
+    createAutomation(ctx.db, { ...draft, projectId: other.id, name: "B" }, 1001);
+    createAutomation(ctx.db, { ...draft, projectId: null, name: "C" }, 1002);
+    expect(listAllAutomations(ctx.db).map((automation) => automation.name)).toEqual([
+      "A",
+      "B",
+      "C",
+    ]);
+  });
+
+  it("finds one Automation's Runs inside one project, through their own Sessions", () => {
+    const { project, ticket, session } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    const ticketRun = recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        automationName: automation.name,
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      2000,
+    );
+    // A Run that names NO Ticket — a schedule's Project target. It is filed by
+    // the project of the Session it opened, which is the only evidence it has.
+    const projectSession = testSession(project.id, null, { id: "session-project" });
+    insertSession(ctx.db, projectSession);
+    const projectRun = recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        automationName: automation.name,
+        ticketId: null,
+        sessionId: projectSession.id,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      3000,
+    );
+
+    expect(projectRun.ticketId).toBeNull();
+    expect(
+      listProjectRunsForAutomation(ctx.db, {
+        automationId: automation.id,
+        projectId: project.id,
+      }),
+    ).toEqual([projectRun, ticketRun]);
+    // And the project's whole history carries the ticketless Run too, without
+    // a second scoping rule.
+    expect(listRunsForProject(ctx.db, project.id)).toEqual([projectRun, ticketRun]);
+    expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([ticketRun]);
+  });
+
+  it("records a Skipped occurrence and lists it newest due first", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    const skip = {
+      id: "11111111-1111-4111-8111-111111111111",
+      automationId: automation.id,
+      automationName: "Nightly",
+      projectId: project.id,
+      dueAt: 5000,
+      missedCount: 3,
+      reason: { kind: "app-closed" as const },
+    };
+    insertSkippedOccurrence(ctx.db, { ...skip, recordedAt: 6000 });
+    insertSkippedOccurrence(ctx.db, {
+      ...skip,
+      id: "22222222-2222-4222-8222-222222222222",
+      dueAt: 9000,
+      missedCount: 1,
+      reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." },
+      recordedAt: 9500,
+    });
+
+    const listed = listSkippedOccurrencesForProject(ctx.db, project.id);
+    expect(listed.map((row) => row.dueAt)).toEqual([9000, 5000]);
+    expect(listed[0]?.reason).toEqual({
+      kind: "run-refused",
+      code: "MODEL_REQUIRED",
+      error: "Choose a model.",
+    });
+    expect(getSkippedOccurrence(ctx.db, skip.id)).toMatchObject({ missedCount: 3 });
+    expect(getSkippedOccurrence(ctx.db, "nope")).toBeUndefined();
+  });
+
+  it("still reads as a skip when the stored reason is unreadable", () => {
+    // The one asymmetry with the Trigger beside it: an unreadable REASON must
+    // never make a skip look like a silence, so it degrades to "unknown"
+    // rather than to a cause we would be inventing.
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    insertSkippedOccurrence(ctx.db, {
+      id: "33333333-3333-4333-8333-333333333333",
+      automationId: automation.id,
+      automationName: "Nightly",
+      projectId: project.id,
+      dueAt: 5000,
+      missedCount: 1,
+      reason: { kind: "app-closed" },
+      recordedAt: 6000,
+    });
+    ctx.db
+      .prepare("UPDATE automation_skipped_occurrences SET reason = ? WHERE id = ?")
+      .run(JSON.stringify({ kind: "from-the-future" }), "33333333-3333-4333-8333-333333333333");
+    expect(listSkippedOccurrencesForProject(ctx.db, project.id)[0]?.reason).toEqual({
+      kind: "unknown",
+    });
+  });
+
+  it("takes a deleted Automation's skips with it — there is nothing left to run now", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NIGHTLY,
+        runtime: null,
+      },
+      1000,
+    );
+    insertSkippedOccurrence(ctx.db, {
+      id: "44444444-4444-4444-8444-444444444444",
+      automationId: automation.id,
+      automationName: "Nightly",
+      projectId: project.id,
+      dueAt: 5000,
+      missedCount: 1,
+      reason: { kind: "app-closed" },
+      recordedAt: 6000,
+    });
+    deleteAutomation(ctx.db, automation.id);
+    expect(listSkippedOccurrencesForProject(ctx.db, project.id)).toEqual([]);
   });
 });

@@ -73,9 +73,12 @@ import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import {
   getAutomation,
+  listAllAutomations,
   listAutomationsForProject,
+  listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
@@ -121,6 +124,9 @@ import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import type { AutomationRunner } from "./automations/run";
 import { createAutomationService } from "./automations/service";
+import { createAutomationScheduler } from "./automations/scheduler";
+import type { AutomationScheduler } from "./automations/scheduler";
+import { advanceScheduleCursor, readScheduleCursors } from "./automations/schedule-cursor";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
@@ -1131,12 +1137,20 @@ app.whenReady().then(async () => {
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
+          skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
           onMutation: (change) => broadcastDataChanged(change),
+          // Every record write can add, retime or remove a schedule, and the
+          // enabled switch decides whether one may fire here at all — so the
+          // timer re-reads after each rather than waiting out its own tick.
+          onAutomationsChanged: () => {
+            void automationScheduler?.refresh();
+          },
         });
   let automationRunner: AutomationRunner | null = null;
+  let automationScheduler: AutomationScheduler | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1825,7 +1839,9 @@ app.whenReady().then(async () => {
           engine: automationEngine,
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           findTicket: (ticketId) => getTicket(sessionDb, ticketId),
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
           listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
           sessions,
           promptSupply: async (projectId) => {
             const project = getProjectById(sessionDb, projectId);
@@ -1873,13 +1889,76 @@ app.whenReady().then(async () => {
             const snapshot = await sessionRuntime.projection({ sessionId });
             return chatSessionRecord(snapshot.projection).activity;
           },
+          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
+          // property rather than sending `undefined` for it: the Electron
+          // transport would carry that by structured clone, and an HTTP one
+          // would mangle it (docs/BOUNDARIES.md rule 3).
           onRunStarted: ({ projectId, run }) =>
-            broadcastDataChanged({ projectId, ticketId: run.ticketId ?? undefined }),
+            broadcastDataChanged(
+              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
+            ),
         })
       : null;
   if (automationRunner !== null) {
     void automationRunner.recover().catch((error: unknown) => {
       console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
+    });
+  }
+  // The schedule timer (VC-130). It is a thin caller of the pure policy in
+  // `@volli/shared` and of the same Run door a person uses, so everything below
+  // is composition: a clock, Node's timers, the projections it reads, and the
+  // durable command it records a Skipped occurrence through.
+  //
+  // It needs the Run door, so it comes up with the runner: a launch where the
+  // Session runtime never started has no scheduler either, which is honest —
+  // nothing could have run, and the missed occurrences are still owed and will
+  // be recorded as skips by the next launch that can.
+  const runnerForSchedule = automationRunner;
+  if (runnerForSchedule !== null && automationEngine !== null && sessionDb !== null) {
+    const scheduleDb = sessionDb;
+    const scheduleEngine = automationEngine;
+    automationScheduler = createAutomationScheduler({
+      now: Date.now,
+      listAutomations: () => Promise.resolve(listAllAutomations(scheduleDb)),
+      enabledAutomationIds: () => scheduleEngine.enabledAutomationIds(),
+      readCursors: () => Promise.resolve(readScheduleCursors(scheduleDb)),
+      advanceCursor: (input) => {
+        advanceScheduleCursor(scheduleDb, input, Date.now());
+        return Promise.resolve();
+      },
+      recordSkip: async (input) => {
+        const outcome = await scheduleEngine.recordSkip(input);
+        if (!outcome.ok) {
+          // Fail the step rather than resolving over it. The scheduler advances
+          // its cursor only after a step settles, so a refused write leaves the
+          // occurrence owed and the next pass records it again under the same
+          // derived command id. Swallowing it here would step past a skip that
+          // never reached the ledger — a skip that looks exactly like a
+          // silence, which is the one outcome VC-112 forbids.
+          throw new Error(outcome.error);
+        }
+        // The Automations page reads its history on arrival and on every
+        // planning change, so a skip recorded while it is open lands without
+        // anyone reloading.
+        broadcastDataChanged({ projectId: input.skip.projectId });
+      },
+      startRun: async (input) => {
+        const outcome = await runnerForSchedule.runForProject(input);
+        return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => {
+        clearTimeout(handle);
+      },
+    });
+    const scheduler = automationScheduler;
+    void scheduler.start().catch((error: unknown) => {
+      console.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`);
+    });
+    // Nothing new may become due once the app is on its way out; work already
+    // accepted is durable and recovers on the next launch.
+    app.on("before-quit", () => {
+      scheduler.stop();
     });
   }
   registerAutomationIpcHandlers(dbHandle, {

@@ -43,6 +43,29 @@ export interface AutomationRunTicket {
   projectId: string;
 }
 
+/**
+ * WHERE a Run is aimed — VC-112's scope axis, and the thing the Trigger
+ * decides. Not to be confused with {@link AutomationRunTarget}, which is what
+ * SUPPLIES the Instructions (a record, or an Unbound Run's own text).
+ *
+ * A Ticket scope opens a Ticket Session; a Project scope opens a Project
+ * Session, which is what a schedule Trigger does (VC-130). Modelled as a union
+ * here and stored as a nullable `ticketId` on the plan, because that nullable
+ * IS the Role in the Session layer already (`session-runtime/sessions.ts`) and
+ * a second spelling of one fact would be a second policy.
+ */
+type RunScope = { kind: "ticket"; ticketId: string } | { kind: "project"; projectId: string };
+
+/** A scope resolved against live host facts: where it runs, and what it competes with. */
+interface ResolvedRunScope {
+  projectId: string;
+  ticketId: string | null;
+  /** The optimistic-open latch key — one live Run per Ticket, or per schedule. */
+  latchKey: string;
+  /** The Runs whose Sessions must be quiet before another starts here. */
+  priorRuns: readonly AutomationRun[];
+}
+
 /** What the Session runtime answers after attempting the persistent message intent. */
 export type InstructionDeliveryResult = void | {
   receipt?: { status: "accepted" | "completed" | "rejected" | "unreconciled" } | null;
@@ -54,7 +77,18 @@ export interface AutomationRunnerDeps {
   /** Projection reads belong to the host, never to IPC. */
   findAutomation(automationId: string): Automation | undefined;
   findTicket(ticketId: string): AutomationRunTicket | undefined;
+  /** Whether a Project scope names a project this host actually has. */
+  findProject(projectId: string): boolean;
   listRunsForTicket(ticketId: string): readonly AutomationRun[];
+  /**
+   * One Automation's Runs in one project — the single-flight subject for a Run
+   * that names no Ticket. A schedule cannot ask "is this Ticket busy", so it
+   * asks whether an earlier Run of itself is still working here.
+   */
+  listProjectRunsForAutomation(input: {
+    automationId: string;
+    projectId: string;
+  }): readonly AutomationRun[];
   /** The product Session facade — the only door that can mint a fresh Session. */
   sessions: Pick<Sessions, "create" | "attach">;
   /** The same supply `volli:prompt-templates` hands the composer's picker. */
@@ -109,8 +143,42 @@ export interface AutomationRunRequest {
   modelOverride: ModelSelection | null;
 }
 
+/**
+ * One Run request aimed at a PROJECT rather than a Ticket (VC-130).
+ *
+ * A separate shape from {@link AutomationRunRequest} because the two differ in
+ * what they can even name: this one has no Ticket to run on and no
+ * per-invocation override, since nobody is standing there to choose one — it is
+ * the timer's door and the "Run now" behind a Skipped occurrence. Both meet
+ * again immediately inside, as one Run path.
+ */
+export interface AutomationProjectRunRequest {
+  commandId: string;
+  automationId: string;
+  projectId: string;
+}
+
+/**
+ * Both doors, once they are inside: what supplies the Instructions, and where
+ * the Run is aimed. Every rule below — replay identity, the single-flight
+ * latch, the accepted plan — is written against this one shape, so the Ticket
+ * door and the Project door cannot drift into two recovery stories.
+ */
+interface InternalRunRequest {
+  commandId: string;
+  target: AutomationRunTarget;
+  scope: RunScope;
+  modelOverride: ModelSelection | null;
+}
+
 export interface AutomationRunner {
   run(input: AutomationRunRequest): Promise<RunAutomationOutcome>;
+  /**
+   * Runs an Automation against a PROJECT rather than a Ticket (VC-130): the
+   * schedule's own door, and the one behind "Run now" on a Skipped occurrence.
+   * It opens a Project Session, because `ticketId === null` is that Role.
+   */
+  runForProject(input: AutomationProjectRunRequest): Promise<RunAutomationOutcome>;
   /** Resume a persistent first-message intent after any successful Session attach. */
   resumeDeliveryForSession(sessionId: string): Promise<void>;
   /** Recover accepted Run plans that died before their Session/Run projection committed. */
@@ -124,11 +192,31 @@ function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRef
   return { ok: false, code, error };
 }
 
+/**
+ * The optimistic-open latch a Run belongs to, minted from the scope it names.
+ *
+ * One key derivation for both the fresh path and the replay path: a retry has
+ * only the stored PLAN to go on, so if the two spelled the key differently a
+ * replay would take a second latch and the guard would be a guard over nothing.
+ * A Ticket is one live Run whichever Automation started it (VC-112); a Run that
+ * names no Ticket is one live Run per schedule per project.
+ */
+function runLatchKey(scope: {
+  ticketId: string | null;
+  projectId: string;
+  automationId: string | null;
+}): string {
+  return scope.ticketId === null
+    ? `project\u0000${scope.projectId}\u0000${scope.automationId ?? "unbound"}`
+    : `ticket\u0000${scope.ticketId}`;
+}
+
 function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | null {
   switch (value) {
     case "AUTOMATION_NOT_FOUND":
     case "AUTOMATION_NOT_IN_PROJECT":
     case "TICKET_NOT_FOUND":
+    case "PROJECT_NOT_FOUND":
     case "RUN_IN_FLIGHT":
     case "MODEL_REQUIRED":
     case "MODEL_UNAVAILABLE":
@@ -150,12 +238,15 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
    */
   const inFlight = new Map<string, Promise<void>>();
 
-  async function activityGuard(ticketId: string): Promise<RunAutomationOutcome | null> {
+  async function activityGuard(
+    runs: readonly AutomationRun[],
+    /** What the earlier Run was about, so the sentence names the real subject. */
+    subject: string,
+  ): Promise<RunAutomationOutcome | null> {
     // Never inspect only the newest Run. An older Session can be resumed after
     // a newer Run has gone idle; every Run-owned Session must be quiet before a
     // Ticket gets another Run. An unreadable projection fails closed rather
     // than accidentally admitting a second live worker.
-    const runs = deps.listRunsForTicket(ticketId);
     for (const run of runs) {
       // "stopped" admits a new Run exactly as "idle" does: a supervisor ending
       // an earlier Run's work is the opposite of that work still being live.
@@ -165,21 +256,21 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       } catch (error) {
         return refuse(
           "RUN_IN_FLIGHT",
-          `Could not verify an earlier Run on this Ticket: ${errorMessage(error)}`,
+          `Could not verify an earlier Run ${subject}: ${errorMessage(error)}`,
         );
       }
       if (activity === null) {
         return refuse(
           "RUN_IN_FLIGHT",
-          "Could not verify an earlier Run on this Ticket. Recover or inspect it before starting another.",
+          `Could not verify an earlier Run ${subject}. Recover or inspect it before starting another.`,
         );
       }
       if (activity === "working" || activity === "waiting") {
         return refuse(
           "RUN_IN_FLIGHT",
           activity === "waiting"
-            ? "A Run on this Ticket is waiting on a person. Answer it or interrupt it before starting another."
-            : "A Run is already working on this Ticket. Interrupt it before starting another.",
+            ? `A Run ${subject} is waiting on a person. Answer it or interrupt it before starting another.`
+            : `A Run is already working ${subject}. Interrupt it before starting another.`,
         );
       }
     }
@@ -298,7 +389,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
   }
 
   async function replayExistingPlan(
-    input: AutomationRunRequest,
+    input: InternalRunRequest,
     plan: AutomationRunPlan,
   ): Promise<RunAutomationOutcome> {
     // The WHOLE intent, not just the record and the Ticket. A command id is
@@ -308,9 +399,15 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     // more: every Unbound Run names none, so a retry carrying edited
     // Instructions — or the same Instructions on another model — would replay
     // the first Run's Session and silently discard what was actually asked for.
+    // The scope is compared as the plan actually stores it: a Ticket Run by its
+    // Ticket, a Project Run by the absence of one plus the project it named.
+    const sameScope =
+      input.scope.kind === "ticket"
+        ? plan.ticketId === input.scope.ticketId
+        : plan.ticketId === null && plan.projectId === input.scope.projectId;
     if (
       plan.automationId !== automationRunTargetId(input.target) ||
-      plan.ticketId !== input.ticketId ||
+      !sameScope ||
       !sameAutomationRunRequestIdentity(plan.request, automationRunRequestIdentity(input))
     ) {
       return refuse(
@@ -318,7 +415,8 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         "This command id was already accepted for a different Automation Run.",
       );
     }
-    const priorBoot = inFlight.get(plan.ticketId);
+    const latchKey = runLatchKey(plan);
+    const priorBoot = inFlight.get(latchKey);
     if (priorBoot !== undefined) {
       // A second delivery of the same command while its first attach is still
       // booting is a transport retry, not a competing Run. Wait for that
@@ -329,7 +427,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     const latch = new Promise<void>((resolve) => {
       releaseLatch = resolve;
     });
-    inFlight.set(plan.ticketId, latch);
+    inFlight.set(latchKey, latch);
     let bootOwnsLatch = false;
     try {
       const replay = await deps.engine.replayRun(input.commandId);
@@ -359,58 +457,31 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       bootOwnsLatch = true;
       void boot(outcome.run).finally(() => {
         releaseLatch();
-        if (inFlight.get(plan.ticketId) === latch) inFlight.delete(plan.ticketId);
+        if (inFlight.get(latchKey) === latch) inFlight.delete(latchKey);
       });
       return outcome;
     } finally {
       if (!bootOwnsLatch) {
         releaseLatch();
-        if (inFlight.get(plan.ticketId) === latch) inFlight.delete(plan.ticketId);
+        if (inFlight.get(latchKey) === latch) inFlight.delete(latchKey);
       }
     }
   }
 
-  return {
-    async run(input) {
-      let persistedPlan: AutomationRunPlan | null;
-      try {
-        persistedPlan = await deps.engine.runPlan(input.commandId);
-      } catch (error) {
-        return refuse("RUN_FAILED", errorMessage(error));
-      }
-      if (persistedPlan !== null) return replayExistingPlan(input, persistedPlan);
-
-      // What this Run will send, and where it came from. An Unbound Run has no
-      // record to read: it carries its own Instructions, saves nothing beyond
-      // the Run, and therefore skips every check that is about a record.
-      let automation: Automation | null = null;
-      let instructions: string;
-      if (input.target.kind === "automation") {
-        const found = deps.findAutomation(input.target.automationId);
-        if (found === undefined) {
-          return refuse("AUTOMATION_NOT_FOUND", "No Automation by that id exists.");
-        }
-        // Refused even when this invocation overrides the Runtime. The override
-        // would indeed replace the corrupt value, but a record whose stored
-        // Runtime cannot be read is a record to repair on the page rather than
-        // one to keep running around — and a rescue that only worked from the
-        // surfaces offering an override would be a second, quieter policy.
-        if (found.runtime !== null && !isAutomationRuntimePin(found.runtime)) {
-          return refuse(
-            "RUN_FAILED",
-            "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair before running.",
-          );
-        }
-        automation = found;
-        instructions = found.instructions;
-      } else {
-        // The shared rule the dialog's disabled Run button already applies — one
-        // policy, checked again here because a door is not a form.
-        const problem = unboundRunProblem(input.target.instructions);
-        if (problem !== null) return refuse("INSTRUCTIONS_REQUIRED", problem);
-        instructions = input.target.instructions;
-      }
-      const ticket = deps.findTicket(input.ticketId);
+  /**
+   * A scope resolved against live host facts, or the refusal that stops it.
+   *
+   * The two arms answer the same four questions — which project, which Ticket
+   * (if any), what this Run competes with, and whether the Automation is
+   * allowed here — so they are resolved in one place rather than duplicated
+   * down two nearly identical run paths.
+   */
+  function resolveScope(
+    automation: Automation | null,
+    scope: RunScope,
+  ): ResolvedRunScope | AutomationRunRefusal {
+    if (scope.kind === "ticket") {
+      const ticket = deps.findTicket(scope.ticketId);
       if (ticket === undefined)
         return refuse("TICKET_NOT_FOUND", "The requested Ticket was not found.");
       if (
@@ -423,72 +494,184 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
           "This Automation belongs to another project and cannot run on this Ticket.",
         );
       }
-      if (inFlight.has(ticket.id)) {
-        return refuse("RUN_IN_FLIGHT", "A Run is already starting on this Ticket.");
-      }
-      let releaseLatch!: () => void;
-      const latch = new Promise<void>((resolve) => {
-        releaseLatch = resolve;
-      });
-      inFlight.set(ticket.id, latch);
-      let bootOwnsLatch = false;
-      try {
-        const active = await activityGuard(ticket.id);
-        if (active !== null) return active;
-
-        let supply: AutomationPromptSupply = { templates: [], skills: [] };
-        try {
-          supply = await deps.promptSupply(ticket.projectId);
-        } catch (error) {
-          // Composer behavior: an unreadable supply leaves the literal text in
-          // place instead of changing the saved Instructions or refusing work.
-          log(`[volli] automation Run could not read the prompt supply: ${errorMessage(error)}`);
-        }
-        const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
-        const accepted = await deps.engine.acceptRun({
-          commandId: input.commandId,
-          automation: automation === null ? null : { id: automation.id, name: automation.name },
-          // The per-invocation override wins for THIS Run and is stored nowhere:
-          // VC-112 puts the override on the deliberate surfaces precisely so a
-          // person can spend one Run differently without editing the record.
-          // Without one, the Automation's own Runtime rides (a whole pin, or
-          // `null` to inherit through project and global preferences).
-          runtime:
-            input.modelOverride ??
-            (automation !== null && isAutomationRuntimePin(automation.runtime)
-              ? automation.runtime
-              : null),
-          // Beside the RESOLVED Runtime above, what was actually asked for —
-          // the durable half of this command id's identity, which no later
-          // retry may quietly differ from.
-          request: automationRunRequestIdentity(input),
-          projectId: ticket.projectId,
+      return {
+        projectId: ticket.projectId,
+        ticketId: ticket.id,
+        latchKey: runLatchKey({
           ticketId: ticket.id,
-          text: expanded.text,
-          resources: expanded.resources,
-        });
-        if (!accepted.ok) {
-          return {
-            ...refuse(runRefusalCode(accepted.code) ?? "RUN_IN_FLIGHT", accepted.error),
-            receipt: accepted.receipt,
-          };
-        }
+          projectId: ticket.projectId,
+          automationId: automation?.id ?? null,
+        }),
+        priorRuns: deps.listRunsForTicket(ticket.id),
+      };
+    }
+    if (!deps.findProject(scope.projectId)) {
+      return refuse("PROJECT_NOT_FOUND", "The requested project was not found.");
+    }
+    if (
+      automation !== null &&
+      automation.projectId !== null &&
+      automation.projectId !== scope.projectId
+    ) {
+      return refuse(
+        "AUTOMATION_NOT_IN_PROJECT",
+        "This Automation belongs to another project and cannot run in this one.",
+      );
+    }
+    return {
+      projectId: scope.projectId,
+      ticketId: null,
+      latchKey: runLatchKey({
+        ticketId: null,
+        projectId: scope.projectId,
+        automationId: automation?.id ?? null,
+      }),
+      priorRuns:
+        automation === null
+          ? []
+          : deps.listProjectRunsForAutomation({
+              automationId: automation.id,
+              projectId: scope.projectId,
+            }),
+    };
+  }
 
-        const outcome = await executePlan(accepted.value);
-        if (!outcome.ok) return outcome;
-        if (!(await hasPendingDelivery(outcome.run))) return outcome;
-        bootOwnsLatch = true;
-        void boot(outcome.run).finally(() => {
-          releaseLatch();
-          if (inFlight.get(ticket.id) === latch) inFlight.delete(ticket.id);
-        });
-        return outcome;
-      } finally {
-        if (!bootOwnsLatch) {
-          releaseLatch();
-          if (inFlight.get(ticket.id) === latch) inFlight.delete(ticket.id);
-        }
+  /**
+   * The one Run path, whichever scope it is aimed at. Both doors below are this
+   * function with a different scope: the accept/execute/boot sequence, its
+   * crash windows and its idempotency are one implementation, because two would
+   * be two recovery stories.
+   */
+  async function startRun(input: InternalRunRequest): Promise<RunAutomationOutcome> {
+    let persistedPlan: AutomationRunPlan | null;
+    try {
+      persistedPlan = await deps.engine.runPlan(input.commandId);
+    } catch (error) {
+      return refuse("RUN_FAILED", errorMessage(error));
+    }
+    if (persistedPlan !== null) return replayExistingPlan(input, persistedPlan);
+
+    // What this Run will send, and where it came from. An Unbound Run has no
+    // record to read: it carries its own Instructions, saves nothing beyond
+    // the Run, and therefore skips every check that is about a record.
+    let automation: Automation | null = null;
+    let instructions: string;
+    if (input.target.kind === "automation") {
+      const found = deps.findAutomation(input.target.automationId);
+      if (found === undefined) {
+        return refuse("AUTOMATION_NOT_FOUND", "No Automation by that id exists.");
       }
+      // Refused even when this invocation overrides the Runtime. The override
+      // would indeed replace the corrupt value, but a record whose stored
+      // Runtime cannot be read is a record to repair on the page rather than
+      // one to keep running around — and a rescue that only worked from the
+      // surfaces offering an override would be a second, quieter policy.
+      if (found.runtime !== null && !isAutomationRuntimePin(found.runtime)) {
+        return refuse(
+          "RUN_FAILED",
+          "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair before running.",
+        );
+      }
+      automation = found;
+      instructions = found.instructions;
+    } else {
+      // The shared rule the dialog's disabled Run button already applies — one
+      // policy, checked again here because a door is not a form.
+      const problem = unboundRunProblem(input.target.instructions);
+      if (problem !== null) return refuse("INSTRUCTIONS_REQUIRED", problem);
+      instructions = input.target.instructions;
+    }
+    const resolved = resolveScope(automation, input.scope);
+    if ("ok" in resolved) return resolved;
+    const subject = resolved.ticketId === null ? "for this Automation" : "on this Ticket";
+    if (inFlight.has(resolved.latchKey)) {
+      return refuse("RUN_IN_FLIGHT", `A Run is already starting ${subject}.`);
+    }
+    let releaseLatch!: () => void;
+    const latch = new Promise<void>((resolve) => {
+      releaseLatch = resolve;
+    });
+    inFlight.set(resolved.latchKey, latch);
+    let bootOwnsLatch = false;
+    try {
+      const active = await activityGuard(resolved.priorRuns, subject);
+      if (active !== null) return active;
+
+      let supply: AutomationPromptSupply = { templates: [], skills: [] };
+      try {
+        supply = await deps.promptSupply(resolved.projectId);
+      } catch (error) {
+        // Composer behavior: an unreadable supply leaves the literal text in
+        // place instead of changing the saved Instructions or refusing work.
+        log(`[volli] automation Run could not read the prompt supply: ${errorMessage(error)}`);
+      }
+      const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
+      const accepted = await deps.engine.acceptRun({
+        commandId: input.commandId,
+        automation: automation === null ? null : { id: automation.id, name: automation.name },
+        // The per-invocation override wins for THIS Run and is stored nowhere:
+        // VC-112 puts the override on the deliberate surfaces precisely so a
+        // person can spend one Run differently without editing the record.
+        // Without one, the Automation's own Runtime rides (a whole pin, or
+        // `null` to inherit through project and global preferences).
+        runtime:
+          input.modelOverride ??
+          (automation !== null && isAutomationRuntimePin(automation.runtime)
+            ? automation.runtime
+            : null),
+        // Beside the RESOLVED Runtime above, what was actually asked for —
+        // the durable half of this command id's identity, which no later
+        // retry may quietly differ from.
+        request: automationRunRequestIdentity(input),
+        projectId: resolved.projectId,
+        ticketId: resolved.ticketId,
+        text: expanded.text,
+        resources: expanded.resources,
+      });
+      if (!accepted.ok) {
+        return {
+          ...refuse(runRefusalCode(accepted.code) ?? "RUN_IN_FLIGHT", accepted.error),
+          receipt: accepted.receipt,
+        };
+      }
+
+      const outcome = await executePlan(accepted.value);
+      if (!outcome.ok) return outcome;
+      if (!(await hasPendingDelivery(outcome.run))) return outcome;
+      bootOwnsLatch = true;
+      void boot(outcome.run).finally(() => {
+        releaseLatch();
+        if (inFlight.get(resolved.latchKey) === latch) inFlight.delete(resolved.latchKey);
+      });
+      return outcome;
+    } finally {
+      if (!bootOwnsLatch) {
+        releaseLatch();
+        if (inFlight.get(resolved.latchKey) === latch) inFlight.delete(resolved.latchKey);
+      }
+    }
+  }
+
+  return {
+    run(input) {
+      return startRun({
+        commandId: input.commandId,
+        target: input.target,
+        scope: { kind: "ticket", ticketId: input.ticketId },
+        modelOverride: input.modelOverride,
+      });
+    },
+
+    runForProject(input) {
+      return startRun({
+        commandId: input.commandId,
+        target: { kind: "automation", automationId: input.automationId },
+        scope: { kind: "project", projectId: input.projectId },
+        // Nobody is standing at this door to choose a model: a schedule fires
+        // unattended, and "Run now" on a Skipped occurrence is the same work
+        // the schedule would have done. The record's own Runtime rides.
+        modelOverride: null,
+      });
     },
 
     resumeDeliveryForSession,

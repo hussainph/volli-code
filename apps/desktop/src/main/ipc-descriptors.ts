@@ -1133,10 +1133,11 @@ function isAutomationCommandId(value: unknown): value is string {
 }
 
 /**
- * A transported Trigger's shape (VC-128). Only the wire grammar is judged here
- * — which column names are real, and whether the list collapses to "Nothing
+ * A transported Trigger's shape (VC-128, widened for VC-130's schedule). Only
+ * the wire grammar is judged here — which column names are real, whether a zone
+ * is one this build's ICU knows, and whether either collapses to "Nothing
  * else", is the shared parser's job on the way into the record, so this guard
- * never has to be kept in step with the board's columns.
+ * never has to be kept in step with the board's columns or with the tz database.
  *
  * A MISSING Trigger is refused rather than read as the default. "Nothing else"
  * has its own union member (`{ kind: "none" }`) precisely so the default is a
@@ -1146,6 +1147,7 @@ function isAutomationCommandId(value: unknown): value is string {
 function isAutomationTriggerShape(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (value["kind"] === "none") return true;
+  if (value["kind"] === "schedule") return isRecord(value["schedule"]);
   return value["kind"] === "columns" && Array.isArray(value["columns"]);
 }
 
@@ -1268,6 +1270,23 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-skips-for-project": {
+    guard: (args): args is IpcArgs<"volli:automation-skips-for-project"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation skips request",
+  },
+  "volli:automation-run-for-project": {
+    // The Project is named rather than implied: this door's whole difference
+    // from `volli:automation-run` is the Target, so the Target is a required
+    // field instead of an absent one (docs/BOUNDARIES.md rule 3).
+    guard: (args): args is IpcArgs<"volli:automation-run-for-project"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation run request",
   },
 };
 

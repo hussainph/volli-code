@@ -15,11 +15,13 @@ import type {
   AutomationEnablementResult,
   AutomationIpcChannel,
   AutomationResult,
+  AutomationRunForProjectInput,
   AutomationRunInput,
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
   AutomationSetEnabledResult,
+  AutomationSkipsResult,
 } from "../../ipc/contract";
 import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
@@ -93,6 +95,25 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
 
     "volli:automation-set-enabled": async (input): Promise<AutomationSetEnabledResult> =>
       service.setEnabled(input),
+
+    "volli:automation-skips-for-project": (input): AutomationSkipsResult =>
+      service.skipsForProject(input.projectId),
+
+    // The Project-target Run door (VC-130). The same runner and the same
+    // degraded answer as the Ticket one beside it — a Run needs the Session
+    // facade whichever Target it names.
+    "volli:automation-run-for-project": async (
+      input: AutomationRunForProjectInput,
+    ): Promise<AutomationRunStartResult> => {
+      if (deps.runner === null) {
+        return {
+          ok: false,
+          code: "RUN_FAILED",
+          error: "The Session runtime is not available this launch.",
+        };
+      }
+      return deps.runner.runForProject(input);
+    },
   };
 
   registerGuardedIpcHandlers(AUTOMATION_IPC, handlers);

@@ -79,6 +79,94 @@ async function startRun(input: RunRequest): Promise<RunAutomationAction | null> 
 }
 
 /**
+ * The same call for a Run whose Target is the PROJECT (VC-130) — a schedule's
+ * own door, reached by hand from a scheduled row's Play or a Skipped
+ * occurrence's "Run now".
+ *
+ * A second function rather than a nullable Ticket on the one above, because
+ * the transports are two channels and the retry key is a different pair. What
+ * they DO share is the retry map: a click whose IPC reply was lost keeps its
+ * durable command id, so pressing again repeats the intent rather than opening
+ * a second Session.
+ */
+async function startProjectRun(input: {
+  automationId: string;
+  projectId: string;
+}): Promise<RunAutomationAction | null> {
+  const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
+  const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
+  pendingCommandIds.set(retryKey, commandId);
+  try {
+    const action = runAutomationAction(
+      await window.api.automations.runForProject({ ...input, commandId }),
+    );
+    pendingCommandIds.delete(retryKey);
+    return action;
+  } catch (error) {
+    toastError(`Couldn't run automation: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Run one Automation at the PROJECT (VC-130) — the Target a schedule Trigger
+ * names, reached by hand.
+ *
+ * Two surfaces press it, and they are the same act:
+ *
+ *  - A **scheduled record's Play**, on the Automations page. VC-112 rules that
+ *    the Trigger decides the Target, so running a scheduled Automation by hand
+ *    must open the Project Session its schedule would have opened. Asking which
+ *    Ticket instead would make the by-hand Run a different piece of work from
+ *    the automatic one, which is the one thing this control must not be.
+ *  - A **Skipped occurrence's "Run now"**, from the Run history (VC-112: "a
+ *    person may start it by hand afterwards").
+ *
+ * Like every other listing-surface Run it does NOT navigate: the person is
+ * reading a page and may well start a second one, so the door arrives as a
+ * toast action (VC-13 decision 2).
+ *
+ * It starts ONE Run, whatever number of occurrences a skip row stands for. A
+ * skip covering fifty missed hours is fifty occurrences that will never be
+ * replayed — the button offers the work now, not the backlog.
+ */
+export async function runAutomationForProject(input: {
+  automationId: string;
+  automationName: string;
+  projectId: string;
+}): Promise<void> {
+  const action = await startProjectRun({
+    automationId: input.automationId,
+    projectId: input.projectId,
+  });
+  if (action === null) return;
+  switch (action.kind) {
+    case "open-model-access":
+      useUiStore.getState().setSettingsOpen(true, "model-access");
+      return;
+    case "toast":
+      toastError(action.message);
+      return;
+    case "open-session": {
+      useChatSessionsStore.getState().adoptChatSession(action.sessionId);
+      toast.success(`${input.automationName} started`, {
+        action: {
+          label: "Open session",
+          onClick: () =>
+            openRunSession({
+              sessionId: action.sessionId,
+              projectId: action.projectId,
+              // A schedule Run names no Ticket, so its Session opens in Home.
+              ticketId: null,
+            }),
+        },
+      });
+      return;
+    }
+  }
+}
+
+/**
  * Run on the Ticket the person is looking at, and open the Session.
  *
  * The palette's "run by name", and the ticket rail's own button (VC-129): in

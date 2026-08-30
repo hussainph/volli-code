@@ -26,6 +26,7 @@ import {
   isAutomationRuntimePin,
   type Automation,
   type AutomationRun,
+  type AutomationSkippedOccurrence,
   type ColumnArming,
   type TicketStatus,
 } from "@volli/shared";
@@ -66,6 +67,14 @@ interface AutomationsState {
   armingByProject: Record<string, readonly ColumnArming[]>;
   /** projectId → every Run on its Tickets, newest first. */
   runsByProject: Record<string, readonly AutomationRun[]>;
+  /**
+   * projectId → the due times its schedules missed, newest first (VC-130).
+   *
+   * Its own slice beside the Runs rather than merged into them: a skip is a
+   * different record with a different action, and the page interleaves the two
+   * by time through a pure function it can test.
+   */
+  skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
    * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
    *
@@ -108,6 +117,8 @@ interface AutomationsState {
   refresh(projectId: string): Promise<boolean>;
   /** Re-fetches one project's Run history, newest first. Toasts on failure. */
   refreshRuns(projectId: string): Promise<void>;
+  /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
+  refreshSkips(projectId: string): Promise<void>;
   /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
   refreshTicketRuns(ticketId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Resolves whether it landed. */
@@ -180,6 +191,7 @@ export function createAutomationsStore() {
     byProject: {},
     armingByProject: {},
     runsByProject: {},
+    skipsByProject: {},
     runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
@@ -247,6 +259,21 @@ export function createAutomationsStore() {
         set((state) => ({ runsByProject: { ...state.runsByProject, [projectId]: result.runs } }));
       } catch (error) {
         toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshSkips(projectId) {
+      try {
+        const result = await window.api.automations.skipsForProject({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load skipped occurrences: ${result.error}`);
+          return;
+        }
+        set((state) => ({
+          skipsByProject: { ...state.skipsByProject, [projectId]: result.skips },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
       }
     },
 
