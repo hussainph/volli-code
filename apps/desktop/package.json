@@ -50,7 +50,7 @@
     "@volli/shared": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
     "ai": "^7.0.83",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
