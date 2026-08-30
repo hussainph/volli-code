@@ -436,22 +436,33 @@ try {
    */
   async function flipLane(status) {
     const before = await laneDigits(status);
-    const from = await stableBox(page.locator(`[data-lane-row="${status}:${before[1].id}"]`));
-    const to = await stableBox(page.locator(`[data-lane-row="${status}:${before[0].id}"]`));
+    const mover = page.locator(`[data-lane-row="${status}:${before[1].id}"]`);
+    const target = page.locator(`[data-lane-row="${status}:${before[0].id}"]`);
+    // The lanes scroll sideways and the page scrolls down: on a window narrower
+    // or shorter than this developer's, a box measured without scrolling the
+    // row into view is a box the pointer cannot reach.
+    await mover.scrollIntoViewIfNeeded();
+    await target.scrollIntoViewIfNeeded();
+    const from = await stableBox(mover);
+    const to = await stableBox(target);
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    // Past dnd-kit's 4px activation — and then WAIT for it, because a drop
-    // aimed before the drag began lands on nothing. The row says when it has
-    // been picked up; on a loaded CI runner that is several frames later than
-    // the move that asked for it.
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 12, { steps: 6 });
+    // Past dnd-kit's 4px activation — and then WAIT for it, nudging on every
+    // poll. A drop aimed before the drag began lands on nothing, and dnd-kit
+    // activates on a pointer MOVE it is listening for: on a loaded runner the
+    // first moves can all land before that listener is attached, so each poll
+    // travels another pixel rather than waiting out a drag nobody started.
+    let nudged = 0;
     await waitUntil(
       "dnd-kit to pick the row up",
-      async () =>
-        (await page
-          .locator(`[data-lane-row="${status}:${before[1].id}"][data-lane-dragging]`)
-          .count()) > 0,
-      { timeout: 10_000, interval: 100 },
+      async () => {
+        nudged = nudged === 0 ? 1 : 0;
+        await page.mouse.move(from.x + from.width / 2 + nudged, from.y + from.height / 2 - 12, {
+          steps: 4,
+        });
+        return mover.evaluate((row) => row.hasAttribute("data-lane-dragging"));
+      },
+      { timeout: 15_000, interval: 150 },
     );
     await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2 - 4, { steps: 12 });
     await page.mouse.up();
