@@ -215,9 +215,9 @@ move. One preview element, so crossing from the centre into a band morphs the re
 swapping two of them. Zones cover the content only — never the pane's own strip, where the same
 drag means a reorder.
 
-**Motion is the drag's, and only the drag's.** The overlay fades in opacity-only over 120ms
-`ease-out`; the preview morphs its four box properties over 150ms `ease-out`; `motion-reduce`
-cancels both. A pane opened from the keyboard (`⌘\`, `⇧⌘\`) appears with **no animation at all** —
+**Motion is the drag's, and only the drag's.** One always-mounted preview element carries the
+whole budget: opacity and its four box properties, named exactly, 150ms `ease-out` — it fades in
+where the pointer entered, morphs between zones, and never blinks; `motion-reduce` cancels it. A pane opened from the keyboard (`⌘\`, `⇧⌘\`) appears with **no animation at all** —
 it is a chord pressed tens of times a day — and hands focus to its menu's first row.
 
 **The empty pane is a menu, not a message.** Four rows at the `lg` rung (32px, the size this
