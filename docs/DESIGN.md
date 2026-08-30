@@ -188,6 +188,44 @@ drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-p
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
 hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
 
+## Split view — panes, zones, and the empty pane (VC-202)
+
+Both tabbed surfaces divide their plane into **panes** (`components/split/`). One grid draws the
+split and unsplit cases, so the unsplit plane is not a special path: it is one pane, with none of
+the chrome below.
+
+| Mark | Treatment | Says |
+|---|---|---|
+| Focused pane | `ring-1 ring-primary/50 ring-inset` | the rail is reading THIS pane's front tab |
+| Unfocused pane | `ring-1 ring-border/50 ring-inset` | a pane, and not the one in context |
+| Divider | 6px grip, `bg-border` hairline → `bg-primary/70` on hover, 150ms | draggable, and where |
+| Drop preview | `bg-primary/10` + `ring-1 ring-primary/40 ring-inset`, `rounded-md` | where the drop would land |
+
+Neither ring is drawn while a surface has one pane: a ring around the only pane is chrome about a
+choice nobody has made. Both are the terminal split's own vocabulary
+(`sessions/session-split-layout.tsx`) because a split is the same act at two scopes — and splits
+open **right or down only** in both, which is what keeps the permanent tab's pane in the top left
+and the surface's full-width strip over it.
+
+**Drop zones draw the result, never the target.** A pane's content box is tiled by three regions —
+a full-height column down the right edge, a strip along the bottom of what is left, and the centre
+(each edge band the outer 25%, floor 48px). The regions themselves are invisible; what lights up is
+the rectangle the drop would leave behind: the right half, the bottom half, or the whole pane for a
+move. One preview element, so crossing from the centre into a band morphs the rectangle rather than
+swapping two of them. Zones cover the content only — never the pane's own strip, where the same
+drag means a reorder.
+
+**Motion is the drag's, and only the drag's.** The overlay fades in opacity-only over 120ms
+`ease-out`; the preview morphs its four box properties over 150ms `ease-out`; `motion-reduce`
+cancels both. A pane opened from the keyboard (`⌘\`, `⇧⌘\`) appears with **no animation at all** —
+it is a chord pressed tens of times a day — and hands focus to its menu's first row.
+
+**The empty pane is a menu, not a message.** Four rows at the `lg` rung (32px, the size this
+document reserves for empty states) in a `w-72` column: New chat `⌘T`, New terminal `⌥⌘T`, Open
+file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' own `MENU_SHORTCUT`.
+No heading, no explanation, and above all no "drag a tab here": every row is a verb that already
+works from the keyboard, and the chord beside it is how the menu teaches itself.
+
 ## Vertical rhythm (reading surfaces)
 
 The Ticket Body tab is the reference implementation: generous air above the title (`pt-8` below the

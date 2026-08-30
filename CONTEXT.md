@@ -31,6 +31,32 @@ fills the surface and Home's tab strip steps aside, so only one tab strip is
 ever on screen.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
+**Split view**:
+A tabbed surface's plane divided into Panes, each holding a subset of that
+surface's tabs (VC-202). Both surfaces have one, each keeps its own, and tabs
+never cross between them. Splits open right or down only, which keeps the
+permanent tab's Pane in the top left and the surface's own tab strip over it. A
+surface with no split is not "a split view of one" — it is the plane it always
+was, and the app stores nothing for it.
+_Avoid_: split screen, editor group, pane tree, multi-pane mode
+
+**Pane**:
+One cell of a Split view: a set of tab ids, the one it has in front, and its own
+tab strip. The FOCUSED Pane is the surface's context — the right rail reads it,
+and the surface's active tab is its front tab. A Pane holding nothing draws the
+surface menu (New chat, New terminal, Open file…, Close pane) rather than an
+empty plane. Not to be confused with a terminal pane, which is one shell inside
+a Split Tab.
+_Avoid_: split, group, editor group, window, terminal pane
+
+**Drop zone**:
+Where a dragged tab, Session row or file row may land on a Pane: its centre
+(move here) or its right/bottom edge (split there). Zones appear only while a
+compatible drag is live, and what lights up is the RESULT — the half the split
+would open, or the whole Pane a move would fill — never the region being
+hit-tested. A payload from another surface shows no zones at all.
+_Avoid_: drop target (for the highlight), drag overlay, hot zone
+
 **Project Files**:
 Main-checkout files opened as tabs in Home, browsed from a Files page in Home's
 own rail. Not a first-class nav item or a standalone page (retired VC-122; the
@@ -408,8 +434,12 @@ The reconstructed view of a Session's interactions: those still waiting, and tho
 _Avoid_: pending list, approval queue
 
 **Split Tab**:
-One returnable tab-strip item that presents multiple independently owned surfaces together.
-_Avoid_: split session, pane tree
+One returnable tab-strip item that presents multiple independently owned
+surfaces together — a terminal tab holding several shells. Inside one tab; the
+surface-level division of the plane is a Split view (VC-202), and the two use
+the same grammar (right/down splits, the same ring, the same divider) precisely
+because they are the same act at two scopes.
+_Avoid_: split session, pane tree, split view
 
 **Ticket ID**:
 The opaque, permanent record identity of a ticket (a UUID). Never shown to users, never derived from mutable fields.
