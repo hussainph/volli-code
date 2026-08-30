@@ -71,7 +71,12 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
+import {
+  getAutomation,
+  listAutomationsForProject,
+  listRunsForProject,
+  listRunsForTicket,
+} from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
@@ -1114,6 +1119,7 @@ app.whenReady().then(async () => {
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),

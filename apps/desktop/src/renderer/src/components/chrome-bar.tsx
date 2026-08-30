@@ -6,7 +6,6 @@ import { CornersInIcon } from "@phosphor-icons/react/dist/csr/CornersIn";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
-import { AutomationEditorDialog } from "@renderer/components/automations/automation-editor";
 import { CommandPalette } from "@renderer/components/command-palette";
 import { QuickOpen } from "@renderer/components/files/quick-open";
 import { Button } from "@renderer/components/ui/button";
@@ -97,9 +96,10 @@ export function ChromeBar() {
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
       <QuickOpen open={quickOpenOpen} onOpenChange={setQuickOpenOpen} />
-      {/* The Automation editor mounts beside the palette that opens it: both are
-          window-level surfaces summoned from anywhere (VC-126). */}
-      <AutomationEditorDialog />
+      {/* No Automation editor here. It used to mount beside the palette as a
+          window-level surface summoned from anywhere (VC-126) — which is a
+          second authoring surface by another name. VC-112 rules that only the
+          Automations page authors, so the page mounts its own form. */}
     </>
   );
 }

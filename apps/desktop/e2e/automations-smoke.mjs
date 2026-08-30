@@ -19,7 +19,9 @@
  * smoke deliberately stops at the refusal arm; `run.test.ts` pins the happy
  * path against the Sessions facade, and the pi-* smokes own live turns.
  *
- * MANUALLY RUN (needs a display + the built app); CI does not run it:
+ * Needs a display and the built app. It DOES run on the desktop smoke lane —
+ * `run-smokes.mjs` globs `*-smoke.mjs` and this name is on neither the
+ * deny-list nor the Pi-credential gate. Locally:
  *
  *   pnpm -w run build
  *   node apps/desktop/e2e/automations-smoke.mjs

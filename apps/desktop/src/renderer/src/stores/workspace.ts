@@ -97,7 +97,7 @@ import { useSessionsStore } from "@renderer/stores/sessions";
  * page — as insurance against a foreign or hand-edited `volli:workspace`
  * blob, even though no build actually needs the migration.
  */
-export type NavKey = "home" | "configure";
+export type NavKey = "home" | "automations" | "configure";
 
 /** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";

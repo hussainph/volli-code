@@ -149,6 +149,12 @@ export default defineConfig(({ mode }) => ({
         // refusal opens Model Access, which toasts, and what success opens —
         // pure precisely so the gate can reach the classification.
         "src/components/automations/run-automation-model.ts",
+        // What the Automations page SAYS (VC-127). In the gate because a Run
+        // is durable evidence: it records the RESOLVED model and reasoning so
+        // the pin/inherit decision is self-correcting, and a label that
+        // silently re-derived one from today's catalogue would erase exactly
+        // that — with nothing on screen to show it had happened.
+        "src/components/automations/automations-page-model.ts",
         // The drop/paste decision (VC-106) is a pure `.ts` beside the views
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.

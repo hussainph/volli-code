@@ -561,6 +561,20 @@ case, authored where it is launched. It writes no file and saves no record
 beyond the Run, so there is nothing left afterwards to name, disable, or delete.
 _Avoid_: ad-hoc automation, draft automation, one-shot automation
 
+**Enabled automation**:
+An Automation somebody switched on for this machine, and therefore the only
+kind whose Trigger has an effect here. Off is the resting state: a machine that
+was never asked has not said yes, so a record fires on its own only where it
+was turned on — the same rule that lets the Skills travel through git while the
+record and its switch do not. Run by hand is universal, so an Automation that
+is off is still runnable from every surface that lists one; the switch narrows
+what _else_ starts it, exactly as the Trigger does. Like arming, it is local to
+the machine that set it and never travels with the project, which is why it is
+not a field on the record. Distinct from deleting, which removes the record;
+there is no third state between them, because for a Skill git is already the
+archive.
+_Avoid_: paused, archived, active, on (alone)
+
 **Skipped occurrence**:
 A scheduled Trigger's due time that passed without a Run, because the app was
 not open. It is recorded with its reason and never replayed — the next
