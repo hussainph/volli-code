@@ -4,6 +4,7 @@ import type {
   Automation,
   AutomationRun,
   ColumnArming,
+  ColumnAutomationOrder,
   PromptResource,
   TicketStatus,
 } from "@volli/shared";
@@ -13,7 +14,9 @@ import {
   getAutomation,
   getAutomationRun,
   listColumnArmings,
+  listColumnOrders,
   setColumnArming,
+  setColumnOrder,
   triggerColumnValue,
 } from "../db/automations-repo";
 import { prepared } from "../db/prepared";
@@ -259,6 +262,24 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
       );
     }
     return listColumnArmings(this.db, input.projectId);
+  }
+
+  /**
+   * The third machine-local projection (VC-132): which Offered Automation reads
+   * as digit `1` in each column. Read and written here, inside the transaction
+   * that appended the event, so a column's order and the history of its order
+   * commit together or neither does — exactly as the arming above it does.
+   */
+  columnOrders(projectId: string): readonly ColumnAutomationOrder[] {
+    return listColumnOrders(this.db, projectId);
+  }
+
+  putColumnOrder(
+    input: { projectId: string; status: TicketStatus; rankedAutomationIds: readonly string[] },
+    recordedAt: number,
+  ): readonly ColumnAutomationOrder[] {
+    setColumnOrder(this.db, input, recordedAt);
+    return listColumnOrders(this.db, input.projectId);
   }
 
   getRun(runId: string): AutomationRun | null {

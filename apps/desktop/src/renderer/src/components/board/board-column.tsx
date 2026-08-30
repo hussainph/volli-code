@@ -6,6 +6,10 @@ import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import { ColumnArmingButton } from "@renderer/components/board/column-arming";
+import {
+  ColumnOfferedPanel,
+  type ColumnOfferedPanelProps,
+} from "@renderer/components/board/column-offered-panel";
 import { useBoardSessionActivityMap } from "@renderer/components/board/session-activity-context";
 import { TicketCard } from "@renderer/components/board/ticket-card";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
@@ -29,6 +33,14 @@ interface BoardColumnProps {
   onComposerClose(status: TicketStatus): void;
   /** Play the enter transition — true for columns appearing on an already-mounted board. */
   animateEnter: boolean;
+  /**
+   * This column's Offered list, mid-drag (VC-132) — absent when there is
+   * nothing to show here, which is every column at rest and every column the
+   * pointer is not over.
+   */
+  offered?: ColumnOfferedPanelProps;
+  /** Quieted because another column is currently grown into landing targets. */
+  dimmed?: boolean;
 }
 
 /** A single status column: header, its own vertically-scrolling ticket list, and an add-card composer. */
@@ -44,6 +56,8 @@ export function BoardColumn({
   composerInitiallyOpen,
   onComposerClose,
   animateEnter,
+  offered,
+  dimmed = false,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
   // from the board's single derivation rather than handed down as a prop: the
@@ -74,18 +88,29 @@ export function BoardColumn({
 
   return (
     <div
+      // The ⌥ picker's own hit test reads this: one `elementFromPoint` per
+      // pointer move answers both which column is under the hand and which
+      // panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
+      // so the panel floating over the list still reads as this column.
+      data-board-column={status}
       className={cn(
         // Cap below the canvas so a strip of background stays grab-able for
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
         // cursor-default overrides the canvas's cursor-grab so only empty
         // background reads as a pan surface.
         "flex min-h-0 max-h-[85%] w-72 flex-none cursor-default flex-col rounded-lg bg-muted/30",
-        // Enter is an opacity fade ONLY. This column hosts droppables that
-        // dnd-kit measures in synchronous layout effects; a scale mid-flight
-        // returns a different rect on every commit and measureRects loops to
-        // React's max update depth (the DndContext crash). Scale must never
-        // animate on a measured element — the 0.98 entrance died for that.
-        animateEnter && "transition-[opacity] duration-200 ease-out starting:opacity-0",
+        // Enter is an opacity fade ONLY, and so is the dim below it. This
+        // column hosts droppables that dnd-kit measures in synchronous layout
+        // effects; a scale mid-flight returns a different rect on every commit
+        // and measureRects loops to React's max update depth (the DndContext
+        // crash). Nothing here may animate anything a rect is read from — the
+        // 0.98 entrance died for that, and the ⌥ picker's own panel floats
+        // over the list rather than growing inside it for the same reason.
+        "transition-[opacity] duration-200 ease-out motion-reduce:transition-none",
+        animateEnter && "starting:opacity-0",
+        // Quieted while another column holds the ⌥ picker: one column is being
+        // aimed at, and the rest are not the question.
+        dimmed && "opacity-50",
       )}
     >
       <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
@@ -97,26 +122,38 @@ export function BoardColumn({
             did before this existed. */}
         <ColumnArmingButton projectId={projectId} status={status} />
       </div>
-      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-        <div
-          ref={setNodeRef}
-          className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"
-        >
-          {tickets.map((ticket) => (
-            <TicketCard
-              key={ticket.id}
-              ticket={ticket}
-              projectId={projectId}
-              ticketPrefix={ticketPrefix}
-              projectLabels={projectLabels}
-              selected={ticket.id === selectedId}
-              sessionActivity={sessionActivity[ticket.id] ?? null}
-              onSelect={onSelect}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
-      </SortableContext>
+      {/* The panel floats OVER the list rather than sitting above it in the
+          flow: the list below is this column's droppable, and a panel that
+          grew and shrank in the layout would move its measured rect every time
+          ⌥ went down — the mid-flight rect change the enter transition above
+          is already scarred by. See `column-offered-panel.tsx`. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {offered === undefined ? null : (
+          <div className="absolute inset-x-2 top-0 z-20">
+            <ColumnOfferedPanel {...offered} />
+          </div>
+        )}
+        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+          <div
+            ref={setNodeRef}
+            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"
+          >
+            {tickets.map((ticket) => (
+              <TicketCard
+                key={ticket.id}
+                ticket={ticket}
+                projectId={projectId}
+                ticketPrefix={ticketPrefix}
+                projectLabels={projectLabels}
+                selected={ticket.id === selectedId}
+                sessionActivity={sessionActivity[ticket.id] ?? null}
+                onSelect={onSelect}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </div>
       {composer.open ? (
         <div className="mx-2 mb-2 rounded-lg border border-border bg-card px-4 py-2">
           <input

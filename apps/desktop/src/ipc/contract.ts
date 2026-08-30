@@ -22,6 +22,7 @@ import type {
   AutomationRunRefusalCode,
   AutomationTrigger,
   ColumnArming,
+  ColumnAutomationOrder,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -1447,6 +1448,31 @@ export interface AutomationArmInput {
   automationId: string | null;
 }
 
+/**
+ * Arranging one column's Offered list — which Automation reads as digit `1`
+ * when a card is dragged over it (VC-132).
+ *
+ * A `commandId` like every write above it, for the reason {@link AutomationArmInput}
+ * states: the PROJECTION is machine-local (`automation_column_order`, which
+ * never travels with a project), while the INTENT is an ordinary durable
+ * command — the rank decides which Automation a release aims at.
+ *
+ * The whole list travels, never a moved id and an index: a JSON transport
+ * carries an array perfectly well, and "the new order" is a value the caller
+ * already holds, while a pair of indices would be a second spelling of the same
+ * arrangement that main would have to re-derive against a list it cannot see.
+ * An EMPTY list is "never arranged", which is a value rather than an absent
+ * field (docs/BOUNDARIES.md rule 3).
+ */
+export interface AutomationSetColumnOrderInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  /** Automation ids, best rank first. Ids the column no longer offers are inert. */
+  rankedAutomationIds: string[];
+}
+
 export interface AutomationIdInput {
   /** Caller-minted UUID: a transport retry repeats this exact command. */
   commandId: string;
@@ -1518,6 +1544,15 @@ export type AutomationArmResult = Result<{
   receipt: AutomationCommandReceipt;
 }>;
 
+/** Every arranged column in the project — whole, so a caller reconstructs nothing. */
+export type AutomationColumnOrdersResult = Result<{ orders: ColumnAutomationOrder[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetColumnOrderResult = Result<{
+  orders: ColumnAutomationOrder[];
+  receipt: AutomationCommandReceipt;
+}>;
+
 /**
  * A run's answer: the durable Run (holding the fresh Session's id and the
  * RESOLVED model), or a coded refusal the caller classifies without string
@@ -1564,6 +1599,16 @@ export interface VolliAutomationIpcContract {
   };
   /** Arms one column with one offered Automation, or disarms it. */
   "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmResult };
+  /** One project's arranged columns — machine-local, like the arming beside it. */
+  "volli:automation-column-order-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationColumnOrdersResult;
+  };
+  /** Arranges one column's Offered list, and answers with the project's whole new set. */
+  "volli:automation-set-column-order": {
+    args: [input: AutomationSetColumnOrderInput];
+    result: AutomationSetColumnOrderResult;
+  };
   /**
    * Every Run in this project, newest first — the Automations page's Run
    * history (VC-127). Scoped through each Run's own durable evidence (the

@@ -2972,10 +2972,92 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-column-order-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-column-order-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation order request");
+    });
+  });
+
+  describe("volli:automation-set-column-order", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-set-column-order"];
+
+    it("takes a project, a real column and a list of ids — empty meaning never arranged", () => {
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            projectId: "p1",
+            status: "doing",
+            rankedAutomationIds: ["a1", "a2"],
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: [] },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            projectId: "p1",
+            status: "shipped",
+            rankedAutomationIds: ["a1"],
+          },
+        ]),
+      ).toBe(false);
+      // Every element is an id, checked here because this is the last place a
+      // non-id can be turned away before it is stored as somebody's digit.
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: [7] },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: "a1" },
+        ]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, status: "doing", rankedAutomationIds: [] }])).toBe(
+        false,
+      );
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries a UUID commandId like every other write — the rank is a command", () => {
+      // The PROJECTION is machine-local (`automation_column_order`); the intent
+      // is durable, so a lost reply is retried rather than re-decided.
+      expect(guard([{ projectId: "p1", status: "doing", rankedAutomationIds: ["a1"] }])).toBe(
+        false,
+      );
+      expect(
+        guard([
+          { commandId: "counter-1", projectId: "p1", status: "doing", rankedAutomationIds: ["a1"] },
+        ]),
+      ).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation order request");
+    });
+  });
+
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(11);
+      expect(AUTOMATION_CHANNELS).toHaveLength(13);
     });
   });
 });

@@ -17,6 +17,7 @@ import type { Automation, AutomationRun, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
 import { openRunSession, runAutomationFromListing } from "./run-automation";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -100,16 +101,29 @@ const doors = {
   create: vi.fn(),
   delete: vi.fn(),
   update: vi.fn(),
+  armings: vi.fn(),
+  columnOrders: vi.fn(),
+  setColumnOrder: vi.fn(),
 };
 
 async function mount(seed: {
   automations?: Automation[];
   runs?: AutomationRun[];
   enabled?: string[];
+  armings?: { projectId: string; status: string; automationId: string; armedAt: number }[];
+  orders?: {
+    projectId: string;
+    status: string;
+    rankedAutomationIds: string[];
+    orderedAt: number;
+  }[];
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.runsForProject.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
+  doors.armings.mockResolvedValue({ ok: true, armings: seed.armings ?? [] });
+  doors.columnOrders.mockResolvedValue({ ok: true, orders: seed.orders ?? [] });
+  doors.setColumnOrder.mockResolvedValue({ ok: true, orders: [], receipt: {} });
   doors.setEnabled.mockResolvedValue({
     ok: true,
     enabledAutomationIds: ["automation-1"],
@@ -126,7 +140,14 @@ async function mount(seed: {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root?.render(<AutomationsPage />);
+    // The provider the app shell already mounts around every page
+    // (`ui/sidebar.tsx`): the lane header's arming bolt is the board's own
+    // control, tooltip and all.
+    root?.render(
+      <TooltipProvider>
+        <AutomationsPage />
+      </TooltipProvider>,
+    );
   });
 }
 
@@ -149,6 +170,14 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The lane view reads it (dnd-kit's sortable transition is dropped under
+  // reduced motion); jsdom does not implement it.
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationFromListing).mockReset();
@@ -156,6 +185,8 @@ beforeEach(() => {
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
     byProject: {},
+    armingByProject: {},
+    orderByProject: {},
     runsByProject: {},
     enabledIds: [],
     editor: null,
@@ -377,5 +408,121 @@ describe("run history", () => {
       projectId: "p1",
       ticketId: null,
     });
+  });
+});
+
+/**
+ * The lane view (VC-132). Its DRAG is proven where a drag can be proven — the
+ * Lab rig, the pure model beside it, and the page smoke driving a real pointer;
+ * what a unit test can hold is what the lanes SAY: one lane per column, the
+ * digit each row answers to, the pin, and the two-ranks-one-record property the
+ * whole feature turns on.
+ */
+describe("the lane view", () => {
+  const doingAndReview = automation({
+    id: "shared",
+    name: "Standards sweep",
+    trigger: { kind: "columns", columns: ["doing", "needs_review"] },
+  });
+  const doingOnly = automation({
+    id: "implement",
+    name: "Implement",
+    trigger: { kind: "columns", columns: ["doing"] },
+  });
+
+  it("draws one lane per board column, plus the lane for records no column offers", async () => {
+    await mount({ automations: [automation()] });
+
+    for (const label of ["Backlog", "Todo", "Doing", "Needs Review", "Done"]) {
+      expect(text()).toContain(label);
+    }
+    // The default Trigger is "Nothing else", so the seeded record is off board.
+    expect(text()).toContain("No column");
+    expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
+  });
+
+  it("reads the column's authored rank as its digits", async () => {
+    await mount({
+      automations: [doingAndReview, doingOnly],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+      ],
+    });
+
+    expect(
+      document.querySelector('[data-lane-row="doing:implement"]')?.getAttribute("data-lane-digit"),
+    ).toBe("1");
+    expect(
+      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
+    ).toBe("2");
+  });
+
+  it("lets one Automation hold a different rank in two columns", async () => {
+    await mount({
+      automations: [doingAndReview, doingOnly],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+        {
+          projectId: "p1",
+          status: "needs_review",
+          rankedAutomationIds: ["shared"],
+          orderedAt: 1,
+        },
+      ],
+    });
+
+    expect(
+      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
+    ).toBe("2");
+    expect(
+      document
+        .querySelector('[data-lane-row="needs_review:shared"]')
+        ?.getAttribute("data-lane-digit"),
+    ).toBe("1");
+  });
+
+  it("pins the armed row to 1 ahead of its authored rank — while it is switched on here", async () => {
+    const armed = [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }];
+    const orders = [
+      {
+        projectId: "p1",
+        status: "doing",
+        rankedAutomationIds: ["implement", "shared"],
+        orderedAt: 1,
+      },
+    ];
+    await mount({
+      automations: [doingAndReview, doingOnly],
+      armings: armed,
+      orders,
+      enabled: ["shared"],
+    });
+
+    expect(
+      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
+    ).toBe("1");
+
+    // Switched off here, a plain drop runs nothing — so the pin lets go and the
+    // authored rank stands, exactly as the drag reads it.
+    await act(async () => {
+      root?.unmount();
+    });
+    container?.remove();
+    useAutomationsStore.setState({ byProject: {}, armingByProject: {}, orderByProject: {} });
+    await mount({ automations: [doingAndReview, doingOnly], armings: armed, orders, enabled: [] });
+
+    expect(
+      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
+    ).toBe("2");
   });
 });

@@ -1341,6 +1341,47 @@ CREATE INDEX IF NOT EXISTS idx_automation_arming_automation
 
 const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGRATION_031_COLUMN_ARMING}`;
 
+/**
+ * Migration 032: the column's own ORDER for its Offered list (VC-112, VC-132).
+ *
+ * The third table under one pattern, and the pattern is worth restating because
+ * this is the row that most looks like part of the record and is not. What a
+ * column offers is the Automation's Trigger — that travels with the record.
+ * Which of those reads as `1` when a card is dragged over the column is the
+ * column's own arrangement, and it is MACHINE-LOCAL for a reason sharper than
+ * "so is the arming": the drag pins the column's armed Automation to digit `1`,
+ * the arming never travels, and an order that travelled would print one digit
+ * here and mean another on the next machine.
+ *
+ * `ranked_ids` is a JSON array of Automation ids, best rank first, stored whole
+ * rather than as a row per rank: a rank has no identity of its own, the whole
+ * list is rewritten by every drop, and a per-row table would need a second
+ * column just to say what an array already says. `json_valid` keeps a row this
+ * build cannot read out of the table in the first place.
+ *
+ * Deliberately NOT foreign-keyed to `automations`: the list is stale-tolerant
+ * by design (`@volli/shared`'s `offeredAutomationsForColumn` filters it against
+ * the Offered list on every read), so a deleted Automation leaves an inert id
+ * rather than a dangling reference — and a JSON array cannot cascade anyway.
+ * The project key does cascade, like the arming beside it.
+ *
+ * Numbered 32 with two sibling automations branches (VC-130, VC-133) in flight
+ * against the same number, exactly as 026 and 031 record before it: a version
+ * is a position in an already-applied history, so whichever lands second
+ * renumbers rather than sharing. The reconciler probes for the same reason 031
+ * does — a developer database that ran a parallel 32 must still converge on
+ * this schema.
+ */
+const MIGRATION_032_COLUMN_ORDER = `
+CREATE TABLE IF NOT EXISTS automation_column_order (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL CHECK (status <> ''),
+  ranked_ids  TEXT NOT NULL CHECK (json_valid(ranked_ids)),
+  ordered_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, status)
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1496,6 +1537,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "automations — the column Trigger on the record, and the column's machine-local arming",
     sql: MIGRATION_031_AUTOMATION_TRIGGERS,
     apply: applyMigration031AutomationTriggers,
+  },
+  {
+    version: 32,
+    name: "automations — the column's machine-local order for its Offered list",
+    sql: MIGRATION_032_COLUMN_ORDER,
   },
 ];
 

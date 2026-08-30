@@ -55,6 +55,9 @@ import type {
   AutomationArmInput,
   AutomationArmingsResult,
   AutomationArmResult,
+  AutomationColumnOrdersResult,
+  AutomationSetColumnOrderInput,
+  AutomationSetColumnOrderResult,
   AutomationCreateInput,
   AutomationDeleteResult,
   AutomationEnablementResult,
@@ -752,6 +755,20 @@ const api = {
      */
     arm: (input: AutomationArmInput): Promise<AutomationArmResult> =>
       invoke("volli:automation-arm", input),
+    /**
+     * One project's arranged columns (VC-132): which Offered Automation reads
+     * as digit `1` when a card is dragged over each column. Machine-local and a
+     * separate read for the arming's reason — the rank never travels with a
+     * project, because the digit it prints is pinned by an arming that does not
+     * either.
+     */
+    columnOrders: (input: ProjectIdInput): Promise<AutomationColumnOrdersResult> =>
+      invoke("volli:automation-column-order-list", input),
+    /** Arranges one column's Offered list; answers with the project's whole new set. */
+    setColumnOrder: (
+      input: AutomationSetColumnOrderInput,
+    ): Promise<AutomationSetColumnOrderResult> =>
+      invoke("volli:automation-set-column-order", input),
     /** Every Run on this project's Tickets, newest first — the page's history. */
     runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-project", input),

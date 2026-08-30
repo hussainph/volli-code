@@ -32,6 +32,7 @@
  * an Automation authored anywhere else in the app is a change this menu's own
  * open is the moment to notice, which is the palette's convention too.
  */
+import * as React from "react";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import {
   offeredAutomationsForColumn,
@@ -56,6 +57,7 @@ import { cn } from "@renderer/lib/utils";
 import {
   selectArmedAutomation,
   selectAutomations,
+  selectColumnRank,
   useAutomationsStore,
 } from "@renderer/stores/automations";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -71,14 +73,25 @@ export function ColumnArmingButton({
   status: TicketStatus;
 }) {
   const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
+  const rank = useAutomationsStore((state) => selectColumnRank(state, projectId, status));
   const armed = useAutomationsStore((state) => selectArmedAutomation(state, projectId, status));
   const enabledIds = useAutomationsStore((state) => state.enabledIds);
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
+  const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const arm = useAutomationsStore((state) => state.arm);
 
-  const offered = offeredAutomationsForColumn(automations, status, armed?.id ?? null);
+  // The column's AUTHORED rank (VC-132) — the same order the lane view
+  // arranges, so the menu and the lane are one list read twice. Deliberately
+  // NOT the drag's pinned shape: the pin exists to protect what digit `1`
+  // means, and this menu has no digits. Memoized because the composition mints
+  // an array: a selector returning a fresh one on every read is what a store
+  // subscription may never do.
+  const offered = React.useMemo(
+    () => offeredAutomationsForColumn(automations, status, rank),
+    [automations, status, rank],
+  );
   const label =
     armed === null
       ? `Arm ${TICKET_STATUS_LABELS[status]}`
@@ -90,6 +103,7 @@ export function ColumnArmingButton({
         if (!open) return;
         void refresh(projectId);
         void refreshArming(projectId);
+        void refreshOrder(projectId);
         void refreshEnablement();
       }}
     >

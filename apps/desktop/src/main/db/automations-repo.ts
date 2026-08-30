@@ -26,6 +26,7 @@ import type {
   AutomationRuntime,
   AutomationTrigger,
   ColumnArming,
+  ColumnAutomationOrder,
   ModelSelection,
   ResolvedAutomationModel,
   TicketStatus,
@@ -49,6 +50,13 @@ interface ColumnArmingRow {
   status: string;
   automation_id: string;
   armed_at: number;
+}
+
+interface ColumnOrderRow {
+  project_id: string;
+  status: string;
+  ranked_ids: string;
+  ordered_at: number;
 }
 
 interface AutomationRunRow {
@@ -430,4 +438,90 @@ export function clearColumnArming(
     input.projectId,
     input.status,
   );
+}
+
+/* -------------------------------------- column order (migration 032) ------ */
+
+/**
+ * The ORDER projection (VC-132) — the third table under the pattern the two
+ * above it established: an ordinary durable command (`automation.set-column-order`)
+ * whose answer lands somewhere machine-local.
+ *
+ * What it stores is which Offered Automation reads as `1` when a card is
+ * dragged over the column. It is not part of the record for the reason the
+ * arming is not: the drag pins the column's ARMED Automation to digit `1`, and
+ * an order that travelled while the arming it is read against did not would
+ * print one digit here and mean another elsewhere.
+ */
+/**
+ * One row, or `null` when this build cannot read it — the same tolerant,
+ * fail-closed read `mapArming` argues for, and closed per ROW for the same
+ * reason: each row names its own column in its own primary key, so an
+ * unreadable one can only ever be about a column this build does not have.
+ *
+ * A rank that fails to parse degrades to "no rank here", which is the resting
+ * state of every column nobody has arranged: the Offered list still reads, in
+ * the order the caller was handed. Nothing about a lost rank can start a Run.
+ */
+function mapColumnOrder(row: ColumnOrderRow): ColumnAutomationOrder | null {
+  if (!isTicketStatus(row.status)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.ranked_ids);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === "string")) return null;
+  return {
+    projectId: row.project_id,
+    status: row.status,
+    rankedAutomationIds: parsed,
+    orderedAt: row.ordered_at,
+  };
+}
+
+/** Every arranged column in one project, board order left to the caller. */
+export function listColumnOrders(
+  db: Database.Database,
+  projectId: string,
+): ColumnAutomationOrder[] {
+  const rows = prepared<[string], ColumnOrderRow>(
+    db,
+    "SELECT * FROM automation_column_order WHERE project_id = ?",
+  ).all(projectId);
+  return rows.flatMap((row) => {
+    const order = mapColumnOrder(row);
+    return order === null ? [] : [order];
+  });
+}
+
+/**
+ * Writes one column's rank, replacing whatever it held. The projection's hand:
+ * called from inside the ledger transaction that recorded the intent
+ * (`SqliteAutomationLedgerTransaction.putColumnOrder`), never from a handler.
+ *
+ * An EMPTY list deletes the row rather than storing `[]`. "Arranged into
+ * nothing" and "never arranged" are the same fact — both read as the Offered
+ * list in the order the caller was handed — and keeping one spelling of it
+ * means no reader has to know two.
+ */
+export function setColumnOrder(
+  db: Database.Database,
+  input: { projectId: string; status: TicketStatus; rankedAutomationIds: readonly string[] },
+  now: number,
+): void {
+  if (input.rankedAutomationIds.length === 0) {
+    prepared(db, "DELETE FROM automation_column_order WHERE project_id = ? AND status = ?").run(
+      input.projectId,
+      input.status,
+    );
+    return;
+  }
+  prepared(
+    db,
+    `INSERT INTO automation_column_order (project_id, status, ranked_ids, ordered_at)
+       VALUES (?, ?, ?, ?)
+     ON CONFLICT (project_id, status)
+       DO UPDATE SET ranked_ids = excluded.ranked_ids, ordered_at = excluded.ordered_at`,
+  ).run(input.projectId, input.status, JSON.stringify([...input.rankedAutomationIds]), now);
 }

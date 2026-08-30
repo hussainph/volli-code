@@ -11,6 +11,7 @@
 import type {
   AutomationArmingsResult,
   AutomationArmResult,
+  AutomationColumnOrdersResult,
   AutomationDeleteResult,
   AutomationEnablementResult,
   AutomationIpcChannel,
@@ -19,6 +20,7 @@ import type {
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
 } from "../../ipc/contract";
 import type { DbHandle } from "../data-ipc";
@@ -82,6 +84,12 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       service.armings(input.projectId),
 
     "volli:automation-arm": async (input): Promise<AutomationArmResult> => service.arm(input),
+
+    "volli:automation-column-order-list": async (input): Promise<AutomationColumnOrdersResult> =>
+      service.columnOrders(input.projectId),
+
+    "volli:automation-set-column-order": async (input): Promise<AutomationSetColumnOrderResult> =>
+      service.setColumnOrder(input),
 
     "volli:automation-runs-for-project": (input): AutomationRunsResult =>
       service.runsForProject(input.projectId),

@@ -5,6 +5,7 @@ import type {
   AutomationRun,
   AutomationTrigger,
   ColumnArming,
+  ColumnAutomationOrder,
   ModelSelection,
   PromptResource,
   ResolvedAutomationModel,
@@ -68,6 +69,24 @@ export type AutomationCommandIntent =
       status: TicketStatus;
       automationId: string | null;
     }
+  /**
+   * Arranging one column's Offered list — which Automation reads as digit `1`
+   * when a card is dragged over it (VC-132), ON THIS MACHINE.
+   *
+   * The third switch under one pattern, and it is a command for the same reason
+   * the two above it are (docs/BOUNDARIES.md rule 5): the rank decides which
+   * Automation a *plain-looking* release aims at, so it is user intent about
+   * what starts work, recorded, evented and receipted rather than poked into a
+   * table. What is machine-local is the PROJECTION — `automation_column_order`,
+   * which never travels with a project, because the digit it prints is pinned
+   * by an arming that never travels either.
+   */
+  | {
+      kind: "automation.set-column-order";
+      projectId: string;
+      status: TicketStatus;
+      rankedAutomationIds: readonly string[];
+    }
   | { kind: "automation.run"; plan: AutomationRunPlan };
 
 /**
@@ -105,6 +124,14 @@ export type AutomationReceiptResult =
       status: TicketStatus;
       automationId: string | null;
       armings: ColumnArming[];
+    }
+  /** The project's whole new order set, whole for the reason the two above are. */
+  | {
+      kind: "automation.column-order.set";
+      projectId: string;
+      status: TicketStatus;
+      rankedAutomationIds: string[];
+      orders: ColumnAutomationOrder[];
     }
   | { kind: "automation.not-found"; automationId: string }
   | { kind: "automation.run.accepted"; plan: AutomationRunPlan }
@@ -172,6 +199,17 @@ export interface AutomationLedgerTransaction {
 
   /** The other machine-local projection: which Automation each of a project's columns arms. */
   columnArmings(projectId: string): Awaitable<readonly ColumnArming[]>;
+  /** And the third: the rank each of a project's columns gives its Offered list. */
+  columnOrders(projectId: string): Awaitable<readonly ColumnAutomationOrder[]>;
+  /**
+   * Writes one column's rank and answers with the project's whole new set,
+   * inside the same transaction as the event that decided it. An empty list is
+   * "never arranged" and clears the row — see the repo's writer.
+   */
+  putColumnOrder(
+    input: { projectId: string; status: TicketStatus; rankedAutomationIds: readonly string[] },
+    recordedAt: number,
+  ): Awaitable<readonly ColumnAutomationOrder[]>;
   /**
    * Arms one column, or disarms it with `automationId: null`, and answers with
    * the project's whole new set. Called inside the same transaction as the
@@ -263,6 +301,15 @@ export interface AutomationEngine {
   }): Promise<AutomationCommandOutcome<ColumnArming[]>>;
   /** Every armed column in one project — the machine-local projection, read back. */
   columnArmings(projectId: string): Promise<ColumnArming[]>;
+  /** Arranges one column's Offered list; answers with the project's whole set. */
+  setColumnOrder(input: {
+    commandId: string;
+    projectId: string;
+    status: TicketStatus;
+    rankedAutomationIds: readonly string[];
+  }): Promise<AutomationCommandOutcome<ColumnAutomationOrder[]>>;
+  /** Every arranged column in one project — the machine-local projection, read back. */
+  columnOrders(projectId: string): Promise<ColumnAutomationOrder[]>;
   acceptRun(input: {
     commandId: string;
     automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
@@ -679,6 +726,78 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
 
     async columnArmings(projectId) {
       return ports.ledger.transaction(async (tx) => [...(await tx.columnArmings(projectId))]);
+    },
+
+    async setColumnOrder(input) {
+      const intent: AutomationCommandIntent = {
+        kind: "automation.set-column-order",
+        projectId: input.projectId,
+        status: input.status,
+        rankedAutomationIds: input.rankedAutomationIds,
+      };
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await existingCommand(tx, input.commandId, intent);
+        if (existing !== null) {
+          return replay(tx, input.commandId, "automation.column-order.set", (result) =>
+            result.kind === "automation.column-order.set" ? result.orders : null,
+          );
+        }
+        const now = ports.now();
+        const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
+        await tx.insertCommand(command);
+        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        // No record guard, unlike arming: a rank is a LIST and it is
+        // stale-tolerant by construction — an id naming an Automation this
+        // column no longer offers is filtered out on every read
+        // (`offeredAutomationsForColumn`). Refusing the whole arrangement
+        // because one id in it went stale would make a lane un-arrangeable
+        // until someone found the row that had moved.
+        const orders = [
+          ...(await tx.putColumnOrder(
+            {
+              projectId: input.projectId,
+              status: input.status,
+              rankedAutomationIds: input.rankedAutomationIds,
+            },
+            now,
+          )),
+        ];
+        const rankedAutomationIds = [...input.rankedAutomationIds];
+        // The projection's own answer is what both the event and the receipt
+        // quote, exactly as the arming's does: one COMMIT decides whether the
+        // row and the history of the row both happened.
+        await tx.appendEvent(
+          event(
+            command.id,
+            "automation.column-order.changed",
+            {
+              projectId: input.projectId,
+              status: input.status,
+              rankedAutomationIds,
+              orders,
+            },
+            now,
+          ),
+        );
+        const completed = receipt(
+          command.id,
+          "completed",
+          {
+            kind: "automation.column-order.set",
+            projectId: input.projectId,
+            status: input.status,
+            rankedAutomationIds,
+            orders,
+          },
+          now,
+        );
+        await recordReceipt(tx, completed);
+        return { ok: true, value: orders, receipt: publicReceipt(completed) };
+      });
+    },
+
+    async columnOrders(projectId) {
+      return ports.ledger.transaction(async (tx) => [...(await tx.columnOrders(projectId))]);
     },
 
     async acceptRun(input) {

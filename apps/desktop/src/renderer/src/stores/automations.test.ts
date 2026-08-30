@@ -4,6 +4,7 @@ import type {
   AutomationRun,
   AutomationTrigger,
   ColumnArming,
+  ColumnAutomationOrder,
   ModelSelection,
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -14,6 +15,11 @@ import {
   selectArmedAutomation,
   selectArmings,
   selectAutomations,
+  selectColumnOrders,
+  selectColumnRank,
+  selectEffectiveArmedAutomation,
+  selectOfferedInDigitOrder,
+  selectOfferedInRankOrder,
 } from "./automations";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -56,6 +62,8 @@ function stubApi(impl: {
   setEnabled?: () => Promise<unknown>;
   armings?: () => Promise<unknown>;
   arm?: () => Promise<unknown>;
+  columnOrders?: () => Promise<unknown>;
+  setColumnOrder?: () => Promise<unknown>;
 }) {
   vi.stubGlobal("window", {
     api: {
@@ -78,6 +86,10 @@ function stubApi(impl: {
           impl.setEnabled ??
             (() => Promise.resolve({ ok: true, enabledAutomationIds: [], receipt: {} })),
         ),
+        columnOrders: vi.fn(impl.columnOrders ?? (() => Promise.resolve({ ok: true, orders: [] }))),
+        setColumnOrder: vi.fn(
+          impl.setColumnOrder ?? (() => Promise.resolve({ ok: false, error: "unused" })),
+        ),
       },
     },
   });
@@ -92,6 +104,14 @@ const ARMING: ColumnArming = {
 
 /** A record that is OFFERED in one column — the Trigger, never the column's arming. */
 const COLUMNS_TRIGGER: AutomationTrigger = { kind: "columns", columns: ["doing"] };
+
+/** One column's authored rank (VC-132) — machine-local like the arming above it. */
+const ORDER: ColumnAutomationOrder = {
+  projectId: "p1",
+  status: "doing",
+  rankedAutomationIds: ["automation-2", "automation-1"],
+  orderedAt: 5,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -727,7 +747,7 @@ describe("enablement", () => {
 });
 
 describe("ensureLoaded", () => {
-  it("fills all three caches for a project nothing has read yet", async () => {
+  it("fills all four caches for a project nothing has read yet", async () => {
     // The one caller that cannot answer from an empty cache: an arrival that
     // beat the board's own reads, or a `volli ticket move` into a project no
     // window has opened.
@@ -735,6 +755,7 @@ describe("ensureLoaded", () => {
       list: () => Promise.resolve({ ok: true, automations: [automation()] }),
       armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
       enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+      columnOrders: () => Promise.resolve({ ok: true, orders: [ORDER] }),
     });
     const store = createAutomationsStore();
 
@@ -742,6 +763,9 @@ describe("ensureLoaded", () => {
 
     expect(store.getState().byProject["p1"]).toHaveLength(1);
     expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    // The rank belongs in the cold-cache door too: a drop whose pick names a
+    // digit would otherwise be classified against an order that never landed.
+    expect(store.getState().orderByProject["p1"]).toEqual([ORDER]);
     expect(store.getState().enabledIds).toEqual(["automation-1"]);
     expect(store.getState().enablementRead).toBe(true);
   });
@@ -752,6 +776,7 @@ describe("ensureLoaded", () => {
     store.setState({
       byProject: { p1: [automation()] },
       armingByProject: { p1: [ARMING] },
+      orderByProject: { p1: [ORDER] },
       enabledIds: [],
       // An EMPTY enabled set that has been read is not a cache that hasn't:
       // "nothing on here" is an answer, and this flag is what says so.
@@ -762,6 +787,7 @@ describe("ensureLoaded", () => {
 
     expect(window.api.automations.list).not.toHaveBeenCalled();
     expect(window.api.automations.armings).not.toHaveBeenCalled();
+    expect(window.api.automations.columnOrders).not.toHaveBeenCalled();
     expect(window.api.automations.enablement).not.toHaveBeenCalled();
   });
 
@@ -774,6 +800,7 @@ describe("ensureLoaded", () => {
 
     expect(window.api.automations.list).not.toHaveBeenCalled();
     expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
     expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
   });
 
@@ -789,6 +816,7 @@ describe("ensureLoaded", () => {
 
     expect(window.api.automations.list).toHaveBeenCalledTimes(1);
     expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
     expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
   });
 
@@ -802,5 +830,155 @@ describe("ensureLoaded", () => {
     await store.getState().ensureLoaded("p1");
 
     expect(window.api.automations.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("refreshOrder", () => {
+  it("caches one project's column ranks, apart from its Automations and its armings", async () => {
+    stubApi({ columnOrders: () => Promise.resolve({ ok: true, orders: [ORDER] }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshOrder("p1");
+
+    expect(store.getState().orderByProject["p1"]).toEqual([ORDER]);
+    expect(store.getState().byProject["p1"]).toBeUndefined();
+    expect(store.getState().armingByProject["p1"]).toBeUndefined();
+  });
+
+  it("toasts a refused read rather than showing an unarranged board as arranged", async () => {
+    stubApi({ columnOrders: () => Promise.resolve({ ok: false, error: "Unknown project" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshOrder("p1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("Unknown project"),
+      expect.anything(),
+    );
+    expect(store.getState().orderByProject["p1"]).toBeUndefined();
+  });
+
+  it("toasts a transport throw rather than swallowing it", async () => {
+    stubApi({ columnOrders: () => Promise.reject(new Error("ipc gone")) });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshOrder("p1");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("ipc gone"),
+      expect.anything(),
+    );
+  });
+});
+
+describe("setColumnOrder", () => {
+  it("replaces the project's order slice from the door's own answer, with no re-read", async () => {
+    stubApi({ setColumnOrder: () => Promise.resolve({ ok: true, orders: [ORDER], receipt: {} }) });
+    const store = createAutomationsStore();
+
+    const refusal = await store.getState().setColumnOrder({
+      projectId: "p1",
+      status: "doing",
+      rankedAutomationIds: ["automation-2", "automation-1"],
+    });
+
+    expect(refusal).toBeNull();
+    expect(store.getState().orderByProject["p1"]).toEqual([ORDER]);
+    expect(window.api.automations.columnOrders).not.toHaveBeenCalled();
+  });
+
+  it("mints a durable command id: the projection is machine-local, the intent is not", async () => {
+    stubApi({ setColumnOrder: () => Promise.resolve({ ok: true, orders: [], receipt: {} }) });
+    const store = createAutomationsStore();
+
+    await store
+      .getState()
+      .setColumnOrder({ projectId: "p1", status: "doing", rankedAutomationIds: ["a1"] });
+
+    expect(window.api.automations.setColumnOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+        projectId: "p1",
+        status: "doing",
+        rankedAutomationIds: ["a1"],
+      }),
+    );
+  });
+
+  it("resolves a refusal, and a transport throw, for the caller to report", async () => {
+    stubApi({ setColumnOrder: () => Promise.resolve({ ok: false, error: "Unknown project" }) });
+    const store = createAutomationsStore();
+    expect(
+      await store
+        .getState()
+        .setColumnOrder({ projectId: "p1", status: "doing", rankedAutomationIds: [] }),
+    ).toBe("Unknown project");
+
+    stubApi({ setColumnOrder: () => Promise.reject(new Error("ipc gone")) });
+    const other = createAutomationsStore();
+    expect(
+      await other
+        .getState()
+        .setColumnOrder({ projectId: "p1", status: "doing", rankedAutomationIds: [] }),
+    ).toBe("ipc gone");
+  });
+});
+
+describe("the digit order (VC-132)", () => {
+  const first = automation({ id: "automation-1", trigger: COLUMNS_TRIGGER });
+  const second = automation({ id: "automation-2", trigger: COLUMNS_TRIGGER });
+
+  async function loaded(seed: { armings?: ColumnArming[]; enabled?: string[] }) {
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [first, second] }),
+      armings: () => Promise.resolve({ ok: true, armings: seed.armings ?? [] }),
+      columnOrders: () => Promise.resolve({ ok: true, orders: [ORDER] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: seed.enabled ?? [] }),
+    });
+    const store = createAutomationsStore();
+    await store.getState().ensureLoaded("p1");
+    return store;
+  }
+
+  it("hands back frozen empties for a project nothing has read yet", () => {
+    const store = createAutomationsStore();
+    const state = store.getState();
+    expect(selectColumnOrders(state, "p1")).toEqual([]);
+    expect(selectColumnRank(state, "p1", "doing")).toEqual([]);
+    expect(selectColumnOrders(state, "p1")).toBe(selectColumnOrders(state, "p2"));
+    expect(selectColumnRank(state, "p1", "doing")).toBe(selectColumnRank(state, "p2", "todo"));
+  });
+
+  it("reads the authored rank, uncapped and unpinned, for the surfaces that choose a record", async () => {
+    const store = await loaded({ armings: [ARMING], enabled: ["automation-1"] });
+    expect(selectOfferedInRankOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual([
+      "automation-2",
+      "automation-1",
+    ]);
+  });
+
+  it("pins the effective armed Automation to digit 1 for the drag", async () => {
+    const store = await loaded({ armings: [ARMING], enabled: ["automation-1"] });
+    expect(selectEffectiveArmedAutomation(store.getState(), "p1", "doing")).toEqual(first);
+    expect(selectOfferedInDigitOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual(
+      ["automation-1", "automation-2"],
+    );
+  });
+
+  it("lets the pin go when the armed Automation is switched off here", async () => {
+    // A plain drop then runs nothing, so pinning it to `1` would make the safe
+    // digit promise a Run that never comes — and the digits do not renumber.
+    const store = await loaded({ armings: [ARMING], enabled: [] });
+    expect(selectEffectiveArmedAutomation(store.getState(), "p1", "doing")).toBeNull();
+    expect(selectOfferedInDigitOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual(
+      ["automation-2", "automation-1"],
+    );
+  });
+
+  it("offers nothing for a column no Trigger names", async () => {
+    const store = await loaded({});
+    expect(selectOfferedInDigitOrder(store.getState(), "p1", "todo")).toEqual([]);
   });
 });

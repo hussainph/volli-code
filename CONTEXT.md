@@ -517,10 +517,26 @@ _Avoid_: default automation (collides with project defaults and the default base
 
 **Offered list**:
 The Automations a column presents during a Deliberate move, in the order their
-digit accelerators read, with a `Move only` target beside them. A column's Armed
-automation is always first. Offering is not arming: a column offers many and
-fires at most one on its own.
+digit accelerators read, with a `Move only` target beside them. Membership is
+each Automation's Trigger; the order is the column's own **rank**, arranged by
+dragging the lanes on the Automations page and stored per column, like the
+arming and on the same machine. A column's Armed automation is pinned to digit
+`1` while it is switched on here, so `1` reproduces a plain drop. Digits run
+`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place and
+simply has no digit. Offering is not arming: a column offers many and fires at
+most one on its own.
 _Avoid_: column automations, automation menu
+
+**Option-drag picker**:
+What holding ⌥ during a drag does: the hovered column grows its Offered list
+into large landing targets — every offered row plus `Move only` — and the picker,
+not the pointer, is what a release obeys, so every release under ⌥ lands on a
+named target. Landing on a named Automation opens the same delay window a plain
+drop into an armed column opens, with the same single Cancel; `Move only` moves
+the ticket and starts nothing. ⌥ is a state rather than an edge: the column is
+expanded whenever ⌥ is held over it, however the two became true. Escape ends
+the drag; ⌥-up only closes the picker.
+_Avoid_: palette, radial menu, drag menu
 
 **Instructions**:
 The prompt an Automation sends when it opens its Session: authored prose plus

@@ -45,6 +45,7 @@ import {
   armedRunVerdict,
   openArmedRun,
   type ArmedRunAbandonReason,
+  type DeliberateMoveChoice,
   type PendingArmedRun,
 } from "./armed-move-model";
 import { runAutomationAction } from "./run-automation-model";
@@ -125,6 +126,13 @@ export interface DeliberateMove {
   ticketId: string;
   from: TicketStatus;
   to: TicketStatus;
+  /**
+   * What the ⌥ drag picker named on release (VC-132), when this move came from
+   * the board's own drop. Absent for every other Deliberate move — the card's
+   * context menu, the ticket rail's status pill, an explicit `volli ticket
+   * move` — and an absent choice is exactly today's path.
+   */
+  choice?: DeliberateMoveChoice;
 }
 
 /**
@@ -182,6 +190,7 @@ function classify(input: DeliberateMove, token: number): void {
     enabledAutomationIds: automations.enabledIds,
     from: input.from,
     to: input.to,
+    choice: input.choice,
   });
   if (decision.kind === "nothing") return;
 
@@ -191,6 +200,7 @@ function classify(input: DeliberateMove, token: number): void {
     projectId: input.projectId,
     automation: decision.automation,
     status: input.to,
+    origin: decision.origin,
     now: Date.now(),
   });
   useArmedRunStore.setState((state) => ({

@@ -9,10 +9,14 @@ import {
   automationPinProblem,
   automationTriggerColumns,
   automationTriggersColumn,
+  columnRankAfterLaneDrop,
+  effectiveArmedAutomationFor,
   isAutomationRuntimePin,
   isColumnArrival,
+  MAX_OFFERED_DIGITS,
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
+  offeredAutomationsInDigitOrder,
   parseAutomationTrigger,
   type Automation,
   type ColumnArming,
@@ -195,20 +199,162 @@ describe("offeredAutomationsForColumn", () => {
       offeredAutomationsForColumn(
         [inDoing, alsoDoing, elsewhere, automation({ id: "a4" })],
         "doing",
-        null,
       ),
     ).toEqual([inDoing, alsoDoing]);
   });
 
-  it("puts the column's Armed automation first, keeping the rest in order", () => {
-    expect(offeredAutomationsForColumn([inDoing, alsoDoing], "doing", "a2")).toEqual([
+  it("reads the column's authored rank first, then whatever order it was handed", () => {
+    expect(offeredAutomationsForColumn([inDoing, alsoDoing], "doing", ["a2"])).toEqual([
       alsoDoing,
       inDoing,
     ]);
   });
 
-  it("ignores an armed id that is not offered here", () => {
-    expect(offeredAutomationsForColumn([inDoing], "doing", "a3")).toEqual([inDoing]);
+  it("ignores a ranked id this column does not offer, and one named twice", () => {
+    expect(offeredAutomationsForColumn([inDoing], "doing", ["a3", "a1", "a1"])).toEqual([inDoing]);
+  });
+
+  it("is uncapped, so a tenth Offered row is still armable", () => {
+    const crowd = Array.from({ length: 12 }, (_, index) =>
+      automation({ id: `a${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+    );
+    expect(offeredAutomationsForColumn(crowd, "doing")).toHaveLength(12);
+  });
+});
+
+describe("offeredAutomationsInDigitOrder", () => {
+  const first = automation({ id: "a1", trigger: { kind: "columns", columns: ["doing"] } });
+  const second = automation({ id: "a2", trigger: { kind: "columns", columns: ["doing"] } });
+  const third = automation({ id: "a3", trigger: { kind: "columns", columns: ["doing"] } });
+
+  it("reads the authored rank when the column arms nothing effective", () => {
+    expect(
+      offeredAutomationsInDigitOrder({
+        automations: [first, second, third],
+        status: "doing",
+        rankedAutomationIds: ["a3", "a1"],
+      }).map((row) => row.id),
+    ).toEqual(["a3", "a1", "a2"]);
+  });
+
+  it("pins the effective armed Automation to digit 1 ahead of the authored rank", () => {
+    expect(
+      offeredAutomationsInDigitOrder({
+        automations: [first, second, third],
+        status: "doing",
+        rankedAutomationIds: ["a3", "a1", "a2"],
+        effectiveArmedAutomationId: "a2",
+      }).map((row) => row.id),
+    ).toEqual(["a2", "a3", "a1"]);
+  });
+
+  it("ignores an armed id this column does not offer (stale arming)", () => {
+    expect(
+      offeredAutomationsInDigitOrder({
+        automations: [first, second],
+        status: "doing",
+        effectiveArmedAutomationId: "gone",
+      }).map((row) => row.id),
+    ).toEqual(["a1", "a2"]);
+  });
+
+  it("pins BEFORE the nine-digit cap, so an armed row ranked past nine keeps digit 1", () => {
+    const crowd = Array.from({ length: 10 }, (_, index) =>
+      automation({ id: `c${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+    );
+    const digits = offeredAutomationsInDigitOrder({
+      automations: crowd,
+      status: "doing",
+      effectiveArmedAutomationId: "c9",
+    }).map((row) => row.id);
+    expect(digits).toHaveLength(MAX_OFFERED_DIGITS);
+    expect(digits[0]).toBe("c9");
+    // The cap still holds: the pin displaces the tail, it never widens the list.
+    expect(digits).not.toContain("c8");
+  });
+
+  it("lets one Automation hold a different rank in two columns", () => {
+    const both = automation({
+      id: "shared",
+      trigger: { kind: "columns", columns: ["doing", "needs_review"] },
+    });
+    const doingOnly = automation({ id: "d1", trigger: { kind: "columns", columns: ["doing"] } });
+    const reviewOnly = automation({
+      id: "r1",
+      trigger: { kind: "columns", columns: ["needs_review"] },
+    });
+    const automations = [both, doingOnly, reviewOnly];
+    expect(
+      offeredAutomationsInDigitOrder({
+        automations,
+        status: "doing",
+        rankedAutomationIds: ["d1", "shared"],
+      }).map((row) => row.id),
+    ).toEqual(["d1", "shared"]);
+    expect(
+      offeredAutomationsInDigitOrder({
+        automations,
+        status: "needs_review",
+        rankedAutomationIds: ["shared", "r1"],
+      }).map((row) => row.id),
+    ).toEqual(["shared", "r1"]);
+  });
+});
+
+describe("columnRankAfterLaneDrop", () => {
+  it("refills the slots the lane moved and leaves every other slot alone", () => {
+    expect(columnRankAfterLaneDrop(["a", "b", "c"], ["c", "b", "a"])).toEqual(["c", "b", "a"]);
+  });
+
+  it("keeps a pinned row's authored rank, so disarming returns it there", () => {
+    // "b" is armed and drawn at slot 1, so the lane never moves it: only "a"
+    // and "c" are draggable, and swapping them must not disturb b's own rank.
+    expect(columnRankAfterLaneDrop(["a", "b", "c"], ["c", "a"])).toEqual(["c", "b", "a"]);
+  });
+
+  it("keeps rows past the digit cap where they were, under rows they cannot see", () => {
+    expect(columnRankAfterLaneDrop(["a", "b", "tenth"], ["b", "a"])).toEqual(["b", "a", "tenth"]);
+  });
+
+  it("drops an id the authored list does not hold", () => {
+    expect(columnRankAfterLaneDrop(["a", "b"], ["b", "gone", "a"])).toEqual(["b", "a"]);
+  });
+});
+
+describe("effectiveArmedAutomationFor", () => {
+  const armedRecord = automation({ trigger: { kind: "columns", columns: ["doing"] } });
+
+  it("is the armed record when this machine has it switched on", () => {
+    expect(
+      effectiveArmedAutomationFor({
+        automations: [armedRecord],
+        armings: [arming()],
+        enabledAutomationIds: ["a1"],
+        status: "doing",
+      }),
+    ).toBe(armedRecord);
+  });
+
+  it("is null when the armed record is switched off here — a plain drop runs nothing", () => {
+    expect(
+      effectiveArmedAutomationFor({
+        automations: [armedRecord],
+        armings: [arming()],
+        enabledAutomationIds: [],
+        status: "doing",
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for an unarmed column", () => {
+    expect(
+      effectiveArmedAutomationFor({
+        automations: [armedRecord],
+        armings: [],
+        enabledAutomationIds: ["a1"],
+        status: "doing",
+      }),
+    ).toBeNull();
   });
 });
 
