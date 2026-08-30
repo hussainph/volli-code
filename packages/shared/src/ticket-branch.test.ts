@@ -24,6 +24,15 @@ describe("slugify", () => {
     expect(result.length).toBeLessThanOrEqual(48);
     expect(result.endsWith("-")).toBe(false);
   });
+
+  it("slugifies a title that is one long run of hyphens in milliseconds", () => {
+    // The `/^-+|-+$/g` trim this replaced backtracked quadratically on a run of
+    // hyphens (CodeQL js/polynomial-redos); index arithmetic is linear.
+    const started = performance.now();
+    expect(slugify("-".repeat(100_000))).toBe("");
+    expect(slugify(`${"-".repeat(100_000)}tail`)).toBe("tail");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("ticketBranchName", () => {

@@ -47,6 +47,27 @@ describe("resolveGhosttyThemeName", () => {
     expect(resolveGhosttyThemeName("Nord", "light")).toBe("Nord");
     expect(resolveGhosttyThemeName("Nord", "dark")).toBe("Nord");
   });
+
+  it("skips an entry whose prefix is not a variant, colon or no colon", () => {
+    expect(resolveGhosttyThemeName("auto:Nord,dark:Rose Pine", "dark")).toBe("Rose Pine");
+    expect(resolveGhosttyThemeName("auto:Nord", "dark")).toBe("auto:Nord");
+  });
+
+  it("tolerates whitespace around the variant colon", () => {
+    expect(resolveGhosttyThemeName("light\t:\tRose Pine Dawn", "light")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName("dark  :  Rose Pine", "dark")).toBe("Rose Pine");
+  });
+
+  it("reads a value that is a variant followed by a long run of tabs in milliseconds", () => {
+    // The `/^(light|dark)\s*:\s*(.*)$/` match this replaced backtracked
+    // quadratically on tab runs (CodeQL js/polynomial-redos); splitting on the
+    // first `:` is linear.
+    const tabs = "\t".repeat(100_000);
+    const started = performance.now();
+    expect(resolveGhosttyThemeName(`dark${tabs}`, "dark")).toBe(`dark${tabs}`);
+    expect(resolveGhosttyThemeName(`dark:${tabs}Rose Pine`, "dark")).toBe("Rose Pine");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("parseGhosttyTerminalPrefs", () => {

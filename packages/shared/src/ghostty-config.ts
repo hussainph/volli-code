@@ -58,20 +58,37 @@ export function resolveGhosttyThemeName(value: string, appearance: ResolvedAppea
   let lightName: string | null = null;
   let darkName: string | null = null;
   for (const rawEntry of value.split(",")) {
-    const entry = rawEntry.trim();
-    const match = /^(light|dark)\s*:\s*(.*)$/.exec(entry);
-    if (!match) continue;
-    const [, variant, name] = match;
-    if (variant === "dark") {
-      darkName = name;
+    const entry = parseVariantEntry(rawEntry);
+    if (entry === null) continue;
+    if (entry.variant === "dark") {
+      darkName = entry.name;
     } else {
-      lightName = name;
+      lightName = entry.name;
     }
   }
 
   const preferred = appearance === "light" ? lightName : darkName;
   const other = appearance === "light" ? darkName : lightName;
   return preferred ?? other ?? value;
+}
+
+/**
+ * Splits one `light:Name` / `dark:Name` entry of a theme pair into its variant
+ * and theme name, or null when it carries no such prefix.
+ *
+ * Split on the first `:` rather than `/^(light|dark)\s*:\s*(.*)$/`, whose two
+ * `\s*` runs backtrack quadratically on an entry that is a `light` followed by
+ * a long run of tabs (CodeQL js/polynomial-redos). The value is the user's own
+ * config line, so that was a hang-your-own-app risk rather than a remote one,
+ * but one `indexOf` says the same thing in linear time.
+ */
+function parseVariantEntry(rawEntry: string): { variant: "light" | "dark"; name: string } | null {
+  const entry = rawEntry.trim();
+  const colon = entry.indexOf(":");
+  if (colon === -1) return null;
+  const variant = entry.slice(0, colon).trimEnd();
+  if (variant !== "light" && variant !== "dark") return null;
+  return { variant, name: entry.slice(colon + 1).trimStart() };
 }
 
 /** Parses `font-size` into a positive finite point size, or null. */
