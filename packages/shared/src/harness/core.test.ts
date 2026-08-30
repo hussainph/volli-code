@@ -51,6 +51,26 @@ describe("mergeFencedSection", () => {
     });
   });
 
+  it("appends to a file of blank lines in milliseconds", () => {
+    // `/\n+$/`, the trailing-newline trim this replaced, was the one genuinely
+    // quadratic regex CodeQL flagged (js/polynomial-redos): 23 seconds on 80k
+    // blank lines followed by any real character.
+    const blankHeavy = `${"\n".repeat(100_000)}# My rules\n`;
+    const started = performance.now();
+    expect(mergeFencedSection(blankHeavy, "Use Volli.", 1).content).toBe(
+      `${"\n".repeat(100_000)}# My rules\n\n<!-- volli:begin v=1 -->\nUse Volli.\n<!-- volli:end -->\n`,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("trims only the trailing `\\n` run, leaving a lone `\\r` in place", () => {
+    // What `/\n+$/` matched, exactly: the run of `\n` at the very end. A `\r`
+    // stops it, so a CRLF file keeps its last `\r`.
+    expect(mergeFencedSection("# My rules\r\n\r\n", "Use Volli.", 1).content).toBe(
+      "# My rules\r\n\r\n\n<!-- volli:begin v=1 -->\nUse Volli.\n<!-- volli:end -->\n",
+    );
+  });
+
   it("inserts a managed body containing $& / $$ verbatim", () => {
     const body = "Cost is $$5 and $& stays literal.";
     const appended = mergeFencedSection("# rules\n", body, 1);

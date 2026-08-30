@@ -80,6 +80,22 @@ function skipLineEnding(text: string, index: number): number {
   return i;
 }
 
+/**
+ * `text` without its trailing run of `\n`.
+ *
+ * By index, because `/\n+$/` is quadratic on a file that is blank lines
+ * followed by anything else (CodeQL js/polynomial-redos, alert 2): `\n+` runs
+ * to the end of the blank prefix, `$` fails on the first real character, and
+ * the whole walk repeats from the next newline — 23 seconds on 80k of them.
+ * An instructions file is local and the user's own, so that was a
+ * hang-your-own-app risk rather than a remote one.
+ */
+function withoutTrailingNewlines(text: string): string {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === LF) end -= 1;
+  return text.slice(0, end);
+}
+
 /** Index where one optional `\r?\n` line ending ending at `end` starts, never below `min`. */
 function lineEndingStart(text: string, end: number, min: number): number {
   let i = end;
@@ -123,7 +139,7 @@ export function mergeFencedSection(
   const markers = FENCE_MARKERS[comment];
   const block = `${markers.begin(version)}\n${managedBody}\n${markers.end}`;
   const managedPattern = fencedBlockPattern(comment);
-  const unmanaged = current.replace(/\n+$/, "");
+  const unmanaged = withoutTrailingNewlines(current);
   // Function-form replacement so `$$`, `$&`, `$1`, … inside the managed body are
   // inserted literally instead of being interpreted as replacement patterns.
   const content = managedPattern.test(current)
