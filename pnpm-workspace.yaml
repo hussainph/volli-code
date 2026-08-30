@@ -35,7 +35,7 @@ allowBuilds:
 catalog:
   "@types/node": ^26.3.0
   "@types/react": ^19.2.18
-  "@types/react-dom": ^19.2.4
+  "@types/react-dom": ^19.2.5
   typescript: ~7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.2.5
   vite-plus: 0.2.5
@@ -90,11 +90,17 @@ overrides:
   vite: "catalog:"
   # One shiki 4 in the tree, ever. streamdown's dist types import bare "shiki"
   # and resolve whatever pnpm's hidden hoist holds — when a transitive range
-  # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's 4.3.1,
+  # (docs-site expressive-code) re-resolved to 4.4.3 beside the app's then-4.3.1,
   # incrementally-updated checkouts hoisted 4.4.3 and typecheck broke against
   # @streamdown/code's shiki-3 types while fresh CI installs stayed green.
-  # Remove when shiki 4.4+ is retaken deliberately (see PR #246's thread).
-  "shiki@^4": "4.3.1"
+  #
+  # 4.4.3 IS that deliberate retake (VC-211, taking over Dependabot #418): the
+  # desktop app's shiki/@shikijs/{langs,monaco,themes} pins moved to 4.4.3 in
+  # the same commit, so this value moves with them. The override stays rather
+  # than being deleted — without it the next shiki 4.4.x release re-splits the
+  # tree exactly as before, because the app pins exactly while the transitive
+  # ranges float. Keep this equal to the desktop pins; never let them drift.
+  "shiki@^4": "4.4.3"
 
 packageExtensions:
   vite-plus@*:
