@@ -360,9 +360,20 @@ try {
     });
   }
 
-  /** Relaunches into a fresh main process and re-arms the notification watch. */
-  async function relaunch() {
+  /**
+   * Closes the app, applies one fixture change, and launches a fresh main
+   * process with the notification watch re-armed.
+   *
+   * The close comes FIRST so every write above happens against a database
+   * nobody is holding — the discipline `automations-schedule-smoke` states and
+   * this probe's own header claims. It also makes each check start from an
+   * empty per-Session memory in the observer, which is what lets the same
+   * fixture be re-asked with one column flipped.
+   */
+  async function relaunchWith(mutate) {
     if (app !== null) await closeAppBounded(app);
+    app = null;
+    mutate();
     app = await launch({ dbPath, userDataDir });
     page = await app.firstWindow();
     page.on("pageerror", (error) => console.log("[pageerror]", String(error).slice(0, 400)));
@@ -373,8 +384,7 @@ try {
     await armActivityPush(page);
   }
 
-  seedNeed("error");
-  await relaunch();
+  await relaunchWith(() => seedNeed("error"));
 
   await must(3, "an unattended Run whose Session is in error notifies, exactly once", async () => {
     const shown = await notificationsAfter(app, page, "Nightly sweep · error");
@@ -384,8 +394,7 @@ try {
     };
   });
 
-  setAttendance("attended");
-  await relaunch();
+  await relaunchWith(() => setAttendance("attended"));
 
   await must(
     4,
@@ -396,9 +405,10 @@ try {
     },
   );
 
-  setAttendance("unattended");
-  seedNeed("waiting");
-  await relaunch();
+  await relaunchWith(() => {
+    setAttendance("unattended");
+    seedNeed("waiting");
+  });
 
   await must(5, "waiting speaks too, and says something error does not", async () => {
     const shown = await notificationsAfter(app, page, "Nightly sweep · waiting");
@@ -408,11 +418,12 @@ try {
     };
   });
 
-  setPreferences({
-    enabled: true,
-    events: { "needs-you": false, finished: true, swept: true, update: true },
-  });
-  await relaunch();
+  await relaunchWith(() =>
+    setPreferences({
+      enabled: true,
+      events: { "needs-you": false, finished: true, swept: true, update: true },
+    }),
+  );
 
   await must(6, "VC-75's needs-you preference governs it — no second setting", async () => {
     const shown = await notificationsAfter(app, page, "Nightly sweep · muted");
