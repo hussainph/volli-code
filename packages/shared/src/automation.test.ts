@@ -4,8 +4,11 @@ import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 import {
   ARMED_RUN_DELAY_MS,
   armedAutomationFor,
+  AUTOMATION_RUN_ATTENDANCE,
   automationDraftProblem,
   automationOwnership,
+  isAutomationRunAttendance,
+  parseAutomationRunAttendance,
   automationPinProblem,
   automationRunRequestIdentity,
   automationRunRetryKey,
@@ -667,5 +670,38 @@ describe("one Run request's identity", () => {
         modelOverride: null,
       }),
     );
+  });
+});
+
+describe("automation Run attendance", () => {
+  it("names the two answers a door can give", () => {
+    expect([...AUTOMATION_RUN_ATTENDANCE]).toEqual(["attended", "unattended"]);
+  });
+
+  it("recognises its own words and nothing else", () => {
+    expect(isAutomationRunAttendance("attended")).toBe(true);
+    expect(isAutomationRunAttendance("unattended")).toBe(true);
+    expect(isAutomationRunAttendance("scheduled")).toBe(false);
+    expect(isAutomationRunAttendance(null)).toBe(false);
+    expect(isAutomationRunAttendance(undefined)).toBe(false);
+    expect(isAutomationRunAttendance(1)).toBe(false);
+  });
+
+  it("reads anything it cannot understand as attended, which never notifies", () => {
+    // The degrade direction is the whole decision here. A Run recorded before
+    // VC-133 says nothing about its door; reading that as `unattended` would
+    // notify about work somebody is already watching, and VC-112 is explicit
+    // that this is how a person learns to switch a feature off. A wrong
+    // `attended` costs one missed notification on a historical Run.
+    expect(parseAutomationRunAttendance(undefined)).toBe("attended");
+    expect(parseAutomationRunAttendance(null)).toBe("attended");
+    expect(parseAutomationRunAttendance("")).toBe("attended");
+    expect(parseAutomationRunAttendance("UNATTENDED")).toBe("attended");
+    expect(parseAutomationRunAttendance({})).toBe("attended");
+  });
+
+  it("passes through the two it does understand", () => {
+    expect(parseAutomationRunAttendance("attended")).toBe("attended");
+    expect(parseAutomationRunAttendance("unattended")).toBe("unattended");
   });
 });

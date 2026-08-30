@@ -1620,6 +1620,10 @@ describe("migration 026 — Automations command ledger and projections", () => {
       "model_id",
       "reasoning_level",
       "created_at",
+      // VC-133: whether a person was at the door that asked for this Run. Last,
+      // because `ALTER TABLE … ADD COLUMN` appends — the 026 table's own order
+      // is unchanged.
+      "attendance",
     ]);
     expect(() =>
       db.prepare("UPDATE automation_runs SET provider_id = '' WHERE id = 'r1'").run(),
@@ -2027,6 +2031,59 @@ describe("migration 030 — birth-frozen Ticket Session delegation grants", () =
     expect(db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
       n: 0,
     });
+    db.close();
+  });
+});
+
+describe("migration 033 — a Run's attendance", () => {
+  it("is nullable, and bounded to the two words the vocabulary has", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+    const insert = (id: string, attendance: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO automation_runs
+             (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, attendance, created_at)
+           VALUES (?, 'a1', 'Review', 't1', 's1', 'anthropic', 'claude-opus', 'high', ?, 0)`,
+        )
+        .run(id, attendance);
+
+    insert("r2", "unattended");
+    insert("r3", "attended");
+    // NULLABLE with no backfilled default: a Run recorded before this column
+    // existed genuinely did not record the fact, and the READ is where that
+    // becomes `attended` (`parseAutomationRunAttendance`). Freezing a guess into
+    // the rows would put the degrade rule in two places.
+    insert("r4", null);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 4 });
+
+    // A hand-edited database cannot introduce a third answer the reader would
+    // then have to interpret.
+    expect(() => insert("r5", "maybe")).toThrow(/CHECK/);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims the column", () => {
+    // The case migration 031's reconciler exists for, applied to this column:
+    // several automations branches have landed against this table, so a
+    // developer database can say it is current while missing half the schema.
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.exec("ALTER TABLE automation_runs DROP COLUMN attendance");
+    expect(columnNames(db, "automation_runs")).not.toContain("attendance");
+
+    db.pragma("user_version = 32");
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "automation_runs")).toContain("attendance");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+
+    // And re-running it against a database that already has the column is a
+    // no-op rather than a duplicate-column error.
+    db.pragma("user_version = 32");
+    expect(() => migrate(db, dbPath)).not.toThrow();
+    expect(columnNames(db, "automation_runs")).toContain("attendance");
     db.close();
   });
 });

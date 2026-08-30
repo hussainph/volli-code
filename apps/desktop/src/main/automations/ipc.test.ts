@@ -302,6 +302,7 @@ describe("automation IPC", () => {
           ticketId: input.ticketId,
           sessionId: "session-1",
           model: PIN,
+          attendance: input.attendance,
           createdAt: 5_000,
         },
         projectId: "project-1",
@@ -318,6 +319,7 @@ describe("automation IPC", () => {
           ticketId: null,
           sessionId: "session-project-1",
           model: PIN,
+          attendance: input.attendance,
           createdAt: 5_000,
         },
         projectId: input.projectId,
@@ -336,6 +338,56 @@ describe("automation IPC", () => {
       modelOverride: null,
     });
     expect(result).toMatchObject({ ok: true, run: { sessionId: "session-1" }, receipt });
+    // ATTENDED, decided by being this handler (VC-133). Every surface behind
+    // this channel is one a person had to click.
+    expect(result).toMatchObject({ ok: true, run: { attendance: "attended" } });
+  });
+
+  it("will not let the renderer declare its own attendance", async () => {
+    // The fact decides whether a person is interrupted, so it must not be
+    // forgeable upstream: the handler overrides whatever arrived on the wire.
+    const receipt = {
+      id: randomUUID(),
+      commandId: randomUUID(),
+      status: "completed" as const,
+      recordedAt: 5_000,
+    };
+    const seen: string[] = [];
+    const runner: AutomationRunner = {
+      run: async (input) => {
+        seen.push(input.attendance);
+        return {
+          ok: true,
+          run: {
+            id: "run-1",
+            automationId: "automation-1",
+            automationName: "Review",
+            ticketId: input.ticketId,
+            sessionId: "session-1",
+            model: PIN,
+            attendance: input.attendance,
+            createdAt: 5_000,
+          },
+          projectId: "project-1",
+          receipt,
+        };
+      },
+      runForProject: async () => ({ ok: false, code: "RUN_FAILED", error: "not this door" }),
+      resumeDeliveryForSession: async () => undefined,
+      recover: async () => undefined,
+      settled: async () => undefined,
+    };
+    const { ticket } = setup({ runner });
+
+    await call<AutomationRunStartResult>("volli:automation-run", {
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: "automation-1" },
+      ticketId: ticket.id,
+      modelOverride: null,
+      attendance: "unattended",
+    } as never);
+
+    expect(seen).toEqual(["attended"]);
   });
 
   it("lists a Ticket's Runs newest first and rejects malformed command identities", async () => {
@@ -1253,6 +1305,7 @@ describe("automation IPC", () => {
           ticketId: null,
           sessionId: "session-project-1",
           model: PIN,
+          attendance: input.attendance,
           createdAt: 5_000,
         },
         projectId: input.projectId,
@@ -1270,7 +1323,14 @@ describe("automation IPC", () => {
         automationId: "automation-1",
         projectId: project.id,
       }),
-    ).toMatchObject({ ok: true, run: { ticketId: null, sessionId: "session-project-1" } });
+    ).toMatchObject({
+      ok: true,
+      // ATTENDED: the only caller of this CHANNEL is "Run now" on a Skipped
+      // occurrence — a person recovering an evening the app was closed for.
+      // The schedule timer runs the same Automation through the same runner
+      // method, but it is inside main and passes `unattended`.
+      run: { ticketId: null, sessionId: "session-project-1", attendance: "attended" },
+    });
 
     // The Target is named rather than implied, so a request that forgot it is
     // refused at the door instead of quietly becoming a Project Session.

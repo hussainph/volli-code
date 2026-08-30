@@ -14,6 +14,7 @@ describe("runAutomationAction", () => {
           ticketId: "t1",
           sessionId: "session-1",
           model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+          attendance: "attended",
           createdAt: 1,
         },
         projectId: "p1",

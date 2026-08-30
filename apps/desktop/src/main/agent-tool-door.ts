@@ -554,6 +554,13 @@ async function runAutomationTool(
     target: { kind: "automation", automationId: found.automation.id },
     ticketId: resolvedTicket.ticket.id,
     modelOverride: null,
+    // UNATTENDED (VC-133). The caller is another Session, not a person: it
+    // issued this tool call and went back to its own turn, so when the Run's
+    // Session stops to ask a permission question there is nobody in front of it
+    // who can answer. That is precisely the case VC-112's notification rule
+    // exists for, and it is the same answer the schedule timer gives — both are
+    // doors inside main with no human on the other side.
+    attendance: "unattended",
   });
   if (!outcome.ok) {
     // The Run door's refusals are already sentences about this request — a Run

@@ -547,6 +547,11 @@ function runShape(run: AutomationRun) {
     sessionId: _sessionId,
     ticketId: _ticketId,
     createdAt: _createdAt,
+    // Attendance is compared on its own below rather than folded in here: it is
+    // the ONE field on which an agent's Run and a person's Run are meant to
+    // differ (VC-133), so hiding it inside a shape equality would make this
+    // helper assert the opposite of the rule.
+    attendance: _attendance,
     ...rest
   } = run;
   return rest;
@@ -570,6 +575,8 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
         target: { kind: "automation", automationId: automation.id },
         ticketId: "ticket-one",
         modelOverride: null,
+        // UNATTENDED (VC-133): the caller is another Session, not a person.
+        attendance: "unattended",
       },
     ]);
     expect(result.text).toContain("Nightly sweep");
@@ -593,6 +600,7 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
       target: { kind: "automation", automationId: automation.id },
       ticketId: "ticket-two",
       modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
     if (!byHand.ok) throw new Error(byHand.error);
@@ -611,6 +619,12 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // Runs a person started by hand.
     expect(runShape(agentRun!)).toEqual(runShape(byHand.run));
     expect(agentRun!.model).toEqual(RUN_MODEL);
+    // …except attendance, which is the one field that SHOULD differ (VC-133).
+    // The agent issued this tool call and went back to its own turn, so when
+    // the Run's Session stops to ask, nobody is in front of it. A person's Run
+    // has somebody right there.
+    expect(agentRun!.attendance).toBe("unattended");
+    expect(byHand.run.attendance).toBe("attended");
   });
 
   it("binds the caller instead of believing one", async () => {
@@ -636,12 +650,16 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // this door rather than by the caller: there is nothing an agent can vary
     // here that a person clicking Run cannot.
     expect(Object.keys(h.runInputs[0]!).toSorted()).toEqual([
+      "attendance",
       "commandId",
       "modelOverride",
       "target",
       "ticketId",
     ]);
     expect(h.runInputs[0]?.modelOverride).toBeNull();
+    // Fixed by this door, not varied by the caller: an agent cannot ask to be
+    // treated as though a person were watching.
+    expect(h.runInputs[0]?.attendance).toBe("unattended");
   });
 
   it("cannot name a Ticket outside the calling Session's project", async () => {

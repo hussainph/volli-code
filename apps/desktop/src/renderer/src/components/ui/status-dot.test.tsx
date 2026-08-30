@@ -10,8 +10,30 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { SESSION_PERSON_NEEDS, type SessionPersonNeed } from "@volli/shared";
 
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+
+/**
+ * VC-112's "this needs no new concept", pinned as a type rather than trusted as
+ * a comment.
+ *
+ * The notification rule (VC-133) fires on a Session entering `waiting` or
+ * `error`, and its whole justification for minting nothing is that both are
+ * already {@link StatusDotState} members — the states a person can already SEE
+ * on every surface that draws a dot. `SessionPersonNeed` lives in
+ * `@volli/shared`, which cannot import this renderer component, so the two
+ * unions would otherwise be free to drift: rename a dot state and the rule
+ * would keep firing on a word nothing draws.
+ *
+ * The widening below is the join: it costs nothing at runtime and fails the
+ * build the moment either side moves. The test at the bottom of this file then
+ * asserts the same thing about the VALUES, so a dot state that is deleted
+ * rather than renamed is caught too.
+ */
+const NOTIFYING_STATES: readonly StatusDotState[] = SESSION_PERSON_NEEDS.map(
+  (need: SessionPersonNeed): StatusDotState => need,
+);
 
 const EVERY_STATE: StatusDotState[] = [
   "working",
@@ -120,5 +142,19 @@ describe("StatusDot", () => {
     // `data-state` is why the panel's own test can assert "this row reports
     // waiting" without asserting a colour it does not own.
     expect(renderToStaticMarkup(<StatusDot state="waiting" />)).toContain('data-state="waiting"');
+  });
+
+  it("draws every state an unattended Run notifies on (VC-112, VC-133)", () => {
+    // The value half of the pin at the top of this file. VC-112 justifies
+    // minting no concept for the notification rule on the claim that both of
+    // its trigger states are already drawn; this asserts the claim rather than
+    // repeating it.
+    expect([...NOTIFYING_STATES].toSorted()).toEqual(["error", "waiting"]);
+    for (const state of NOTIFYING_STATES) {
+      expect(EVERY_STATE).toContain(state);
+      // And each is one of the two LOUD tones — never a neutral. A state a
+      // person is notified about cannot be one the app draws as resting.
+      expect(toneOf(state)).not.toMatch(/^bg-muted-foreground/);
+    }
   });
 });
