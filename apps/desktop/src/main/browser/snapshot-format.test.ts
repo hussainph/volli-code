@@ -72,7 +72,7 @@ describe("formatAXSnapshot", () => {
         '- textbox "What needs to be done?" [ref=e1]',
         "- listitem:",
         '  - checkbox "Toggle Todo" [ref=e2]',
-        "  - text: Buy groceries",
+        '  - text: "Buy groceries"',
         '- link "All" [ref=e3]',
       ].join("\n"),
     );
@@ -164,6 +164,31 @@ describe("formatAXSnapshot", () => {
     // e2's line fell past the bound, so e2 is gone — whatever tokens survive
     // inside quoted names are the page talking, not the map's keys.
     expect(snapshot.refs.has("e2")).toBe(false);
+  });
+
+  it("bounds cyclic or excessively deep protocol trees instead of recursing forever", () => {
+    const nodes: AXNodeLike[] = [
+      node({ nodeId: "1", role: { value: "RootWebArea" }, childIds: ["2"] }),
+      node({
+        nodeId: "2",
+        role: { value: "group" },
+        name: { value: "cycle" },
+        childIds: ["3"],
+      }),
+      node({
+        nodeId: "3",
+        role: { value: "button" },
+        name: { value: "Save" },
+        backendDOMNodeId: 600,
+        childIds: ["2"],
+      }),
+    ];
+
+    const snapshot = formatAXSnapshot(nodes);
+
+    expect(snapshot.text).toContain('- button "Save" [ref=e1]');
+    expect(snapshot.refs.get("e1")).toBe(600);
+    expect(snapshot.truncated).toBe(true);
   });
 
   it("keeps a hostile accessible name on one line, so a page cannot mint snapshot lines", () => {

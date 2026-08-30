@@ -905,6 +905,7 @@ class PiBinding implements BindingHandle {
     }
     this.#released = true;
     this.#abort.abort();
+    this.#browser?.dispose?.();
     await this.#handle?.close();
   }
 

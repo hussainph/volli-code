@@ -1,13 +1,24 @@
 # Browser tooling for Volli (VC-110)
 
-**Status:** adopted and implemented on VC-110's branch with one amendment: the
-agent control path is the native `webContents.debugger` controller speaking the
-Playwright-MCP snapshot/ref dialect as a format spec (no vendored code, no
-second browser, no remote debugging port), and **Playwright (npm) replaces
-`agent-browser` as the leading Phase 4 QA-runner candidate** — agent-browser's
-advantages (CLI ergonomics, daemon state, Rust startup) do not survive an
-in-process host. See the VC-110 decision comment for the settled product
-choices and `apps/desktop/src/main/browser/` for the implementation.
+**Status:** research record; adopted with the settled amendments below. Where a
+recommendation later in this memo conflicts with this list, this list and the
+implementation control:
+
+- the control path is a native `webContents.debugger` controller speaking the
+  Playwright-MCP snapshot/ref dialect as a format spec (no vendored code, second
+  browser, or remote debugging port);
+- visible Browser Tabs ship in both Home and Ticket workspaces;
+- user-created tabs use a persistent browser-only profile and may browse public
+  HTTP(S); Session-created tabs use credentialless per-Ticket partitions;
+- a Session receives full inspect/interact capability over visible user tabs and
+  its own Ticket's agent tabs in this slice. Explicit references, per-tab grants,
+  and takeover UI are downstream rather than prerequisites here;
+- **Playwright (npm) replaces `agent-browser` as the leading Phase 4 QA-runner
+  candidate** — the latter's CLI/daemon advantages do not survive an in-process
+  host.
+
+See the VC-110 decision comment and `apps/desktop/src/main/browser/` for the
+implemented product shape.
 **Research date:** 2026-08-24
 **Question:** Can Volli offer a user-visible, sandboxed browser that its Agent
 Runtime can use for previewing, testing, artifacts, and chat references—and is

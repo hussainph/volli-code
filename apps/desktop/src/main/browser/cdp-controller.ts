@@ -28,13 +28,13 @@
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 
-import { formatAXSnapshot, type AXNodeLike } from "./snapshot-format";
+import { formatAXSnapshot, SNAPSHOT_MAX_CHARS, type AXNodeLike } from "./snapshot-format";
 
-/** One CDP wire: send a command, and hear the events the page emits. */
+/** One CDP wire. Production may re-establish and initialize its attachment. */
 export interface CdpTransport {
   send: (method: string, params?: object) => Promise<unknown>;
-  /** Subscribe to protocol events; returns the unsubscribe. */
-  onEvent: (listener: (method: string, params: unknown) => void) => () => void;
+  ensureReady?: () => Promise<void>;
+  dispose?: () => void;
 }
 
 /** What one act call may say — the tool schema's shape, minus the tab id the host resolved. */
@@ -55,51 +55,32 @@ export interface TabSnapshot {
   truncated: boolean;
 }
 
-export interface TabConsoleRecord {
-  messages: { level: "debug" | "info" | "log" | "warn" | "error"; text: string }[];
-  truncated: boolean;
-}
-
 /** Bounds a caller may narrow but not remove. */
 export interface ControllerLimits {
-  maxConsoleMessages?: number;
   maxSnapshotChars?: number;
   maxWaitMs?: number;
 }
 
-const MAX_CONSOLE_MESSAGES = 100;
 const MAX_WAIT_MS = 5_000;
 
-/** CDP console-API types folded onto the product's five levels. */
-function consoleLevel(type: unknown): TabConsoleRecord["messages"][number]["level"] {
-  switch (type) {
-    case "debug":
-      return "debug";
-    case "info":
-      return "info";
-    case "warning":
-      return "warn";
-    case "error":
-    case "assert":
-      return "error";
-    default:
-      return "log";
-  }
+function narrowedLimit(requested: number | undefined, maximum: number): number {
+  return Math.min(Math.max(requested ?? maximum, 0), maximum);
 }
 
-/**
- * A console argument as one bounded piece of text. Only primitive `value`s are
- * read; a RemoteObject's preview graph is a rabbit hole of page-shaped data
- * the record does not need.
- */
-function argText(argument: unknown): string {
-  if (typeof argument !== "object" || argument === null) return "";
-  const value = (argument as { value?: unknown }).value;
-  if (value === undefined) {
-    const description = (argument as { description?: unknown }).description;
-    return typeof description === "string" ? description : "[object]";
-  }
-  return typeof value === "string" ? value : JSON.stringify(value);
+async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const finish = (): void => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error("Browser action cancelled"));
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 /**
@@ -142,39 +123,33 @@ const MODIFIER_BITS: Record<string, number> = {
 
 export class BrowserTabController {
   readonly #send: CdpTransport["send"];
+  readonly #ensureReady: CdpTransport["ensureReady"];
+  readonly #disposeTransport: CdpTransport["dispose"];
   readonly #limits: Required<ControllerLimits>;
-  readonly #console: TabConsoleRecord["messages"] = [];
-  #consoleOverflowed = false;
   #generation = 0;
   #refs: ReadonlyMap<string, number> = new Map();
-  #snapshotGeneration = 0;
+  #snapshotGeneration = -1;
+  #nextRef = 1;
 
   constructor(transport: CdpTransport, limits: ControllerLimits = {}) {
     this.#send = transport.send;
+    this.#ensureReady = transport.ensureReady;
+    this.#disposeTransport = transport.dispose;
     this.#limits = {
-      maxConsoleMessages: limits.maxConsoleMessages ?? MAX_CONSOLE_MESSAGES,
-      maxSnapshotChars: limits.maxSnapshotChars ?? 30_000,
-      maxWaitMs: limits.maxWaitMs ?? MAX_WAIT_MS,
+      maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
+      maxWaitMs: narrowedLimit(limits.maxWaitMs, MAX_WAIT_MS),
     };
-    transport.onEvent((method, params) => this.#onEvent(method, params));
   }
 
   /** Domains the controller needs live; the host calls this once after attach. */
   async enable(): Promise<void> {
+    if (this.#ensureReady !== undefined) {
+      await this.#ensureReady();
+      return;
+    }
     await this.#send("Accessibility.enable");
-    await this.#send("Runtime.enable");
     await this.#send("DOM.enable");
     await this.#send("Page.enable");
-  }
-
-  /**
-   * The host's notice that the page changed under the refs: every navigation
-   * bumps this, and an action carrying an older generation refuses. The
-   * controller cannot see navigations itself — the host owns the webContents
-   * and its events, so the host owns the bump.
-   */
-  bumpGeneration(): void {
-    this.#generation += 1;
   }
 
   /**
@@ -183,23 +158,36 @@ export class BrowserTabController {
    * late echo, never a reason to resurrect refs that already staled.
    */
   syncGeneration(generation: number): void {
-    this.#generation = Math.max(this.#generation, generation);
+    if (generation <= this.#generation) return;
+    this.#generation = generation;
+    this.#refs = new Map();
+    this.#snapshotGeneration = -1;
+    this.#nextRef = 1;
   }
 
   get generation(): number {
     return this.#generation;
   }
 
-  async snapshot(): Promise<TabSnapshot> {
-    if (this.#generation === 0) this.#generation = 1;
+  dispose(): void {
+    this.#disposeTransport?.();
+    this.#refs = new Map();
+    this.#snapshotGeneration = -1;
+  }
+
+  async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
+    signal?.throwIfAborted();
     const answer = (await this.#send("Accessibility.getFullAXTree")) as {
       nodes?: AXNodeLike[];
     };
+    signal?.throwIfAborted();
     const printed = formatAXSnapshot(answer.nodes ?? [], {
       maxChars: this.#limits.maxSnapshotChars,
+      refStart: this.#nextRef,
     });
     this.#refs = printed.refs;
     this.#snapshotGeneration = this.#generation;
+    this.#nextRef = printed.nextRef;
     return { text: printed.text, generation: this.#generation, truncated: printed.truncated };
   }
 
@@ -209,7 +197,8 @@ export class BrowserTabController {
    * must have been minted by the snapshot of that generation. Both refuse
    * before any input is dispatched.
    */
-  async act(request: TabActRequest): Promise<void> {
+  async act(request: TabActRequest, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (request.generation !== this.#generation || this.#snapshotGeneration !== this.#generation) {
       throw new BrowserRefusal(
         "browser.stale-ref",
@@ -223,14 +212,27 @@ export class BrowserTabController {
         return this.#pointer(this.#resolve(request.ref), "hover");
       case "type": {
         const backendNodeId = this.#resolve(request.ref);
+        if (request.text === undefined) {
+          throw new BrowserRefusal(
+            "browser.unactionable",
+            "type needs text to insert into the element.",
+          );
+        }
         await this.#send("DOM.focus", { backendNodeId });
-        await this.#send("Input.insertText", { text: request.text ?? "" });
+        signal?.throwIfAborted();
+        await this.#send("Input.insertText", { text: request.text });
         return;
       }
       case "press":
         return this.#press(request.key ?? "");
       case "select": {
         const backendNodeId = this.#resolve(request.ref);
+        if (request.text === undefined) {
+          throw new BrowserRefusal(
+            "browser.unactionable",
+            "select needs the option value or label to choose.",
+          );
+        }
         const resolved = (await this.#send("DOM.resolveNode", { backendNodeId })) as {
           object?: { objectId?: string };
         };
@@ -241,15 +243,27 @@ export class BrowserTabController {
             "The element behind that ref is gone from the page: take a fresh snapshot.",
           );
         }
-        await this.#send("Runtime.callFunctionOn", {
+        signal?.throwIfAborted();
+        const selected = (await this.#send("Runtime.callFunctionOn", {
           objectId,
           functionDeclaration: SELECT_OPTION_FUNCTION,
-          arguments: [{ value: request.text ?? "" }],
-        });
+          arguments: [{ value: request.text }],
+          returnByValue: true,
+        })) as { result?: { value?: unknown } };
+        if (selected.result?.value !== true) {
+          throw new BrowserRefusal(
+            "browser.unactionable",
+            "That ref is not a select element with the requested option: take a fresh snapshot and choose one it shows.",
+          );
+        }
         return;
       }
       case "scroll": {
+        if (request.direction === undefined) {
+          throw new BrowserRefusal("browser.unactionable", "scroll needs a direction: up or down.");
+        }
         const { x, y } = await this.#viewportCenter();
+        signal?.throwIfAborted();
         await this.#send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x,
@@ -261,58 +275,31 @@ export class BrowserTabController {
       }
       case "wait": {
         const bounded = Math.min(Math.max(request.waitMs ?? 500, 0), this.#limits.maxWaitMs);
-        await new Promise((resolve) => setTimeout(resolve, bounded));
+        await abortableDelay(bounded, signal);
         return;
       }
     }
   }
 
-  /** The bounded, most-recent console record, oldest first. */
-  console(): TabConsoleRecord {
-    return { messages: [...this.#console], truncated: this.#consoleOverflowed };
-  }
-
-  async screenshot(): Promise<{ base64Png: string; width: number; height: number }> {
+  async screenshot(
+    signal?: AbortSignal,
+  ): Promise<{ base64Png: string; width: number; height: number }> {
+    signal?.throwIfAborted();
     const captured = (await this.#send("Page.captureScreenshot", { format: "png" })) as {
       data?: string;
     };
+    if (typeof captured.data !== "string" || captured.data.length === 0) {
+      throw new Error("Chromium returned no Browser Tab screenshot data");
+    }
+    signal?.throwIfAborted();
     const metrics = (await this.#send("Page.getLayoutMetrics")) as {
       cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
     };
     return {
-      base64Png: captured.data ?? "",
+      base64Png: captured.data,
       width: Math.round(metrics.cssVisualViewport?.clientWidth ?? 0),
       height: Math.round(metrics.cssVisualViewport?.clientHeight ?? 0),
     };
-  }
-
-  #onEvent(method: string, params: unknown): void {
-    if (method === "Runtime.consoleAPICalled") {
-      const event = params as { type?: unknown; args?: unknown[] };
-      const text = (event.args ?? [])
-        .map(argText)
-        .filter((one) => one !== "")
-        .join(" ");
-      this.#record({ level: consoleLevel(event.type), text });
-      return;
-    }
-    if (method === "Runtime.exceptionThrown") {
-      const details = (
-        params as { exceptionDetails?: { text?: string; exception?: { description?: string } } }
-      ).exceptionDetails;
-      const text = [details?.text, details?.exception?.description]
-        .filter((one): one is string => typeof one === "string" && one !== "")
-        .join(" ");
-      this.#record({ level: "error", text });
-    }
-  }
-
-  #record(message: TabConsoleRecord["messages"][number]): void {
-    this.#console.push(message);
-    if (this.#console.length > this.#limits.maxConsoleMessages) {
-      this.#console.shift();
-      this.#consoleOverflowed = true;
-    }
   }
 
   #resolve(ref: string | undefined): number {
@@ -366,21 +353,29 @@ export class BrowserTabController {
       .map((one) => one.trim())
       .filter((one) => one !== "");
     const keyPart = parts.at(-1) ?? "";
-    const modifiers = parts
-      .slice(0, -1)
-      .reduce((bits, name) => bits | (MODIFIER_BITS[name.toLowerCase()] ?? 0), 0);
+    let modifiers = 0;
+    for (const name of parts.slice(0, -1)) {
+      const bit = MODIFIER_BITS[name.toLowerCase()];
+      if (bit === undefined) {
+        throw new BrowserRefusal(
+          "browser.unactionable",
+          `press does not know the modifier ${JSON.stringify(name)}.`,
+        );
+      }
+      modifiers |= bit;
+    }
     const named = NAMED_KEYS[keyPart.toLowerCase()];
+    if (keyPart === "" || (named === undefined && keyPart.length !== 1)) {
+      throw new BrowserRefusal(
+        "browser.unactionable",
+        "press needs one character or a supported key, e.g. Enter or Control+a.",
+      );
+    }
     const key = named ?? {
       key: keyPart,
       code: `Key${keyPart.toUpperCase()}`,
       keyCode: keyPart.toUpperCase().charCodeAt(0),
     };
-    if (keyPart === "") {
-      throw new BrowserRefusal(
-        "browser.unactionable",
-        "press needs a key, e.g. Enter or Control+a.",
-      );
-    }
     await this.#send("Input.dispatchKeyEvent", {
       type: "rawKeyDown",
       modifiers,
@@ -390,7 +385,7 @@ export class BrowserTabController {
     });
     // A printable single character also produces its char event, so text
     // inputs actually receive it the way a keyboard would deliver it.
-    if (named === undefined && keyPart.length === 1) {
+    if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
       await this.#send("Input.dispatchKeyEvent", {
         type: "char",
         modifiers,

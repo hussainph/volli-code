@@ -8,6 +8,7 @@ import {
   type FileWorkspaceTab,
   type Ticket,
 } from "@volli/shared";
+import { BROWSER_START_URL } from "../../../../browser-start-page";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { BrowserPane } from "@renderer/components/browser/browser-pane";
@@ -61,7 +62,6 @@ import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
-import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
@@ -950,12 +950,16 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
+  // Opens the tab first and asks where to go second — see the note on Home's
+  // twin. The `window.prompt` this replaces throws in Electron by definition,
+  // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(async () => {
-    const requested = window.prompt("Open Browser Tab", "http://localhost:3000");
-    const url = requested?.trim() ?? "";
-    if (url.length === 0) return;
     try {
-      const result = await browserApi.open({ projectId, ticketId: ticket.id, url });
+      const result = await browserApi.open({
+        projectId,
+        ticketId: ticket.id,
+        url: BROWSER_START_URL,
+      });
       if (!result.ok) {
         toastError(`Could not open Browser Tab: ${result.error}`);
         return;
@@ -966,11 +970,6 @@ export function TicketDetail({
       toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
     }
   }, [browserApi, projectId, setActiveTab, ticket.id]);
-
-  // The project's skills, for the session-start control's "Chat with skill"
-  // submenu — the attach-time injection route, chosen at the moment of
-  // creation because promptResources are fixed once the runtime attaches.
-  const { skills } = usePromptTemplates(projectId);
 
   // Mints one durable chat Session on this ticket and opens its tab, through
   // the same boot guard the terminal path uses: one create per ticket at a
@@ -1118,8 +1117,6 @@ export function TicketDetail({
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
             onNewBrowser={() => void createBrowser()}
-            skills={skills}
-            onNewChatWithSkill={(name) => void createChat([name])}
             railCollapsed={railCollapsed}
             onToggleRail={toggleRailCollapsed}
           />
@@ -1238,8 +1235,7 @@ export function TicketDetail({
                 creating={creating || creatingChat}
                 onNewSession={() => void createSession()}
                 onNewChat={() => void createChat()}
-                skills={skills}
-                onNewChatWithSkill={(name) => void createChat([name])}
+                onNewBrowser={() => void createBrowser()}
                 onActivateSession={setActiveTab}
                 onActivateChat={activateChat}
                 activeTabId={activeTabId}

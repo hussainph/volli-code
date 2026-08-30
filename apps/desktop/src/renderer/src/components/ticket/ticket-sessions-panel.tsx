@@ -5,12 +5,7 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import {
-  errorMessage,
-  type SessionListingRow,
-  type SessionRecord,
-  type SkillReference,
-} from "@volli/shared";
+import { errorMessage, type SessionListingRow, type SessionRecord } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
@@ -354,8 +349,7 @@ export function TicketSessionsPanel({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
 }: {
@@ -363,10 +357,8 @@ export function TicketSessionsPanel({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
 }) {
@@ -561,9 +553,8 @@ export function TicketSessionsPanel({
             placement="rail"
             align="end"
             shortcuts
-            skills={skills}
             onNewChat={onNewChat}
-            onNewChatWithSkill={onNewChatWithSkill}
+            onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
         </SectionHeadingRow>

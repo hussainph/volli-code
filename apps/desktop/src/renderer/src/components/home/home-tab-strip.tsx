@@ -4,15 +4,12 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
-
-import type { SkillReference } from "@volli/shared";
 
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
@@ -83,10 +80,6 @@ interface HomeTabStripProps {
   onNewSession(): void;
   onNewChat(): void;
   onNewBrowser(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
   /** A Session of either kind is already booting. */
   creating: boolean;
   /** Whether Home's details rail is collapsed — the corner control's state. */
@@ -132,8 +125,6 @@ export function HomeTabStrip({
   onNewSession,
   onNewChat,
   onNewBrowser,
-  skills,
-  onNewChatWithSkill,
   creating,
   railCollapsed,
   railTogglable,
@@ -157,24 +148,13 @@ export function HomeTabStrip({
               tab as well as from a Session tab. `align="end"` so the menu hangs
               back into the window rather than off its edge. */}
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label="New Browser Tab"
-              onClick={onNewBrowser}
-            >
-              <PlusIcon />
-              Browser
-            </Button>
             <NewSessionControl
               disabled={creating}
               placement="strip"
               align="end"
               shortcuts
-              skills={skills}
               onNewChat={onNewChat}
-              onNewChatWithSkill={onNewChatWithSkill}
+              onNewBrowser={onNewBrowser}
               onNewTerminal={onNewSession}
             />
           </div>

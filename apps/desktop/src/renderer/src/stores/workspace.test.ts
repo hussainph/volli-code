@@ -1559,6 +1559,53 @@ describe("ticket diff view-state persistence", () => {
   });
 });
 
+describe("Home Browser Tab workspace", () => {
+  it("closes the active Browser Tab through surviving MRU tabs", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "chat:one");
+    store.getState().setHomeActiveTab("project-a", "browser:one");
+    store.getState().setHomeActiveTab("project-a", "browser:two");
+
+    store
+      .getState()
+      .closeHomeBrowserTab("project-a", "browser:two", [
+        HOME_BOARD_TAB_ID,
+        "chat:one",
+        "browser:one",
+      ]);
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "browser:one",
+      homeTabHistory: [HOME_BOARD_TAB_ID, "chat:one", "browser:one"],
+    });
+  });
+
+  it("drops an inactive closed Browser Tab without moving the active tab", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setHomeActiveTab("project-a", "browser:one");
+    store.getState().setHomeActiveTab("project-a", "chat:one");
+
+    store
+      .getState()
+      .closeHomeBrowserTab("project-a", "browser:one", [HOME_BOARD_TAB_ID, "chat:one"]);
+
+    expect(store.getState().byProject["project-a"]).toMatchObject({
+      homeActiveTab: "chat:one",
+      homeTabHistory: [HOME_BOARD_TAB_ID, "chat:one"],
+    });
+  });
+
+  it("does not conjure a workspace record for a close racing project removal", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const before = store.getState();
+
+    store.getState().closeHomeBrowserTab("missing-project", "browser:gone", []);
+
+    expect(store.getState()).toBe(before);
+    expect(store.getState().byProject["missing-project"]).toBeUndefined();
+  });
+});
+
 describe("Home file workspace", () => {
   it("previews a file as an active Home tab and records the tab it came from", () => {
     const store = createWorkspaceStore(createMemoryStorage());

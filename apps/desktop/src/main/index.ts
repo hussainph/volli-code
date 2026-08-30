@@ -375,6 +375,13 @@ const browserMembership: RuntimeBrowserPort = {
   console: membershipUnresolved,
 };
 
+function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
+  }
+}
+
 function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
   if (input.kind !== "tool-surface") {
     throw new Error(`Recorded Agent Tool Surface has kind ${input.kind}`);
@@ -1707,17 +1714,20 @@ app.whenReady().then(async () => {
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
-    publishState: (tab) => {
-      const event = { tab } satisfies BrowserTabStateEvent;
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window.isDestroyed()) continue;
-        window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
-      }
-    },
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
-  const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  const createOwnedWindow = (): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint());
+    // Browser Tabs are live machine resources, not durable documents. Once the
+    // app window that can place them closes, keeping invisible remote pages
+    // running would leave network/timers with no reachable owner.
+    window.once("closed", () => browserTabs.closeAll());
+    return window;
+  };
+  const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
@@ -2372,7 +2382,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager, currentFirstPaint());
+      createOwnedWindow();
     }
   });
 });

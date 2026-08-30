@@ -983,7 +983,8 @@ export function createWorkspaceStore(storage?: StateStorage) {
 
         closeHomeBrowserTab(projectId, tabId, openTabIds) {
           set((state) => {
-            const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
+            const current = state.byProject[projectId];
+            if (current === undefined) return state;
             if (current.homeActiveTab !== tabId) {
               return patchWorkspace(state, projectId, {
                 homeTabHistory: current.homeTabHistory.filter((candidate) => candidate !== tabId),

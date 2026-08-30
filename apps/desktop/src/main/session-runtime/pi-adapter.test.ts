@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type {
   BindingHandle,
@@ -508,7 +508,8 @@ describe("Pi native adapter attach", () => {
   it("hands the desktop's Browser port to a recorded surface, scoped to the Session's own Ticket", async () => {
     const scopes: unknown[] = [];
     const listed: unknown[] = [];
-    const { runtime } = await attached({
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
       resolveRuntimeContext: async () => ({
         ...context,
         toolSurface: [
@@ -546,6 +547,7 @@ describe("Pi native adapter attach", () => {
           console: async () => {
             throw new Error("unused");
           },
+          dispose,
         };
       },
     });
@@ -555,6 +557,9 @@ describe("Pi native adapter attach", () => {
     expect(scopes).toEqual([{ projectId: "project-1", ticketId: "ticket-1" }]);
     await runtime.spec.browser?.tabs({ signal: new AbortController().signal });
     expect(listed).toEqual([false]);
+
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("refuses attachment rather than binding a frozen browser surface the host cannot answer", async () => {

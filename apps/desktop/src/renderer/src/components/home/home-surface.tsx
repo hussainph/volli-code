@@ -52,7 +52,8 @@
  */
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorMessage, type FileWorkspaceTab, type SkillReference } from "@volli/shared";
+import { errorMessage, type FileWorkspaceTab } from "@volli/shared";
+import { BROWSER_START_URL } from "../../../../browser-start-page";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -86,7 +87,6 @@ import {
   CHAT_TAB_FALLBACK_LABEL,
 } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
-import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { useBoardStore } from "@renderer/stores/board";
 import {
@@ -324,17 +324,16 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // One control mints both kinds, so it goes quiet while EITHER is starting —
   // the one place ORing the two flags is the honest reading (session-create.ts).
   const creating = startingTerminal || startingChat;
-  // The selected project's skills, for the session-start control's "Chat with
-  // skill" submenu.
-  const { skills } = usePromptTemplates(selectedId);
 
+  // Opens the tab first and asks where to go second — the address bar is the
+  // question, and it focuses itself on a blank tab. The shape this replaces
+  // called `window.prompt`, which Electron defines as `throw new Error(...)`:
+  // the press raised before it reached the try below, so the button did
+  // nothing at all, silently.
   const createBrowser = React.useCallback(async () => {
     if (selectedId === null) return;
-    const requested = window.prompt("Open Browser Tab", "http://localhost:3000");
-    const url = requested?.trim() ?? "";
-    if (url.length === 0) return;
     try {
-      const result = await browserApi.open({ projectId: selectedId, url });
+      const result = await browserApi.open({ projectId: selectedId, url: BROWSER_START_URL });
       if (!result.ok) {
         toastError(`Could not open Browser Tab: ${result.error}`);
         return;
@@ -467,14 +466,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           dirtyFilePaths={fileWorkspace.dirtyPaths}
           activeTabId={activeTabId}
           creating={creating}
-          skills={skills}
           onSelect={handleSelect}
           onClose={handleClose}
           onRename={handleRename}
           onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
           onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
           onNewChat={() => void startProjectChat(selectedId)}
-          onNewChatWithSkill={(name) => void startProjectChat(selectedId, [name])}
           onNewSession={() => void startProjectTerminal(selectedId)}
           onNewBrowser={() => void createBrowser()}
           railCollapsed={railCollapsed}
@@ -595,7 +592,6 @@ function HomeTabs({
   dirtyFilePaths,
   activeTabId,
   creating,
-  skills,
   onSelect,
   onClose,
   onRename,
@@ -603,7 +599,6 @@ function HomeTabs({
   onCloseOtherFiles,
   onNewSession,
   onNewChat,
-  onNewChatWithSkill,
   onNewBrowser,
   railCollapsed,
   railTogglable,
@@ -616,7 +611,6 @@ function HomeTabs({
   dirtyFilePaths: ReadonlySet<string>;
   activeTabId: string;
   creating: boolean;
-  skills?: readonly SkillReference[];
   onSelect(tab: HomeTabDescriptor): void;
   onClose(tab: HomeTabDescriptor): void;
   onRename(tab: HomeTabDescriptor, title: string): void;
@@ -624,7 +618,6 @@ function HomeTabs({
   onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
-  onNewChatWithSkill(name: string): void;
   onNewBrowser(): void;
   /** The rail's collapse state and its corner control — see `home-rail.tsx`. */
   railCollapsed: boolean;
@@ -683,7 +676,6 @@ function HomeTabs({
       tabs={tabs}
       activeTabId={activeTabId}
       creating={creating}
-      skills={skills}
       onSelect={onSelect}
       onClose={onClose}
       onRename={onRename}
@@ -691,7 +683,6 @@ function HomeTabs({
       onCloseOtherFiles={onCloseOtherFiles}
       onNewSession={onNewSession}
       onNewChat={onNewChat}
-      onNewChatWithSkill={onNewChatWithSkill}
       onNewBrowser={onNewBrowser}
       railCollapsed={railCollapsed}
       railTogglable={railTogglable}

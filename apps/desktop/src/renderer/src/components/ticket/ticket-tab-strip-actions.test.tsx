@@ -36,12 +36,18 @@ describe("TicketTabStrip", () => {
 
     expect(html).toContain('aria-label="New chat"');
     expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other session kinds")).toContain('aria-haspopup="menu"');
+    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('aria-label="New session"');
   });
 
-  it("offers a Browser Tab from the same trailing cluster", () => {
-    expect(strip(false)).toContain('aria-label="New Browser Tab"');
+  it("offers a Browser Tab from inside the one menu, not beside it", () => {
+    const html = strip(false);
+
+    // The strip's trailing cluster is one pill of two halves. The Browser row
+    // moved into that menu (covered in `new-session-control.test.tsx`, where
+    // the portalled rows are reachable), so no third button may appear here.
+    expect(html).not.toContain('aria-label="New Browser Tab"');
+    expect(html.match(/<button/g)).toHaveLength(3); // two halves + rail toggle
   });
 
   it("draws a live-titled, closable Browser Tab", () => {
@@ -107,7 +113,7 @@ describe("TicketTabStrip", () => {
     const html = strip(true);
 
     expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other session kinds")).toContain('disabled=""');
+    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
   });
 
   it("puts the details-rail toggle in the corner, above the pane it collapses", () => {

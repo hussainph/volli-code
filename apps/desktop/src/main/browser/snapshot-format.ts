@@ -40,6 +40,8 @@ export interface BrowserSnapshotFormat {
   text: string;
   /** `eN` to the CDP backendDOMNodeId input is dispatched at. */
   refs: ReadonlyMap<string, number>;
+  /** First number no line in this print minted, including lines truncated away. */
+  nextRef: number;
   truncated: boolean;
 }
 
@@ -49,6 +51,9 @@ export interface BrowserSnapshotFormat {
  * was chosen to save.
  */
 export const SNAPSHOT_MAX_CHARS = 30_000;
+const SNAPSHOT_MAX_NODES = 2_000;
+const SNAPSHOT_MAX_TREE_DEPTH = 128;
+const SNAPSHOT_MAX_NODE_NAME_CHARS = 1_000;
 
 /**
  * Roles whose element a model can act on, and which therefore earn a ref.
@@ -102,7 +107,7 @@ function nameOf(node: AXNodeLike): string {
   if (typeof value !== "string") return "";
   // A page's name is one line by decree: the printed shape is Volli's, and a
   // newline inside an accessible name must not mint a line the page wrote.
-  return value.replace(/\s+/g, " ").trim();
+  return value.slice(0, SNAPSHOT_MAX_NODE_NAME_CHARS).replace(/\s+/g, " ").trim();
 }
 
 function headingLevel(node: AXNodeLike): number | null {
@@ -123,21 +128,42 @@ interface MintedRef {
   lineIndex: number;
 }
 
+interface SnapshotTraversal {
+  visited: Set<string>;
+  remainingNodes: number;
+  truncated: boolean;
+}
+
 function printNode(
   node: AXNodeLike,
   byId: ReadonlyMap<string, AXNodeLike>,
   depth: number,
+  treeDepth: number,
   parentName: string,
   lines: string[],
   refs: MintedRef[],
+  refStart: number,
+  traversal: SnapshotTraversal,
 ): void {
+  if (
+    traversal.visited.has(node.nodeId) ||
+    traversal.remainingNodes === 0 ||
+    treeDepth > SNAPSHOT_MAX_TREE_DEPTH
+  ) {
+    traversal.truncated = true;
+    return;
+  }
+  traversal.visited.add(node.nodeId);
+  traversal.remainingNodes -= 1;
   const role = roleOf(node).toLowerCase();
   const children = (node.childIds ?? []).flatMap((childId) => byId.get(childId) ?? []);
 
   // Ignored nodes and silent structure vanish; their children rise to the
   // reader's current depth, exactly as the page reads to assistive tech.
   if (node.ignored === true || SILENT_ROLES.has(role) || role === "") {
-    for (const child of children) printNode(child, byId, depth, parentName, lines, refs);
+    for (const child of children) {
+      printNode(child, byId, depth, treeDepth + 1, parentName, lines, refs, refStart, traversal);
+    }
     return;
   }
 
@@ -148,7 +174,7 @@ function printNode(
     // A text leaf that only repeats its parent's accessible name is the name
     // computation showing its work; the reader already has it.
     if (name === "" || name === parentName) return;
-    lines.push(`${indent}- text: ${name}`);
+    lines.push(`${indent}- text: ${JSON.stringify(name)}`);
     return;
   }
 
@@ -157,13 +183,15 @@ function printNode(
   const level = role === "heading" ? headingLevel(node) : null;
   if (level !== null) line += ` [level=${level}]`;
   if (INTERACTIVE_ROLES.has(role) && node.backendDOMNodeId !== undefined) {
-    const ref = `e${refs.length + 1}`;
+    const ref = `e${refStart + refs.length}`;
     refs.push({ ref, backendDOMNodeId: node.backendDOMNodeId, lineIndex: lines.length });
     line += ` [ref=${ref}]`;
   }
 
   const index = lines.push(line) - 1;
-  for (const child of children) printNode(child, byId, depth + 1, name, lines, refs);
+  for (const child of children) {
+    printNode(child, byId, depth + 1, treeDepth + 1, name, lines, refs, refStart, traversal);
+  }
   // The colon is grammar, not content: it exists exactly when children
   // actually printed beneath this line.
   if (lines.length > index + 1) lines[index] = `${line}:`;
@@ -179,20 +207,28 @@ function printNode(
  */
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
-  limits: { maxChars?: number } = {},
+  limits: { maxChars?: number; refStart?: number } = {},
 ): BrowserSnapshotFormat {
   const maxChars = limits.maxChars ?? SNAPSHOT_MAX_CHARS;
+  const refStart = limits.refStart ?? 1;
   const byId = new Map(nodes.map((candidate) => [candidate.nodeId, candidate]));
   const pointedAt = new Set(nodes.flatMap((candidate) => candidate.childIds ?? []));
   const roots = nodes.filter((candidate) => !pointedAt.has(candidate.nodeId));
 
   const lines: string[] = [];
   const minted: MintedRef[] = [];
-  for (const root of roots) printNode(root, byId, 0, "", lines, minted);
+  const traversal: SnapshotTraversal = {
+    visited: new Set(),
+    remainingNodes: SNAPSHOT_MAX_NODES,
+    truncated: false,
+  };
+  for (const root of roots) {
+    printNode(root, byId, 0, 0, "", lines, minted, refStart, traversal);
+  }
 
   let keptLines = lines.length;
   let text = lines.join("\n");
-  let truncated = false;
+  let truncated = traversal.truncated;
   if (text.length > maxChars) {
     const cut = text.lastIndexOf("\n", maxChars);
     text = text.slice(0, cut === -1 ? maxChars : cut);
@@ -209,5 +245,5 @@ export function formatAXSnapshot(
     minted.filter((one) => one.lineIndex < keptLines).map((one) => [one.ref, one.backendDOMNodeId]),
   );
 
-  return { text, refs, truncated };
+  return { text, refs, nextRef: refStart + minted.length, truncated };
 }

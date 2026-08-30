@@ -6,6 +6,9 @@ import type {
   WebContentsViewConstructorOptions,
   WebPreferences,
 } from "electron";
+import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
+
+import { isBrowserStartUrl } from "../../browser-start-page";
 import type { BrowserTabCreatedBy, BrowserTabState } from "../../ipc/contract";
 
 /**
@@ -31,11 +34,14 @@ export interface BrowserTabHostDependencies {
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;
   publishState: (event: BrowserTabState) => void;
+  publishClosed: (tabId: string) => void;
 }
 
 interface BrowserTabEntry {
   state: BrowserTabState;
   view: WebContentsView;
+  console: RuntimeBrowserConsoleMessage[];
+  consoleTruncated: boolean;
 }
 
 /**
@@ -55,17 +61,66 @@ export function browserRemoteWebPreferences(): Pick<
 }
 
 /**
- * Whether a target may enter a remote Browser Tab. Keeping this decision pure
- * lets every navigation door — address bar, page redirect, and popup — enforce
- * the same HTTP(S)-only rule before Electron sees the target.
+ * Whether a target may enter a remote Browser Tab under its own steam. Keeping
+ * this decision pure lets every PAGE-driven door — redirect, frame, and popup —
+ * enforce the same HTTP(S)-only rule before Electron sees the target.
+ *
+ * The blank start page is deliberately NOT allowed here. Page-driven navigation
+ * is the surface an attacker controls, and it has no business reaching a scheme
+ * outside HTTP(S) even when that scheme is harmless today.
  */
+export const BROWSER_URL_MAX_CHARS = 8_192;
+export const BROWSER_TITLE_MAX_CHARS = 512;
+export const BROWSER_ERROR_MAX_CHARS = 1_024;
+export const BROWSER_MAX_TABS_PER_PROJECT = 32;
+export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
+export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
+export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
+
+export class BrowserTabLimitError extends Error {
+  constructor() {
+    super(`A project can have at most ${BROWSER_MAX_TABS_PER_PROJECT} live Browser Tabs`);
+    this.name = "BrowserTabLimitError";
+  }
+}
+
+/** Keeps page-owned chrome facts bounded and on one renderer/model-owned line. */
+function boundedBrowserTitle(title: string): string {
+  return title.replace(/\s+/g, " ").trim().slice(0, BROWSER_TITLE_MAX_CHARS);
+}
+
+function boundedBrowserUrl(url: string): string {
+  return url.slice(0, BROWSER_URL_MAX_CHARS);
+}
+
+function boundedBrowserError(error: string | null): string | null {
+  return error === null
+    ? null
+    : error.replace(/\s+/g, " ").trim().slice(0, BROWSER_ERROR_MAX_CHARS);
+}
+
 export function isAllowedBrowserUrl(target: string): boolean {
+  if (target.length > BROWSER_URL_MAX_CHARS) return false;
   try {
     const url = new URL(target);
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a target may be opened by the PRODUCT — the New Browser Tab entry and
+ * the address bar — which is the HTTP(S) rule plus this app's own blank start
+ * page.
+ *
+ * The two predicates are separate on purpose. A new tab must be able to land
+ * somewhere empty before a destination is typed, but widening the shared rule
+ * would have handed the same scheme to every page redirect and popup. Splitting
+ * the doors keeps the remote-content policy exactly as strict as it was.
+ */
+export function isAllowedBrowserTarget(target: string): boolean {
+  return isBrowserStartUrl(target) || isAllowedBrowserUrl(target);
 }
 
 /**
@@ -108,12 +163,47 @@ export class BrowserTabHost {
     return entry;
   }
 
+  private hasCapacity(projectId: string): boolean {
+    let count = 0;
+    for (const entry of this.tabs.values()) {
+      if (entry.state.projectId === projectId) count += 1;
+    }
+    return count < BROWSER_MAX_TABS_PER_PROJECT;
+  }
+
+  private recordConsole(entry: BrowserTabEntry, message: RuntimeBrowserConsoleMessage): void {
+    const text = message.text.slice(0, BROWSER_CONSOLE_MAX_CHARS);
+    if (text.length !== message.text.length) entry.consoleTruncated = true;
+    entry.console.push({ ...message, text });
+
+    let chars = entry.console.reduce((total, one) => total + one.text.length, 0);
+    while (
+      entry.console.length > BROWSER_CONSOLE_MAX_MESSAGES ||
+      chars > BROWSER_CONSOLE_MAX_CHARS
+    ) {
+      const removed = entry.console.shift();
+      chars -= removed?.text.length ?? 0;
+      entry.consoleTruncated = true;
+    }
+  }
+
+  private beginProductNavigation(entry: BrowserTabEntry, url?: string): void {
+    this.publish(entry, {
+      error: null,
+      generation: entry.state.generation + 1,
+      loading: true,
+      ...(url === undefined ? {} : { url }),
+    });
+  }
+
   private publish(
     entry: BrowserTabEntry,
-    update: Partial<Pick<BrowserTabState, "generation" | "loading" | "title" | "url">> = {},
+    update: Partial<
+      Pick<BrowserTabState, "error" | "generation" | "loading" | "title" | "url">
+    > = {},
   ): void {
     const contents = entry.view.webContents;
-    entry.state = {
+    const next = {
       ...entry.state,
       url: contents.getURL() || entry.state.url,
       title: contents.getTitle(),
@@ -121,6 +211,14 @@ export class BrowserTabHost {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
       ...update,
+    };
+    // URL and title are page-owned bytes. They cross IPC and can enter a model
+    // result, so the Browser host — not each consumer — owns their bounds.
+    entry.state = {
+      ...next,
+      url: boundedBrowserUrl(next.url),
+      title: boundedBrowserTitle(next.title),
+      error: boundedBrowserError(next.error),
     };
     this.deps.publishState({ ...entry.state });
   }
@@ -139,9 +237,10 @@ export class BrowserTabHost {
 
   /** Creates one hidden tab; visibility is a separate renderer-measured act. */
   open(input: BrowserTabCreateOptions): BrowserTabState {
-    if (!isAllowedBrowserUrl(input.url)) {
+    if (!isAllowedBrowserTarget(input.url)) {
       throw new Error("Browser Tabs only support HTTP(S) URLs");
     }
+    if (!this.hasCapacity(input.projectId)) throw new BrowserTabLimitError();
     const tabId = this.deps.createId();
     if (this.tabs.has(tabId)) throw new Error("Duplicate Browser Tab id");
 
@@ -153,6 +252,10 @@ export class BrowserTabHost {
         session: isolatedSession,
       },
     });
+    // A Session-created tab may never be selected by the renderer, but it still
+    // needs a real viewport for layout, screenshots, and pointer coordinates.
+    // Renderer measurement replaces this default whenever a person shows it.
+    view.setBounds(BROWSER_DEFAULT_BOUNDS);
     const state: BrowserTabState = {
       tabId,
       projectId: input.projectId,
@@ -161,14 +264,24 @@ export class BrowserTabHost {
       url: input.url,
       title: "",
       loading: true,
+      error: null,
       canGoBack: false,
       canGoForward: false,
       generation: 0,
     };
-    const entry = { state, view };
+    const entry: BrowserTabEntry = {
+      state,
+      view,
+      console: [],
+      consoleTruncated: false,
+    };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedBrowserUrl(url)) this.open({ ...input, url });
+      // A hostile page can ask indefinitely; the same per-project cap used by
+      // every other open door turns excess popups into ordinary denials.
+      if (isAllowedBrowserUrl(url) && this.hasCapacity(input.projectId)) {
+        this.open({ ...input, url });
+      }
       return { action: "deny" };
     });
     view.webContents.on("will-navigate", (details) => {
@@ -183,14 +296,41 @@ export class BrowserTabHost {
     view.webContents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame) return;
       this.publish(entry, {
+        error: null,
         generation: entry.state.generation + 1,
         url: details.url,
       });
     });
+    view.webContents.on("console-message", (_event, level, message) => {
+      const consoleLevel: RuntimeBrowserConsoleMessage["level"] =
+        level >= 3 ? "error" : level === 2 ? "warn" : level === 1 ? "info" : "debug";
+      this.recordConsole(entry, { level: consoleLevel, text: message });
+    });
     view.webContents.on("did-start-loading", () => this.publish(entry, { loading: true }));
     view.webContents.on("did-stop-loading", () => this.publish(entry, { loading: false }));
+    view.webContents.on(
+      "did-fail-load",
+      (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+        // ERR_ABORTED is Chromium cancelling an older load because a newer one
+        // won. It is not a failed user operation and must not overwrite the
+        // newer page with a stale error.
+        if (!isMainFrame || errorCode === -3) return;
+        const message = `Could not load page: ${errorDescription}`;
+        this.recordConsole(entry, { level: "error", text: message });
+        this.publish(entry, {
+          error: message,
+          loading: false,
+        });
+      },
+    );
     view.webContents.on("page-title-updated", (_event, title) => {
       this.publish(entry, { title });
+    });
+    view.webContents.on("render-process-gone", (_event, details) => {
+      this.recordConsole(entry, {
+        level: "error",
+        text: `Browser Tab renderer stopped: ${details.reason}`,
+      });
     });
     view.webContents.on("did-navigate", (_event, url) => this.publish(entry, { url }));
     view.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
@@ -205,6 +345,7 @@ export class BrowserTabHost {
         this.attached = null;
       }
       this.tabs.delete(tabId);
+      this.deps.publishClosed(tabId);
     });
     this.deps.publishState({ ...state });
     void view.webContents.loadURL(input.url).catch(() => undefined);
@@ -216,15 +357,21 @@ export class BrowserTabHost {
     const entry = this.requireTab(tabId);
     if (this.attached?.entry === entry) this.hide(tabId);
     this.tabs.delete(tabId);
+    this.deps.publishClosed(tabId);
     entry.view.webContents.close({ waitForBeforeUnload: false });
   }
 
-  /** Navigates one opaque tab after applying the same HTTP(S) policy pages face. */
+  /**
+   * Navigates one opaque tab. This is a product door — the address bar — so it
+   * applies the product policy: the HTTP(S) rule pages face, plus the blank
+   * start page a tab may return to.
+   */
   navigate(tabId: string, url: string): BrowserTabState {
-    if (!isAllowedBrowserUrl(url)) {
+    if (!isAllowedBrowserTarget(url)) {
       throw new Error("Browser Tabs only support HTTP(S) URLs");
     }
     const entry = this.requireTab(tabId);
+    this.beginProductNavigation(entry, url);
     void entry.view.webContents.loadURL(url).catch(() => undefined);
     return { ...entry.state };
   }
@@ -233,6 +380,7 @@ export class BrowserTabHost {
   back(tabId: string): BrowserTabState {
     const entry = this.requireTab(tabId);
     if (entry.view.webContents.navigationHistory.canGoBack()) {
+      this.beginProductNavigation(entry);
       entry.view.webContents.navigationHistory.goBack();
     }
     return { ...entry.state };
@@ -242,6 +390,7 @@ export class BrowserTabHost {
   forward(tabId: string): BrowserTabState {
     const entry = this.requireTab(tabId);
     if (entry.view.webContents.navigationHistory.canGoForward()) {
+      this.beginProductNavigation(entry);
       entry.view.webContents.navigationHistory.goForward();
     }
     return { ...entry.state };
@@ -250,6 +399,7 @@ export class BrowserTabHost {
   /** Reloads one tab without exposing a general WebContents operation surface. */
   reload(tabId: string): BrowserTabState {
     const entry = this.requireTab(tabId);
+    this.beginProductNavigation(entry);
     entry.view.webContents.reload();
     return { ...entry.state };
   }
@@ -295,6 +445,23 @@ export class BrowserTabHost {
    */
   webContentsOf(tabId: string): WebContentsView["webContents"] {
     return this.requireTab(tabId).view.webContents;
+  }
+
+  /** Page console and renderer-failure evidence recorded from the moment the tab exists. */
+  consoleOf(tabId: string): {
+    messages: RuntimeBrowserConsoleMessage[];
+    truncated: boolean;
+  } {
+    const entry = this.requireTab(tabId);
+    return {
+      messages: entry.console.map((message) => ({ ...message })),
+      truncated: entry.consoleTruncated,
+    };
+  }
+
+  /** Closes every live view when its owning app window goes away. */
+  closeAll(): void {
+    for (const tabId of this.tabs.keys()) this.close(tabId);
   }
 
   /** Lists only the caller's product scope, never Chromium's positional view order. */

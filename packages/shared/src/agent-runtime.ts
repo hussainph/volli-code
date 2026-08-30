@@ -578,6 +578,8 @@ export interface RuntimeBrowserPort {
   act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
+  /** Releases host-private debugger/controller resources when an attachment ends. */
+  dispose?(): void;
 }
 
 /**

@@ -11,24 +11,15 @@ import { BrowserTabController, type CdpTransport } from "./cdp-controller";
  */
 function wire(answers: Record<string, unknown> = {}): {
   sent: { method: string; params?: object }[];
-  emit: (method: string, params: unknown) => void;
   transport: CdpTransport;
 } {
   const sent: { method: string; params?: object }[] = [];
-  const listeners = new Set<(method: string, params: unknown) => void>();
   return {
     sent,
-    emit: (method, params) => {
-      for (const listener of listeners) listener(method, params);
-    },
     transport: {
       send: async (method, params) => {
         sent.push(params === undefined ? { method } : { method, params });
         return answers[method] ?? {};
-      },
-      onEvent: (listener) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
       },
     },
   };
@@ -67,7 +58,7 @@ describe("BrowserTabController", () => {
 
     expect(page.sent.map((call) => call.method)).toContain("Accessibility.getFullAXTree");
     expect(snapshot.text).toBe('- button "Save" [ref=e1]');
-    expect(snapshot.generation).toBe(1);
+    expect(snapshot.generation).toBe(0);
     expect(snapshot.truncated).toBe(false);
   });
 
@@ -96,13 +87,30 @@ describe("BrowserTabController", () => {
     expect(mouse[0]?.params).toMatchObject({ x: 105, y: 205, button: "left", clickCount: 1 });
   });
 
+  it("never aliases a ref from an older snapshot onto the latest snapshot", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.getBoxModel": BUTTON_BOX,
+    });
+    const controller = new BrowserTabController(page.transport);
+    const first = await controller.snapshot();
+    const second = await controller.snapshot();
+
+    expect(first.text).toContain("[ref=e1]");
+    expect(second.text).toContain("[ref=e2]");
+    await expect(
+      controller.act({ generation: first.generation, kind: "click", ref: "e1" }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+    expect(page.sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
+  });
+
   it("refuses a ref from a stale generation without dispatching anything", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
     const controller = new BrowserTabController(page.transport);
     await controller.snapshot();
-    controller.bumpGeneration();
+    controller.syncGeneration(1);
 
-    await expect(controller.act({ generation: 1, kind: "click", ref: "e1" })).rejects.toThrow(
+    await expect(controller.act({ generation: 0, kind: "click", ref: "e1" })).rejects.toThrow(
       BrowserRefusal,
     );
     expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
@@ -158,31 +166,55 @@ describe("BrowserTabController", () => {
     expect(page.sent).toContainEqual({ method: "Input.insertText", params: { text: "hello" } });
   });
 
-  it("keeps a bounded, most-recent console record from the page's own events", async () => {
-    const page = wire();
-    const controller = new BrowserTabController(page.transport, { maxConsoleMessages: 2 });
+  it("refuses malformed action-specific input rather than silently defaulting it", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
 
-    page.emit("Runtime.consoleAPICalled", {
-      type: "log",
-      args: [{ value: "first" }],
-    });
-    page.emit("Runtime.consoleAPICalled", {
-      type: "warning",
-      args: [{ value: "second" }],
-    });
-    page.emit("Runtime.exceptionThrown", {
-      exceptionDetails: { text: "Uncaught", exception: { description: "Error: boom" } },
-    });
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "type", ref: "e1" }),
+    ).rejects.toMatchObject({ rule: "browser.unactionable" });
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "scroll" }),
+    ).rejects.toMatchObject({ rule: "browser.unactionable" });
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "press", key: "Mystery+Enter" }),
+    ).rejects.toMatchObject({ rule: "browser.unactionable" });
+    expect(page.sent.some((call) => call.method.startsWith("Input."))).toBe(false);
+  });
 
-    const record = controller.console();
+  it("reports a select that did not match instead of returning a false success", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.resolveNode": { object: { objectId: "object-1" } },
+      "Runtime.callFunctionOn": { result: { value: false } },
+    });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
 
-    // Two survive the bound of two, oldest first out; the flag says the rest
-    // existed. A warning is a warn, an exception is an error.
-    expect(record.truncated).toBe(true);
-    expect(record.messages).toEqual([
-      { level: "warn", text: "second" },
-      { level: "error", text: "Uncaught Error: boom" },
-    ]);
+    await expect(
+      controller.act({
+        generation: snapshot.generation,
+        kind: "select",
+        ref: "e1",
+        text: "missing",
+      }),
+    ).rejects.toMatchObject({ rule: "browser.unactionable" });
+  });
+
+  it("withdraws a wait action as soon as its call is aborted", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+    const abort = new AbortController();
+
+    const waiting = controller.act(
+      { generation: snapshot.generation, kind: "wait", waitMs: 5_000 },
+      abort.signal,
+    );
+    abort.abort(new Error("withdrawn"));
+
+    await expect(waiting).rejects.toThrow("withdrawn");
   });
 
   it("captures the page as the PNG the engine rendered", async () => {

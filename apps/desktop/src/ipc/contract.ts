@@ -1272,6 +1272,8 @@ export interface BrowserTabState {
   url: string;
   title: string;
   loading: boolean;
+  /** Main-frame load failure, cleared when the next navigation starts. */
+  error: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
   /** Monotonic within this tab; a main-frame navigation advances it. */
@@ -1357,9 +1359,9 @@ export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
  * history reachability, or generation changes. A full snapshot avoids merging
  * partial events from different navigations out of order.
  */
-export interface BrowserTabStateEvent {
-  tab: BrowserTabState;
-}
+export type BrowserTabStateEvent =
+  | { tab: BrowserTabState; closedTabId?: never }
+  | { tab?: never; closedTabId: string };
 
 /**
  * Type-only entries for every remaining invoke channel — these live outside

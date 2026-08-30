@@ -18,13 +18,12 @@ import * as React from "react";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+
 import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import type { SkillReference } from "@volli/shared";
 
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
@@ -163,10 +162,6 @@ interface TicketTabStripProps {
   onNewChat(): void;
   /** Opens a user-owned Browser Tab in this Ticket workspace. */
   onNewBrowser(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
   /** Drives the corner control's label — the details rail's current state. */
   railCollapsed: boolean;
   onToggleRail(): void;
@@ -402,8 +397,6 @@ export function TicketTabStrip({
   onNewSession,
   onNewChat,
   onNewBrowser,
-  skills,
-  onNewChatWithSkill,
   railCollapsed,
   onToggleRail,
 }: TicketTabStripProps) {
@@ -419,16 +412,6 @@ export function TicketTabStrip({
       actions={
         <>
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label="New Browser Tab"
-              onClick={onNewBrowser}
-            >
-              <PlusIcon />
-              Browser
-            </Button>
             {/* The chord hint belongs here: ⌘T / ⌥⌘T resolve against the
                 surface in front (`lib/new-session-shortcut.ts`), so inside a
                 ticket they start exactly what this control starts.
@@ -439,9 +422,8 @@ export function TicketTabStrip({
               placement="strip"
               align="end"
               shortcuts
-              skills={skills}
               onNewChat={onNewChat}
-              onNewChatWithSkill={onNewChatWithSkill}
+              onNewBrowser={onNewBrowser}
               onNewTerminal={onNewSession}
             />
           </div>

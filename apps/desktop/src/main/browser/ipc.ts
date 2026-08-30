@@ -17,6 +17,11 @@ import type { BrowserTabHost } from "./tab-host";
  * the one main-process host. Renderer opens are stamped `user` here rather than
  * accepting provenance over IPC; Session-created tabs enter through the host's
  * separate runtime port.
+ *
+ * This is intentionally host IPC rather than a new durable domain API under
+ * docs/BOUNDARIES.md #5: Browser Tabs are ephemeral machine resources like PTY
+ * planes, and bounds/show/hide are Electron-window placement commands. No
+ * Browser command writes product history or an id a future host must reconcile.
  */
 export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
   const handlers: IpcHandlerTable<BrowserIpcChannel> = {

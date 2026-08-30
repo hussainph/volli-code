@@ -6,10 +6,17 @@ import type {
 } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { BROWSER_START_URL } from "../../browser-start-page";
 import {
+  BROWSER_CONSOLE_MAX_CHARS,
+  BROWSER_DEFAULT_BOUNDS,
+  BROWSER_MAX_TABS_PER_PROJECT,
+  BROWSER_TITLE_MAX_CHARS,
+  BROWSER_URL_MAX_CHARS,
   BrowserTabHost,
   browserRemoteWebPreferences,
   browserSessionPartition,
+  isAllowedBrowserTarget,
   isAllowedBrowserUrl,
 } from "./tab-host";
 
@@ -125,6 +132,7 @@ beforeEach(() => {
     },
     getWindow: () => fakeWindow as unknown as BrowserWindow,
     publishState: (event) => published.push(event),
+    publishClosed: (tabId) => published.push({ closedTabId: tabId }),
   });
 });
 
@@ -155,6 +163,30 @@ describe("isAllowedBrowserUrl", () => {
     expect(isAllowedBrowserUrl("http://localhost:3000/preview")).toBe(true);
     expect(isAllowedBrowserUrl("https://example.com/docs")).toBe(true);
     expect(isAllowedBrowserUrl("/relative")).toBe(false);
+  });
+
+  it("keeps the blank start page out of reach of page-driven navigation", () => {
+    // The predicate every redirect, frame and popup is measured against must
+    // not widen just because the product gained a start page.
+    expect(isAllowedBrowserUrl(BROWSER_START_URL)).toBe(false);
+  });
+
+  it("refuses an oversized page-owned URL before it can cross IPC or enter a model result", () => {
+    expect(isAllowedBrowserUrl(`https://example.com/${"x".repeat(BROWSER_URL_MAX_CHARS)}`)).toBe(
+      false,
+    );
+  });
+});
+
+describe("isAllowedBrowserTarget", () => {
+  it("adds the blank start page to the HTTP(S) rule, and nothing else", () => {
+    expect(isAllowedBrowserTarget("https://example.com/docs")).toBe(true);
+    expect(isAllowedBrowserTarget(BROWSER_START_URL)).toBe(true);
+    // Exact match only: `about:` is a family of privileged Chromium pages, and
+    // a lookalike must not ride in on the one page this app vouches for.
+    expect(isAllowedBrowserTarget("about:blank#x")).toBe(false);
+    expect(isAllowedBrowserTarget("about:config")).toBe(false);
+    expect(isAllowedBrowserTarget("file:///etc/passwd")).toBe(false);
   });
 });
 
@@ -215,6 +247,31 @@ describe("BrowserTabHost security", () => {
     expect(host.list({ projectId: "project-1", ticketId: "ticket-1" })).toHaveLength(2);
   });
 
+  it("caps page-driven popup creation within one project", () => {
+    host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const handler = views[0]?.webContents.windowOpenHandler;
+    for (let index = 1; index < BROWSER_MAX_TABS_PER_PROJECT; index += 1) {
+      handler?.({ url: `https://example.com/popup-${index}` });
+    }
+    expect(views).toHaveLength(BROWSER_MAX_TABS_PER_PROJECT);
+
+    expect(handler?.({ url: "https://example.com/excess" })).toEqual({ action: "deny" });
+    expect(views).toHaveLength(BROWSER_MAX_TABS_PER_PROJECT);
+    expect(() =>
+      host.open({
+        url: "https://example.com/excess",
+        projectId: "project-1",
+        ticketId: null,
+        createdBy: "user",
+      }),
+    ).toThrow(`at most ${BROWSER_MAX_TABS_PER_PROJECT}`);
+  });
+
   it("refuses file, JavaScript, and custom-scheme navigation from both host and page", () => {
     const tab = host.open({
       url: "https://example.com",
@@ -241,6 +298,31 @@ describe("BrowserTabHost security", () => {
     const frameNavigation = { url: "custom://escape", preventDefault: vi.fn() };
     contents?.emit("will-frame-navigate", frameNavigation);
     expect(frameNavigation.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("opens a blank start page for the product while refusing one from a page", () => {
+    const tab = host.open({
+      url: BROWSER_START_URL,
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+
+    // The product's own doors take it — this is what "New Browser Tab" opens.
+    expect(tab.url).toBe(BROWSER_START_URL);
+    expect(views[0]?.webContents.loadURL).toHaveBeenCalledWith(BROWSER_START_URL);
+    expect(() => host.navigate(tab.tabId, BROWSER_START_URL)).not.toThrow();
+
+    // A page's doors do not: neither a popup nor a redirect may reach it.
+    const before = views.length;
+    expect(views[0]?.webContents.windowOpenHandler?.({ url: BROWSER_START_URL })).toEqual({
+      action: "deny",
+    });
+    expect(views).toHaveLength(before);
+
+    const redirect = { url: BROWSER_START_URL, preventDefault: vi.fn() };
+    views[0]?.webContents.emit("will-redirect", redirect);
+    expect(redirect.preventDefault).toHaveBeenCalledOnce();
   });
 });
 
@@ -296,6 +378,87 @@ describe("BrowserTabHost state", () => {
     contents.loading = false;
     contents.emit("did-stop-loading");
     expect(published.at(-1)).toMatchObject({ loading: false, generation: 2 });
+  });
+
+  it("bounds page-owned titles and publishes a main-frame load failure until navigation retries", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]?.webContents;
+    if (contents === undefined) throw new Error("expected WebContents");
+
+    contents.title = `  hostile\n${"x".repeat(BROWSER_TITLE_MAX_CHARS)}  `;
+    contents.emit("page-title-updated", {}, contents.title);
+    const titled = published.at(-1) as { title: string };
+    expect(titled.title).not.toContain("\n");
+    expect(titled.title.length).toBe(BROWSER_TITLE_MAX_CHARS);
+
+    contents.loading = false;
+    contents.emit("did-fail-load", {}, -105, "NAME_NOT_RESOLVED", tab.url, true);
+    expect(published.at(-1)).toMatchObject({
+      error: "Could not load page: NAME_NOT_RESOLVED",
+      loading: false,
+    });
+
+    contents.emit("did-start-navigation", {
+      url: "https://example.com/retry",
+      isMainFrame: true,
+    });
+    expect(published.at(-1)).toMatchObject({ error: null });
+  });
+
+  it("invalidates existing refs synchronously when product navigation is requested", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+
+    const moved = host.navigate(tab.tabId, "https://example.com/next");
+
+    expect(moved).toMatchObject({
+      url: "https://example.com/next",
+      loading: true,
+      error: null,
+      generation: tab.generation + 1,
+    });
+  });
+
+  it("records console evidence from tab creation under one byte bound", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]?.webContents;
+
+    contents?.emit("console-message", {}, 1, "booted");
+    contents?.emit("console-message", {}, 2, "x".repeat(BROWSER_CONSOLE_MAX_CHARS + 1));
+
+    const record = host.consoleOf(tab.tabId);
+    expect(record.messages).toEqual([
+      { level: "warn", text: "x".repeat(BROWSER_CONSOLE_MAX_CHARS) },
+    ]);
+    expect(record.truncated).toBe(true);
+  });
+
+  it("does not surface Chromium aborting an older load for a newer navigation", () => {
+    host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const before = published.length;
+
+    views[0]?.webContents.emit("did-fail-load", {}, -3, "ABORTED", "https://example.com", true);
+
+    expect(published).toHaveLength(before);
   });
 });
 
@@ -367,6 +530,7 @@ describe("BrowserTabHost registry", () => {
       createdBy: "user",
       generation: 0,
     });
+    expect(views[0]?.setBounds).toHaveBeenCalledWith(BROWSER_DEFAULT_BOUNDS);
     expect(views[0]?.webContents.loadURL).toHaveBeenCalledWith("http://localhost:3000");
     expect(host.list({ projectId: "project-1" })).toEqual([opened]);
     expect(host.list({ projectId: "another-project" })).toEqual([]);
@@ -386,7 +550,19 @@ describe("BrowserTabHost registry", () => {
     expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
     expect(views[0]?.webContents.close).toHaveBeenCalledWith({ waitForBeforeUnload: false });
     expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(published.at(-1)).toEqual({ closedTabId: tab.tabId });
     expect(() => host.reload(tab.tabId)).toThrow("Unknown Browser Tab");
+  });
+
+  it("closes every live view when the owning app window closes", () => {
+    for (const url of ["https://one.example.com", "https://two.example.com"]) {
+      host.open({ url, projectId: "project-1", ticketId: null, createdBy: "user" });
+    }
+
+    host.closeAll();
+
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(views.every((view) => view.webContents.close.mock.calls.length === 1)).toBe(true);
   });
 
   it("forgets a tab whose WebContents was destroyed outside the close command", () => {
@@ -400,6 +576,7 @@ describe("BrowserTabHost registry", () => {
     views[0]?.webContents.emit("destroyed");
 
     expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(published.at(-1)).toEqual({ closedTabId: tab.tabId });
     expect(() => host.reload(tab.tabId)).toThrow("Unknown Browser Tab");
   });
 });

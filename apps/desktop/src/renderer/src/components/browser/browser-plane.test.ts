@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { BrowserPlaneController } from "./browser-plane";
+import { BrowserPlaneController, type BrowserPlaneGateway } from "./browser-plane";
 
-function gateway(calls: string[]) {
+function gateway(calls: string[]): BrowserPlaneGateway {
   return {
     setBounds: async (input: {
       tabId: string;
@@ -52,6 +52,19 @@ describe("BrowserPlaneController", () => {
     plane.dispose();
 
     expect(calls).toEqual(["show:tab-7", "hide:tab-7"]);
+  });
+
+  it("reports a failed disposal hide because remote pixels may still cover the app", async () => {
+    const api = gateway([]);
+    api.hide = async () => ({ ok: false, error: "host unavailable" });
+    const errors: string[] = [];
+    const plane = new BrowserPlaneController("tab-7", api, (message) => errors.push(message));
+    plane.setVisible(true);
+
+    plane.dispose();
+    await Promise.resolve();
+
+    expect(errors).toEqual(["Could not hide Browser Tab: host unavailable"]);
   });
 
   it("does not report a late IPC failure into an unmounted React surface", async () => {

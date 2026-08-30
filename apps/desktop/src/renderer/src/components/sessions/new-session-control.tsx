@@ -15,6 +15,17 @@
  * is a press plus something — where two identical ghost icon buttons say the
  * opposite.
  *
+ * Browser joins the menu below a separator rather than standing as its own
+ * button in the strip. One "+" is the workspace's single answer to "open
+ * something here", and a second labelled button beside it re-asked the question
+ * the split was built to settle. The separator carries the real distinction:
+ * above it are Sessions, which run something; below it is a surface, which
+ * shows something.
+ *
+ * "Chat with skill" is deliberately absent. A skill is a property of the chat
+ * you are about to have, not a kind of thing to open, and pricing it at the top
+ * level put a rarely-taken branch in front of the act this control exists for.
+ *
  * The word earns its width twice over: it is what a first-run user reads, and a
  * labelled target is a BIGGER target, so Fitts pays for it again at the
  * hundredth use.
@@ -23,32 +34,28 @@
  * because a transition restarts from the computed value, and given overshoot
  * nowhere — none of these presses carries momentum.
  */
-import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import * as React from "react";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import type { SkillReference } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { cn } from "@renderer/lib/utils";
@@ -78,15 +85,85 @@ const DRAWING = {
   { size: "sm" | "xs"; caret: "icon-sm" | "icon-xs"; variant: "ghost" | "default"; label: string }
 >;
 
+/** What every row in either menu needs, and nothing about how it is drawn. */
+export interface NewSessionMenuRowHandlers {
+  shortcuts?: boolean;
+  onNewChat(): void;
+  onNewBrowser?(): void;
+  onNewTerminal(): void;
+}
+
+/**
+ * The rows, written once for the two menus that must offer the same acts.
+ *
+ * The caret menu and the right-click menu are the same offer reached two ways,
+ * and keeping one list is what stops them drifting into two. The split is only
+ * in the drawing: Radix gives each menu its own item and shortcut components,
+ * and the context flavour takes its icon as a prop where the dropdown takes it
+ * as a child.
+ *
+ * Exported and hook-free so a test can read the rows directly — both menus are
+ * portalled and closed at rest, so rendered markup never contains them.
+ */
+export function newSessionMenuRows(
+  menu: "dropdown" | "context",
+  { shortcuts = false, onNewChat, onNewBrowser, onNewTerminal }: NewSessionMenuRowHandlers,
+): React.ReactNode {
+  if (menu === "context") {
+    return (
+      <>
+        <ContextMenuItem icon={ChatCircleIcon} onSelect={onNewChat}>
+          Chat
+          {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
+        </ContextMenuItem>
+        <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
+          Terminal
+          {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
+        </ContextMenuItem>
+        {onNewBrowser === undefined ? null : (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem icon={BrowserIcon} onSelect={onNewBrowser}>
+              Browser
+            </ContextMenuItem>
+          </>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      <DropdownMenuItem onSelect={onNewChat}>
+        <ChatCircleIcon />
+        Chat
+        {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={onNewTerminal}>
+        <TerminalWindowIcon />
+        Terminal
+        {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
+      </DropdownMenuItem>
+      {onNewBrowser === undefined ? null : (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onNewBrowser}>
+            <BrowserIcon />
+            Browser
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  );
+}
+
 export function NewSessionControl({
   disabled,
   placement = "strip",
   align = "start",
   shortcuts = false,
   className,
-  skills,
   onNewChat,
-  onNewChatWithSkill,
+  onNewBrowser,
   onNewTerminal,
 }: {
   /** A Session of either kind is already booting. */
@@ -109,54 +186,52 @@ export function NewSessionControl({
    */
   shortcuts?: boolean;
   className?: string;
-  /**
-   * The project's skills (`.agents/skills/`), offered as "Chat with skill".
-   * Absent or empty simply hides the submenu — most projects have none, and a
-   * submenu of nothing is a promise the press cannot keep.
-   */
-  skills?: readonly SkillReference[];
   onNewChat(): void;
   /**
-   * Start a chat with one named skill injected at attach time. Required only
-   * when {@link skills} is supplied — a surface that offers the rows must be
-   * able to honour a pick.
+   * Open a blank Browser Tab in this surface's scope.
+   *
+   * Optional, and absent simply drops the row: a mount that cannot host a
+   * native Browser Tab must not offer one, for the reason the skills submenu
+   * used to state — an item is a promise the press has to keep.
    */
-  onNewChatWithSkill?(name: string): void;
+  onNewBrowser?(): void;
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
-  const skillRows = onNewChatWithSkill === undefined || skills === undefined ? [] : skills;
 
-  const items = (
-    <>
-      <DropdownMenuItem onSelect={onNewChat}>
-        <ChatCircleIcon />
-        Chat
-        {shortcuts ? <DropdownMenuShortcut>{CHORD.chat}</DropdownMenuShortcut> : null}
-      </DropdownMenuItem>
-      {skillRows.length > 0 ? (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <BookOpenIcon />
-            Chat with skill
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            {skillRows.map((skill) => (
-              <DropdownMenuItem key={skill.name} onSelect={() => onNewChatWithSkill?.(skill.name)}>
-                <BookOpenIcon />
-                {skill.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      ) : null}
-      <DropdownMenuItem onSelect={onNewTerminal}>
-        <TerminalWindowIcon />
-        Terminal
-        {shortcuts ? <DropdownMenuShortcut>{CHORD.terminal}</DropdownMenuShortcut> : null}
-      </DropdownMenuItem>
-    </>
-  );
+  // Whether the menu that is closing should keep its hands off the caret.
+  //
+  // A menu returns focus to its own trigger as it closes, which is right for
+  // every row here but one: a blank Browser Tab exists to be typed into, and
+  // its address bar takes the caret as it mounts. Those two acts raced, and the
+  // menu won — the built-app smoke caught the "+" button still focused over an
+  // empty address bar. So the Browser row declines the restore instead, and the
+  // pane's own focus is left standing.
+  //
+  // Scoped to that one row on purpose: Escape, an outside click, and both
+  // Session rows still hand the caret back to the trigger, which is what a
+  // keyboard reader expects and the only behaviour that has somewhere to
+  // return to.
+  const yieldFocus = React.useRef(false);
+  const handleCloseAutoFocus = (event: Event) => {
+    if (!yieldFocus.current) return;
+    yieldFocus.current = false;
+    event.preventDefault();
+  };
+  const handleNewBrowser =
+    onNewBrowser === undefined
+      ? undefined
+      : () => {
+          yieldFocus.current = true;
+          onNewBrowser();
+        };
+
+  const items = newSessionMenuRows("dropdown", {
+    shortcuts,
+    onNewChat,
+    onNewBrowser: handleNewBrowser,
+    onNewTerminal,
+  });
 
   return (
     <ContextMenu>
@@ -209,7 +284,9 @@ export function NewSessionControl({
                 variant={drawing.variant}
                 size={drawing.caret}
                 disabled={disabled}
-                aria-label="Other session kinds"
+                // Not "other session kinds" any more: a Browser Tab is not a
+                // Session, and this menu now holds both.
+                aria-label="Other things to open"
                 // Narrower than a stock icon button: this segment holds one
                 // 12px caret and exists to be SEEN, not aimed at — the whole
                 // menu is also on right-click, so a tab strip pays the smallest
@@ -227,37 +304,21 @@ export function NewSessionControl({
                 />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align={align}>{items}</DropdownMenuContent>
+            <DropdownMenuContent align={align} onCloseAutoFocus={handleCloseAutoFocus}>
+              {items}
+            </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </ContextMenuTrigger>
-      {/* The same two items on right-click, so turning to the caret is a
+      {/* The same items on right-click, so turning to the caret is a
           convenience and never the only route. */}
-      <ContextMenuContent>
-        <ContextMenuItem icon={ChatCircleIcon} onSelect={onNewChat}>
-          Chat
-          {shortcuts ? <ContextMenuShortcut>{CHORD.chat}</ContextMenuShortcut> : null}
-        </ContextMenuItem>
-        {skillRows.length > 0 ? (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger icon={BookOpenIcon}>Chat with skill</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {skillRows.map((skill) => (
-                <ContextMenuItem
-                  key={skill.name}
-                  icon={BookOpenIcon}
-                  onSelect={() => onNewChatWithSkill?.(skill.name)}
-                >
-                  {skill.name}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        ) : null}
-        <ContextMenuItem icon={TerminalWindowIcon} onSelect={onNewTerminal}>
-          Terminal
-          {shortcuts ? <ContextMenuShortcut>{CHORD.terminal}</ContextMenuShortcut> : null}
-        </ContextMenuItem>
+      <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
+        {newSessionMenuRows("context", {
+          shortcuts,
+          onNewChat,
+          onNewBrowser: handleNewBrowser,
+          onNewTerminal,
+        })}
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -5,6 +5,7 @@ import {
   HOME_BOARD_TAB_ID,
   browserTabId,
   closeHomeTabHistory,
+  parseBrowserTabId,
   resolveHomeTabs,
   sanitizeHomeActiveTab,
   visitHomeTab,
@@ -24,6 +25,14 @@ function input(over: Partial<Parameters<typeof resolveHomeTabs>[0]> = {}) {
 }
 
 const SETTLED = { kind: "settled" } as const;
+
+describe("Browser Home tab identity", () => {
+  it("round-trips only a non-empty opaque Browser Tab id", () => {
+    expect(parseBrowserTabId(browserTabId("tab-1"))).toBe("tab-1");
+    expect(parseBrowserTabId("browser:")).toBeNull();
+    expect(parseBrowserTabId("chat:tab-1")).toBeNull();
+  });
+});
 
 describe("resolveHomeTabs — which Home tab is in front", () => {
   it("puts the Board in front when it is what was recorded, whatever else is open", () => {

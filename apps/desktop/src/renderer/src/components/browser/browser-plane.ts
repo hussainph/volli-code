@@ -74,19 +74,25 @@ export class BrowserPlaneController {
   dispose(): void {
     if (this.disposed) return;
     if (this.visibility === "visible") {
-      this.run(this.gateway.hide({ tabId: this.tabId }), "hide Browser Tab");
+      // A failed cleanup can leave remote pixels covering the app after React
+      // believes the tab is gone. Report this one even after disposal; late
+      // failures from older placement/show calls remain irrelevant once their
+      // surface has disappeared.
+      this.run(this.gateway.hide({ tabId: this.tabId }), "hide Browser Tab", true);
     }
     this.visibility = "hidden";
     this.disposed = true;
   }
 
-  private run(operation: Promise<Result>, label: string): void {
+  private run(operation: Promise<Result>, label: string, reportAfterDispose = false): void {
     void operation
       .then((result) => {
-        if (!this.disposed && !result.ok) this.onError(`Could not ${label}: ${result.error}`);
+        if ((!this.disposed || reportAfterDispose) && !result.ok) {
+          this.onError(`Could not ${label}: ${result.error}`);
+        }
       })
       .catch((error: unknown) => {
-        if (this.disposed) return;
+        if (this.disposed && !reportAfterDispose) return;
         const detail = error instanceof Error ? error.message : String(error);
         this.onError(`Could not ${label}: ${detail}`);
       });

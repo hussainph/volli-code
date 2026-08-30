@@ -31,7 +31,7 @@ function draw(tabs: readonly HomeTabDescriptor[], activeTabId: string): string {
 }
 
 describe("HomeTabStrip Browser Tabs", () => {
-  it("draws a live-titled closable tab and a strip entry point", () => {
+  it("draws a live-titled closable tab, with its entry point inside the one menu", () => {
     const browser: HomeTabDescriptor = {
       kind: "browser",
       id: "browser:tab-7",
@@ -45,7 +45,9 @@ describe("HomeTabStrip Browser Tabs", () => {
     expect(html).toContain('data-testid="home-browser-tab"');
     expect(html).toContain("Volli docs");
     expect(html).toContain('aria-label="Close Volli docs"');
-    expect(html).toContain('aria-label="New Browser Tab"');
+    // The way in is the "+" menu's Browser row now, not a second labelled
+    // button on the strip — see `new-session-control.test.tsx`.
+    expect(html).not.toContain('aria-label="New Browser Tab"');
   });
 });
 

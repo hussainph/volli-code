@@ -178,18 +178,19 @@ async function loadingSettled(page, title) {
   );
 }
 
-async function answerNextPrompt(page, value, action) {
-  await page.evaluate((answer) => {
-    const original = window.prompt;
-    window.volliBrowserSmokePrompt = null;
-    window.prompt = (message, defaultValue) => {
-      window.prompt = original;
-      window.volliBrowserSmokePrompt = { message, defaultValue };
-      return answer;
-    };
-  }, value);
-  await action();
-  return page.evaluate(() => window.volliBrowserSmokePrompt);
+/**
+ * Open a Browser Tab the way a person does: the strip's one "+" pill, its caret
+ * half, then the Browser row.
+ *
+ * Nothing is stubbed here on purpose. The previous shape of this smoke replaced
+ * `window.prompt` with its own function, which is why it stayed green while the
+ * shipped button did nothing at all — Electron defines `window.prompt` as
+ * `throw new Error("prompt() is not supported.")`. A smoke that substitutes the
+ * one API the product got wrong is testing itself.
+ */
+async function openBrowserTabFromMenu(page) {
+  await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Browser", exact: true }).click();
 }
 
 /**
@@ -299,11 +300,29 @@ async function main() {
 
   await must(
     1,
-    "New Browser Tab opens the loopback fixture with live URL/title chrome and settled loading",
+    "the + menu opens a blank tab whose address bar reaches the loopback fixture",
     async () => {
-      const prompt = await answerNextPrompt(page, startUrl, () =>
-        page.getByRole("button", { name: "New Browser Tab", exact: true }).click(),
-      );
+      await openBrowserTabFromMenu(page);
+
+      // A blank tab lands first: named "New Tab", addressed with nothing, and
+      // already holding the caret so the next keystroke is the destination.
+      const blank = await waitUntil("the blank Browser Tab", async () => {
+        const labels = await browserTabLabels(page);
+        const address = await addressBar(page)
+          .inputValue()
+          .catch(() => null);
+        return labels.length === 1 && labels[0] === "New Tab" && address === ""
+          ? { labels, address }
+          : null;
+      });
+      // The caret must be IN the field, not merely near it: the menu declines
+      // to restore focus to its trigger for this row precisely so the pane's
+      // own focus survives, and an earlier build of this feature failed here
+      // with the "+" button still focused over an empty address bar.
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+
+      await addressBar(page).fill(startUrl);
+      await addressBar(page).press("Enter");
       await waitUntil(
         "the fixture Browser Tab to settle",
         async () => {
@@ -327,12 +346,8 @@ async function main() {
       );
       const labels = await browserTabLabels(page);
       return {
-        ok:
-          prompt?.message === "Open Browser Tab" &&
-          prompt?.defaultValue === "http://localhost:3000" &&
-          labels.length === 1 &&
-          labels[0] === START_TITLE,
-        detail: `prompt=${JSON.stringify(prompt)} tabs=${JSON.stringify(labels)} address=${await addressBar(page).inputValue()}`,
+        ok: focused === "Address" && labels.length === 1 && labels[0] === START_TITLE,
+        detail: `blank=${JSON.stringify(blank)} focused=${focused} tabs=${JSON.stringify(labels)} address=${await addressBar(page).inputValue()}`,
       };
     },
   );
@@ -391,7 +406,11 @@ async function main() {
         "Back to return to the start fixture",
         async () =>
           (await addressBar(page).inputValue()) === startUrl &&
-          !(await chromeButton(page, "Back").isEnabled()) &&
+          // Back stays REACHABLE here, where it used to go dead: a tab now
+          // begins on the blank start page, so that page is one more step
+          // behind the first real destination — the same history a real
+          // browser's new tab leaves behind it.
+          (await chromeButton(page, "Back").isEnabled()) &&
           (await chromeButton(page, "Forward").isEnabled()) &&
           (await loadingSettled(page, START_TITLE)),
         { timeout: 20000 },

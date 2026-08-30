@@ -39,6 +39,7 @@ function state(overrides: Partial<BrowserTabState> & { tabId: string }): Browser
     url: "https://example.com/",
     title: "Example",
     loading: false,
+    error: null,
     canGoBack: false,
     canGoForward: false,
     generation: 1,
@@ -94,6 +95,7 @@ function fakeHost(initial: BrowserTabState[]): {
       back: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       forward: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       reload: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
+      consoleOf: () => ({ messages: [], truncated: false }),
     },
   };
 }
@@ -108,7 +110,6 @@ function transportFor(): CdpTransport {
       }
       return {};
     },
-    onEvent: () => () => undefined,
   };
 }
 
@@ -224,6 +225,7 @@ describe("createAgentBrowserPort", () => {
     const commands: { method: string; params?: object }[] = [];
     let attached = false;
     const attaches: string[] = [];
+    let detaches = 0;
     const contents = {
       debugger: {
         isAttached: () => attached,
@@ -235,8 +237,10 @@ describe("createAgentBrowserPort", () => {
           commands.push(params === undefined ? { method } : { method, params });
           return { ok: true };
         },
-        on: () => undefined,
-        removeListener: () => undefined,
+        detach: () => {
+          attached = false;
+          detaches += 1;
+        },
       },
     };
 
@@ -245,7 +249,29 @@ describe("createAgentBrowserPort", () => {
     await transport.send("Page.captureScreenshot", { format: "png" });
 
     expect(attaches).toEqual(["1.3"]);
-    expect(commands.map((one) => one.method)).toEqual(["Page.enable", "Page.captureScreenshot"]);
+    expect(commands.map((one) => one.method)).toEqual([
+      "Accessibility.enable",
+      "DOM.enable",
+      "Page.enable",
+      "Page.enable",
+      "Page.captureScreenshot",
+    ]);
+
+    // DevTools or a renderer restart can detach the app-private debugger. The
+    // next command establishes a fresh attachment and re-enables its domains.
+    attached = false;
+    await transport.send("Page.getLayoutMetrics");
+    expect(attaches).toEqual(["1.3", "1.3"]);
+    expect(commands.slice(-4).map((one) => one.method)).toEqual([
+      "Accessibility.enable",
+      "DOM.enable",
+      "Page.enable",
+      "Page.getLayoutMetrics",
+    ]);
+
+    transport.dispose?.();
+    expect(detaches).toBe(1);
+    expect(attached).toBe(false);
   });
 
   it("waits for a loading tab to settle and returns at once for one already settled", async () => {
@@ -274,6 +300,35 @@ describe("createAgentBrowserPort", () => {
     listeners.clear();
     await wait("tab-1", new AbortController().signal);
     expect(listeners.size).toBe(0);
+  });
+
+  it("waits for a required navigation that has not started yet", async () => {
+    let loading = false;
+    const listeners = new Map<string, () => void>();
+    const contents = {
+      isLoading: () => loading,
+      on: (event: string, listener: () => void) => listeners.set(event, listener),
+      removeListener: (event: string) => listeners.delete(event),
+    };
+    const wait = loadWaiter(() => contents as never, 1_000);
+
+    const pending = wait("tab-1", new AbortController().signal, "required-navigation");
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    loading = true;
+    listeners.get("did-start-loading")?.();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    loading = false;
+    listeners.get("did-stop-loading")?.();
+    await pending;
+    expect(settled).toBe(true);
   });
 
   it("answers a screenshot with the tab's own record beside the engine's pixels", async () => {

@@ -26,6 +26,7 @@ import type { WebContents } from "electron";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
+  RuntimeBrowserConsole,
   RuntimeBrowserNavigation,
   RuntimeBrowserPort,
   RuntimeBrowserSnapshot,
@@ -33,7 +34,7 @@ import type {
 
 import type { BrowserTabState } from "../../ipc/contract";
 import type { BrowserTabCreateOptions } from "./tab-host";
-import { isAllowedBrowserUrl } from "./tab-host";
+import { BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
 
 /**
@@ -48,6 +49,7 @@ export interface AgentBrowserHost {
   back(tabId: string): BrowserTabState;
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
+  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
 }
 
 export interface AgentBrowserPortOptions {
@@ -57,7 +59,7 @@ export interface AgentBrowserPortOptions {
   /** The CDP wire for one live tab — production binds `webContents.debugger`. */
   transportFor: (tabId: string) => CdpTransport;
   /** Resolves when the tab has settled enough to read; must honour the signal. */
-  waitForLoad: (tabId: string, signal: AbortSignal) => Promise<void>;
+  waitForLoad: (tabId: string, signal: AbortSignal, mode?: BrowserLoadWaitMode) => Promise<void>;
 }
 
 /**
@@ -71,20 +73,38 @@ export interface AgentBrowserPortOptions {
  */
 export function debuggerTransport(contents: WebContents): CdpTransport {
   const wire = contents.debugger;
-  const attached = (): void => {
-    if (!wire.isAttached()) wire.attach("1.3");
+  let initialized = false;
+  const ensureReady = async (): Promise<void> => {
+    if (initialized && wire.isAttached()) return;
+    initialized = false;
+    try {
+      if (!wire.isAttached()) wire.attach("1.3");
+      await wire.sendCommand("Accessibility.enable");
+      await wire.sendCommand("DOM.enable");
+      await wire.sendCommand("Page.enable");
+      initialized = true;
+    } catch {
+      throw new BrowserRefusal(
+        "browser.debugger-unavailable",
+        "Browser control is unavailable while another debugger owns this tab. Close its DevTools and retry.",
+      );
+    }
   };
   return {
+    ensureReady,
     send: async (method, params) => {
-      attached();
+      await ensureReady();
       return wire.sendCommand(method, params);
     },
-    onEvent: (listener) => {
-      attached();
-      const handler = (_event: unknown, method: string, params: unknown): void =>
-        listener(method, params);
-      wire.on("message", handler);
-      return () => wire.removeListener("message", handler);
+    dispose: () => {
+      if (!initialized || !wire.isAttached()) return;
+      initialized = false;
+      try {
+        wire.detach();
+      } catch {
+        // The target may already be disappearing. Disposal owns no user
+        // operation to fail; the WebContents teardown finishes the job.
+      }
     },
   };
 }
@@ -96,23 +116,37 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
  * honestly describe as it stands, and a withdrawn wait belongs to a turn that
  * is already gone.
  */
+export type BrowserLoadWaitMode = "current" | "possible-navigation" | "required-navigation";
+
 export function loadWaiter(
   webContentsOf: (tabId: string) => Pick<WebContents, "isLoading" | "on" | "removeListener">,
   timeoutMs = 10_000,
-): (tabId: string, signal: AbortSignal) => Promise<void> {
-  return async (tabId, signal) => {
+  navigationGraceMs = 50,
+): (tabId: string, signal: AbortSignal, mode?: BrowserLoadWaitMode) => Promise<void> {
+  return async (tabId, signal, mode = "current") => {
     const contents = webContentsOf(tabId);
-    if (!contents.isLoading() || signal.aborted) return;
+    const loading = contents.isLoading();
+    if ((!loading && mode === "current") || signal.aborted) return;
     await new Promise<void>((resolve) => {
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const started = (): void => {
+        if (grace !== undefined) clearTimeout(grace);
+      };
       const finish = (): void => {
         clearTimeout(timer);
+        if (grace !== undefined) clearTimeout(grace);
+        contents.removeListener("did-start-loading", started);
         contents.removeListener("did-stop-loading", finish);
         signal.removeEventListener("abort", finish);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
+      contents.on("did-start-loading", started);
       contents.on("did-stop-loading", finish);
       signal.addEventListener("abort", finish, { once: true });
+      // Close the gap between the first isLoading() read and listener install.
+      if (contents.isLoading()) started();
+      else if (mode === "possible-navigation") grace = setTimeout(finish, navigationGraceMs);
     });
   };
 }
@@ -129,6 +163,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
   const resolve = (tabId: string): BrowserTabState => {
     const tab = visible().find((candidate) => candidate.tabId === tabId);
     if (tab === undefined) {
+      controllers.get(tabId)?.dispose();
       controllers.delete(tabId);
       throw new BrowserRefusal(
         "browser.unknown-tab",
@@ -143,8 +178,8 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     let controller = controllers.get(tab.tabId);
     if (controller === undefined) {
       controller = new BrowserTabController(options.transportFor(tab.tabId));
-      controllers.set(tab.tabId, controller);
       await controller.enable();
+      controllers.set(tab.tabId, controller);
     }
     controller.syncGeneration(tab.generation);
     return controller;
@@ -153,11 +188,17 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
   const snapshotOf = async (
     tabId: string,
     signal: AbortSignal,
+    waitMode: BrowserLoadWaitMode = "current",
   ): Promise<RuntimeBrowserSnapshot> => {
-    await options.waitForLoad(tabId, signal);
+    // Scope before waiting: an out-of-scope id must not gain a loading-timing
+    // oracle, and a cancelled call must not attach Chromium's debugger.
+    resolve(tabId);
+    signal.throwIfAborted();
+    await options.waitForLoad(tabId, signal, waitMode);
+    signal.throwIfAborted();
     const tab = resolve(tabId);
     const controller = await controllerFor(tab);
-    const printed = await controller.snapshot();
+    const printed = await controller.snapshot(signal);
     return {
       tabId: tab.tabId,
       url: tab.url,
@@ -168,7 +209,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     };
   };
 
-  const steer = (tabId: string | undefined, navigation: RuntimeBrowserNavigation): string => {
+  const steer = (
+    tabId: string | undefined,
+    navigation: RuntimeBrowserNavigation,
+  ): { tabId: string; waitMode: BrowserLoadWaitMode } => {
     if (navigation.kind === "url" && !isAllowedBrowserUrl(navigation.url)) {
       throw new BrowserRefusal(
         "browser.navigation-policy",
@@ -188,73 +232,111 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
           "Only a Ticket Session can open its own Browser Tab; ask the person to open one and reference it.",
         );
       }
-      return options.host.open({
-        url: navigation.url,
-        projectId: options.scope.projectId,
-        ticketId: options.scope.ticketId,
-        createdBy: "session",
-      }).tabId;
+      try {
+        return {
+          tabId: options.host.open({
+            url: navigation.url,
+            projectId: options.scope.projectId,
+            ticketId: options.scope.ticketId,
+            createdBy: "session",
+          }).tabId,
+          waitMode: "required-navigation",
+        };
+      } catch (error) {
+        if (!(error instanceof BrowserTabLimitError)) throw error;
+        throw new BrowserRefusal("browser.tab-limit", error.message);
+      }
     }
     const tab = resolve(tabId);
     switch (navigation.kind) {
       case "url":
-        return options.host.navigate(tab.tabId, navigation.url).tabId;
-      case "back":
-        return options.host.back(tab.tabId).tabId;
-      case "forward":
-        return options.host.forward(tab.tabId).tabId;
+        return {
+          tabId: options.host.navigate(tab.tabId, navigation.url).tabId,
+          waitMode: "required-navigation",
+        };
+      case "back": {
+        const moved = options.host.back(tab.tabId);
+        return {
+          tabId: moved.tabId,
+          waitMode: moved.generation > tab.generation ? "required-navigation" : "current",
+        };
+      }
+      case "forward": {
+        const moved = options.host.forward(tab.tabId);
+        return {
+          tabId: moved.tabId,
+          waitMode: moved.generation > tab.generation ? "required-navigation" : "current",
+        };
+      }
       case "reload":
-        return options.host.reload(tab.tabId).tabId;
+        return {
+          tabId: options.host.reload(tab.tabId).tabId,
+          waitMode: "required-navigation",
+        };
     }
   };
 
   return {
-    tabs: async () => ({
-      tabs: visible().map((tab) => ({
-        tabId: tab.tabId,
-        url: tab.url,
-        title: tab.title,
-        createdBy: tab.createdBy,
-      })),
-    }),
+    tabs: async (input) => {
+      input.signal.throwIfAborted();
+      return {
+        tabs: visible().map((tab) => ({
+          tabId: tab.tabId,
+          url: tab.url,
+          title: tab.title,
+          createdBy: tab.createdBy,
+        })),
+      };
+    },
     navigate: async (input) => {
-      const tabId = steer(input.tabId, input.navigation);
-      return snapshotOf(tabId, input.signal);
+      input.signal.throwIfAborted();
+      const steered = steer(input.tabId, input.navigation);
+      return snapshotOf(steered.tabId, input.signal, steered.waitMode);
     },
     snapshot: async (input) => {
       resolve(input.tabId);
       return snapshotOf(input.tabId, input.signal);
     },
     act: async (input) => {
+      input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       const controller = await controllerFor(tab);
-      await controller.act({
-        generation: input.generation,
-        kind: input.kind,
-        ...(input.ref === undefined ? {} : { ref: input.ref }),
-        ...(input.text === undefined ? {} : { text: input.text }),
-        ...(input.key === undefined ? {} : { key: input.key }),
-        ...(input.direction === undefined ? {} : { direction: input.direction }),
-        ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
-      });
-      return snapshotOf(input.tabId, input.signal);
+      await controller.act(
+        {
+          generation: input.generation,
+          kind: input.kind,
+          ...(input.ref === undefined ? {} : { ref: input.ref }),
+          ...(input.text === undefined ? {} : { text: input.text }),
+          ...(input.key === undefined ? {} : { key: input.key }),
+          ...(input.direction === undefined ? {} : { direction: input.direction }),
+          ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+        },
+        input.signal,
+      );
+      return snapshotOf(input.tabId, input.signal, "possible-navigation");
     },
     screenshot: async (input) => {
+      input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       const controller = await controllerFor(tab);
-      const shot = await controller.screenshot();
+      const shot = await controller.screenshot(input.signal);
+      input.signal.throwIfAborted();
       return { tabId: tab.tabId, url: tab.url, ...shot };
     },
     console: async (input) => {
+      input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
-      const controller = await controllerFor(tab);
-      const record = controller.console();
+      const record = options.host.consoleOf(tab.tabId);
       return {
         tabId: tab.tabId,
         url: tab.url,
         messages: record.messages,
         truncated: record.truncated,
       };
+    },
+    dispose: () => {
+      for (const controller of controllers.values()) controller.dispose();
+      controllers.clear();
     },
   };
 }
