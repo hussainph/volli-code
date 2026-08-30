@@ -133,24 +133,55 @@ export function BoardColumn({
             <ColumnOfferedPanel {...offered} />
           </div>
         )}
+        {/* The SCROLL CONTAINER is the droppable's PARENT, never the droppable
+            itself (VC-221). dnd-kit answers `getScrollableAncestors` by walking
+            up from a node and EXCLUDING that node, so while this element was
+            both, a card and the column holding it disagreed about their own
+            ancestry: a card's list scrolls, so it counted three ancestors
+            (list, canvas, document) where its column counted two.
+
+            `over` flips between a card and its column on ordinary pointer
+            travel, and each flip handed `useRects` an `elements` array of a
+            different LENGTH — the first thing `sameMeasuredRects` checks, so
+            the patch's guard could not absorb it. The new state moved
+            `scrollAdjustedTranslate`, which moved `collisionRect`, which
+            flipped `over` straight back: a closed cycle that reached React's
+            nested-update limit in one commit chain and took the board out
+            through `BoardBoundary` (error #185, `Maximum update depth
+            exceeded`). It needed no modifier — ⌥ was how it was noticed, not
+            why it happened.
+
+            Split, both nodes resolve to the SAME three ancestors, so a flip
+            measures identical rects, `setRects` bails, and the cycle has
+            nothing to feed it. The scroll behaviour is unchanged: this element
+            carries the overflow and the cap, exactly as the merged one did. */}
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
           <div
-            ref={setNodeRef}
-            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"
+            data-column-scroller={status}
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto"
           >
-            {tickets.map((ticket) => (
-              <TicketCard
-                key={ticket.id}
-                ticket={ticket}
-                projectId={projectId}
-                ticketPrefix={ticketPrefix}
-                projectLabels={projectLabels}
-                selected={ticket.id === selectedId}
-                sessionActivity={sessionActivity[ticket.id] ?? null}
-                onSelect={onSelect}
-                onOpen={onOpen}
-              />
-            ))}
+            <div
+              // Named so the split above is a fact a test can hold rather than a
+              // shape a refactor can quietly undo — the two must never be the
+              // same element again. See `board-column-dropzone.test.tsx`.
+              data-column-dropzone={status}
+              ref={setNodeRef}
+              className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
+            >
+              {tickets.map((ticket) => (
+                <TicketCard
+                  key={ticket.id}
+                  ticket={ticket}
+                  projectId={projectId}
+                  ticketPrefix={ticketPrefix}
+                  projectLabels={projectLabels}
+                  selected={ticket.id === selectedId}
+                  sessionActivity={sessionActivity[ticket.id] ?? null}
+                  onSelect={onSelect}
+                  onOpen={onOpen}
+                />
+              ))}
+            </div>
           </div>
         </SortableContext>
       </div>
