@@ -7,6 +7,7 @@ import {
   type CreateSessionHarnessStateInput,
   type HarnessEvent,
   type SessionHarnessState,
+  type SessionProvenance,
   type SessionRecord,
   type Ticket,
   type LatestSessionSignal,
@@ -583,6 +584,79 @@ describe("buildActiveSessionListing — the Active band", () => {
       { title: "Blocked session", attention: { signal: "blocked", reason: null } },
       { title: "Done session", attention: null },
     ]);
+  });
+});
+
+describe("buildActiveSessionListing — who started each Session", () => {
+  const RUN = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const NOW = 100_000;
+
+  /** One live chat and one long-quiet one, so both bands are populated at once. */
+  function bands(provenance?: Record<string, SessionProvenance>) {
+    return buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({ ticketId: "t1", sessionId: "chat-live", title: "Live", lastActivityAt: NOW }),
+        chatSession({
+          ticketId: "t1",
+          sessionId: "chat-old",
+          title: "Old",
+          live: false,
+          lastActivityAt: NOW - ACTIVE_QUIET_WINDOW_MS - 1,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      ...(provenance === undefined ? {} : { provenance }),
+      now: NOW,
+    });
+  }
+
+  // The rule is "everywhere a Session appears", and this module produces two
+  // bands: a Run that carried its bolt in Active and lost it on ageing out
+  // would have found the quiet band to hide in.
+  it("carries the mark into BOTH bands", () => {
+    const result = bands({ "chat-live": RUN, "chat-old": RUN });
+
+    expect(result.active.map((row) => row.provenance)).toEqual([RUN]);
+    expect(result.previous.map((row) => row.provenance)).toEqual([RUN]);
+  });
+
+  it("reads a Session the map does not mention as person-started, by identity", () => {
+    const result = bands({ "chat-live": RUN });
+
+    expect(result.active[0]?.provenance).toEqual(RUN);
+    expect(result.previous[0]?.provenance).toBe(PERSON_STARTED);
+  });
+
+  // A listing built with no map at all marks nothing, which is the right
+  // failure: a band that cannot read provenance should be quiet rather than
+  // guessing at a bolt.
+  it("marks nothing when it was handed no map", () => {
+    const result = bands();
+
+    expect(result.active[0]?.provenance).toBe(PERSON_STARTED);
+    expect(result.previous[0]?.provenance).toBe(PERSON_STARTED);
+  });
+
+  it("marks a terminal row too, keyed by the tab the row speaks for", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "A terminal a Run opened")]) },
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: { s1: NOW },
+      parkState: {},
+      harness: {},
+      provenance: { s1: RUN },
+      now: NOW,
+    });
+
+    expect(result.active[0]?.provenance).toEqual(RUN);
   });
 });
 

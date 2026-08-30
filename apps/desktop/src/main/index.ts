@@ -696,7 +696,7 @@ app.whenReady().then(async () => {
           // Read on the push path as well as the fetch path, so a Run's bolt
           // survives its Session's first turn (VC-131): the renderer upserts
           // the whole row, so a push without provenance would erase the mark.
-          provenanceOf: (session) => readSessionProvenance(watchedDb, session),
+          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;

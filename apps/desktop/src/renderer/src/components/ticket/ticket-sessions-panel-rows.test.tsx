@@ -58,11 +58,46 @@ const fixture = vi.hoisted(() => {
     activity: "stopped",
     waitingOn: null,
   };
+  // The rail is a listing like any other, so it draws the same three marks the
+  // sidebar's bands do (VC-131). One Run, one Session-started child, one row a
+  // person opened — which is the row that must gain nothing.
+  const byRun: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-run",
+    title: "Fix the flaky worktree test",
+    live: true,
+    activity: "working",
+    waitingOn: null,
+  };
+  const byAgent: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-child",
+    title: "Second opinion",
+    live: true,
+    activity: "working",
+    waitingOn: null,
+  };
   const rows: SessionListingRow[] = [
     { kind: "chat", record, usage: unmetered, provenance: personStarted },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
+    {
+      kind: "chat",
+      record: byRun,
+      usage: unmetered,
+      provenance: { kind: "automation", automationName: "Nightly sweep" },
+    },
+    {
+      kind: "chat",
+      record: byAgent,
+      usage: unmetered,
+      provenance: {
+        kind: "session",
+        parentSessionId: "chat-0",
+        parentTitle: "Previous implementation",
+      },
+    },
   ];
-  return { record, ended, rows };
+  return { record, ended, byRun, byAgent, rows };
 });
 
 vi.mock("@renderer/stores/ticket-session-records", async () => {
@@ -128,6 +163,29 @@ describe("TicketSessionsPanel rows", () => {
     // A test that matched the class would fail the day the dot is restyled and
     // pass the day this panel starts reporting the wrong state.
     expect(panel()).toContain('data-state="waiting"');
+  });
+
+  describe("who started the Session", () => {
+    it("carries the bolt and the Automation's name on a Run's row", () => {
+      const html = panel();
+
+      expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
+      expect(html).toContain('title="Automation · Nightly sweep"');
+    });
+
+    it("names the parent in a tooltip, and mints no glyph for it", () => {
+      expect(panel()).toContain('title="Started by Previous implementation"');
+    });
+
+    it("gives a person's row nothing — no mark, and no empty tooltip", () => {
+      const html = panel();
+
+      // The row a person opened is present and titled, and carries neither the
+      // Automation's accessible name nor a provenance tooltip of its own.
+      expect(html).toContain(fixture.record.title);
+      expect(html).not.toContain('title=""');
+      expect(html.match(/aria-label="Started by the Automation/g)).toHaveLength(1);
+    });
   });
 
   it("draws History as a sibling section, never the old rail's drawer", () => {
