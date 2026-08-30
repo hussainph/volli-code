@@ -25,6 +25,7 @@ import {
   sessionRailRowStampAt,
   sessionSourceLabel,
   ticketOutputStamps,
+  ticketSessionProvenance,
   type SessionRailRow,
   type TicketSessionRow,
   type TicketSessionRowsInput,
@@ -579,6 +580,46 @@ describe("ticketOutputStamps", () => {
 
     expect(stamps).toEqual({});
     expect(Object.keys(stamps)).toEqual([]);
+  });
+});
+
+describe("ticketSessionProvenance", () => {
+  const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const child = {
+    kind: "session",
+    parentSessionId: "session-parent",
+    parentTitle: "Orchestrator",
+  } as const;
+
+  it("keys both kinds by the id the rail's rows answer to", () => {
+    expect(
+      ticketSessionProvenance([
+        { ...terminalRow(record({ id: "s1" })), provenance: run },
+        {
+          kind: "chat",
+          record: chatRecord({ sessionId: "c1" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: child,
+        },
+      ]),
+    ).toEqual({ s1: run, c1: child });
+  });
+
+  // The resting case is stored as its own absence, which is what makes a ticket
+  // nobody automated cost this read nothing at all (VC-131).
+  it("gives a Session a person started no entry", () => {
+    const provenance = ticketSessionProvenance([
+      terminalRow(record({ id: "s1" })),
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+    ]);
+
+    expect(provenance).toEqual({});
+    expect(Object.keys(provenance)).toEqual([]);
   });
 });
 

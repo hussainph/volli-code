@@ -107,6 +107,72 @@ describe("project-sessions store", () => {
     });
   });
 
+  // VC-131. The map is keyed by the id each row's own shape answers to, so both
+  // arms are exercised: a terminal row is found by `record.id` and a chat row by
+  // `record.sessionId`, and getting that backwards would file a mark under an id
+  // no surface ever asks for — a bolt that silently never draws.
+  it("keeps who started each Session, keyed by the id its own shape answers to", async () => {
+    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const child = {
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    } as const;
+    stubList([
+      {
+        kind: "terminal",
+        record: record(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: child,
+      },
+      {
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: run,
+      },
+    ]);
+    const store = createProjectSessionsStore();
+
+    await store.getState().refresh("p1");
+
+    expect(store.getState().byProject.p1?.provenance).toEqual({ s1: child, c1: run });
+  });
+
+  // A Run started after this window opened arrives on the push channel before
+  // any baseline fetch has seen it, so the fold has to carry the mark — a push
+  // that dropped it would leave the newest Run as the one row with no bolt.
+  it("folds a pushed row's provenance in, and leaves the resting case absent", async () => {
+    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    stubList([]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord({ sessionId: "fresh" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: run,
+      }),
+    );
+    expect(store.getState().byProject.p1?.provenance).toEqual({ fresh: run });
+
+    const before = store.getState().byProject.p1?.provenance;
+    store.getState().applyActivity(
+      notice({
+        kind: "terminal",
+        record: record({ id: "human" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
+    // Not merely equal — the same object. A person-started row must not mint a
+    // fresh map identity, or every push in a project nobody automated would
+    // re-derive every listing built from it.
+    expect(store.getState().byProject.p1?.provenance).toBe(before);
+  });
+
   it("surfaces a failed listing read instead of silently emptying the project", async () => {
     const list = vi.fn().mockResolvedValue({ ok: false, error: "db closed" });
     Object.assign(globalThis, { window: { api: { sessions: { list } } } });

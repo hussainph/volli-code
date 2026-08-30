@@ -32,8 +32,8 @@
  */
 import {
   HARNESS_EVENT_GRACE_MS,
-  PERSON_STARTED,
   sessionActivitySource,
+  sessionProvenanceOf,
   type ChatSessionRecord,
   type ChatWaitingReason,
   type SessionActivitySource,
@@ -729,12 +729,12 @@ export function buildActiveSessionListing(
   const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
   /**
    * Who started one Session. The map is sparse and its holes ARE the resting
-   * case, so a miss is {@link PERSON_STARTED} rather than an unknown — and the
-   * shared frozen constant is handed back rather than a fresh literal, so the
-   * memoised rows are not defeated by a new object per rebuild.
+   * case, so a miss is the person-started answer rather than an unknown — the
+   * resting answer is the shared frozen constant, so the memoised rows are not
+   * defeated by a new object per rebuild.
    */
   const provenanceOf = (sessionId: string): SessionProvenance =>
-    (input.provenance ?? NO_PROVENANCE)[sessionId] ?? PERSON_STARTED;
+    sessionProvenanceOf(input.provenance ?? NO_PROVENANCE, sessionId);
 
   const activeEntries: ActiveEntry[] = [];
   const previousById = new Map<string, PreviousCandidate>();

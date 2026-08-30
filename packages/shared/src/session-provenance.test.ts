@@ -6,6 +6,7 @@ import {
   drawsSessionProvenanceMark,
   PERSON_STARTED,
   sessionProvenanceHoverLine,
+  sessionProvenanceOf,
   type SessionProvenance,
 } from "./session-provenance";
 
@@ -24,6 +25,21 @@ describe("PERSON_STARTED", () => {
 
   it("is frozen, so the one shared value cannot be edited into another party", () => {
     expect(Object.isFrozen(PERSON_STARTED)).toBe(true);
+  });
+});
+
+describe("sessionProvenanceOf", () => {
+  it("reads a Session the map has something to say about", () => {
+    expect(sessionProvenanceOf({ "session-run": AUTOMATION }, "session-run")).toEqual(AUTOMATION);
+  });
+
+  // The holes ARE the answer: a project nobody has automated stores an empty
+  // object, and every Session in it reads as person-started from that.
+  it("reads a miss as the resting case, by identity", () => {
+    expect(sessionProvenanceOf({}, "session-human")).toBe(PERSON_STARTED);
+    expect(sessionProvenanceOf({ "session-run": AUTOMATION }, "session-human")).toBe(
+      PERSON_STARTED,
+    );
   });
 });
 

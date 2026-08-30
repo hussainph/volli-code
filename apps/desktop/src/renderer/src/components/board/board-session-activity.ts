@@ -60,7 +60,7 @@
 import { WORKING_WINDOW_MS } from "@renderer/stores/sessions";
 import { sessionActivityState, sessionPanes } from "@renderer/stores/sessions";
 import type { SessionContainer } from "@renderer/stores/sessions";
-import { drawsSessionProvenanceMark, PERSON_STARTED } from "@volli/shared";
+import { drawsSessionProvenanceMark, sessionProvenanceOf } from "@volli/shared";
 import type {
   ChatSessionRecord,
   SessionActivityState,
@@ -183,7 +183,7 @@ export function buildBoardSessionActivity(
       word ??
         (record.live &&
         record.activity !== "stopped" &&
-        drawsSessionProvenanceMark(provenance[record.sessionId] ?? PERSON_STARTED)
+        drawsSessionProvenanceMark(sessionProvenanceOf(provenance, record.sessionId))
           ? "live"
           : undefined),
     );

@@ -34,7 +34,6 @@
 import { create } from "zustand";
 import {
   errorMessage,
-  PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionProvenance,
@@ -58,25 +57,10 @@ export interface ProjectSessionRows {
    * `{ kind: "user" }` for every Session: a project where nobody has ever run
    * an Automation carries an empty object here, which is the same shape the
    * rail's "no persistent weight" criterion asks for said in data. Read it
-   * through {@link sessionProvenanceOf}, which turns a miss back into the
-   * resting answer.
+   * through `sessionProvenanceOf` (`@volli/shared`), which turns a miss back
+   * into the resting answer.
    */
   provenance: Readonly<Record<string, SessionProvenance>>;
-}
-
-/**
- * One Session's provenance out of a sparse map — the resting case on a miss.
- *
- * Written once here rather than spelled `?? PERSON_STARTED` at each of the four
- * surfaces that draw a mark: the map's holes ARE the resting case, and a caller
- * that read the miss as "unknown" instead would be one `undefined` check away
- * from drawing a bolt on a Session nobody automated.
- */
-export function sessionProvenanceOf(
-  provenance: Readonly<Record<string, SessionProvenance>>,
-  sessionId: string,
-): SessionProvenance {
-  return provenance[sessionId] ?? PERSON_STARTED;
 }
 
 export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {

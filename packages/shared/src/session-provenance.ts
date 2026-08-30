@@ -73,6 +73,28 @@ export type SessionProvenance =
 export const PERSON_STARTED: SessionProvenance = Object.freeze({ kind: "user" });
 
 /**
+ * One Session's provenance out of a SPARSE map — the resting case on a miss.
+ *
+ * Every surface that draws a mark reads its answer through here, and the map
+ * behind it stores only the Sessions that have something to say: a project
+ * where nobody has run an Automation carries an empty object rather than one
+ * `{ kind: "user" }` entry per Session, which is the "no persistent weight"
+ * criterion said in data instead of in pixels.
+ *
+ * Written once, and shared, because the holes ARE the answer. A caller that
+ * read a miss as "unknown" instead would be one `undefined` check away from
+ * drawing a bolt on a Session nobody automated — and the shared frozen
+ * {@link PERSON_STARTED} comes back rather than a fresh literal, so a memoised
+ * row is not defeated by a new object on every rebuild.
+ */
+export function sessionProvenanceOf(
+  provenance: Readonly<Record<string, SessionProvenance>>,
+  sessionId: string,
+): SessionProvenance {
+  return provenance[sessionId] ?? PERSON_STARTED;
+}
+
+/**
  * Whether this provenance draws ANY resting mark.
  *
  * The acceptance criterion "a resting rail gains no persistent visual weight

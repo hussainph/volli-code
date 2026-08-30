@@ -7,8 +7,8 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   errorMessage,
-  PERSON_STARTED,
   sessionProvenanceHoverLine,
+  sessionProvenanceOf,
   type SessionListingRow,
   type SessionProvenance,
   type SessionRecord,
@@ -289,7 +289,7 @@ function SessionList({
               key={sessionId}
               kind="chat"
               title={title}
-              provenance={provenance[sessionId] ?? PERSON_STARTED}
+              provenance={sessionProvenanceOf(provenance, sessionId)}
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
@@ -324,7 +324,7 @@ function SessionList({
             key={record.id}
             kind="terminal"
             title={title}
-            provenance={provenance[record.id] ?? PERSON_STARTED}
+            provenance={sessionProvenanceOf(provenance, record.id)}
             trailing={
               variant === "current" ? (
                 <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
