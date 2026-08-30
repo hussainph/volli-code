@@ -430,7 +430,10 @@ try {
     return { ok: shown.length === 0, detail: JSON.stringify(shown) };
   });
 
-  exitCode = summarize() ? 0 : 1;
+  // `summarize()` RETURNS the exit code (0 when every check passed), not a
+  // boolean — every sibling smoke assigns it directly, and treating it as a
+  // truthy verdict inverts the result into a green run that exits 1.
+  exitCode = summarize();
 } catch (error) {
   console.error("\nSMOKE FAILED:", error);
   exitCode = 1;
