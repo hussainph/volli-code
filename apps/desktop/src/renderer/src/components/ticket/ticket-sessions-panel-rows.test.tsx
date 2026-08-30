@@ -9,12 +9,20 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { ChatSessionRecord, SessionListingRow, SessionUsageSummary } from "@volli/shared";
+import type {
+  ChatSessionRecord,
+  SessionListingRow,
+  SessionProvenance,
+  SessionUsageSummary,
+} from "@volli/shared";
 
 const fixture = vi.hoisted(() => {
   // Spelled out rather than imported: this block is hoisted above the module's
   // own imports, so a shared constant would be in its temporal dead zone here.
   // Unmetered, which is what these rows are about — nothing here calls a model.
+  // Spelled out for the same reason, and it is the resting case: these rows
+  // are Sessions a person opened, so they carry no mark at all (VC-131).
+  const personStarted: SessionProvenance = { kind: "user" };
   const unmetered: SessionUsageSummary = {
     requestCount: 0,
     tokenRequestCount: 0,
@@ -51,8 +59,8 @@ const fixture = vi.hoisted(() => {
     waitingOn: null,
   };
   const rows: SessionListingRow[] = [
-    { kind: "chat", record, usage: unmetered },
-    { kind: "chat", record: ended, usage: unmetered },
+    { kind: "chat", record, usage: unmetered, provenance: personStarted },
+    { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
   ];
   return { record, ended, rows };
 });

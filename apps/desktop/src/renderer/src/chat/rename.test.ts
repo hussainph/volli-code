@@ -1,5 +1,6 @@
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionPresentationProjection,
@@ -56,6 +57,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
   };
 }
 
@@ -80,6 +82,7 @@ const terminalRow: SessionListingRow = {
     bornTicketless: false,
   },
   usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
 };
 
 /** The cached chat row's title, for the ticket the fixtures use. */

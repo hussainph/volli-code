@@ -32,7 +32,14 @@
  * terminal's durable IDENTITY (title, harness, when it ended) — not its pulse.
  */
 import { create } from "zustand";
-import { errorMessage, type ChatSessionRecord, type SessionRecord } from "@volli/shared";
+import {
+  errorMessage,
+  PERSON_STARTED,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionProvenance,
+  type SessionRecord,
+} from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
@@ -41,9 +48,47 @@ import type { SessionActivityNotice } from "../../../ipc/contract";
 export interface ProjectSessionRows {
   terminal: readonly SessionRecord[];
   chat: readonly ChatSessionRecord[];
+  /**
+   * Who started each Session, keyed by Session id — and **sparse on purpose**
+   * (VC-131). Provenance rides on the listing ROW rather than inside either
+   * record (`SessionListingRow`), and this store keeps the two records and
+   * discards the wrapper, so it needs one place to keep the fact.
+   *
+   * A map with a hole for the resting case, rather than an entry reading
+   * `{ kind: "user" }` for every Session: a project where nobody has ever run
+   * an Automation carries an empty object here, which is the same shape the
+   * rail's "no persistent weight" criterion asks for said in data. Read it
+   * through {@link sessionProvenanceOf}, which turns a miss back into the
+   * resting answer.
+   */
+  provenance: Readonly<Record<string, SessionProvenance>>;
 }
 
-export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = { terminal: [], chat: [] };
+/**
+ * One Session's provenance out of a sparse map — the resting case on a miss.
+ *
+ * Written once here rather than spelled `?? PERSON_STARTED` at each of the four
+ * surfaces that draw a mark: the map's holes ARE the resting case, and a caller
+ * that read the miss as "unknown" instead would be one `undefined` check away
+ * from drawing a bolt on a Session nobody automated.
+ */
+export function sessionProvenanceOf(
+  provenance: Readonly<Record<string, SessionProvenance>>,
+  sessionId: string,
+): SessionProvenance {
+  return provenance[sessionId] ?? PERSON_STARTED;
+}
+
+export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
+  terminal: [],
+  chat: [],
+  provenance: {},
+};
+
+/** The Session id a listing row answers to, whichever shape it arrived in. */
+function rowSessionId(row: SessionListingRow): string {
+  return row.kind === "terminal" ? row.record.id : row.record.sessionId;
+}
 
 interface ProjectSessionsState {
   byProject: Readonly<Record<string, ProjectSessionRows>>;
@@ -120,9 +165,17 @@ export function createProjectSessionsStore() {
           toastError(`Couldn't load sessions: ${result.error}`);
           return;
         }
+        const provenance: Record<string, SessionProvenance> = {};
+        for (const row of result.sessions) {
+          // Only a Session with something to say takes a slot. `user` is the
+          // overwhelming majority and it says nothing, so it is stored as its
+          // own absence — see `ProjectSessionRows.provenance`.
+          if (row.provenance.kind !== "user") provenance[rowSessionId(row)] = row.provenance;
+        }
         const rows: ProjectSessionRows = {
           terminal: result.sessions.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])),
           chat: result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
+          provenance,
         };
         set((state) => ({ byProject: { ...state.byProject, [projectId]: rows } }));
       } catch (error) {
@@ -153,6 +206,16 @@ export function createProjectSessionsStore() {
         // other list on every apply rather than only inserted into its own —
         // without that, one Session would be listed twice, once in each shape,
         // and the older shape would never move again.
+        // Provenance is immutable — decided at birth, never rewritten — so a
+        // push can only ever confirm what the baseline already had. It is still
+        // folded rather than assumed, because the Session a push introduces may
+        // be one the baseline fetch never saw: a Run started after this window
+        // opened arrives here first, and dropping its mark would leave the
+        // newest Run on the board as the one row with no bolt.
+        const provenance =
+          row.provenance.kind === "user"
+            ? current.provenance
+            : { ...current.provenance, [rowSessionId(row)]: row.provenance };
         const next: ProjectSessionRows =
           row.kind === "terminal"
             ? {
@@ -163,6 +226,7 @@ export function createProjectSessionsStore() {
                   row.record.id,
                 ),
                 chat: current.chat.filter((record) => record.sessionId !== row.record.id),
+                provenance,
               }
             : {
                 terminal: current.terminal.filter((record) => record.id !== row.record.sessionId),
@@ -172,6 +236,7 @@ export function createProjectSessionsStore() {
                   (record) => record.sessionId,
                   row.record.sessionId,
                 ),
+                provenance,
               };
         return { byProject: { ...state.byProject, [notice.projectId]: next } };
       });
@@ -194,7 +259,7 @@ export function createProjectSessionsStore() {
         return {
           byProject: {
             ...state.byProject,
-            [projectId]: { terminal, chat: current.chat },
+            [projectId]: { terminal, chat: current.chat, provenance: current.provenance },
           },
         };
       });

@@ -13,7 +13,7 @@
  * the thing the lab is supposed to be measuring — and none of it is what a
  * design question is ever about.
  */
-import { EMPTY_SESSION_USAGE_SUMMARY, type SessionListingRow } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, PERSON_STARTED, type SessionListingRow } from "@volli/shared";
 import type {
   AppStateSetResult,
   HarnessPendingResult,
@@ -62,10 +62,19 @@ const sessionRows: SessionListingRow[] = [
       kind: "terminal",
       record,
       usage: EMPTY_SESSION_USAGE_SUMMARY,
+      provenance: PERSON_STARTED,
     }),
   ),
   ...chatSessions.map(
-    (record): SessionListingRow => ({ kind: "chat", record, usage: EMPTY_SESSION_USAGE_SUMMARY }),
+    (record): SessionListingRow => ({
+      kind: "chat",
+      record,
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+      // A terminal companion is always something a person opened, and the lab's
+      // chats are too. The Run-started marks are drawn against the sidebar
+      // scratch's own fixtures, where the bolt is the thing under the lamp.
+      provenance: PERSON_STARTED,
+    }),
   ),
 ];
 

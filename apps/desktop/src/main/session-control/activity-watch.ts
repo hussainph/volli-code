@@ -40,7 +40,8 @@
  * to fail the command that triggered it.
  */
 import type { SessionEngine } from "@volli/session-engine";
-import type { SessionListingRow } from "@volli/shared";
+import { PERSON_STARTED } from "@volli/shared";
+import type { SessionListingRow, SessionProvenance } from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
 
@@ -56,6 +57,17 @@ const DEFAULT_COALESCE_MS = 60;
 export interface SessionActivityWatchPorts {
   /** Called once per Session whose listing row actually changed. */
   publish(notice: { projectId: string; ticketId: string | null; row: SessionListingRow }): void;
+  /**
+   * Who started a Session (VC-131), so a pushed row carries the same mark the
+   * fetch gave it. A push that dropped it would take the bolt off a Run's row
+   * the first time that Run did anything — the renderer upserts the whole row,
+   * so a missing field is an erasure rather than an omission.
+   *
+   * Optional for the same reason `onError` is: a test that only asks whether a
+   * write was noticed has no database to read provenance out of. Absent means
+   * every row reads as person-started, which is the quiet answer.
+   */
+  provenanceOf?: (session: { sessionId: string; ticketId: string | null }) => SessionProvenance;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
   /** Diagnostics seam. Defaults to `console.warn`. */
@@ -92,6 +104,7 @@ export function watchSessionActivity(
   const coalesceMs = ports.coalesceMs ?? DEFAULT_COALESCE_MS;
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] session activity watch:", error));
+  const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
 
   const dirty = new Set<string>();
   /**
@@ -133,7 +146,13 @@ export function watchSessionActivity(
         // nothing can be said about it, and the listing that held it will drop
         // it on its own next read.
         if (projection === null) continue;
-        const row = sessionListingRow(projection);
+        const row = sessionListingRow(
+          projection,
+          provenanceOf({
+            sessionId: projection.session.id,
+            ticketId: projection.session.ticketId,
+          }),
+        );
         const signature = JSON.stringify(row);
         if (published.get(sessionId) === signature) continue;
         published.set(sessionId, signature);
