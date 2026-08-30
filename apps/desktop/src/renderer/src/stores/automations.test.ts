@@ -293,6 +293,51 @@ describe("refreshArming", () => {
   });
 });
 
+describe("a planning read's own answer", () => {
+  it("says whether the cache now holds THIS read, not merely that it settled", async () => {
+    // What a slice cannot say for itself. Each of the three refreshes resolves
+    // its landing, so a caller re-reading on arrival (VC-129's rail) can tell a
+    // value just confirmed from one that only survived a failed re-read.
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+
+    expect(await store.getState().refresh("p1")).toBe(true);
+    expect(await store.getState().refreshArming("p1")).toBe(true);
+    expect(await store.getState().refreshEnablement()).toBe(true);
+  });
+
+  it("answers false for a refused or thrown read, and leaves the warm value alone", async () => {
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+    await store.getState().refresh("p1");
+    await store.getState().refreshArming("p1");
+    await store.getState().refreshEnablement();
+
+    stubApi({
+      list: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+      armings: () => Promise.reject(new Error("ipc gone")),
+      enablement: () => Promise.resolve({ ok: false, error: "no db" }),
+    });
+
+    expect(await store.getState().refresh("p1")).toBe(false);
+    expect(await store.getState().refreshArming("p1")).toBe(false);
+    expect(await store.getState().refreshEnablement()).toBe(false);
+    // The stale values are still there, still looking landed — which is exactly
+    // why the boolean is the only honest signal a failed re-read leaves.
+    expect(store.getState().byProject["p1"]).toEqual([automation()]);
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(store.getState().enabledIds).toEqual(["automation-1"]);
+  });
+});
+
 describe("arm", () => {
   it("replaces the project's arming slice from the door's own answer, with no re-read", async () => {
     const armings = vi.fn(() => Promise.resolve({ ok: true, armings: [] }));

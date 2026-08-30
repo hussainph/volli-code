@@ -370,6 +370,37 @@ describe("the split button", () => {
     expect(control("Run Run once on this ticket")).not.toBeNull();
   });
 
+  it("does not press a stale arming its re-read FAILED to replace", async () => {
+    // The warm-cache half of the same rule. The caches have landed, so
+    // `selectPlanningLoaded` is true and stays true — a failed read toasts and
+    // leaves the old value exactly where it was. If the rail counted a settled
+    // read as a read, the arming this column dropped an hour ago in another
+    // window would become pressable the moment the toast appeared.
+    useAutomationsStore.setState({
+      byProject: { p1: [automation()] },
+      armingByProject: { p1: [ARMING] },
+      enablementRead: true,
+    });
+    doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
+    doors.armings.mockResolvedValue({ ok: false, error: "database is locked" });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    // Landed caches, and still nothing to press: the rail says what it knows.
+    expect(useAutomationsStore.getState().armingByProject.p1).toEqual([ARMING]);
+    expect(document.querySelector('[aria-label="Run Review sweep on this ticket"]')).toBeNull();
+    const reading = control("Reading automations…") as HTMLButtonElement;
+    expect(reading.disabled).toBe(true);
+
+    await act(async () => {
+      reading.click();
+    });
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
+  });
+
   it("holds no authoring form: nothing here creates, edits or deletes a record", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
     await openMenu();

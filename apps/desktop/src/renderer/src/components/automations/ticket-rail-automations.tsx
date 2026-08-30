@@ -20,9 +20,10 @@
  *    and until that read lands the control says so and starts nothing bound
  *    (`automation-run-menu.tsx` owns the rule, `armed-run.ts` makes the same
  *    refusal for a dropped card). A cold cache would offer Run once on an
- *    armed Ticket; a stale one would press the Automation the column used to
- *    arm. Both are wrong for one reason: the cache cannot tell "nothing armed"
- *    from "not asked yet".
+ *    armed Ticket; a stale one — including one whose re-read FAILED — would
+ *    press the Automation the column used to arm. All of it is wrong for one
+ *    reason: the cache cannot tell "nothing armed" from "not asked yet", nor a
+ *    value that was just confirmed from one that merely survived.
  *  - **Never hidden when empty.** A project with no Automations still draws the
  *    button, says so in one line, and links to the page. Hidden-when-empty is
  *    how a feature never gets discovered.

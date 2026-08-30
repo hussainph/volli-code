@@ -243,6 +243,24 @@ describe("the board card's Automations submenu", () => {
     expect(text()).toContain("Review sweep");
   });
 
+  it("keeps saying so when the re-read of a warm cache fails", async () => {
+    // A landed cache whose re-read failed is indistinguishable, in the slice,
+    // from one just confirmed — the old value is still there. The menu counts
+    // the read as unmade rather than listing an arming nobody re-read.
+    doors.armings.mockResolvedValue({ ok: false, error: "database is locked" });
+    useAutomationsStore.setState({
+      byProject: { p1: [automation()] },
+      armingByProject: { p1: [ARMING] },
+      enablementRead: true,
+    });
+
+    await open();
+
+    expect(text()).toContain("Reading automations…");
+    expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
+    expect(runAutomationFromListing).not.toHaveBeenCalled();
+  });
+
   it("says so plainly when this column offers nothing", async () => {
     doors.list.mockResolvedValue({ ok: true, automations: [] });
     doors.armings.mockResolvedValue({ ok: true, armings: [] });

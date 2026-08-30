@@ -119,6 +119,13 @@ export function useOfferableModels(): readonly ComposerModel[] {
  * column USED to arm. This is the same refusal to decide from an unwarmed cache
  * `armed-run.ts` makes for an arrival; what differs is only what each does
  * about it — the drop waits, the button says it is reading.
+ *
+ * "Landed" means EVERY one of the three reads succeeded, not merely that they
+ * all settled. A failed read toasts and leaves its slice as it found it, which
+ * on a cold cache is empty — but on a warm one is the very stale value this
+ * rail must not press. So the answer stays unread unless all three came back
+ * ok: a press whose backing read failed runs nothing, exactly as a press that
+ * arrived before the read runs nothing.
  */
 export function useAutomationRunOffer(
   projectId: string,
@@ -139,8 +146,12 @@ export function useAutomationRunOffer(
     // change: what is on screen now was decided from what the cache held then.
     setRead(false);
     void Promise.all([refresh(projectId), refreshArming(projectId), refreshEnablement()]).then(
-      () => {
-        if (current) setRead(true);
+      (landings) => {
+        // Every one of them, not just all of them SETTLING. A refresh that
+        // failed toasted and returned false, leaving its slice holding whatever
+        // was there before — on a warm cache, the stale arming a press would
+        // otherwise spend. One failure keeps the whole rail unread.
+        if (current && landings.every(Boolean)) setRead(true);
       },
     );
     return () => {
@@ -148,9 +159,9 @@ export function useAutomationRunOffer(
     };
   }, [refresh, refreshArming, refreshEnablement, projectId, planningVersion]);
 
-  // A read that FAILED toasted and left its cache empty, so `landed` is still
-  // false and the control keeps saying it is reading rather than claiming this
-  // project has no Automations.
+  // `landed` adds the cold-cache half of the same rule: a slice that has never
+  // been filled is not something to classify from either. The control keeps
+  // saying it is reading rather than claiming this project has no Automations.
   return ticketRailAutomations({ automations, armings, status, ready: read && landed });
 }
 
