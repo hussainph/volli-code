@@ -1879,8 +1879,14 @@ app.whenReady().then(async () => {
             const snapshot = await sessionRuntime.projection({ sessionId });
             return chatSessionRecord(snapshot.projection).activity;
           },
+          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
+          // property rather than sending `undefined` for it: the Electron
+          // transport would carry that by structured clone, and an HTTP one
+          // would mangle it (docs/BOUNDARIES.md rule 3).
           onRunStarted: ({ projectId, run }) =>
-            broadcastDataChanged({ projectId, ticketId: run.ticketId ?? undefined }),
+            broadcastDataChanged(
+              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
+            ),
         })
       : null;
   if (automationRunner !== null) {
@@ -1913,8 +1919,13 @@ app.whenReady().then(async () => {
       recordSkip: async (input) => {
         const outcome = await scheduleEngine.recordSkip(input);
         if (!outcome.ok) {
-          console.error(`[volli] automation skip could not be recorded: ${outcome.error}`);
-          return;
+          // Fail the step rather than resolving over it. The scheduler advances
+          // its cursor only after a step settles, so a refused write leaves the
+          // occurrence owed and the next pass records it again under the same
+          // derived command id. Swallowing it here would step past a skip that
+          // never reached the ledger — a skip that looks exactly like a
+          // silence, which is the one outcome VC-112 forbids.
+          throw new Error(outcome.error);
         }
         // The Automations page reads its history on arrival and on every
         // planning change, so a skip recorded while it is open lands without

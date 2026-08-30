@@ -8,6 +8,7 @@ import {
   automationHistory,
   duplicateName,
   groupByOwnership,
+  listingRunTarget,
   ownershipLabel,
   runAutomationLabel,
   runModelLabel,
@@ -190,6 +191,24 @@ describe("triggerLabel for a schedule", () => {
   });
 });
 
+describe("listingRunTarget", () => {
+  it("sends a schedule to the Project and everything else to a Ticket", () => {
+    // VC-112's second scope axis: the Trigger decides the Target. A schedule
+    // names the Project, so running one by hand opens the Project Session it
+    // would have opened rather than asking which Ticket.
+    expect(
+      listingRunTarget({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    ).toBe("project");
+    expect(listingRunTarget({ trigger: NO_AUTOMATION_TRIGGER })).toBe("ticket");
+    expect(listingRunTarget({ trigger: { kind: "columns", columns: ["doing"] } })).toBe("ticket");
+  });
+});
+
 describe("automationHistory", () => {
   it("interleaves Runs and Skipped occurrences, newest first", () => {
     const early = run({ id: "run-early", createdAt: 100 });
@@ -224,6 +243,11 @@ describe("automationHistory", () => {
 describe("skipReasonLabel", () => {
   it("says Skipped in every arm, so a skip is never a silence", () => {
     expect(skipReasonLabel(skip())).toBe("Skipped — Volli wasn’t running");
+    // A machine asleep at 21:00 with the app open is not a closed app, and the
+    // row says what was observed rather than a cause it cannot know.
+    expect(skipReasonLabel(skip({ reason: { kind: "not-observed" } }))).toBe(
+      "Skipped — Volli didn’t wake in time",
+    );
     expect(
       skipReasonLabel(
         skip({ reason: { kind: "run-refused", code: "MODEL_REQUIRED", error: "Choose a model." } }),

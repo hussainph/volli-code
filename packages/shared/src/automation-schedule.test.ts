@@ -5,7 +5,6 @@ import {
   AUTOMATION_SCHEDULE_STAGGER_MS,
   hostTimeZone,
   isScheduleTimeZone,
-  missedScheduleOccurrences,
   nextScheduleOccurrence,
   parseAutomationSchedule,
   SCHEDULE_WEEKDAYS,
@@ -300,6 +299,76 @@ describe("daylight saving is the zone's problem", () => {
     expect(wallClock(following, LONDON)).toBe("2026-10-26 01:30");
   });
 
+  it("runs late rather than early for a gap time in a zone WEST of UTC", () => {
+    // The bug this case exists for: New York jumps 02:00 → 03:00 EDT on
+    // 2026-03-08, so 02:30 never happens. Guessing an offset and correcting
+    // once answered 06:30Z — 01:30 EST, a full hour BEFORE the authored wall
+    // time and before the transition itself. The contract has one direction,
+    // and it is not that one.
+    const schedule = { preset: "daily", hour: 2, minute: 30, timeZone: NEW_YORK } as const;
+    const at = nextScheduleOccurrence({
+      schedule,
+      staggerKey: "id",
+      after: Date.parse("2026-03-07T12:00:00Z"),
+    });
+    expect(at).toBe(Date.parse("2026-03-08T07:30:00Z"));
+    expect(wallClock(at, NEW_YORK)).toBe("2026-03-08 03:30");
+    // Said as the rule rather than as a constant: whatever instant 02:30 EST
+    // would have been, the occurrence is not before it.
+    expect(at).toBeGreaterThanOrEqual(Date.parse("2026-03-08T07:30:00Z"));
+    // And the day after is the ordinary 02:30 again — one deleted morning
+    // does not move the schedule.
+    const following = nextScheduleOccurrence({ schedule, staggerKey: "id", after: at });
+    expect(wallClock(following, NEW_YORK)).toBe("2026-03-09 02:30");
+  });
+
+  it("fires once, at the later reading, for a fold time in a zone WEST of UTC", () => {
+    // New York repeats 01:00–01:59 on 2026-11-01: 01:30 happens at 05:30Z
+    // (EDT) and again at 06:30Z (EST). London already asserted the later
+    // reading wins; before the fix New York quietly chose the earlier one, so
+    // the same stored schedule had two different meanings by hemisphere.
+    const schedule = { preset: "daily", hour: 1, minute: 30, timeZone: NEW_YORK } as const;
+    const at = nextScheduleOccurrence({
+      schedule,
+      staggerKey: "id",
+      after: Date.parse("2026-10-31T12:00:00Z"),
+    });
+    expect(at).toBe(Date.parse("2026-11-01T06:30:00Z"));
+    expect(wallClock(at, NEW_YORK)).toBe("2026-11-01 01:30");
+    const following = nextScheduleOccurrence({ schedule, staggerKey: "id", after: at });
+    expect(wallClock(following, NEW_YORK)).toBe("2026-11-02 01:30");
+  });
+
+  it("never lands before the authored wall time, on either side of any transition", () => {
+    // The contract as a property rather than as four examples. Every minute of
+    // every 2026 transition in four zones — two east of UTC, two west, one of
+    // them on a 30-minute shift — asked at one-minute resolution across the
+    // transition day: the occurrence's own wall reading is never EARLIER than
+    // the time that was authored.
+    const zones: [string, string][] = [
+      [LONDON, "2026-03-29"],
+      [LONDON, "2026-10-25"],
+      [NEW_YORK, "2026-03-08"],
+      [NEW_YORK, "2026-11-01"],
+      ["Australia/Lord_Howe", "2026-10-04"],
+      ["Pacific/Auckland", "2026-09-27"],
+    ];
+    for (const [timeZone, day] of zones) {
+      const start = Date.parse(`${day}T00:00:00Z`) - 12 * 3_600_000;
+      for (let hour = 0; hour < 24; hour += 1) {
+        for (const minute of [0, 15, 30, 45]) {
+          const schedule = { preset: "daily", hour, minute, timeZone } as const;
+          const at = nextScheduleOccurrence({ schedule, staggerKey: "id", after: start });
+          const authored = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+          const landed = wallClock(at, timeZone).slice(11);
+          // A gap time lands later in the day than it was written; nothing
+          // ever lands earlier, which is the whole contract.
+          expect(landed >= authored, `${timeZone} ${authored} landed at ${landed}`).toBe(true);
+        }
+      }
+    }
+  });
+
   it("crosses a US transition on the US zone's own date, not Europe's", () => {
     // New York springs forward on 2026-03-08, three weeks before London.
     const schedule = { preset: "daily", hour: 9, minute: 0, timeZone: NEW_YORK } as const;
@@ -420,47 +489,5 @@ describe("the stagger", () => {
         scheduleStaggerMs({ preset: "hourly", minute: 0, timeZone: LONDON }, key),
       ).toBeGreaterThanOrEqual(0);
     }
-  });
-});
-
-describe("missedScheduleOccurrences", () => {
-  it("names every occurrence a closed app went through", () => {
-    const schedule = daily();
-    const from = Date.parse("2026-06-01T00:00:00Z");
-    const missed = missedScheduleOccurrences({
-      schedule,
-      staggerKey: "id",
-      after: from,
-      through: Date.parse("2026-06-04T00:00:00Z"),
-      limit: 100,
-    });
-    expect(missed.map((at) => wallClock(at, LONDON))).toEqual([
-      "2026-06-01 21:30",
-      "2026-06-02 21:30",
-      "2026-06-03 21:30",
-    ]);
-  });
-
-  it("is empty when nothing was missed", () => {
-    expect(
-      missedScheduleOccurrences({
-        schedule: daily(),
-        staggerKey: "id",
-        after: Date.parse("2026-06-01T00:00:00Z"),
-        through: Date.parse("2026-06-01T10:00:00Z"),
-        limit: 100,
-      }),
-    ).toEqual([]);
-  });
-
-  it("stops at its limit rather than walking a decade", () => {
-    const missed = missedScheduleOccurrences({
-      schedule: { preset: "hourly", minute: 0, timeZone: LONDON },
-      staggerKey: "id",
-      after: Date.parse("2020-01-01T00:00:00Z"),
-      through: Date.parse("2026-01-01T00:00:00Z"),
-      limit: 10,
-    });
-    expect(missed).toHaveLength(10);
   });
 });

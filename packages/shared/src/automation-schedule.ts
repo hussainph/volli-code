@@ -2,9 +2,10 @@
  * Schedule policy (VC-112, VC-130): when a schedule Trigger is next due.
  *
  * This module is a PURE FUNCTION of the schedule, its stored IANA zone and a
- * current time. The Electron timer that acts on it is a thin caller
- * (`main/automations/scheduler.ts`), and that split is the ticket's ruled
- * architecture rather than a preference:
+ * current time. It answers WHEN; `automation-schedule-pass.ts` beside it
+ * answers what a host owes about that; and the Electron timer that acts on
+ * both is a thin caller (`main/automations/scheduler.ts`). That split is the
+ * ticket's ruled architecture rather than a preference:
  *
  *  - **Testability first.** Every hard rule this feature owns — reschedule and
  *    never replay, never start early, stagger a top-of-hour schedule, let the
@@ -348,31 +349,61 @@ function zoneOffsetMs(instant: number, timeZone: string): number {
   return asUtc - Math.floor(instant / 1000) * 1000;
 }
 
+/** A day in milliseconds — the window either side of a wall time a transition is looked for in. */
+const DAY_MS = 86_400_000;
+
+/** Whether a clock in `timeZone` really reads `wall` at `instant`. */
+function readsAs(instant: number, wall: WallTime, timeZone: string): boolean {
+  const actual = wallTimeAt(instant, timeZone);
+  return (
+    actual.year === wall.year &&
+    actual.month === wall.month &&
+    actual.day === wall.day &&
+    actual.hour === wall.hour &&
+    actual.minute === wall.minute
+  );
+}
+
 /**
  * The instant a clock in `timeZone` reads `wall`.
  *
  * The offset at an instant can only be asked of an instant, and the instant is
- * what we are solving for — so this guesses with the offset at the naive UTC
- * reading and corrects once. Two DST cases and what each does, because both are
- * the zone's problem rather than an offset's (VC-112) and both must be
- * deliberate:
+ * what we are solving for. So both offsets a zone could be on around this wall
+ * time are asked for — a day either side, which brackets any transition that
+ * could touch it — and each yields one candidate instant. A candidate is real
+ * only if the zone actually reads `wall` there, and **the answer is always the
+ * LATEST candidate**, whether or not any of them was real. That single rule is
+ * VC-112's durability contract ("a Run may start late, but never early")
+ * expressed in arithmetic, and it is why this cannot be an offset guess
+ * corrected once: correcting once picks whichever offset the guess landed on,
+ * which in a zone west of UTC is the one BEFORE the transition — 02:30 on New
+ * York's spring-forward morning came back as 01:30 EST, an hour early.
  *
- *  - **Spring forward**, where the wall time does not exist (02:30 on a night
- *    that jumps 02:00 → 03:00). The correction lands after the gap, so the
- *    occurrence runs LATE that day. Late is the contract's allowed direction;
- *    a result inside the gap would not be a real time at all.
- *  - **Fall back**, where the wall time happens twice (01:30 on a night that
- *    repeats 01:00–01:59). This resolves to the LATER of the two readings, so
- *    the ambiguity is settled in the contract's own allowed direction: late,
- *    never early. The repeated hour still produces exactly ONE occurrence,
- *    because the next one is a whole period after the instant returned here.
+ * The two DST cases, both the zone's problem rather than an offset's (VC-112):
+ *
+ *  - **Spring forward**, where the wall time does not exist (02:30 on a morning
+ *    that jumps 02:00 → 03:00). Neither candidate is real, and the later one is
+ *    the instant that wall time WOULD have been under the offset still in force
+ *    before the jump — 03:30 EDT for a 02:30 EST that never happened. So the
+ *    occurrence runs after the gap: late, never early, and never at an instant
+ *    that is not a real time at all.
+ *  - **Fall back**, where the wall time happens twice (01:30 on a morning that
+ *    repeats 01:00–01:59). Both candidates are real and the later reading wins,
+ *    settling the ambiguity in the contract's own allowed direction. The
+ *    repeated hour still produces exactly ONE occurrence, because the next one
+ *    is a whole period after the instant returned here.
  */
 function instantOfWallTime(wall: WallTime, timeZone: string): number {
   const naive = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute);
-  const guessedOffset = zoneOffsetMs(naive, timeZone);
-  const candidate = naive - guessedOffset;
-  const actualOffset = zoneOffsetMs(candidate, timeZone);
-  return actualOffset === guessedOffset ? candidate : naive - actualOffset;
+  // The offset before any transition near this wall time, and the offset after
+  // it. They are equal on all but two days a year, and then both candidates
+  // collapse to the one instant.
+  const underEarlierOffset = naive - zoneOffsetMs(naive - DAY_MS, timeZone);
+  const underLaterOffset = naive - zoneOffsetMs(naive + DAY_MS, timeZone);
+  const real = [underEarlierOffset, underLaterOffset].filter((candidate) =>
+    readsAs(candidate, wall, timeZone),
+  );
+  return real.length === 0 ? Math.max(underEarlierOffset, underLaterOffset) : Math.max(...real);
 }
 
 /** The day of week of a wall date, 0–6 with Sunday at 0 — pure calendar, no zone. */
@@ -490,31 +521,10 @@ export function nextScheduleOccurrence(input: ScheduleOccurrenceInput): number {
   return at;
 }
 
-/**
- * Every occurrence in `(after, through]`, newest last — what a launch sweep
- * missed while nothing was running.
- *
- * Separate from {@link nextScheduleOccurrence} because the two answer different
- * questions and a caller must not conflate them: this one says what DID NOT
- * happen, and its result is recorded as a Skipped occurrence rather than run.
- * VC-112's rule is reschedule, never replay — so a caller holding ten missed
- * occurrences starts none of them.
- *
- * `limit` bounds the walk for the pathological case (an hourly schedule and a
- * machine that was off for years). Hitting it costs only the exact count in the
- * skip's own sentence, never a missed Run: the caller's cursor advances to the
- * last occurrence returned and the sweep resumes from there on the next pass.
+/*
+ * What a host OWES a schedule — what it missed, whether it may run now, and
+ * where its cursor lands — is the other half of this policy and lives in
+ * `automation-schedule-pass.ts`. It is the only caller of the walk that counts
+ * missed occurrences, which is why that walk is over there with the durability
+ * rules it serves rather than here beside the calendar arithmetic.
  */
-export function missedScheduleOccurrences(
-  input: ScheduleOccurrenceInput & { through: number; limit: number },
-): number[] {
-  const missed: number[] = [];
-  let cursor = input.after;
-  while (missed.length < input.limit) {
-    const next = nextScheduleOccurrence({ ...input, after: cursor });
-    if (next > input.through) break;
-    missed.push(next);
-    cursor = next;
-  }
-  return missed;
-}

@@ -3,39 +3,43 @@
  * main process, and deliberately the thinnest thing that could deserve the
  * name.
  *
- * **It decides nothing about time.** Which instant comes next is
- * `@volli/shared`'s `nextScheduleOccurrence`, a pure function of the schedule,
- * its stored IANA zone and a current time. This module owns only what a pure
- * function cannot: a clock, a `setTimeout`, and the host-local memory of how
- * far it has already looked. That split is the ticket's ruled architecture —
- * every hard rule (never early, reschedule rather than replay, stagger, the
- * stored zone wins) is a table test over there rather than a sleep over here.
+ * **It decides nothing.** Which instant comes next is `@volli/shared`'s
+ * `nextScheduleOccurrence`; what a host owes a schedule at this moment — what
+ * it missed, why, whether it may run now, and where its cursor lands — is
+ * `evaluateSchedulePass`, beside it and equally pure. This module owns only
+ * what a pure function cannot: a clock, a `setTimeout`, the host-local memory
+ * of how far it has already looked, and the doors it performs the returned
+ * steps against. That split is the ticket's ruled architecture — every hard
+ * rule (never early, reschedule rather than replay, one skip per gap, a
+ * truthful reason, the stagger, the stored zone winning) is a table test over
+ * there rather than a sleep over here.
  *
- * **The three rules this module does own**, because each is about *being
- * awake* rather than about time:
+ * **What is genuinely this module's**, because each needs a running process:
  *
- *  1. **Never early.** An occurrence is fired only once `now` has reached it.
- *     There is no rounding, no "close enough": the comparison is `due <= now`.
- *  2. **Reschedule, never replay.** A due time that passed while nothing was
- *     watching is recorded as a Skipped occurrence and the cursor moves past
- *     it. No launch ever fires a backlog, however long the app was closed —
- *     one row says what was missed, and a person may start it by hand.
- *  3. **Late has a limit.** The app being open is not the same as the app
- *     having been awake: a laptop that slept through 21:00 and woke at 23:00
- *     did not observe the due time. Anything more than
- *     {@link AUTOMATION_SCHEDULE_LATE_GRACE_MS} behind is therefore a skip
- *     rather than a very late Run — which is the honest reading, and keeps an
- *     unattended Session from starting hours after anyone expected it.
+ *  1. **Being awake at all.** The tick, the arming, the re-arming after a pass
+ *     that failed — a scheduler that stops looking is the silence VC-112
+ *     forbids, and only something with a timer can guarantee the next look.
+ *  2. **Performing the steps.** Recording a skip through the durable command
+ *     ledger, asking the Run door, moving the cursor. Each step carries the
+ *     cursor position it earns, so a crash between two steps repeats at most
+ *     one of them — and the command ids below make that repeat idempotent.
+ *  3. **A refusal that is not a silence.** Only the caller of the Run door
+ *     learns it said no, so recording that refusal as a Skipped occurrence is
+ *     the host's job rather than the policy's.
+ *  4. **When this host started watching.** `watchingSince` is what lets the
+ *     pure policy say "Volli wasn't running" only when that is true.
  *
  * What it fires is a Run whose Target is the PROJECT (VC-112: a schedule
  * Trigger names the Project), so a schedule opens a Project Session.
  */
+import { createHash } from "node:crypto";
+
 import {
   automationTriggerSchedule,
-  missedScheduleOccurrences,
-  nextScheduleOccurrence,
+  evaluateSchedulePass,
   type Automation,
   type AutomationSchedule,
+  type SchedulePassStep,
 } from "@volli/shared";
 
 import type { AutomationSkipIntent } from "./engine";
@@ -58,10 +62,17 @@ export const AUTOMATION_SCHEDULE_TICK_MS = 60_000;
  * Two minutes. VC-112's contract is that a Run may start late but never early,
  * and this is where "late" stops meaning late and starts meaning missed. A
  * timer that fires a few seconds behind, a machine briefly busy at 09:00, a
- * process that took a moment to boot — all inside. A closed app, a slept
- * laptop, a machine off for the weekend — all outside, and all recorded as
- * Skipped occurrences instead, because starting unattended work hours after
- * anyone expected it is how a person learns to switch the feature off.
+ * process that took a moment to boot — all inside, and exactly this late still
+ * runs. A closed app, a slept laptop, a machine off for the weekend — all
+ * outside, and all recorded as Skipped occurrences instead, because starting
+ * unattended work hours after anyone expected it is how a person learns to
+ * switch the feature off.
+ *
+ * The window says only WHETHER an occurrence still runs. What the resulting
+ * skip then claims about the world is a separate question the policy answers
+ * from `watchingSince`: an occurrence older than this process says the app was
+ * closed, and one this running process simply failed to reach says that
+ * instead.
  */
 export const AUTOMATION_SCHEDULE_LATE_GRACE_MS = 2 * 60_000;
 
@@ -162,29 +173,49 @@ export function schedulableAutomations(
 /**
  * The command id for one occurrence's Run, and for one gap's skip.
  *
- * DURABLE DERIVATIONS, frozen the moment they ship (CLAUDE.md): they are the
- * ledger's own idempotency keys, so changing the shape would not error — it
- * would let a crash-and-relaunch record the same missed evening twice, or start
- * a second Run for an occurrence that already has one. Scoped by the
- * Automation's own UUID, which is docs/BOUNDARIES.md standing rule 1's third
- * form; nothing machine-local appears in either.
+ * A CONTENT HASH — docs/BOUNDARIES.md standing rule 1's second form. The rule's
+ * third form is a string scoped by a session/attachment UUID and an Automation
+ * id is not one, so the deterministic identity this needs is spelled the way
+ * the rule actually allows rather than by widening the rule.
  *
- * The occurrence's due time is the whole point of including it: it is what
- * makes "this occurrence" a stable identity across processes, so two windows,
- * a retry and a relaunch all name the same command rather than three.
+ * Deterministic is the whole requirement: the occurrence's due time makes "this
+ * occurrence" a stable identity across processes, so a crash and a relaunch
+ * name the same command instead of recording the same missed evening twice or
+ * starting a second Run for an occurrence that already has one.
+ *
+ * **The derivation is FROZEN** (CLAUDE.md): these strings are durable ledger
+ * ids, so changing the algorithm, the prefix, the separator or the field order
+ * would not error — it would silently make every occurrence a new command and
+ * undo the idempotency above. The hashed material names its purpose so no other
+ * derivation in the app can ever collide with it.
  */
+function scheduleCommandId(kind: "run" | "skip", automationId: string, dueAt: number): string {
+  const material = `volli:automation-schedule:${kind}:${automationId}:${dueAt}`;
+  return `sha256:${createHash("sha256").update(material).digest("hex")}`;
+}
+
 export function scheduleRunCommandId(automationId: string, dueAt: number): string {
-  return `${automationId}:run:${dueAt}`;
+  return scheduleCommandId("run", automationId, dueAt);
 }
 
 export function scheduleSkipCommandId(automationId: string, dueAt: number): string {
-  return `${automationId}:skip:${dueAt}`;
+  return scheduleCommandId("skip", automationId, dueAt);
 }
 
 export function createAutomationScheduler(ports: AutomationSchedulerPorts): AutomationScheduler {
   const log = ports.log ?? ((message: string) => console.error(message));
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
+  /**
+   * When this host started watching — stamped at construction and re-stamped by
+   * every `start()`, because a scheduler that was stopped in between was not
+   * watching either.
+   *
+   * It exists to keep one sentence honest. "Volli wasn't running" is a claim
+   * about this process, so the policy is told when the process began rather
+   * than left to assume that everything late happened while the app was shut.
+   */
+  let watchingSince = ports.now();
   /** One pass at a time, and one queued behind it — never a pile. */
   let pass: Promise<void> = Promise.resolve();
 
@@ -204,62 +235,34 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
   }
 
   /**
-   * One schedule's whole pass: what it missed, whether it is due, and when it
-   * is next due. Answers the next occurrence so the caller can arm the timer
-   * for the earliest of them.
+   * Performs one step the policy returned, then moves the cursor to where that
+   * step earned.
+   *
+   * The cursor advance is LAST and inside the same call on purpose: a step
+   * whose write threw leaves the cursor where it was, so the next pass owes the
+   * same occurrence again rather than stepping silently over a skip that never
+   * reached the ledger. Repeating it is safe — the command id is derived from
+   * the occurrence, so the ledger collapses the retry.
    */
-  async function evaluate(
-    automation: ScheduledAutomation,
-    cursors: ScheduleCursors,
-    now: number,
-  ): Promise<number> {
-    const occurrence = (after: number) =>
-      nextScheduleOccurrence({ schedule: automation.schedule, staggerKey: automation.id, after });
-
-    const cursor = cursors[automation.id];
-    if (cursor === undefined) {
-      // First sight of this schedule on this machine — a new record, a switch
-      // just turned on, or a first launch. It is not retroactive: the clock
-      // starts now and the next occurrence stands, exactly as arming a column
-      // governs arrivals rather than the Tickets already sitting there.
-      await ports.advanceCursor({ automationId: automation.id, through: now });
-      return occurrence(now);
-    }
-
-    let due = occurrence(cursor);
-    // Everything older than the grace window went by unobserved. Recorded as
-    // ONE Skipped occurrence naming the last of them, and never replayed.
-    const staleBefore = now - AUTOMATION_SCHEDULE_LATE_GRACE_MS;
-    if (due <= staleBefore) {
-      const missed = missedScheduleOccurrences({
-        schedule: automation.schedule,
-        staggerKey: automation.id,
-        after: cursor,
-        through: staleBefore,
-        limit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
-      });
-      const last = missed[missed.length - 1] ?? due;
+  async function perform(automation: ScheduledAutomation, step: SchedulePassStep): Promise<void> {
+    const identity = {
+      automationId: automation.id,
+      automationName: automation.name,
+      projectId: automation.projectId,
+    };
+    if (step.kind === "skip") {
       await ports.recordSkip({
-        commandId: scheduleSkipCommandId(automation.id, last),
+        commandId: scheduleSkipCommandId(automation.id, step.dueAt),
         skip: {
-          automationId: automation.id,
-          automationName: automation.name,
-          projectId: automation.projectId,
-          dueAt: last,
-          missedCount: missed.length,
-          reason: { kind: "app-closed" },
+          ...identity,
+          dueAt: step.dueAt,
+          missedCount: step.missedCount,
+          reason: step.reason,
         },
       });
-      await ports.advanceCursor({ automationId: automation.id, through: last });
-      due = occurrence(last);
-    }
-
-    // Never early: only an occurrence `now` has actually reached may run. And
-    // never stale: one the grace window has already disowned is the sweep's,
-    // which the next pass resumes.
-    if (due <= now && due > staleBefore) {
+    } else if (step.kind === "run") {
       const outcome = await ports.startRun({
-        commandId: scheduleRunCommandId(automation.id, due),
+        commandId: scheduleRunCommandId(automation.id, step.dueAt),
         automationId: automation.id,
         projectId: automation.projectId,
       });
@@ -267,22 +270,42 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
         // A refusal is not a silence. The scheduler was awake and asked; the
         // door said no, and the person finds out from the same Run history
         // that shows a closed-app skip, with the same "Run now" beside it.
+        // Only the caller of the door can know this, which is why it is the
+        // one skip reason the policy does not decide.
         await ports.recordSkip({
-          commandId: scheduleSkipCommandId(automation.id, due),
+          commandId: scheduleSkipCommandId(automation.id, step.dueAt),
           skip: {
-            automationId: automation.id,
-            automationName: automation.name,
-            projectId: automation.projectId,
-            dueAt: due,
+            ...identity,
+            dueAt: step.dueAt,
             missedCount: 1,
             reason: { kind: "run-refused", code: outcome.code, error: outcome.error },
           },
         });
       }
-      await ports.advanceCursor({ automationId: automation.id, through: due });
-      due = occurrence(due);
     }
-    return due;
+    await ports.advanceCursor({ automationId: automation.id, through: step.through });
+  }
+
+  /**
+   * One schedule's whole pass: ask the policy what is owed, do it, and answer
+   * when this schedule is next due so the caller can arm for the earliest.
+   */
+  async function evaluate(
+    automation: ScheduledAutomation,
+    cursors: ScheduleCursors,
+    now: number,
+  ): Promise<number> {
+    const owed = evaluateSchedulePass({
+      schedule: automation.schedule,
+      staggerKey: automation.id,
+      cursor: cursors[automation.id] ?? null,
+      now,
+      watchingSince,
+      graceMs: AUTOMATION_SCHEDULE_LATE_GRACE_MS,
+      missedLimit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
+    });
+    for (const step of owed.steps) await perform(automation, step);
+    return owed.nextDueAt;
   }
 
   async function sweep(): Promise<void> {
@@ -329,6 +352,14 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
       .then(() => (stopped ? undefined : sweep()))
       .catch((error: unknown) => {
         log(`[volli] automation scheduler pass failed: ${errorText(error)}`);
+        // AND LOOK AGAIN. A pass can fail whole — a locked database at launch,
+        // an unreadable projection — and a scheduler that only logged that
+        // would stay disarmed for as long as the app stays open: no Runs, no
+        // Skipped occurrences, nothing in the history to show it had stopped.
+        // That is precisely the silence VC-112 forbids, so a failed pass
+        // re-arms and the next tick retries it. `arm` still refuses once
+        // stopped, so quitting is not a retry loop.
+        arm(AUTOMATION_SCHEDULE_TICK_MS);
       });
     return pass;
   }
@@ -336,6 +367,7 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
   return {
     async start() {
       stopped = false;
+      watchingSince = ports.now();
       await run();
     },
     async refresh() {

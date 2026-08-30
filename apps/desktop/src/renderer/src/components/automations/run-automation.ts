@@ -62,7 +62,8 @@ async function startRun(input: {
 
 /**
  * The same call for a Run whose Target is the PROJECT (VC-130) — a schedule's
- * own door, reached by hand from a Skipped occurrence's "Run now".
+ * own door, reached by hand from a scheduled row's Play or a Skipped
+ * occurrence's "Run now".
  *
  * A second function rather than a nullable Ticket on the one above, because
  * the transports are two channels and the retry key is a different pair. What
@@ -90,20 +91,28 @@ async function startProjectRun(input: {
 }
 
 /**
- * Start the Run a Skipped occurrence records as not having happened (VC-112:
- * "a person may start it by hand from the Run history afterwards").
+ * Run one Automation at the PROJECT (VC-130) — the Target a schedule Trigger
+ * names, reached by hand.
  *
- * It runs at the Target the schedule would have used — the Project — so what a
- * person gets by hand is the same Session the schedule would have opened. Like
- * every other listing-surface Run it does NOT navigate: the person is reading a
- * history and may well start a second one, so the door arrives as a toast
- * action (VC-13 decision 2).
+ * Two surfaces press it, and they are the same act:
  *
- * It starts ONE Run, whatever `missedCount` the row stands for. A skip covering
- * fifty missed hours is fifty occurrences that will never be replayed — the
- * button offers the work now, not the backlog.
+ *  - A **scheduled record's Play**, on the Automations page. VC-112 rules that
+ *    the Trigger decides the Target, so running a scheduled Automation by hand
+ *    must open the Project Session its schedule would have opened. Asking which
+ *    Ticket instead would make the by-hand Run a different piece of work from
+ *    the automatic one, which is the one thing this control must not be.
+ *  - A **Skipped occurrence's "Run now"**, from the Run history (VC-112: "a
+ *    person may start it by hand afterwards").
+ *
+ * Like every other listing-surface Run it does NOT navigate: the person is
+ * reading a page and may well start a second one, so the door arrives as a
+ * toast action (VC-13 decision 2).
+ *
+ * It starts ONE Run, whatever number of occurrences a skip row stands for. A
+ * skip covering fifty missed hours is fifty occurrences that will never be
+ * replayed — the button offers the work now, not the backlog.
  */
-export async function runSkippedOccurrence(input: {
+export async function runAutomationForProject(input: {
   automationId: string;
   automationName: string;
   projectId: string;

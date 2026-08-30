@@ -248,8 +248,12 @@ describe("automationScheduleProblem", () => {
 });
 
 describe("parseAutomationSkipReason", () => {
-  it("reads the two reasons a schedule actually records", () => {
+  it("reads the three reasons a schedule actually records", () => {
     expect(parseAutomationSkipReason({ kind: "app-closed" })).toEqual({ kind: "app-closed" });
+    // The app WAS running and still did not reach the due time — a sleeping
+    // machine, a suspended process. Its own reason, because recording it as
+    // "app-closed" would be recording something false.
+    expect(parseAutomationSkipReason({ kind: "not-observed" })).toEqual({ kind: "not-observed" });
     expect(
       parseAutomationSkipReason({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" }),
     ).toEqual({ kind: "run-refused", code: "MODEL_REQUIRED", error: "No model" });

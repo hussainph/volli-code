@@ -23,6 +23,9 @@
  *   5. That row offers **Run now**, and the click reaches the Run door: it
  *      fails only for the ordinary missing-model reason on this profile, whose
  *      recovery is Model Access opening.
+ *   6. **A schedule's Target is the Project on every door.** Pressing Play on
+ *      the scheduled record itself never asks which Ticket — the by-hand Run
+ *      and the automatic one are the same work at the same scope (VC-112).
  *
  * The DB is touched exactly once, while the app is CLOSED, and only to move the
  * scheduler's own machine-local cursor backwards — the one fact a smoke cannot
@@ -288,6 +291,27 @@ try {
       return listed.ok ? listed.runs.length : `error: ${listed.error}`;
     }, seeded.projectId);
     return { ok: runs === 0, detail: `runs=${runs}` };
+  });
+
+  await attempt(10, "the scheduled record's own Run names the Project, not a Ticket", async () => {
+    // The Trigger decides the Target (VC-112), so Play on a scheduled row must
+    // open the Project Session the schedule itself would open. A Ticket dialog
+    // here would quietly make the by-hand Run a different piece of work from
+    // the one the timer starts — on the very surface a person uses to check
+    // what the schedule does.
+    await page.keyboard.press("Escape");
+    await openAutomationsPage();
+    await page.getByLabel("Run Nightly sweep", { exact: true }).click();
+    const asksForATicket = await page
+      .getByText("Run \u201cNightly sweep\u201d on")
+      .waitFor({ timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    if (asksForATicket) return { ok: false, detail: "it opened the Ticket dialog" };
+    // Same evidence as step 8: the Project door was reached and refused for the
+    // ordinary missing-model reason, whose recovery is Model Access.
+    await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
+    return { ok: true, detail: "Play went straight to the Project door" };
   });
 
   exitCode = summarize();

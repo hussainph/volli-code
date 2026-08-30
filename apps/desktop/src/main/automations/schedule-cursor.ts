@@ -14,8 +14,14 @@
  * up" in the record's permanent history, which is a log, not a fact about the
  * Automation.
  *
- * **Why it is machine-local.** It answers "did this host see that due time go
- * by", and only this host can. A second machine that has never run the app owes
+ * **Locality is not the reason, and could not be.** Enablement is machine-local
+ * too and still rides command → event → receipt through the engine
+ * (`automation.set-enabled`), because switching an Automation on IS user intent
+ * about the record. So is arming. The line is what the write is, not where it
+ * lives — and a cursor is the timer's own place-keeping either way.
+ *
+ * **Why it is nevertheless machine-local.** It answers "did this host see that
+ * due time go by", and only this host can. A second machine that has never run the app owes
  * no skips for the evenings it was off — it was never going to fire them, and
  * VC-112 already rules that a machine fires nothing until someone switches
  * something on there. So the cursor rides `app_state` beside the enabled set,

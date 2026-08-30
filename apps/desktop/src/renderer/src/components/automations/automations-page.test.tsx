@@ -16,7 +16,11 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import { openRunSession, runAutomationFromListing, runSkippedOccurrence } from "./run-automation";
+import {
+  openRunSession,
+  runAutomationFromListing,
+  runAutomationForProject,
+} from "./run-automation";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -27,7 +31,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
   runAutomationFromListing: vi.fn(),
-  runSkippedOccurrence: vi.fn(),
+  runAutomationForProject: vi.fn(),
 }));
 
 let root: Root | null = null;
@@ -170,7 +174,7 @@ beforeEach(() => {
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationFromListing).mockReset();
-  vi.mocked(runSkippedOccurrence).mockReset();
+  vi.mocked(runAutomationForProject).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useAutomationsStore.setState({
@@ -406,6 +410,51 @@ describe("schedules (VC-130)", () => {
     schedule: { preset: "daily" as const, hour: 21, minute: 0, timeZone: "Europe/London" },
   };
 
+  it("runs a scheduled record at the PROJECT, without asking for a Ticket", async () => {
+    // VC-112: the Trigger decides the Target, and a schedule names the Project.
+    // Pressing Play here therefore opens the Project Session the schedule
+    // itself would open — the by-hand Run and the automatic one are the same
+    // work, and a Ticket dialog would quietly make them two.
+    await mount({
+      automations: [automation({ name: "Nightly sweep", trigger: NIGHTLY })],
+    });
+
+    await act(async () => {
+      button("Run Nightly sweep").click();
+    });
+
+    expect(document.body.textContent).not.toContain("Run “Nightly sweep” on");
+    expect(runAutomationFromListing).not.toHaveBeenCalled();
+    expect(runAutomationForProject).toHaveBeenCalledTimes(1);
+    expect(runAutomationForProject).toHaveBeenCalledWith({
+      automationId: "automation-1",
+      automationName: "Nightly sweep",
+      projectId: "p1",
+    });
+  });
+
+  it("still asks which Ticket for a record whose Trigger is not a schedule", async () => {
+    // The other side of the same rule, so the branch cannot rot: only a
+    // schedule takes the Project door.
+    await mount({ automations: [automation()] });
+
+    await act(async () => {
+      button("Run Review sweep").click();
+    });
+
+    expect(document.body.textContent).toContain("Run “Review sweep” on");
+    expect(runAutomationForProject).not.toHaveBeenCalled();
+  });
+
+  it("says a skip the app was open for did not claim the app was closed", async () => {
+    // A sleeping machine is not a closed app, and the history must not say it
+    // was: the reason recorded is what was observed.
+    await mount({ skips: [skip({ reason: { kind: "not-observed" } })] });
+    expect(text()).toContain("Skipped");
+    expect(text()).toContain("Volli didn’t wake in time");
+    expect(text()).not.toContain("Volli wasn’t running");
+  });
+
   it("prints a scheduled row's whole sentence, zone included", async () => {
     await mount({ automations: [automation({ trigger: NIGHTLY })] });
     // The stored zone is shown ALWAYS (VC-112) — a row that hid it would leave
@@ -437,8 +486,8 @@ describe("schedules (VC-130)", () => {
 
     // Fifty missed occurrences, one Run: a missed occurrence is never replayed
     // (VC-112), and this is the by-hand recovery offered instead.
-    expect(vi.mocked(runSkippedOccurrence)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runSkippedOccurrence)).toHaveBeenCalledWith({
+    expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledWith({
       automationId: "automation-1",
       automationName: "Nightly sweep",
       projectId: "p1",

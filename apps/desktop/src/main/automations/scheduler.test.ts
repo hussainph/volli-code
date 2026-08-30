@@ -1,14 +1,19 @@
 /**
- * The timer's own rules (VC-130). What time it is next due belongs to
- * `@volli/shared`'s pure policy and is tested exhaustively there; what is
- * tested here is everything that depends on being AWAKE — never early, missed
- * rather than replayed, no backlog on launch, a refusal that is not a silence,
- * and a first sight that owes nothing.
+ * The timer's own rules (VC-130). Which instant comes next, and what a host
+ * owes a schedule at this moment, both belong to `@volli/shared`'s pure policy
+ * and are tested exhaustively there (`automation-schedule{,-pass}.test.ts`).
+ * What is tested here is everything that needs a running process: that the
+ * steps the policy returns are actually performed, that the cursor moves only
+ * after a step settled, that a refusal is recorded, that this host's start time
+ * reaches the policy, and that the timer keeps looking — including after a pass
+ * that failed whole.
  *
  * The ports are fakes rather than a database, on purpose: this module is a
  * thin caller, so a test that had to open SQLite to ask "did it fire early"
  * would be testing the composition instead of the rule.
  */
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vite-plus/test";
 import { nextScheduleOccurrence, type Automation, type AutomationSchedule } from "@volli/shared";
 
@@ -152,10 +157,29 @@ describe("schedulableAutomations", () => {
 });
 
 describe("the command ids", () => {
-  it("name the occurrence, so the same one cannot be recorded or run twice", () => {
-    expect(scheduleRunCommandId("a1", 1000)).toBe("a1:run:1000");
-    expect(scheduleSkipCommandId("a1", 1000)).toBe("a1:skip:1000");
+  it("are content hashes, pinned because the derivation is durable", () => {
+    // docs/BOUNDARIES.md rule 1 allows a UUID, a content hash, or a string
+    // scoped by a session/attachment UUID. These are the second form, and the
+    // exact strings are pinned here because they are `automation_commands.id`:
+    // changing the algorithm, the prefix or the field order would not error, it
+    // would silently make every occurrence a new command and let a relaunch
+    // record the same missed evening twice.
+    expect(scheduleRunCommandId("a1", 1000)).toBe(
+      `sha256:${createHash("sha256").update("volli:automation-schedule:run:a1:1000").digest("hex")}`,
+    );
+    expect(scheduleSkipCommandId("a1", 1000)).toBe(
+      `sha256:${createHash("sha256").update("volli:automation-schedule:skip:a1:1000").digest("hex")}`,
+    );
+  });
+
+  it("name one occurrence each, so the same one cannot be recorded or run twice", () => {
+    // Same occurrence, same id — across processes, which is what makes a crash
+    // mid-record idempotent rather than duplicating.
+    expect(scheduleRunCommandId("a1", 1000)).toBe(scheduleRunCommandId("a1", 1000));
     expect(scheduleRunCommandId("a1", 1000)).not.toBe(scheduleRunCommandId("a1", 2000));
+    expect(scheduleRunCommandId("a1", 1000)).not.toBe(scheduleRunCommandId("a2", 1000));
+    // And a Run is never the same command as the skip for the same occurrence.
+    expect(scheduleRunCommandId("a1", 1000)).not.toBe(scheduleSkipCommandId("a1", 1000));
   });
 });
 
@@ -280,6 +304,59 @@ describe("reschedule, never replay", () => {
   });
 });
 
+describe("a skip says something true", () => {
+  it("says the app was closed for a gap this process was not there for", async () => {
+    // The launch sweep: the scheduler stamps when it started watching, and
+    // every due time older than that provably had nobody to start it.
+    const now = Date.parse("2026-06-04T09:00:00Z");
+    const h = harness({ now, cursors: { a1: Date.parse("2026-06-01T00:00:00Z") } });
+    await h.scheduler.start();
+    expect(h.skips[0]?.skip.reason).toEqual({ kind: "app-closed" });
+  });
+
+  it("says it was not observed when the app was open the whole time", async () => {
+    // Same shape, different truth: this process was already watching when the
+    // due time went by, so "Volli wasn't running" would be a false sentence in
+    // the Run history. The machine slept, or the loop stalled — either way what
+    // is recorded is that nobody saw it, not a cause we cannot know.
+    const start = Date.parse("2026-06-10T12:00:00Z");
+    const nextDue = due(start);
+    const h = harness({ now: start, cursors: { a1: start - 1 } });
+    await h.scheduler.start();
+    expect(h.skips).toEqual([]);
+    // The machine wakes two hours after the occurrence it slept through.
+    h.setNow(nextDue + 2 * 3_600_000);
+    await h.fire();
+    expect(h.runs).toEqual([]);
+    expect(h.skips).toHaveLength(1);
+    expect(h.skips[0]?.skip.dueAt).toBe(nextDue);
+    expect(h.skips[0]?.skip.reason).toEqual({ kind: "not-observed" });
+  });
+
+  it("leaves the occurrence owed when its skip could not be recorded", async () => {
+    // The cursor is what says "this host is past that due time". Moving it over
+    // a skip that never reached the ledger would turn a skip into a silence,
+    // which is the one outcome VC-112 forbids — so the step fails, the cursor
+    // stays, and the next pass records it again under the same derived id.
+    const now = Date.parse("2026-06-04T09:00:00Z");
+    const cursor = Date.parse("2026-06-01T00:00:00Z");
+    const h = harness({ now, cursors: { a1: cursor } });
+    h.ports.recordSkip = () => Promise.reject(new Error("database is locked"));
+    await h.scheduler.start();
+    expect(h.cursors["a1"]).toBe(cursor);
+    expect(h.runs).toEqual([]);
+    expect(h.logs.some((line) => line.includes("database is locked"))).toBe(true);
+    // And the retry works: the same pass, with a ledger that answers.
+    h.ports.recordSkip = (input) => {
+      h.skips.push(input);
+      return Promise.resolve();
+    };
+    await h.scheduler.refresh();
+    expect(h.skips).toHaveLength(1);
+    expect(h.cursors["a1"]).toBe(h.skips[0]?.skip.dueAt);
+  });
+});
+
 describe("a skip and a silence never look the same", () => {
   it("records the refusal when the Run door says no", async () => {
     const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
@@ -353,13 +430,36 @@ describe("the pass as a whole", () => {
     expect(h.delays.length).toBeGreaterThan(0);
   });
 
-  it("logs and survives a pass that fails outright", async () => {
+  it("logs a pass that fails outright, and LOOKS AGAIN", async () => {
+    // A locked database at launch used to disarm the scheduler for the life of
+    // the process: no Runs, no Skipped occurrences, and nothing on screen to
+    // say it had stopped watching. A pass that fails re-arms, so the fault is
+    // transient rather than permanent.
+    let failures = 1;
+    const h = harness({
+      now: Date.parse("2026-06-10T12:00:00Z"),
+      listAutomations: () =>
+        failures-- > 0
+          ? Promise.reject(new Error("database is locked"))
+          : Promise.resolve([automation()]),
+    });
+    await h.scheduler.start();
+    expect(h.logs.some((line) => line.includes("database is locked"))).toBe(true);
+    expect(h.delays.at(-1)).toBe(AUTOMATION_SCHEDULE_TICK_MS);
+    // The retry tick finds a working database and the schedule is watched again.
+    await h.fire();
+    expect(h.cursors["a1"]).toBeDefined();
+  });
+
+  it("does not re-arm after a failed pass once it has been stopped", async () => {
     const h = harness({
       now: 0,
       listAutomations: () => Promise.reject(new Error("database is locked")),
     });
-    await h.scheduler.start();
-    expect(h.logs.some((line) => line.includes("database is locked"))).toBe(true);
+    h.scheduler.stop();
+    await h.scheduler.start().then(() => h.scheduler.stop());
+    await h.scheduler.refresh();
+    expect(h.delays.filter((delay) => delay === AUTOMATION_SCHEDULE_TICK_MS)).toHaveLength(1);
   });
 
   it("arms no timer on a host with nothing scheduled", async () => {

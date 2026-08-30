@@ -195,6 +195,25 @@ export function duplicateName(name: string, taken: readonly string[]): string {
  * is not. The same is true of a Run that never named one (VC-130).
  */
 
+/**
+ * What a by-hand Run from a listing surface is aimed at — VC-112's second scope
+ * axis, decided by the Trigger.
+ *
+ * The rule it encodes is the ticket's own: a schedule Run's Target is the
+ * Project, so it opens a Project Session. Pressing Play on a scheduled record
+ * therefore runs the Project rather than asking which Ticket — anything else
+ * would make the by-hand Run a different piece of work from the one the
+ * schedule starts, on the surface a person uses to check what the schedule
+ * does. Every other Trigger names a Ticket and the page asks for one.
+ *
+ * A pure function beside the page for the gate's sake: this is the only place
+ * the Target is chosen in the renderer, and choosing it wrong is a Session
+ * opened at the wrong scope with nothing on screen to say so.
+ */
+export function listingRunTarget(automation: Pick<Automation, "trigger">): "project" | "ticket" {
+  return automationTriggerSchedule(automation.trigger) === null ? "ticket" : "project";
+}
+
 /* --------------------------------- Skipped occurrences (VC-130) ----------- */
 
 /**
@@ -244,6 +263,12 @@ export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason"
   switch (skip.reason.kind) {
     case "app-closed":
       return "Skipped — Volli wasn’t running";
+    // Said as what was observed rather than as a cause: the app WAS running and
+    // still did not reach the due time — a sleeping machine, a busy one, a
+    // suspended process. Printing "Volli wasn't running" here would be a
+    // sentence the reader could disprove.
+    case "not-observed":
+      return "Skipped — Volli didn’t wake in time";
     case "run-refused":
       return `Skipped — ${skip.reason.error}`;
     case "unknown":

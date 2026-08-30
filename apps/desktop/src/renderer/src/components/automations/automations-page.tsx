@@ -54,6 +54,7 @@ import {
 import {
   automationHistory,
   groupByOwnership,
+  listingRunTarget,
   runAutomationLabel,
   runModelLabel,
   runModelTitle,
@@ -63,7 +64,11 @@ import {
   triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorDialog } from "./automation-editor";
-import { openRunSession, runAutomationFromListing, runSkippedOccurrence } from "./run-automation";
+import {
+  openRunSession,
+  runAutomationFromListing,
+  runAutomationForProject,
+} from "./run-automation";
 import { PageHeader } from "@renderer/components/layout/page-header";
 import {
   AlertDialog,
@@ -322,6 +327,18 @@ function AutomationRowItem({
               aria-label={`Run ${automation.name}`}
               onClick={(event) => {
                 event.stopPropagation();
+                // The Trigger decides the Target (VC-112). A schedule names the
+                // Project, so its Play opens the Project Session the schedule
+                // itself would open rather than asking which Ticket — the
+                // by-hand Run and the automatic one are the same work.
+                if (listingRunTarget(automation) === "project") {
+                  void runAutomationForProject({
+                    automationId: automation.id,
+                    automationName: automation.name,
+                    projectId,
+                  });
+                  return;
+                }
                 setChoosingTicket(true);
               }}
             >
@@ -584,7 +601,7 @@ function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
           aria-label={`Run ${skip.automationName} now`}
           onClick={(event) => {
             event.stopPropagation();
-            void runSkippedOccurrence({
+            void runAutomationForProject({
               automationId: skip.automationId,
               automationName: skip.automationName,
               projectId: skip.projectId,

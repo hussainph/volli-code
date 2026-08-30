@@ -341,14 +341,33 @@ export function automationScheduleProblem(draft: {
 /* -------------------------------- skipped occurrences (VC-130) ------------ */
 
 /**
+ * Why a due time went by without anyone watching it — the two answers the
+ * scheduler's pure policy can reach on its own.
+ *
+ * They are split from the rest of {@link AutomationSkipReason} because they are
+ * derived rather than observed, and each is a CLAIM ABOUT THIS PROCESS that
+ * must be true:
+ *
+ *  - `app-closed` — the due time is older than the moment this host started
+ *    watching, so nothing here could have started it. The ordinary case, and
+ *    the one VC-130 names.
+ *  - `not-observed` — the app was running and still did not reach the due time
+ *    in the grace window: a laptop asleep at 21:00, a machine too busy to run
+ *    a timer, a process suspended by the OS. Its own answer rather than
+ *    `app-closed`, because "Volli wasn't running" would be false, and a
+ *    history that says a false thing about why work did not happen is worse
+ *    than one that says a vague true thing.
+ */
+export type AutomationMissedReason = { kind: "app-closed" } | { kind: "not-observed" };
+
+/**
  * Why a due time passed without a Run.
  *
  * A closed union rather than prose, for the reason every other refusal in this
- * file is vocabulary: a surface classifies without matching strings. Two real
- * answers, plus the one every tolerant reader needs:
+ * file is vocabulary: a surface classifies without matching strings. The two
+ * unobserved answers above, plus the one the host observed and the one every
+ * tolerant reader needs:
  *
- *  - `app-closed` — the ordinary case, and the one CONTEXT.md names: nothing
- *    was running at the due time, so nothing could start.
  *  - `run-refused` — the scheduler was awake and asked, and the Run door said
  *    no (no default model, an earlier Run still working). Recorded because
  *    VC-112's rule is that a skip and a silence must never look the same, and
@@ -362,7 +381,7 @@ export function automationScheduleProblem(draft: {
  * knows a refusal code must print what happened rather than rewrite it.
  */
 export type AutomationSkipReason =
-  | { kind: "app-closed" }
+  | AutomationMissedReason
   | { kind: "run-refused"; code: string; error: string }
   | { kind: "unknown" };
 
@@ -407,6 +426,7 @@ export function parseAutomationSkipReason(raw: unknown): AutomationSkipReason {
   if (typeof raw !== "object" || raw === null) return { kind: "unknown" };
   const record = raw as Record<string, unknown>;
   if (record["kind"] === "app-closed") return { kind: "app-closed" };
+  if (record["kind"] === "not-observed") return { kind: "not-observed" };
   if (record["kind"] !== "run-refused") return { kind: "unknown" };
   const code = record["code"];
   const error = record["error"];
