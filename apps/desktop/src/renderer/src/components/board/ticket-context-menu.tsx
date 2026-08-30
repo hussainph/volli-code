@@ -9,6 +9,7 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
+import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
@@ -23,6 +24,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { TicketAutomationMenuItems } from "@renderer/components/automations/automation-run-menu";
 import { useTicketDialogs } from "@renderer/components/board/ticket-dialog-host";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
 import {
@@ -230,6 +232,16 @@ export function TicketContextMenu({
           <ContextMenuSubTrigger icon={TagIcon}>Labels</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <TicketLabelItems ticket={ticket} projectId={projectId} />
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        {/* VC-112's "run one without opening the Ticket", and the nested
+            context-menu home of the per-invocation model override. The rows
+            are the ticket rail's own (`automation-run-menu.tsx`), so a card and
+            an open Ticket cannot disagree about what this column offers. */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger icon={LightningIcon}>Automations</ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-56">
+            <TicketAutomationMenuItems ticket={ticket} projectId={projectId} />
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSeparator />

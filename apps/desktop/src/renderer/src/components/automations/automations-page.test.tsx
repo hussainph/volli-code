@@ -302,6 +302,7 @@ describe("running by hand", () => {
       automationName: "Review sweep",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
+      modelOverride: null,
     });
   });
 

@@ -8,6 +8,7 @@ import {
 import type { ModelSelection, PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
+import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
 import type { AutomationRunnerDeps } from "./run";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
@@ -275,6 +276,7 @@ describe("createAutomationRunner", () => {
       commandId: randomUUID(),
       automation: { id: automation.id, name: automation.name },
       runtime: null,
+      request: { instructions: null, modelOverride: null },
       projectId: h.projectId,
       ticketId: h.ticketId,
       text: "Persisted instructions",
@@ -562,6 +564,158 @@ describe("createAutomationRunner", () => {
         target: { kind: "unbound", instructions: "something else entirely" },
         ticketId: h.ticketId,
         modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("refuses to reuse one command id for DIFFERENT Unbound Instructions", async () => {
+    // Both Runs name no Automation, so the record alone cannot tell them apart:
+    // what distinguishes them is the only thing either of them said.
+    const h = harness();
+    const commandId = randomUUID();
+
+    const first = await h.runner.run({
+      commandId,
+      target: { kind: "unbound", instructions: "sweep the diff" },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "unbound", instructions: "sweep the WHOLE repository" },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    // The first Run stands, alone: a conflict starts nothing and undoes nothing.
+    expect(h.creates).toHaveLength(1);
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("refused");
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([first.run]);
+  });
+
+  it("refuses to reuse one command id for a different per-invocation override", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+
+    await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    });
+    await h.runner.settled();
+
+    // Same Automation, same Ticket, another model — a second Run, and it must
+    // not be answered with the first one's Session.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    // And dropping the override entirely is a different request too.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("replays the receipt when the SAME override is retried under one command id", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const request = {
+      commandId,
+      target: { kind: "automation", automationId: automation.id } as const,
+      ticketId: h.ticketId,
+      modelOverride: {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      } as const,
+    };
+
+    const first = await h.runner.run(request);
+    await h.runner.settled();
+    const replayed = await h.runner.run(request);
+    await h.runner.settled();
+
+    expect(first.ok && replayed.ok).toBe(true);
+    if (!first.ok || !replayed.ok) throw new Error("refused");
+    expect(replayed.run).toEqual(first.run);
+    expect(h.creates).toHaveLength(1);
+  });
+
+  it("reads a plan written before the request identity existed as the request it was", async () => {
+    // The ledger is append-only and older than VC-129: a plan accepted then
+    // carries no `request` at all, so this seeds one exactly as that release
+    // would have left it — an accepted command whose Session never got minted.
+    // Its caller's retry must still replay, rather than be told its own command
+    // id belongs to a different Run.
+    const h = harness();
+    const automation = await savedAutomation(h);
+    const commandId = randomUUID();
+    const legacyPlan = {
+      commandId,
+      runId: randomUUID(),
+      automationId: automation.id,
+      automationName: automation.name,
+      projectId: h.projectId,
+      ticketId: h.ticketId,
+      runtime: null,
+      text: "Persisted instructions",
+      resources: [],
+      sessionOperationId: randomUUID(),
+      messageCommandId: randomUUID(),
+      messageId: randomUUID(),
+    } as unknown as AutomationRunPlan;
+    await new SqliteAutomationLedger(ctx.db).transaction(async (tx) => {
+      await tx.insertCommand({
+        id: commandId,
+        intent: { kind: "automation.run", plan: legacyPlan },
+        createdAt: 1,
+      });
+      await tx.appendReceipt({
+        id: randomUUID(),
+        commandId,
+        status: "accepted",
+        result: { kind: "automation.run.accepted", plan: legacyPlan },
+        recordedAt: 1,
+      });
+    });
+
+    const replayed = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+    });
+    await h.runner.settled();
+
+    expect(replayed).toMatchObject({ ok: true });
+    if (!replayed.ok) throw new Error("refused");
+    expect(replayed.run).toMatchObject({ id: legacyPlan.runId, automationId: automation.id });
+    // Read as the request it was, not as a wildcard: a retry that now names an
+    // override is a different Run under the same id, and still refuses.
+    await expect(
+      h.runner.run({
+        commandId,
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
       }),
     ).resolves.toMatchObject({ ok: false, code: "RUN_FAILED" });
     expect(h.creates).toHaveLength(1);

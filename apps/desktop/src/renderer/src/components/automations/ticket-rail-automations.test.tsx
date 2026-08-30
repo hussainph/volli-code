@@ -20,6 +20,7 @@ import type { Automation, AutomationRun, ColumnArming, Ticket } from "@volli/sha
 
 import { openRunSession, runAutomationOnTicket } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
+import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 vi.mock("./run-automation", () => ({
@@ -83,6 +84,56 @@ const doors = {
   runsForTicket: vi.fn(),
 };
 
+/**
+ * One available model with one reasoning level, so the per-invocation override
+ * menu has something to offer. Without a catalog the override rows are
+ * correctly absent, which would make the surface untestable rather than tested.
+ */
+const MODEL_ACCESS = {
+  inspect: vi.fn(async () => ({
+    providers: [{ id: "anthropic", label: "Anthropic" }],
+    models: [
+      {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        label: "claude-opus",
+        state: "available",
+        reasoningLevels: ["high"],
+      },
+    ],
+  })),
+  hiddenModels: vi.fn(async () => []),
+  defaults: vi.fn(),
+  setDefault: vi.fn(),
+  setHiddenModels: vi.fn(),
+  compactionPolicy: vi.fn(),
+  setCompactionPolicy: vi.fn(),
+  beginSignIn: vi.fn(),
+  signOut: vi.fn(),
+} as unknown as React.ComponentProps<typeof ModelAccessProvider>["client"];
+
+/** A read this test holds open, so the rail can be seen before it has landed. */
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+async function render() {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => {
+    root?.render(
+      <ModelAccessProvider client={MODEL_ACCESS}>
+        <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
+      </ModelAccessProvider>,
+    );
+  });
+}
+
 async function mount(seed: {
   automations?: Automation[];
   armings?: ColumnArming[];
@@ -95,12 +146,7 @@ async function mount(seed: {
   doors.runsForTicket.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
 
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => {
-    root?.render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
-  });
+  await render();
 }
 
 function text(): string {
@@ -128,6 +174,17 @@ function menuItem(label: string): HTMLElement {
   );
   if (found === undefined) throw new Error(`no menu item named ${label}`);
   return found as HTMLElement;
+}
+
+/** Open a nested menu — where the per-invocation override lives (VC-112). */
+async function openSubmenu(label: string): Promise<void> {
+  const trigger = [...document.querySelectorAll('[data-slot="dropdown-menu-sub-trigger"]')].find(
+    (candidate) => candidate.textContent?.includes(label),
+  );
+  if (trigger === undefined) throw new Error(`no submenu named ${label}`);
+  await act(async () => {
+    (trigger as HTMLElement).click();
+  });
 }
 
 /** Type into the Run once form's controlled textarea the way React sees it. */
@@ -255,6 +312,64 @@ describe("the split button", () => {
     expect(text()).toContain("No automations in this project yet.");
   });
 
+  it("presses nothing, and claims nothing, until its own reads have landed", async () => {
+    // The race the rail must not lose: this Ticket's column IS armed, and for
+    // the frame before the read lands an ungated rail would offer a clickable
+    // Run once instead — or, from a cache filled elsewhere, press whatever was
+    // armed then.
+    const list = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockReturnValue(list.promise);
+    doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    const reading = control("Reading automations…") as HTMLButtonElement;
+    expect(reading.disabled).toBe(true);
+    await act(async () => {
+      reading.click();
+    });
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+    // Not the Run once form either: an unread rail starts nothing on a press.
+    expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
+    // And no claim about the project, which it has not read.
+    expect(text()).not.toContain("No automations in this project yet.");
+
+    await act(async () => {
+      list.resolve({ ok: true, automations: [automation()] });
+    });
+
+    expect(control("Run Review sweep on this ticket")).not.toBeNull();
+  });
+
+  it("does not press an arming this rail inherited from an earlier read", async () => {
+    // A cache filled before someone re-armed the column in another window. The
+    // rail re-reads on arrival, and until that read lands it presses nothing:
+    // "nothing armed" and "not asked yet" are one value in the cache.
+    useAutomationsStore.setState({
+      byProject: { p1: [automation()] },
+      armingByProject: { p1: [ARMING] },
+      enablementRead: true,
+    });
+    const list = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockReturnValue(list.promise);
+    doors.armings.mockResolvedValue({ ok: true, armings: [] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    expect(document.querySelector('[aria-label="Run Review sweep on this ticket"]')).toBeNull();
+    expect(control("Reading automations…")).not.toBeNull();
+
+    // The read lands on the truth: nothing arms this column any more.
+    await act(async () => {
+      list.resolve({ ok: true, automations: [automation()] });
+    });
+    expect(control("Run Run once on this ticket")).not.toBeNull();
+  });
+
   it("holds no authoring form: nothing here creates, edits or deletes a record", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
     await openMenu();
@@ -309,6 +424,55 @@ describe("Run once", () => {
     // and is stored nowhere, so "Default model" is the resting answer.
     expect(text()).toContain("Default model");
     expect(text()).toContain("This run");
+  });
+
+  it("opens holding the model the nested override named, and runs on it", async () => {
+    // A column with nothing armed: the default press IS Run once, so choosing
+    // "Run on model ▸ claude-opus" is a person choosing the Runtime for the Run
+    // they are about to describe. The form must open already holding it.
+    await mount({ automations: [automation()] });
+    await openMenu();
+    await openSubmenu("Run on model");
+    await act(async () => {
+      menuItem("claude-opus").click();
+    });
+
+    expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
+    await typeInstructions("/sweep this once");
+    await act(async () => {
+      runButton().click();
+    });
+
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "unbound", instructions: "/sweep this once" },
+      ticketId: "t1",
+      modelOverride: {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      },
+    });
+  });
+});
+
+describe("the per-invocation override", () => {
+  it("spends the model it names on the Armed automation's own Run", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    await openMenu();
+    await openSubmenu("Run on model");
+    await act(async () => {
+      menuItem("claude-opus").click();
+    });
+
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "automation", automationId: "a1" },
+      ticketId: "t1",
+      modelOverride: {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      },
+    });
   });
 });
 

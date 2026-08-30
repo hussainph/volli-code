@@ -293,6 +293,89 @@ export function unboundRunProblem(instructions: string): string | null {
   return null;
 }
 
+/* ------------------------------------------- one Run request's identity -- */
+
+/**
+ * What a Run request ASKED FOR, beside the ids that already travel with it —
+ * the half of a Run's intent that a plan's resolved fields cannot recover.
+ *
+ * A Run command id is durable intent, so two requests carrying the same id must
+ * either be the same request (replay its receipt) or a conflict (refuse). The
+ * Automation and the Ticket are not enough to decide that any more (VC-129):
+ * every Unbound Run names no Automation, so a second one with DIFFERENT
+ * Instructions would otherwise read as a retry of the first and silently replay
+ * work nobody asked for. The per-invocation override is here for the same
+ * reason — running the same Instructions on another model is a second Run.
+ *
+ * Deliberately the caller's words rather than the plan's `text`: `text` is the
+ * composer's expansion at request time, and a template edited between the two
+ * calls would turn one honest retry into a conflict.
+ *
+ * `instructions` is `null` for a bound Run, whose Instructions live in the
+ * record it names — which is also what a plan written before this field existed
+ * normalizes to (see the engine's plan reader).
+ */
+export interface AutomationRunRequestIdentity {
+  instructions: string | null;
+  modelOverride: ModelSelection | null;
+}
+
+/** One Run request's identity, read off the target and the invocation's override. */
+export function automationRunRequestIdentity(input: {
+  target: AutomationRunTarget;
+  modelOverride: ModelSelection | null;
+}): AutomationRunRequestIdentity {
+  return {
+    instructions: input.target.kind === "unbound" ? input.target.instructions : null,
+    modelOverride: input.modelOverride,
+  };
+}
+
+/** Whether two Run requests are the same intent — field by field, no JSON order. */
+export function sameAutomationRunRequestIdentity(
+  left: AutomationRunRequestIdentity,
+  right: AutomationRunRequestIdentity,
+): boolean {
+  if (left.instructions !== right.instructions) return false;
+  if (left.modelOverride === null || right.modelOverride === null) {
+    return left.modelOverride === right.modelOverride;
+  }
+  return (
+    left.modelOverride.providerId === right.modelOverride.providerId &&
+    left.modelOverride.modelId === right.modelOverride.modelId &&
+    left.modelOverride.reasoningLevel === right.modelOverride.reasoningLevel
+  );
+}
+
+/**
+ * The key a caller holding a durable command id across a lost reply files it
+ * under: the whole intent, so pressing again after CHANGING something asks for
+ * a new Run rather than replaying the old one's receipt.
+ *
+ * It is the renderer's half of the rule main enforces with
+ * {@link sameAutomationRunRequestIdentity} — one statement of "the same Run",
+ * rather than a key that agrees with the durable comparison only by luck.
+ * `\u0000` cannot appear in any of the parts, so no two different intents can
+ * spell one key.
+ */
+export function automationRunRetryKey(input: {
+  target: AutomationRunTarget;
+  ticketId: string;
+  modelOverride: ModelSelection | null;
+}): string {
+  const identity = automationRunRequestIdentity(input);
+  const override =
+    identity.modelOverride === null
+      ? "inherit"
+      : `${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
+  return [
+    automationRunTargetId(input.target) ?? "unbound",
+    identity.instructions ?? "",
+    input.ticketId,
+    override,
+  ].join("\u0000");
+}
+
 /** What a save must carry. Everything else on {@link Automation} is minted by the store. */
 export interface AutomationDraft {
   name: string;

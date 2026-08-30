@@ -10,10 +10,12 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  automationRunRequestIdentity,
   automationRunTargetId,
   errorMessage,
   expandCommandInvocation,
   isAutomationRuntimePin,
+  sameAutomationRunRequestIdentity,
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
   type Automation,
@@ -299,9 +301,17 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     input: AutomationRunRequest,
     plan: AutomationRunPlan,
   ): Promise<RunAutomationOutcome> {
+    // The WHOLE intent, not just the record and the Ticket. A command id is
+    // durable intent, so the only two honest answers to a second request under
+    // one are "the same Run" (replay its receipt below) and "a different Run"
+    // (refuse here). Comparing the Automation alone cannot tell them apart any
+    // more: every Unbound Run names none, so a retry carrying edited
+    // Instructions — or the same Instructions on another model — would replay
+    // the first Run's Session and silently discard what was actually asked for.
     if (
       plan.automationId !== automationRunTargetId(input.target) ||
-      plan.ticketId !== input.ticketId
+      plan.ticketId !== input.ticketId ||
+      !sameAutomationRunRequestIdentity(plan.request, automationRunRequestIdentity(input))
     ) {
       return refuse(
         "RUN_FAILED",
@@ -448,6 +458,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
             (automation !== null && isAutomationRuntimePin(automation.runtime)
               ? automation.runtime
               : null),
+          // Beside the RESOLVED Runtime above, what was actually asked for —
+          // the durable half of this command id's identity, which no later
+          // retry may quietly differ from.
+          request: automationRunRequestIdentity(input),
           projectId: ticket.projectId,
           ticketId: ticket.id,
           text: expanded.text,

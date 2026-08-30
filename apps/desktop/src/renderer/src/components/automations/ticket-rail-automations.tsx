@@ -10,12 +10,19 @@
  * rail offers instead is a door to that page — from the menu always, and from
  * the empty state's own sentence.
  *
- * Three rules the drawing carries:
+ * Four rules the drawing carries:
  *
  *  - **The press follows the column.** The default action is whatever this
  *    Ticket's current column has ARMED, so pressing here is the same act the
  *    board performs on a Deliberate move into that column. With nothing armed
  *    the press becomes Run once, which needs no record at all.
+ *  - **It never presses what it has not read.** The rail re-reads on arrival,
+ *    and until that read lands the control says so and starts nothing bound
+ *    (`automation-run-menu.tsx` owns the rule, `armed-run.ts` makes the same
+ *    refusal for a dropped card). A cold cache would offer Run once on an
+ *    armed Ticket; a stale one would press the Automation the column used to
+ *    arm. Both are wrong for one reason: the cache cannot tell "nothing armed"
+ *    from "not asked yet".
  *  - **Never hidden when empty.** A project with no Automations still draws the
  *    button, says so in one line, and links to the page. Hidden-when-empty is
  *    how a feature never gets discovered.
@@ -34,32 +41,33 @@ import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import {
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
-  type Automation,
   type AutomationRun,
   type ModelSelection,
   type Ticket,
 } from "@volli/shared";
 
 import {
-  runAutomationLabel,
-  runModelLabel,
-  runModelTitle,
-  SWITCHED_OFF_NOTE,
-} from "./automations-page-model";
+  AutomationRunMenuItems,
+  OffNote,
+  useAutomationRunOffer,
+  useOfferableModels,
+} from "./automation-run-menu";
+import { runAutomationLabel, runModelLabel, runModelTitle } from "./automations-page-model";
 import { InstructionsTextarea } from "./automation-editor";
 import { openRunSession, runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
+  overridePressable,
   railRunLabel,
-  ticketRailAutomations,
+  RAIL_UNREAD_LABEL,
   type RailRunAction,
+  type TicketRailAutomations,
 } from "./ticket-rail-automations-model";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import {
   ComposerPickerStack,
   ModelPill,
-  offerableModels,
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
@@ -67,11 +75,6 @@ import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import {
@@ -91,24 +94,17 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { relativeTime } from "@renderer/lib/relative-time";
-import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
-import {
-  selectArmings,
-  selectAutomations,
-  selectTicketRuns,
-  useAutomationsStore,
-} from "@renderer/stores/automations";
+import { selectTicketRuns, useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
-
-const NO_MODELS: readonly ComposerModel[] = [];
 
 /** The blank the pill reads as its resting "Model" label — the composer's own. */
 const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
@@ -120,37 +116,15 @@ const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
 type OverrideChoice = "inherit" | "pin";
 
 /**
- * The catalog a per-invocation override may name — signed-in, unhidden models,
- * read once per mount.
+ * The open Run once form, and what it opens HOLDING.
  *
- * The same read the Automation editor's pin control makes, for the same
- * catalog. An unreadable catalog costs the OVERRIDE and never the Run: with no
- * models the override menu has nothing to offer and every Run resolves its
- * Runtime the ordinary way, which is what it would have done anyway.
+ * `null` is closed. An open form carries the per-invocation override the menu
+ * was on when it asked for one — choosing "Run on model ▸ Opus" where the
+ * column arms nothing is still a person choosing a model for the Run they are
+ * about to describe, and dropping it on the way to the dialog would answer that
+ * choice with a form resting on "Default model".
  */
-function useOfferableModels(): readonly ComposerModel[] {
-  const access = useModelAccessClient();
-  const inspect = access?.inspect;
-  const hiddenModels = access?.hiddenModels;
-  const [models, setModels] = React.useState<readonly ComposerModel[]>(NO_MODELS);
-  React.useEffect(() => {
-    if (inspect === undefined || hiddenModels === undefined) return;
-    let current = true;
-    void Promise.all([inspect({}), hiddenModels()])
-      .then(([snapshot, hidden]) => {
-        if (!current) return;
-        setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
-      })
-      .catch(() => {
-        if (!current) return;
-        setModels(NO_MODELS);
-      });
-    return () => {
-      current = false;
-    };
-  }, [inspect, hiddenModels]);
-  return models;
-}
+type RunOnceRequest = { modelOverride: ModelSelection | null } | null;
 
 export function TicketAutomationsPanel({
   projectId,
@@ -159,42 +133,30 @@ export function TicketAutomationsPanel({
   projectId: string;
   ticket: Ticket;
 }) {
-  const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
-  const armings = useAutomationsStore((state) => selectArmings(state, projectId));
   const enabledIds = useAutomationsStore((state) => state.enabledIds);
   const runs = useAutomationsStore((state) => selectTicketRuns(state, ticket.id));
-  const refresh = useAutomationsStore((state) => state.refresh);
-  const refreshArming = useAutomationsStore((state) => state.refreshArming);
-  const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const refreshTicketRuns = useAutomationsStore((state) => state.refreshTicketRuns);
-  const [runOnceOpen, setRunOnceOpen] = React.useState(false);
+  const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(null);
   const models = useOfferableModels();
 
-  // Read on arrival and after any planning change, the way the Automations
-  // page reads: opening a Ticket IS the moment a stale Offered list or a stale
-  // arming would show, and this rail must not depend on some other surface
-  // having been the one to notice a record created, armed or switched
-  // elsewhere. Deliberately NOT `ensureLoaded`, which only fills a cache that
-  // has never landed — that is the board arrival's rule, and it would leave
-  // this button naming an Automation that was disarmed an hour ago.
-  const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
-  React.useEffect(() => {
-    void refresh(projectId);
-    void refreshArming(projectId);
-    void refreshEnablement();
-  }, [refresh, refreshArming, refreshEnablement, projectId, planningVersion]);
+  // What this column offers, read on arrival and inert until that read lands
+  // (`automation-run-menu.tsx` states the rule once, for this rail and for the
+  // board card's own menu).
+  const rail = useAutomationRunOffer(projectId, ticket.status);
 
   // The Runs, on the same clock — a Run started from the board's armed window,
   // the palette or another window lands here without this rail having asked.
+  const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
   React.useEffect(() => {
     void refreshTicketRuns(ticket.id);
   }, [refreshTicketRuns, ticket.id, planningVersion]);
 
-  const rail = ticketRailAutomations({ automations, armings, status: ticket.status });
-
   const run = (action: RailRunAction, modelOverride: ModelSelection | null): void => {
+    // Nothing bound starts from an unread rail: the press that reached here
+    // named no record, because the rail knew of none to name.
+    if (action.kind === "unread") return;
     if (action.kind === "run-once") {
-      setRunOnceOpen(true);
+      setRunOnce({ modelOverride });
       return;
     }
     void runAutomationOnTicket({
@@ -214,11 +176,13 @@ export function TicketAutomationsPanel({
         models={models}
         enabledIds={enabledIds}
         onRun={run}
-        onRunOnce={() => setRunOnceOpen(true)}
+        onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
-      {rail.listsAny ? null : (
+      {!rail.ready || rail.listsAny ? null : (
         // Visible, plain, and a door. The button above still presses — Run once
-        // names no record, so an empty project is not an empty control.
+        // names no record, so an empty project is not an empty control. The
+        // sentence waits for the read, though: "no automations here" is a claim
+        // about the project, and an unread cache cannot make it.
         <>
           <p className="px-2 text-label text-muted-foreground">
             No automations in this project yet.
@@ -238,8 +202,8 @@ export function TicketAutomationsPanel({
       )}
       <TicketRuns projectId={projectId} runs={runs} />
       <RunOnceDialog
-        open={runOnceOpen}
-        onOpenChange={setRunOnceOpen}
+        request={runOnce}
+        onClose={() => setRunOnce(null)}
         projectId={projectId}
         ticketId={ticket.id}
         models={models}
@@ -253,10 +217,18 @@ export function TicketAutomationsPanel({
  * The split button: `[⚡ Armed automation │ ▾]`.
  *
  * Drawn as `new-session-control.tsx` draws its own — the press-scale on the
- * wrapper so the pill depresses as one object, and the same two items on
- * right-click so turning to the caret is a convenience rather than the only
- * route. The right-click menu is also where the per-invocation model override
- * lives as a NESTED item (VC-112: the deliberate surfaces, never the drag).
+ * wrapper so the pill depresses as one object, and the same rows on right-click
+ * so turning to the caret is a convenience rather than the only route. Those
+ * rows are `automation-run-menu.tsx`'s, which the board card's own
+ * `Automations ▸` submenu mounts too.
+ *
+ * The per-invocation override VC-112 names is reachable from BOTH deliberate
+ * surfaces this control offers: the rail's own caret menu, and the nested item
+ * in the context menu. Never from the drag path, which has no menu at all.
+ *
+ * While the rail is still reading, the default half is present, named and
+ * disabled: never hidden, and never a press against a cache that has not
+ * landed.
  */
 function AutomationRunControl({
   rail,
@@ -265,7 +237,7 @@ function AutomationRunControl({
   onRun,
   onRunOnce,
 }: {
-  rail: ReturnType<typeof ticketRailAutomations>;
+  rail: TicketRailAutomations;
   models: readonly ComposerModel[];
   enabledIds: readonly string[];
   onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
@@ -274,6 +246,9 @@ function AutomationRunControl({
   const label = railRunLabel(rail.primary);
   const overrides = modelOverrideRows(models);
   const offered = rail.offered;
+  // Present, named and unpressable while the reads land: the control is never
+  // hidden (VC-112), and it never presses a default it has not read yet.
+  const unread = rail.primary.kind === "unread";
 
   return (
     <ContextMenu>
@@ -283,7 +258,8 @@ function AutomationRunControl({
             type="button"
             variant="secondary"
             size="sm"
-            aria-label={`Run ${label} on this ticket`}
+            disabled={unread}
+            aria-label={unread ? label : `Run ${label} on this ticket`}
             className="min-w-0 flex-1 justify-start rounded-r-none pr-1 active:scale-100!"
             onClick={() => onRun(rail.primary, null)}
           >
@@ -310,6 +286,7 @@ function AutomationRunControl({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
+              {unread ? <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div> : null}
               {offered.map((automation) => (
                 <DropdownMenuItem
                   key={automation.id}
@@ -325,7 +302,12 @@ function AutomationRunControl({
                 <PlayIcon />
                 {UNBOUND_RUN_LABEL}…
               </DropdownMenuItem>
-              {overrides.length === 0 ? null : (
+              {/* The override on the rail itself, beside the nested
+                  context-menu one below (VC-112 names both). Absent while the
+                  rail is still reading, and on a profile whose catalog offers
+                  no model a Run could name — in both cases there is nothing for
+                  a chosen model to be spent on. */}
+              {overrides.length === 0 || !overridePressable(rail.primary, true) ? null : (
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger>
                     <CpuIcon />
@@ -368,77 +350,19 @@ function AutomationRunControl({
           </DropdownMenu>
         </div>
       </ContextMenuTrigger>
+      {/* Right-click is the nested context-menu surface VC-112 names, drawn by
+          the same component the board card's own `Automations ▸` submenu
+          mounts — one answer to "what may this Ticket run", in two places. */}
       <ContextMenuContent className="w-56">
-        {offered.map((automation) => (
-          <ContextMenuItem
-            key={automation.id}
-            icon={LightningIcon}
-            onSelect={() => onRun({ kind: "automation", automation }, null)}
-          >
-            <span className="min-w-0 flex-1 truncate">{automation.name}</span>
-            <OffNote automation={automation} enabledIds={enabledIds} />
-          </ContextMenuItem>
-        ))}
-        {offered.length > 0 ? <ContextMenuSeparator /> : null}
-        <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
-          {UNBOUND_RUN_LABEL}…
-        </ContextMenuItem>
-        {/* The nested override item VC-112 names. Model and reasoning travel
-            together, so a model offering several levels opens onto them rather
-            than running at one nobody chose. */}
-        {overrides.length === 0 ? null : (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger icon={CpuIcon}>Run on model</ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {overrides.map(({ model, selections }) =>
-                selections.length === 1 ? (
-                  <ContextMenuItem
-                    key={model.id}
-                    icon={CpuIcon}
-                    onSelect={() => onRun(rail.primary, selections[0] ?? null)}
-                  >
-                    {model.label}
-                  </ContextMenuItem>
-                ) : (
-                  <ContextMenuSub key={model.id}>
-                    <ContextMenuSubTrigger icon={CpuIcon}>{model.label}</ContextMenuSubTrigger>
-                    <ContextMenuSubContent>
-                      {selections.map((selection) => (
-                        <ContextMenuItem
-                          key={selection.reasoningLevel}
-                          icon={SlidersIcon}
-                          onSelect={() => onRun(rail.primary, selection)}
-                        >
-                          {selection.reasoningLevel}
-                        </ContextMenuItem>
-                      ))}
-                    </ContextMenuSubContent>
-                  </ContextMenuSub>
-                ),
-              )}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
+        <AutomationRunMenuItems
+          rail={rail}
+          enabledIds={enabledIds}
+          models={models}
+          onRun={onRun}
+          onRunOnce={onRunOnce}
+        />
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-/**
- * What a switched-off Automation says here — the page's own words, so one
- * record does not read as two states on two surfaces. It is still offered and
- * still runs: the switch decides what starts it BESIDES a person (VC-112).
- */
-function OffNote({
-  automation,
-  enabledIds,
-}: {
-  automation: Automation;
-  enabledIds: readonly string[];
-}) {
-  if (enabledIds.includes(automation.id)) return null;
-  return (
-    <span className="ml-auto shrink-0 text-label text-muted-foreground">{SWITCHED_OFF_NOTE}</span>
   );
 }
 
@@ -492,29 +416,39 @@ function TicketRuns({ projectId, runs }: { projectId: string; runs: readonly Aut
  * The Instructions box is the editor's, imported rather than re-drawn — same
  * `/` templates and Skills, same `@` files, same expansion at launch. A second
  * box wired slightly differently would be a second grammar wearing one name.
+ *
+ * It opens holding whatever override asked for it. Choosing "Run on model ▸
+ * Opus" on a column that arms nothing IS a per-invocation override being
+ * chosen, and a form that then rested on "Default model" would have quietly
+ * discarded the only part of the request the person had already made.
  */
 function RunOnceDialog({
-  open,
-  onOpenChange,
+  request,
+  onClose,
   projectId,
   ticketId,
   models,
   onStarted,
 }: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
+  request: RunOnceRequest;
+  onClose(): void;
   projectId: string;
   ticketId: string;
   models: readonly ComposerModel[];
   onStarted(): void;
 }) {
-  if (!open) return null;
+  if (request === null) return null;
   return (
     <RunOnceForm
+      // Remounted per opening, so a second Run once starts from a blank form
+      // rather than from the last one's words — and so the override it opens
+      // holding is this request's, not the previous request's.
+      key={`${request.modelOverride?.providerId ?? ""}:${request.modelOverride?.modelId ?? ""}:${request.modelOverride?.reasoningLevel ?? ""}`}
       projectId={projectId}
       ticketId={ticketId}
       models={models}
-      onClose={() => onOpenChange(false)}
+      modelOverride={request.modelOverride}
+      onClose={onClose}
       onStarted={onStarted}
     />
   );
@@ -524,18 +458,22 @@ function RunOnceForm({
   projectId,
   ticketId,
   models,
+  modelOverride,
   onClose,
   onStarted,
 }: {
   projectId: string;
   ticketId: string;
   models: readonly ComposerModel[];
+  modelOverride: ModelSelection | null;
   onClose(): void;
   onStarted(): void;
 }) {
   const [instructions, setInstructions] = React.useState("");
-  const [choice, setChoice] = React.useState<OverrideChoice>("inherit");
-  const [pin, setPin] = React.useState<ModelSelection | null>(null);
+  const [choice, setChoice] = React.useState<OverrideChoice>(
+    modelOverride === null ? "inherit" : "pin",
+  );
+  const [pin, setPin] = React.useState<ModelSelection | null>(modelOverride);
   const { templates, skills } = usePromptTemplates(projectId);
   const fileIndex = useFileIndex(projectId);
 

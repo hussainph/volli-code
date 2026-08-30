@@ -1,8 +1,9 @@
-import { parseAutomationTrigger } from "@volli/shared";
+import { parseAutomationTrigger, sameAutomationRunRequestIdentity } from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationRunRequestIdentity,
   AutomationTrigger,
   ColumnArming,
   ModelSelection,
@@ -136,6 +137,21 @@ export interface AutomationRunPlan {
    * model it RESOLVED, and that lands on the Run itself.
    */
   runtime: ModelSelection | null;
+  /**
+   * What the CALLER asked for, beside what this plan resolved (VC-129): an
+   * Unbound Run's own Instructions, and this invocation's model override.
+   *
+   * The durable half of the retry identity. Neither is recoverable from the
+   * fields around it — every Unbound Run has `automationId: null`, and
+   * `runtime` is the RESOLVED pin, which an override and a record's own
+   * Runtime can produce alike. Without it a second request under one command
+   * id could carry different Instructions or a different model and still read
+   * as a retry of the first.
+   *
+   * A plan written before VC-129 has no such field, and is read as the request
+   * it was: a bound Run with no override (see {@link readRunPlan}).
+   */
+  request: AutomationRunRequestIdentity;
   /** The composer's expansion at request time, never re-expanded on recovery. */
   text: string;
   resources: readonly PromptResource[];
@@ -282,6 +298,8 @@ export interface AutomationEngine {
     automation: Pick<Automation, "id" | "name"> | null;
     /** The resolved Runtime for this invocation — an override, a pin, or inherit. */
     runtime: ModelSelection | null;
+    /** What the caller asked for, which is what a retry is compared against. */
+    request: AutomationRunRequestIdentity;
     projectId: string;
     ticketId: string;
     text: string;
@@ -709,6 +727,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         projectId: input.projectId,
         ticketId: input.ticketId,
         runtime: input.runtime,
+        request: input.request,
         text: input.text,
         resources: input.resources,
         sessionOperationId: ports.nextId(),
@@ -726,13 +745,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
               `Automation command ${input.commandId} was already used for ${existing.intent.kind}`,
             );
           }
-          const plan = existing.intent.plan;
+          const plan = readRunPlan(existing.intent.plan);
           if (
             plan.automationId !== (input.automation?.id ?? null) ||
             plan.automationName !== (input.automation?.name ?? null) ||
             plan.projectId !== input.projectId ||
             plan.ticketId !== input.ticketId ||
             !sameJson(plan.runtime, input.runtime) ||
+            !sameAutomationRunRequestIdentity(plan.request, input.request) ||
             plan.text !== input.text ||
             !sameJson(plan.resources, input.resources)
           ) {
@@ -824,7 +844,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             `Automation Run command ${input.commandId} was not accepted`,
           );
         }
-        const { plan } = command.intent;
+        const plan = readRunPlan(command.intent.plan);
         const existing = await tx.getRun(plan.runId);
         if (existing !== null) {
           if (
@@ -954,7 +974,7 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
             `Automation command ${commandId} was already used for ${command.intent.kind}`,
           );
         }
-        return command.intent.plan;
+        return readRunPlan(command.intent.plan);
       });
     },
 
@@ -977,14 +997,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
           case "automation.run.accepted":
             return {
               ok: true,
-              value: { plan: command.intent.plan, run: null },
+              value: { plan: readRunPlan(command.intent.plan), run: null },
               receipt: publicReceipt(latest),
               replayed: true,
             };
           case "automation.run.completed":
             return {
               ok: true,
-              value: { plan: command.intent.plan, run: latest.result.run },
+              value: { plan: readRunPlan(command.intent.plan), run: latest.result.run },
               receipt: publicReceipt(latest),
               replayed: true,
             };
@@ -1005,7 +1025,9 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
     },
 
     async recoverableRunPlans() {
-      return ports.ledger.transaction((tx) => tx.listRecoverableRunPlans());
+      return ports.ledger.transaction(async (tx) =>
+        (await tx.listRecoverableRunPlans()).map(readRunPlan),
+      );
     },
 
     async pendingDeliveriesForSession(sessionId) {
@@ -1075,8 +1097,31 @@ function terminalReceipt(
  * history rather than reading it.
  */
 function readIntent(intent: AutomationCommandIntent): AutomationCommandIntent {
+  if (intent.kind === "automation.run") return { ...intent, plan: readRunPlan(intent.plan) };
   if (intent.kind !== "automation.create" && intent.kind !== "automation.update") return intent;
   return { ...intent, trigger: parseAutomationTrigger(intent.trigger) };
+}
+
+/**
+ * A stored Run plan, read in TODAY's vocabulary — the same rule
+ * {@link readIntent} states for the Trigger, applied to the field VC-129 added.
+ *
+ * The ledger is append-only and older than the Unbound Run: a plan written
+ * before VC-129 carries no `request` at all. Every plan of that age was a bound
+ * Run started from a record, with no per-invocation override to spend — that is
+ * not a guess, it is the only Run the code of the time could accept — so it is
+ * read as the request it was. Reading it literally would instead compare a
+ * retry against `undefined` and refuse the caller's own command as a different
+ * one, which is exactly the upgrade-day bug the Trigger normalizer exists to
+ * avoid.
+ *
+ * A plan is never written back through this: normalization is about how an old
+ * row is UNDERSTOOD, and the row itself stays whatever it was recorded as.
+ */
+function readRunPlan(plan: AutomationRunPlan): AutomationRunPlan {
+  const request: AutomationRunRequestIdentity | undefined = plan.request;
+  if (request !== undefined) return plan;
+  return { ...plan, request: { instructions: null, modelOverride: null } };
 }
 
 /**

@@ -20,7 +20,12 @@
  *      untouched, so there is nothing afterwards to name, disable or delete.
  *   6. There is no authoring form anywhere in the rail: no Name, no Trigger,
  *      no save, no delete.
- *   7. This Ticket's Run-history door answers for this Ticket.
+ *   7. This Ticket's Runs are drawn from this Ticket's own read: with nothing
+ *      run yet the rail draws no list, and the door it reads agrees.
+ *   8. Right-clicking the control opens the nested context menu — the other
+ *      deliberate surface VC-112 names for the per-invocation override.
+ *   9. The board card's own `Automations ▸` submenu offers this column's list
+ *      without opening the Ticket, and holds the same nested override.
  *
  * TWO LIMITS, both stated rather than papered over:
  *
@@ -31,13 +36,16 @@
  *    unbound Run's own Session and its `null` Automation.
  *  - **The nested model override depends on the catalog.** Its submenu lists
  *    the models a picker may offer, so on a profile with nothing available it
- *    is correctly absent — which makes it a bad thing to require. Check 4
- *    PRINTS the menu it found (the override row shows up as "Run on model"
- *    when there is a catalog) and requires only what must always be there.
- *    What the override menu may name — never a model without a reasoning level
- *    it can run — is pinned in `ticket-rail-automations-model.test.ts`, and
- *    the surface this probe does require is the Run once form's own Runtime
- *    control, which the rail draws whatever the catalog says.
+ *    is correctly absent — which makes it a bad thing to require. Checks 4, 8
+ *    and 9 PRINT the menu they found (the override row shows up as "Run on
+ *    model" when there is a catalog) and require only what must always be
+ *    there. What the override menu may name — never a model without a
+ *    reasoning level it can run — is pinned in
+ *    `ticket-rail-automations-model.test.ts`; that the pick SURVIVES into the
+ *    Run, including into a Run once form opened by it, is pinned in
+ *    `ticket-rail-automations.test.tsx` and `automation-run-menu.test.tsx`.
+ *    The override surface this probe does require is the Run once form's own
+ *    Runtime control, which the rail draws whatever the catalog says.
  *
  * No fixed sleeps: every wait is on a real signal.
  *
@@ -285,16 +293,63 @@ try {
     },
   );
 
-  await attempt(7, "the Ticket's own Run-history door answers for this Ticket", async () => {
-    // A Run needs a live model and spends tokens, so this probe stops at the
-    // door — the same line the page smoke draws. What the rail DOES with the
-    // rows (newest first, the resolved model, a door back to the Session) is
-    // pinned in `ticket-rail-automations.test.tsx`.
+  await attempt(7, "this Ticket's Runs are drawn from this Ticket's own read", async () => {
+    // A Run needs a live model and spends tokens, so nothing has run here: the
+    // VISIBLE evidence is that the rail draws no run list, and the door it
+    // reads says the same. What the rail DOES with rows once they exist
+    // (newest first, the resolved model, a door back to the Session) is pinned
+    // in `ticket-rail-automations.test.tsx`, which can mint Runs freely.
+    await openTicket();
+    const drawn = await rail().locator('[data-testid="ticket-rail-runs"]').count();
     const outcome = await page.evaluate(async (ticketId) => {
       const mine = await window.api.automations.runsForTicket({ ticketId });
       return mine.ok ? { runs: mine.runs.length } : { refused: mine.error };
     }, seeded.ticketId);
-    return { ok: outcome.runs === 0, detail: JSON.stringify(outcome) };
+    return {
+      ok: drawn === 0 && outcome.runs === 0,
+      detail: `lists=${drawn} ${JSON.stringify(outcome)}`,
+    };
+  });
+
+  await attempt(8, "right-clicking the control opens the nested context menu", async () => {
+    // The second deliberate surface VC-112 names beside the rail itself. The
+    // override row rides here when the profile has a catalog; this profile has
+    // none, so the row is printed rather than required.
+    await page.getByLabel("Run Review sweep on this ticket").click({ button: "right" });
+    const menu = page.getByRole("menu").first();
+    await menu.waitFor({ timeout: 10000 });
+    const items = await menu.innerText();
+    await page.keyboard.press("Escape");
+    await backToBoard();
+    return {
+      ok:
+        items.includes("Review sweep") &&
+        items.includes("Nightly sweep") &&
+        !items.includes("Done sweep") &&
+        items.includes("Run once"),
+      detail: items.replaceAll("\n", " | ").slice(0, 240),
+    };
+  });
+
+  await attempt(9, "the board card runs one without opening the Ticket", async () => {
+    await cardById(page, "PRB-1").first().click({ button: "right" });
+    const menu = page.getByRole("menu").first();
+    await menu.waitFor({ timeout: 10000 });
+    await menu.getByRole("menuitem", { name: "Automations" }).hover();
+    const submenu = page.getByRole("menu").nth(1);
+    await submenu.waitFor({ timeout: 10000 });
+    const items = await submenu.innerText();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    return {
+      ok:
+        items.includes("Review sweep") &&
+        items.includes("Nightly sweep") &&
+        !items.includes("Done sweep") &&
+        // A card has nowhere to type an Unbound Run, so it offers none.
+        !items.includes("Run once"),
+      detail: items.replaceAll("\n", " | ").slice(0, 240),
+    };
   });
 
   exitCode = summarize();

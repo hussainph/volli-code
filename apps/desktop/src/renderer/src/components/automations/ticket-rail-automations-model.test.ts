@@ -4,7 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   modelOverrideRows,
+  overridePressable,
   railRunLabel,
+  RAIL_UNREAD_LABEL,
   ticketRailAutomations,
 } from "./ticket-rail-automations-model";
 import type { ComposerModel } from "@renderer/components/chat/composer-ui";
@@ -47,6 +49,7 @@ describe("ticketRailAutomations", () => {
       automations: [armed],
       armings: [arming()],
       status: "doing",
+      ready: true,
     });
 
     expect(rail.primary).toEqual({ kind: "automation", automation: armed });
@@ -58,6 +61,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [],
       status: "doing",
+      ready: true,
     });
 
     expect(rail.primary).toEqual({ kind: "run-once" });
@@ -72,6 +76,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation()],
       armings: [arming({ status: "todo" })],
       status: "doing",
+      ready: true,
     });
 
     expect(rail.primary).toEqual({ kind: "run-once" });
@@ -85,6 +90,7 @@ describe("ticketRailAutomations", () => {
       automations: [offeredFirst, armed],
       armings: [arming()],
       status: "doing",
+      ready: true,
     });
 
     expect(rail.offered.map((entry) => entry.id)).toEqual(["a1", "a2"]);
@@ -95,6 +101,7 @@ describe("ticketRailAutomations", () => {
       automations: [automation({ trigger: NO_AUTOMATION_TRIGGER })],
       armings: [],
       status: "doing",
+      ready: true,
     });
 
     expect(rail.offered).toEqual([]);
@@ -105,12 +112,71 @@ describe("ticketRailAutomations", () => {
   });
 
   it("says the project lists nothing, which is what the empty state is drawn from", () => {
-    const rail = ticketRailAutomations({ automations: [], armings: [], status: "doing" });
+    const rail = ticketRailAutomations({
+      automations: [],
+      armings: [],
+      status: "doing",
+      ready: true,
+    });
 
     expect(rail.listsAny).toBe(false);
     expect(rail.offered).toEqual([]);
     // Run once needs no record, so an empty project still has a working press.
     expect(rail.primary).toEqual({ kind: "run-once" });
+    expect(rail.ready).toBe(true);
+  });
+
+  it("presses nothing until the reads behind it have landed", () => {
+    // The cache says the same thing whether this column arms nothing or nobody
+    // has asked yet, so an unread rail answers neither: it says it is reading.
+    const rail = ticketRailAutomations({
+      automations: [automation()],
+      armings: [arming()],
+      status: "doing",
+      ready: false,
+    });
+
+    expect(rail.ready).toBe(false);
+    expect(rail.primary).toEqual({ kind: "unread" });
+    expect(railRunLabel(rail.primary)).toBe(RAIL_UNREAD_LABEL);
+    // Nothing offered and no claim about the project either: a menu row here
+    // would be a record read from a cache nobody has filled.
+    expect(rail.offered).toEqual([]);
+    expect(rail.listsAny).toBe(false);
+  });
+
+  it("does not mistake an unread cache for an armed column that lost its record", () => {
+    // The stale case the read exists for: this cache still holds the arming a
+    // person removed in another window, and the rail must not press it.
+    const stale = ticketRailAutomations({
+      automations: [automation()],
+      armings: [arming()],
+      status: "doing",
+      ready: false,
+    });
+
+    expect(stale.primary).not.toEqual({ kind: "automation", automation: automation() });
+  });
+});
+
+describe("overridePressable", () => {
+  it("offers the override wherever the default press is a Run", () => {
+    const primary = { kind: "automation", automation: automation() } as const;
+
+    expect(overridePressable(primary, true)).toBe(true);
+    expect(overridePressable(primary, false)).toBe(true);
+  });
+
+  it("offers it for Run once only where there is a form to carry it into", () => {
+    expect(overridePressable({ kind: "run-once" }, true)).toBe(true);
+    // The board card has nowhere to type an Unbound Run, so an override there
+    // would name a model for a Run that cannot be described.
+    expect(overridePressable({ kind: "run-once" }, false)).toBe(false);
+  });
+
+  it("never offers it before the rail has read what it would run", () => {
+    expect(overridePressable({ kind: "unread" }, true)).toBe(false);
+    expect(overridePressable({ kind: "unread" }, false)).toBe(false);
   });
 });
 

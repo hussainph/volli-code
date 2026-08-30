@@ -16,7 +16,12 @@
  *    decision 2's no-redirect rule — so the finished Run becomes a toast whose
  *    action is the door (the shape VC-128's armed window also uses).
  */
-import { errorMessage, type AutomationRunTarget, type ModelSelection } from "@volli/shared";
+import {
+  automationRunRetryKey,
+  errorMessage,
+  type AutomationRunTarget,
+  type ModelSelection,
+} from "@volli/shared";
 import { toast } from "sonner";
 
 import { runAutomationAction, type RunAutomationAction } from "./run-automation-model";
@@ -29,23 +34,6 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
-
-/**
- * What a lost reply is retried AS.
- *
- * A bound Run is identified by its record and its Ticket. An Unbound Run has no
- * record, so its own Instructions stand in: the same words on the same Ticket
- * are the same intent and reuse the durable command id, while a person who
- * edited the box before pressing again means a different Run and gets a new
- * one. A per-invocation model override is deliberately NOT part of it — running
- * the same work again on a different model is a second Run, and it takes the
- * fresh id the missing key gives it.
- */
-function retryKeyFor(target: AutomationRunTarget, ticketId: string): string {
-  const named =
-    target.kind === "automation" ? target.automationId : `unbound:${target.instructions}`;
-  return `${named}\u0000${ticketId}`;
-}
 
 /** One Run request, as every caller in the renderer spells it. */
 export interface RunRequest {
@@ -61,7 +49,15 @@ export interface RunRequest {
  * waiting on a Session and no other surface will tell them.
  */
 async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
-  const retryKey = retryKeyFor(input.target, input.ticketId);
+  // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
+  // — the record or the Unbound Run's own words, the Ticket, and this
+  // invocation's model override. Running the same work on a different model is
+  // a second Run, so it must not FIND the first one's durable command id: an
+  // override left out of this key would reuse that id, and main would answer
+  // the second press with the first Run's receipt. Main compares the same
+  // identity durably (`sameAutomationRunRequestIdentity`), so the two halves of
+  // "the same Run" are one statement rather than two that agree by luck.
+  const retryKey = automationRunRetryKey(input);
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
   try {
@@ -113,8 +109,8 @@ export async function runAutomationOnTicket(input: RunRequest): Promise<void> {
 
 /**
  * Run one Automation from a surface that LISTS it (VC-112: running by hand is
- * universal, and every listing surface can do it). The Automations page is the
- * caller today.
+ * universal, and every listing surface can do it). The Automations page and the
+ * board card's own context menu are the callers today.
  *
  * It never navigates. The person is on a page of records, quite possibly
  * running a second one next, and a Session that seizes the window is VC-13
@@ -128,11 +124,19 @@ export async function runAutomationFromListing(input: {
   automationName: string;
   ticketId: string;
   ticketDisplayId: string;
+  /**
+   * This invocation's Runtime, or `null` to resolve it the ordinary way.
+   * Required rather than optional: every listing surface has to say whether it
+   * offers the per-invocation override (VC-112 puts it on the deliberate
+   * surfaces only), and an omitted field would let a new caller inherit an
+   * answer it never gave.
+   */
+  modelOverride: ModelSelection | null;
 }): Promise<void> {
   const action = await startRun({
     target: { kind: "automation", automationId: input.automationId },
     ticketId: input.ticketId,
-    modelOverride: null,
+    modelOverride: input.modelOverride,
   });
   if (action === null) return;
   switch (action.kind) {

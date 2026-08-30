@@ -442,6 +442,27 @@ export function selectArmings(state: AutomationsState, projectId: string): reado
 }
 
 /**
+ * Whether all three planning caches this project's Automations are decided from
+ * — its records, its armed columns, and this machine's switches — have LANDED,
+ * as opposed to resting at their empty defaults.
+ *
+ * The distinction the caches themselves cannot make: "nothing armed here" and
+ * "never asked here" are one value in every slice, deliberately (VC-112), so a
+ * caller that must not act on a guess asks this instead. Two of them do, and
+ * they answer the same question differently on purpose — an arrival mid-drag
+ * DEFERS its classification until this is true (`armed-run.ts`), while the
+ * ticket rail leaves its default press inert until it is (VC-129). Neither may
+ * decide from an empty cache; what they may do about it is theirs.
+ */
+export function selectPlanningLoaded(state: AutomationsState, projectId: string): boolean {
+  return (
+    state.byProject[projectId] !== undefined &&
+    state.armingByProject[projectId] !== undefined &&
+    state.enablementRead
+  );
+}
+
+/**
  * The Automation a column fires on its own, resolved through the shared rule
  * rather than by reading the arming row directly — a row naming a deleted
  * Automation, or one whose Trigger no longer offers this column, is inert.
