@@ -16,12 +16,10 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import {
   displayTicketId,
-  effectiveArmedAutomationFor,
   EMPTY_TICKET_FILTER,
   filterTickets,
   groupTicketsByStatus,
   moveTicket,
-  offeredAutomationsInDigitOrder,
   sortTickets,
   TICKET_STATUSES,
   type Automation,
@@ -37,6 +35,7 @@ import { BoardColumn } from "@renderer/components/board/board-column";
 import {
   MOVE_ONLY_ROW,
   OFFERED_ROW_ATTRIBUTE,
+  type ColumnOfferedPanelProps,
 } from "@renderer/components/board/column-offered-panel";
 import {
   dragPickerReducer,
@@ -67,6 +66,8 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
 import {
+  effectiveArmedIn,
+  offeredInDigitOrder,
   selectArmings,
   selectAutomations,
   selectColumnOrders,
@@ -255,26 +256,19 @@ export const Board = React.memo(function Board({
   const columnOrders = useAutomationsStore((state) => selectColumnOrders(state, projectId));
   const enabledIds = useAutomationsStore((state) => state.enabledIds);
   const offeredByStatus = React.useMemo(() => {
+    // The store's own composition, handed the four slices this component
+    // subscribed to — the same function the lane view runs, which is what makes
+    // "the digit a lane prints is the digit a drag answers" structural rather
+    // than a pair of memos that agree today.
+    const slices = { automations, armings, orders: columnOrders, enabledAutomationIds: enabledIds };
     const offered = {} as Record<TicketStatus, readonly Automation[]>;
     const armed = {} as Record<TicketStatus, string | null>;
     for (const status of TICKET_STATUSES) {
       // The PIN's source: armed and switched on here. An armed Automation this
       // machine has switched off starts nothing on a plain drop, so pinning it
       // to `1` would make the safe digit promise a Run that never comes.
-      const effective = effectiveArmedAutomationFor({
-        automations,
-        armings,
-        enabledAutomationIds: enabledIds,
-        status,
-      });
-      armed[status] = effective?.id ?? null;
-      offered[status] = offeredAutomationsInDigitOrder({
-        automations,
-        status,
-        rankedAutomationIds:
-          columnOrders.find((order) => order.status === status)?.rankedAutomationIds ?? [],
-        effectiveArmedAutomationId: effective?.id ?? null,
-      });
+      armed[status] = effectiveArmedIn(slices, status)?.id ?? null;
+      offered[status] = offeredInDigitOrder(slices, status);
     }
     return { offered, armed };
   }, [automations, armings, columnOrders, enabledIds]);
@@ -308,6 +302,31 @@ export const Board = React.memo(function Board({
     pickerRef.current = next;
     setPicker(next);
   }, []);
+
+  // What a column shows mid-drag — its Offered list compactly while the pointer
+  // is merely over it, grown into landing targets while ⌥ holds it open — built
+  // in one place because TWO surfaces draw it: a standing column, and the rail
+  // pill that stands in for an EMPTY one. An empty column can be armed, so the
+  // pill has to be able to grow the same picker; what a column offers is a fact
+  // about the column, never about how much of it is on screen.
+  const offeredPanelFor = React.useCallback(
+    (status: TicketStatus): ColumnOfferedPanelProps | undefined =>
+      showsOfferedList(picker, status)
+        ? {
+            rows: offeredByStatus.offered[status],
+            expanded: isPickerColumn(picker, status),
+            highlighted: highlightedIndex(picker, pickerColumns, status),
+            armedId: offeredByStatus.armed[status],
+          }
+        : undefined,
+    [picker, pickerColumns, offeredByStatus],
+  );
+  // One column is being aimed at, and the rest — standing or collapsed — are
+  // not the question.
+  const dimmedFor = React.useCallback(
+    (status: TicketStatus): boolean => isPickerOpen(picker) && !isPickerColumn(picker, status),
+    [picker],
+  );
 
   // Live only while a card is in the air. ⌥ is read from TWO sources for the
   // reason the Lab rig documents: the key events alone miss a drag that STARTED
@@ -693,20 +712,10 @@ export const Board = React.memo(function Board({
                   <BoardColumn
                     key={status}
                     status={status}
-                    // What this column can run, mid-drag (VC-132): its Offered
-                    // list compactly while the pointer is merely over it, grown
-                    // into landing targets while ⌥ holds it open.
-                    offered={
-                      showsOfferedList(picker, status)
-                        ? {
-                            rows: offeredByStatus.offered[status],
-                            expanded: isPickerColumn(picker, status),
-                            highlighted: highlightedIndex(picker, pickerColumns, status),
-                            armedId: offeredByStatus.armed[status],
-                          }
-                        : undefined
-                    }
-                    dimmed={isPickerOpen(picker) && !isPickerColumn(picker, status)}
+                    // What this column can run, mid-drag (VC-132) — the same
+                    // panel the rail's pills draw, from the same builder.
+                    offered={offeredPanelFor(status)}
+                    dimmed={dimmedFor(status)}
                     // Display order is sort-driven: `sortedGroups` reorders each
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
@@ -731,11 +740,25 @@ export const Board = React.memo(function Board({
                     dragActive={drag !== null}
                     onExpand={setExpandedEmptyStatus}
                     animateEnter={boardMounted.current}
+                    offeredFor={offeredPanelFor}
+                    dimmedFor={dimmedFor}
                   />
                 )}
               </div>
             )}
             <DragOverlay
+              // The lifted card is a PICTURE, never a surface: dnd-kit's own
+              // wrapper is a fixed, card-sized box at `z-index: 999` that
+              // follows the pointer exactly, so without this it is the topmost
+              // thing under the hand at every moment of the drag — and the
+              // picker's hit test (`pointerLanding`) reads the topmost thing
+              // under the hand. It answered "no column, no row" for any aim
+              // that ended INSIDE the lifted card's own outline, which is most
+              // of them: which aims survived depended on where the card had
+              // been grabbed. A row aimed at and not taken is the one failure
+              // this gesture cannot have, because the release then runs the
+              // column's default instead of what the hand was pointing at.
+              className="pointer-events-none"
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not
                 // necessarily where the card is: animating the card into the

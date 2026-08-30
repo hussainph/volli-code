@@ -13,18 +13,36 @@ import { toast } from "sonner";
 
 import {
   createAutomationsStore,
+  effectiveArmedIn,
+  offeredInDigitOrder,
+  offeredInRankOrder,
   selectArmedAutomation,
   selectArmings,
   selectAutomations,
   selectColumnOrders,
   selectColumnRank,
-  selectEffectiveArmedAutomation,
-  selectOfferedInDigitOrder,
-  selectOfferedInRankOrder,
   selectTicketRuns,
+  type OfferedListSlices,
 } from "./automations";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+/**
+ * The four slices an Offered-list composition reads, assembled from one
+ * project's state exactly as board.tsx and the lane view assemble them from
+ * their own subscriptions.
+ */
+function slicesFor(
+  state: Parameters<typeof selectAutomations>[0],
+  projectId: string,
+): OfferedListSlices {
+  return {
+    automations: selectAutomations(state, projectId),
+    armings: selectArmings(state, projectId),
+    orders: selectColumnOrders(state, projectId),
+    enabledAutomationIds: state.enabledIds,
+  };
+}
 
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
@@ -1053,33 +1071,36 @@ describe("the digit order (VC-132)", () => {
 
   it("reads the authored rank, uncapped and unpinned, for the surfaces that choose a record", async () => {
     const store = await loaded({ armings: [ARMING], enabled: ["automation-1"] });
-    expect(selectOfferedInRankOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual([
-      "automation-2",
-      "automation-1",
-    ]);
+    expect(
+      offeredInRankOrder(slicesFor(store.getState(), "p1"), "doing").map((row) => row.id),
+    ).toEqual(["automation-2", "automation-1"]);
   });
 
   it("pins the effective armed Automation to digit 1 for the drag", async () => {
     const store = await loaded({ armings: [ARMING], enabled: ["automation-1"] });
-    expect(selectEffectiveArmedAutomation(store.getState(), "p1", "doing")).toEqual(first);
-    expect(selectOfferedInDigitOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual(
-      ["automation-1", "automation-2"],
-    );
+    expect(effectiveArmedIn(slicesFor(store.getState(), "p1"), "doing")).toEqual(first);
+    expect(
+      offeredInDigitOrder(slicesFor(store.getState(), "p1"), "doing").map((row) => row.id),
+    ).toEqual(["automation-1", "automation-2"]);
   });
 
   it("lets the pin go when the armed Automation is switched off here", async () => {
     // A plain drop then runs nothing, so pinning it to `1` would make the safe
     // digit promise a Run that never comes — and the digits do not renumber.
     const store = await loaded({ armings: [ARMING], enabled: [] });
-    expect(selectEffectiveArmedAutomation(store.getState(), "p1", "doing")).toBeNull();
-    expect(selectOfferedInDigitOrder(store.getState(), "p1", "doing").map((row) => row.id)).toEqual(
-      ["automation-2", "automation-1"],
-    );
+    expect(effectiveArmedIn(slicesFor(store.getState(), "p1"), "doing")).toBeNull();
+    expect(
+      offeredInDigitOrder(slicesFor(store.getState(), "p1"), "doing").map((row) => row.id),
+    ).toEqual(["automation-2", "automation-1"]);
   });
 
   it("offers nothing for a column no Trigger names", async () => {
     const store = await loaded({});
-    expect(selectOfferedInDigitOrder(store.getState(), "p1", "todo")).toEqual([]);
+    expect(offeredInDigitOrder(slicesFor(store.getState(), "p1"), "todo")).toEqual([]);
+    // A column nobody arranged, out of slices that HAVE landed: the rank
+    // lookup's own empty answer, which the frozen-empties case above can only
+    // reach through a project that was never read.
+    expect(offeredInRankOrder(slicesFor(store.getState(), "p1"), "needs_review")).toEqual([]);
   });
 });
 

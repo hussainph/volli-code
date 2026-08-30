@@ -18,6 +18,9 @@
  *      all, in a column armed to fire.
  *   7. Releasing ⌥ collapses the picker without ending the drag, and Escape
  *      ends the drag itself — nothing moves and nothing starts.
+ *   8. A COLLAPSED PILL is a column: an empty column that is armed grows the
+ *      same picker under ⌥, and its Move only target lands the card without
+ *      starting the countdown its arming would otherwise open.
  *
  * The digits and the state machine behind all of this are unit-tested at 100%
  * in `components/board/drag-picker-model.ts`; what needs a real app is that a
@@ -128,18 +131,25 @@ function panelRows(page) {
  * pressed before that has no hovered column to open over (it would open on the
  * next move, and a check that presses and reads makes none).
  */
-async function liftOver(page, displayId, status, { expectPanel = true } = {}) {
+async function liftOver(page, displayId, status, { expectPanel = true, dwell = 120 } = {}) {
   // Both boxes measured only once they have stopped moving: a card that just
   // landed is still animating into its slot, and pressing down on where it WAS
   // starts no drag at all.
   const from = await stableBox(cardById(page, displayId).first());
   const column = await stableBox(columnFor(page, status));
+  // Where the pointer parks inside the target, and it is aimed rather than
+  // arbitrary: 120px down a standing column puts it BELOW that column's own
+  // collapsed panel, over its cards, so every row is somewhere the pointer
+  // then has to travel to. A COLLAPSED PILL is some forty pixels tall, so
+  // check 8 says where to park rather than inheriting a depth measured for a
+  // full column.
+  const dwellY = column.y + dwell;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   // Two moves: the first passes dnd-kit's 4px activation constraint, the second
   // carries the pointer onto the target column.
   await page.mouse.move(from.x + from.width / 2 + 30, from.y + 40, { steps: 8 });
-  await page.mouse.move(column.x + column.width / 2, column.y + 120, { steps: 20 });
+  await page.mouse.move(column.x + column.width / 2, dwellY, { steps: 20 });
   // dnd-kit has actually picked the card up. Asserted before anything is read,
   // because a drag that never activated and a panel that has not rendered yet
   // look identical from the outside.
@@ -155,7 +165,7 @@ async function liftOver(page, displayId, status, { expectPanel = true } = {}) {
       "the column's Offered list to appear under the pointer",
       async () => {
         nudged = nudged === 0 ? 3 : 0;
-        await page.mouse.move(column.x + column.width / 2 + nudged, column.y + 120, { steps: 2 });
+        await page.mouse.move(column.x + column.width / 2 + nudged, dwellY, { steps: 2 });
         return (await page.locator("[data-offered-panel]").count()) > 0;
       },
       { timeout: 10_000, interval: 150 },
@@ -175,7 +185,7 @@ async function liftOver(page, displayId, status, { expectPanel = true } = {}) {
   return {
     /** A pointer move that changes nothing but makes the app read ⌥ again. */
     async nudge(dx = 2, dy = 0) {
-      await page.mouse.move(column.x + column.width / 2 + dx, column.y + 120 + dy, { steps: 2 });
+      await page.mouse.move(column.x + column.width / 2 + dx, dwellY + dy, { steps: 2 });
     },
     async moveTo(x, y) {
       await page.mouse.move(x, y, { steps: 6 });
@@ -226,9 +236,9 @@ try {
       title: "Drag me",
       status: "todo",
     });
-    // A resident in each column this smoke drags between: an EMPTY column
-    // collapses into the board's rail, and a collapsed pill is not a column
-    // with an Offered list to grow.
+    // A resident in each column this smoke drags a card BETWEEN, so both stand
+    // as full columns. Needs Review is deliberately left empty: it collapses
+    // into the board's rail, and check 8 is about that pill.
     const todoSitter = await window.api.tickets.create({
       projectId: project.id,
       title: "Stays in Todo",
@@ -240,8 +250,9 @@ try {
       status: "doing",
     });
     if (!mover.ok || !todoSitter.ok || !doingSitter.ok) return { fail: "ticket create failed" };
-    // Two Automations offered in Doing, plus one Todo-only so a column with
-    // nothing offered is on the board as well (Needs Review).
+    // Two Automations offered in Doing — enough for a rank and a pin to
+    // disagree — and one offered in Needs Review, the column that is EMPTY and
+    // therefore drawn as a pill (check 8).
     const armed = await window.api.automations.create({
       commandId: crypto.randomUUID(),
       projectId: project.id,
@@ -258,10 +269,20 @@ try {
       trigger: { kind: "columns", columns: ["doing"] },
       runtime: null,
     });
-    if (!armed.ok || !other.ok) return { fail: armed.ok ? other.error : armed.error };
+    const collapsed = await window.api.automations.create({
+      commandId: crypto.randomUUID(),
+      projectId: project.id,
+      name: "Standards sweep",
+      instructions: "/standards",
+      trigger: { kind: "columns", columns: ["needs_review"] },
+      runtime: null,
+    });
+    if (!armed.ok || !other.ok || !collapsed.ok) {
+      return { fail: armed.ok ? (other.ok ? collapsed.error : other.error) : armed.error };
+    }
     // Both switched ON here: a machine fires nothing until someone does
     // (VC-112), and the pin follows the EFFECTIVE armed Automation.
-    for (const id of [armed.automation.id, other.automation.id]) {
+    for (const id of [armed.automation.id, other.automation.id, collapsed.automation.id]) {
       const on = await window.api.automations.setEnabled({
         commandId: crypto.randomUUID(),
         automationId: id,
@@ -283,7 +304,21 @@ try {
       status: "doing",
       automationId: armed.automation.id,
     });
-    if (!ordered.ok || !armedOk.ok) return { fail: ordered.ok ? armedOk.error : ordered.error };
+    // …and the EMPTY column is armed too. That is the whole subject of check 8:
+    // arming is a property of the column and has nothing to do with whether a
+    // ticket is sitting in it, so the one column shape that cannot show its
+    // cards is still the one that fires on arrival.
+    const collapsedArmed = await window.api.automations.arm({
+      commandId: crypto.randomUUID(),
+      projectId: project.id,
+      status: "needs_review",
+      automationId: collapsed.automation.id,
+    });
+    if (!ordered.ok || !armedOk.ok || !collapsedArmed.ok) {
+      return {
+        fail: ordered.ok ? (armedOk.ok ? collapsedArmed.error : armedOk.error) : ordered.error,
+      };
+    }
     return {
       projectId: project.id,
       ticketId: mover.ticket.id,
@@ -293,7 +328,7 @@ try {
   });
   await must(
     0,
-    "a project, three tickets, and an armed column with two offered Automations",
+    "a project, three tickets, an armed column with two offered Automations, and an armed EMPTY one",
     async () => ({
       ok: seeded.fail === undefined,
       detail: seeded.fail ?? `project=${seeded.projectId}`,
@@ -481,6 +516,58 @@ try {
       return {
         ok: stillDragging > 0 && after === before && windows === 0,
         detail: `dragging=${stillDragging} status ${before}→${after} windows=${windows}`,
+      };
+    },
+  );
+
+  await must(
+    8,
+    "an armed EMPTY column's pill grows the same picker, and Move only lands there",
+    async () => {
+      // Needs Review holds no tickets, so the board draws it as a rail pill —
+      // and it is armed, so a plain release here would open the countdown. What
+      // the pill owes the hand is therefore exactly what a standing column owes
+      // it: the hint, the grown list, and a Move only target to aim at.
+      //
+      // Parked on the pill itself, twenty pixels down a forty-pixel target. Its
+      // panel hangs BENEATH it, so the hand is still resting on the pill when ⌥
+      // grows the targets below and every one of them is a real journey.
+      const drag = await liftOver(page, "PRB-1", "needs_review", { dwell: 20 });
+      const hint = await page.locator("[data-choose-hint]").textContent();
+      await page.keyboard.down("Alt");
+      await page.locator('[data-offered-panel="expanded"]').waitFor({ timeout: 5000 });
+      const rows = await panelRows(page);
+      const moveOnly = page.locator('[data-offered-row="move-only"]');
+      const box = await stableBox(moveOnly);
+      await drag.moveTo(box.x + box.width / 2, box.y + box.height / 2);
+      await waitUntil(
+        "Move only to light up over the pill",
+        async () => (await moveOnly.getAttribute("aria-current")) === "true",
+        { timeout: 3000 },
+      );
+      await drag.release();
+      await page.keyboard.up("Alt");
+
+      await waitUntil("PRB-1 to land in Needs Review", async () =>
+        statusOf(page, seeded.projectId, seeded.ticketId).then(
+          (status) => status === "needs_review",
+        ),
+      );
+      const windows = await page.locator("[data-armed-run-window]").count();
+      const runs = await page.evaluate(async (ticketId) => {
+        const result = await window.api.automations.runsForTicket({ ticketId });
+        return result.ok ? result.runs.length : -1;
+      }, seeded.ticketId);
+      return {
+        ok:
+          (hint ?? "").includes("to choose") &&
+          rows.length === 2 &&
+          rows[0].row === "0" &&
+          rows[0].text.includes("Standards sweep") &&
+          rows[1].row === "move-only" &&
+          windows === 0 &&
+          runs === 0,
+        detail: `hint=${JSON.stringify((hint ?? "").trim())} ${JSON.stringify(rows)} windows=${windows} runs=${runs}`,
       };
     },
   );

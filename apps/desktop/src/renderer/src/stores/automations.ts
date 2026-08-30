@@ -76,7 +76,7 @@ interface AutomationsState {
    * property of the COLUMN and of THIS machine, never a field on an Automation
    * that could travel with the record. It is read beside the arming too — the
    * digit a lane prints and the digit a drag answers are one list, composed by
-   * {@link selectOfferedInDigitOrder}.
+   * {@link offeredInDigitOrder}.
    */
   orderByProject: Record<string, readonly ColumnAutomationOrder[]>;
   /** projectId → every Run on its Tickets, newest first. */
@@ -568,10 +568,15 @@ export function selectColumnRank(
   projectId: string,
   status: TicketStatus,
 ): readonly string[] {
-  return (
-    selectColumnOrders(state, projectId).find((order) => order.status === status)
-      ?.rankedAutomationIds ?? NO_RANK
-  );
+  return rankFor(selectColumnOrders(state, projectId), status);
+}
+
+/** The same lookup for a surface that already holds the order rows. */
+function rankFor(
+  orders: readonly ColumnAutomationOrder[],
+  status: TicketStatus,
+): readonly string[] {
+  return orders.find((order) => order.status === status)?.rankedAutomationIds ?? NO_RANK;
 }
 
 /**
@@ -619,18 +624,37 @@ export function selectArmedAutomation(
 }
 
 /**
+ * The four machine-local slices an Offered list is composed from, in the shape
+ * a component can actually hold them.
+ *
+ * Slices rather than the whole state, and that is forced rather than stylistic:
+ * a composition mints an array on every read, so no surface may SUBSCRIBE to
+ * one. Every surface therefore subscribes to these four raw (each is a stable
+ * reference the store swaps only when it changes) and composes inside a memo —
+ * and a memo may only read what it was handed, since anything else is a
+ * dependency the compiler cannot see. Handing the slices in is what lets the
+ * one composition below be the one every surface runs.
+ */
+export interface OfferedListSlices {
+  automations: readonly Automation[];
+  armings: readonly ColumnArming[];
+  orders: readonly ColumnAutomationOrder[];
+  /** The ids switched on THIS machine — {@link AutomationsState.enabledIds}. */
+  enabledAutomationIds: readonly string[];
+}
+
+/**
  * What a column would fire on a PLAIN drop right now: armed, and switched on
  * here (VC-132). The pin's own source — see the shared rule.
  */
-export function selectEffectiveArmedAutomation(
-  state: AutomationsState,
-  projectId: string,
+export function effectiveArmedIn(
+  slices: OfferedListSlices,
   status: TicketStatus,
 ): Automation | null {
   return effectiveArmedAutomationFor({
-    automations: selectAutomations(state, projectId),
-    armings: selectArmings(state, projectId),
-    enabledAutomationIds: state.enabledIds,
+    automations: slices.automations,
+    armings: slices.armings,
+    enabledAutomationIds: slices.enabledAutomationIds,
     status,
   });
 }
@@ -641,19 +665,17 @@ export function selectEffectiveArmedAutomation(
  *
  * The one composition of all four slices, so the digit a lane prints and the
  * digit a drag answers can never be two lists. Not memoized — every caller
- * either derives it inside a `useMemo` of its own or reads it once at a drop.
+ * derives it inside a `useMemo` of its own.
  */
-export function selectOfferedInDigitOrder(
-  state: AutomationsState,
-  projectId: string,
+export function offeredInDigitOrder(
+  slices: OfferedListSlices,
   status: TicketStatus,
 ): readonly Automation[] {
   return offeredAutomationsInDigitOrder({
-    automations: selectAutomations(state, projectId),
+    automations: slices.automations,
     status,
-    rankedAutomationIds: selectColumnRank(state, projectId, status),
-    effectiveArmedAutomationId:
-      selectEffectiveArmedAutomation(state, projectId, status)?.id ?? null,
+    rankedAutomationIds: rankFor(slices.orders, status),
+    effectiveArmedAutomationId: effectiveArmedIn(slices, status)?.id ?? null,
   });
 }
 
@@ -662,14 +684,9 @@ export function selectOfferedInDigitOrder(
  * shows when it is choosing a record rather than pressing a digit (the column's
  * bolt menu, the lane's own arrangement).
  */
-export function selectOfferedInRankOrder(
-  state: AutomationsState,
-  projectId: string,
+export function offeredInRankOrder(
+  slices: OfferedListSlices,
   status: TicketStatus,
 ): readonly Automation[] {
-  return offeredAutomationsForColumn(
-    selectAutomations(state, projectId),
-    status,
-    selectColumnRank(state, projectId, status),
-  );
+  return offeredAutomationsForColumn(slices.automations, status, rankFor(slices.orders, status));
 }

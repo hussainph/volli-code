@@ -50,9 +50,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import {
-  offeredAutomationsForColumn,
-  offeredAutomationsInDigitOrder,
-  effectiveArmedAutomationFor,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Automation,
@@ -66,6 +63,9 @@ import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import {
+  effectiveArmedIn,
+  offeredInDigitOrder,
+  offeredInRankOrder,
   selectArmings,
   selectAutomations,
   selectColumnOrders,
@@ -94,36 +94,33 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
   const setColumnOrder = useAutomationsStore((state) => state.setColumnOrder);
   const reducedMotion = useReducedMotion();
 
-  const lanes = React.useMemo<readonly Lane[]>(
-    () =>
-      TICKET_STATUSES.map((status) => {
-        const rankedAutomationIds =
-          orders.find((order) => order.status === status)?.rankedAutomationIds ?? [];
-        const pinned = effectiveArmedAutomationFor({
-          automations,
-          armings,
-          enabledAutomationIds: enabledIds,
-          status,
-        });
-        return {
-          status,
-          digits: offeredAutomationsInDigitOrder({
-            automations,
-            status,
-            rankedAutomationIds,
-            effectiveArmedAutomationId: pinned?.id ?? null,
-          }),
-          authored: offeredAutomationsForColumn(automations, status, rankedAutomationIds),
-          pinnedId: pinned?.id ?? null,
-        };
-      }),
-    [automations, armings, orders, enabledIds],
-  );
+  // Composed by the STORE's own three compositions, never here: the digit this
+  // lane prints and the digit the board's ⌥ picker answers have to be one list,
+  // and the only way to make that structural rather than a promise is for both
+  // surfaces to run the same function. The four slices are subscribed raw above
+  // and handed in — see `OfferedListSlices` for why they cannot be subscribed
+  // to already composed.
+  const lanes = React.useMemo<readonly Lane[]>(() => {
+    const slices = { automations, armings, orders, enabledAutomationIds: enabledIds };
+    return TICKET_STATUSES.map((status) => ({
+      status,
+      digits: offeredInDigitOrder(slices, status),
+      authored: offeredInRankOrder(slices, status),
+      pinnedId: effectiveArmedIn(slices, status)?.id ?? null,
+    }));
+  }, [automations, armings, orders, enabledIds]);
 
   // Automations that answer to no column: listed so the page never hides a
   // record, and digitless because a digit means "this column's row N".
+  //
+  // The complement of the lanes rather than the "Nothing else" Trigger alone: a
+  // schedule record is offered by no column either, and filtering for `none`
+  // left a schedule-only project reading "Every automation has a column" —
+  // a completeness claim under a view that was hiding the records. Stated as
+  // "not a column Trigger" so a Trigger kind added later lands here by default
+  // instead of vanishing.
   const offBoard = React.useMemo(
-    () => automations.filter((automation) => automation.trigger.kind === "none"),
+    () => automations.filter((automation) => automation.trigger.kind !== "columns"),
     [automations],
   );
 

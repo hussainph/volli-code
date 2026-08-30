@@ -466,6 +466,28 @@ describe("the lane view", () => {
     expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
   });
 
+  it("puts a SCHEDULE record in that lane too, rather than claiming every automation has a column", async () => {
+    // A schedule fires on a clock, so no column offers it and no digit means
+    // anything for it — exactly the off-board case. Filtering for the "Nothing
+    // else" Trigger alone left a schedule-only project reading a completeness
+    // claim under a view that was hiding its records.
+    await mount({
+      automations: [
+        automation({
+          id: "nightly",
+          name: "Nightly sweep",
+          trigger: {
+            kind: "schedule",
+            schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+          },
+        }),
+      ],
+    });
+
+    expect(document.querySelector('[data-lane-row="none:nightly"]')).not.toBeNull();
+    expect(text()).not.toContain("Every automation has a column.");
+  });
+
   it("reads the column's authored rank as its digits", async () => {
     await mount({
       automations: [doingAndReview, doingOnly],
