@@ -537,5 +537,19 @@ describe("column Trigger and arming (migration 031)", () => {
       .run(project.id, automation.id);
 
     expect(listColumnArmings(ctx.db, project.id)).toEqual([]);
+
+    // Closed per ROW, not per project. Each row names its own column in its own
+    // primary key, so an unreadable one can only ever be about a column this
+    // build does not have — voiding the rest would disarm columns we can read
+    // perfectly, which is a bigger lie than dropping the one we cannot.
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      2000,
+    );
+
+    expect(listColumnArmings(ctx.db, project.id)).toEqual([
+      { projectId: project.id, status: "doing", automationId: automation.id, armedAt: 2000 },
+    ]);
   });
 });
