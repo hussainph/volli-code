@@ -43,9 +43,22 @@ export type SessionProvenance =
       kind: "automation";
       /**
        * The bound Automation's name as it stood at launch, retained after that
-       * record is deleted (`AutomationRun.automationName`). `null` is an
-       * Unbound Run — one that carried its own Instructions and named no
-       * Automation, so there is nothing afterwards to name.
+       * record is deleted (`AutomationRun.automationName`).
+       *
+       * **`null` is "an Automation, which cannot be named" — never "not an
+       * Automation".** Two situations reach it, and the mark treats them alike
+       * because a reader can do nothing different about them:
+       *
+       * - An Unbound Run — one that carried its own Instructions and named no
+       *   Automation, so there is nothing afterwards to name.
+       * - A Run whose `automation_runs` row has not landed yet. The Session and
+       *   its `session_started` event are durable one step before that row is
+       *   written, so a crash in between leaves a Session that is provably a
+       *   Run's without anything on disk that can say whose
+       *   (`main/db/session-provenance-repo.ts`).
+       *
+       * The bolt draws either way. Only the name is missing, and a mark that
+       * printed a guess here would be worse than one that prints nothing.
        */
       automationName: string | null;
     }
@@ -108,19 +121,21 @@ export function drawsSessionProvenanceMark(provenance: SessionProvenance): boole
 }
 
 /**
- * The words that ride beside the bolt.
+ * The one accessible sentence the bolt carries, or `null` for a provenance
+ * that draws no bolt.
  *
- * "Run once" is the Unbound Run's name in the product already — it is what the
- * ticket rail's menu item creates — so a Run with no Automation behind it is
- * labelled with the act instead of being labelled with nothing. A bolt with no
- * text at all was the alternative and it is worse: the reader would have to
- * know the glyph's meaning before the row said anything, which is the exact
- * failure VC-112 rejects a glyph for on the `session` arm.
+ * Spelled here rather than in the component because the visible half of the
+ * mark is conditional ({@link automationMarkName}) and this one never is: the
+ * fact must not depend on a sighted comparison with the row's title. When the
+ * Automation cannot be named the sentence keeps the half that is still true —
+ * that no person opened this Session — instead of naming something it does not
+ * know.
  */
-export function automationProvenanceName(provenance: {
-  readonly automationName: string | null;
-}): string {
-  return provenance.automationName ?? "Run once";
+export function automationMarkLabel(provenance: SessionProvenance): string | null {
+  if (provenance.kind !== "automation") return null;
+  return provenance.automationName === null
+    ? "Started by an Automation"
+    : `Started by the Automation ${provenance.automationName}`;
 }
 
 /**
@@ -141,10 +156,14 @@ export function automationProvenanceName(provenance: {
  * Compared after trimming and case-insensitively, because a title that differs
  * from its Automation only by whitespace or capitalisation is the same answer
  * to the reader, and a mark that printed it again would look like a bug.
+ *
+ * An Automation this row cannot name prints nothing at all rather than a
+ * stand-in word: the bolt has already said the only thing that is known.
  */
 export function automationMarkName(provenance: SessionProvenance, rowTitle: string): string | null {
   if (provenance.kind !== "automation") return null;
-  const name = automationProvenanceName(provenance);
+  const name = provenance.automationName;
+  if (name === null) return null;
   return name.trim().toLowerCase() === rowTitle.trim().toLowerCase() ? null : name;
 }
 
@@ -171,7 +190,12 @@ export function sessionProvenanceHoverLine(provenance: SessionProvenance): strin
     case "user":
       return null;
     case "automation":
-      return `Automation · ${automationProvenanceName(provenance)}`;
+      // The nameless arm borrows the `session` arm's own shape — the useful
+      // half of an answer beats silence, and silence here would read as a
+      // Session a person started.
+      return provenance.automationName === null
+        ? "Started by an Automation"
+        : `Automation · ${provenance.automationName}`;
     case "session":
       // A parent we cannot name still says the useful half — that no person
       // opened this Session — rather than falling silent and reading as one a

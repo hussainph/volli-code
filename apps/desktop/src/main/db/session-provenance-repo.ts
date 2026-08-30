@@ -34,6 +34,32 @@
  * is Ticket history), and neither door that can start a Session on someone's
  * behalf can produce one — a Run's Target is always a Ticket, and the
  * `session.start` tool refuses a request that names none.
+ *
+ * ── THE EVENT DECIDES THE PARTY; THE RUN RECORD ONLY NAMES IT ─────────────
+ * The two records do not land together, and they cannot be made to: `run.ts`
+ * creates the Session (durably, with its `session_started` event) and only THEN
+ * asks the Automations ledger to complete the Run, which is the write that
+ * inserts `automation_runs`. They are two ledgers with two transactions, and
+ * `automation_runs.session_id` is a foreign key to a Session that must already
+ * exist — so no reordering closes the gap between them.
+ *
+ * A crash, or a startup recovery that does not finish, therefore leaves a real
+ * window in which a Run's Session exists with no Run row pointing at it. **The
+ * `session_started` actor is what closes it.** Every Session start records that
+ * actor, `run.ts` passes `{ kind: "automation" }`, and a party is a durable
+ * fact of the launch rather than of the bookkeeping that followed it. Reading
+ * the Run row alone would answer `user` for such a Session — the one wrong
+ * answer this feature can give, because it takes away both the bolt and the
+ * board's Run-scoped live ring and says a person did this.
+ *
+ * What the window does cost is the NAME: nothing that survives the crash ties
+ * this Session to which Automation ran. `AutomationRunPlan` holds the name and
+ * is durable first, but it is keyed by the Session OPERATION id, and joining it
+ * would mean rebuilding `sessionCreateCommandId`'s string in SQL and scanning
+ * the Automations event log for every unmarked row — real coupling and an
+ * unindexed scan, to name a case that only a crash produces. The mark says
+ * "an Automation started this" and declines to guess which; see
+ * `SessionProvenance.automationName`.
  */
 import type Database from "better-sqlite3";
 import { PERSON_STARTED, type SessionProvenance } from "@volli/shared";
@@ -60,7 +86,8 @@ export interface SessionProvenanceReader {
  * because it is the only one of the two that can carry a NAME: a Run also
  * writes a `session_started` event, with the `automation` actor and no room in
  * it for which Automation ran, so consulting the event first would produce a
- * bolt that could not say what started the work.
+ * bolt that could not say what started the work. It is asked first, and it is
+ * not required — the event answers for the rows it cannot reach.
  */
 export function readSessionProvenance(
   db: Database.Database,
@@ -83,8 +110,12 @@ export function readSessionProvenance(
   ).get(query.ticketId, query.sessionId);
   if (started === undefined) return PERSON_STARTED;
 
-  const parentSessionId = parentOf(started.actor);
-  if (parentSessionId === null) return PERSON_STARTED;
+  const launcher = launchActorOf(started.actor);
+  if (launcher === null) return PERSON_STARTED;
+  // The pre-Run window: the launch says an Automation, and the record that
+  // would name it is not there (or never will be). The bolt still draws.
+  if (launcher.kind === "automation") return { kind: "automation", automationName: null };
+  const parentSessionId = launcher.sessionId;
   const parent = prepared<[string], { title: string | null }>(
     db,
     "SELECT title FROM sessions WHERE id = ? LIMIT 1",
@@ -94,22 +125,33 @@ export function readSessionProvenance(
   return { kind: "session", parentSessionId, parentTitle: parent?.title ?? null };
 }
 
+/** The two parties a launch actor can name, once everything else is `null`. */
+type LaunchActor = { kind: "automation" } | { kind: "session"; sessionId: string };
+
 /**
- * The parent Session id inside a stored actor, or `null` for every actor that
- * is not a Session.
+ * Which of the two non-resting parties a stored actor names, or `null` for one
+ * that names neither.
  *
  * Read here rather than through `events-repo`'s `parseActor` because that one
  * answers a different question — it maps a row to a whole {@link TicketEvent},
  * and its documented asymmetry is that an unreadable token degrades to `user`.
- * This asks only "is there a Session id in here", so an unreadable token, a
- * bare token, and a JSON actor of another kind all answer the same `null`
- * without borrowing that degradation rule.
+ * Borrowing that here would put the degradation on the wrong side of THIS
+ * question: an unreadable token means "nothing can be said", and this module
+ * says nothing by returning `null`, which the caller draws as the resting case.
+ * `unauthenticated` is `null` for the reason `SessionProvenance` gives — it
+ * names nobody, so there is nothing for a mark to say.
+ *
+ * Both spellings of an `automation` actor land on the same answer, because
+ * `serializeActor` writes the context-less one as a bare token and the
+ * session-driven one as JSON. A Run passes `{ kind: "automation" }` and so
+ * takes the bare-token path; reading only the JSON one is how this whole arm
+ * was invisible.
  */
-function parentOf(actor: string): string | null {
+function launchActorOf(actor: string): LaunchActor | null {
   // Every actor that carries context is stored as JSON (`serializeActor`), so a
   // string that cannot start one is answered without paying for a parse — which
   // is the common case, because `user` is the actor on most rows.
-  if (!actor.startsWith("{")) return null;
+  if (!actor.startsWith("{")) return actor === "automation" ? { kind: "automation" } : null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(actor);
@@ -118,8 +160,9 @@ function parentOf(actor: string): string | null {
   }
   if (typeof parsed !== "object" || parsed === null) return null;
   const candidate = parsed as { kind?: unknown; sessionId?: unknown };
+  if (candidate.kind === "automation") return { kind: "automation" };
   if (candidate.kind !== "session" || typeof candidate.sessionId !== "string") return null;
-  return candidate.sessionId;
+  return { kind: "session", sessionId: candidate.sessionId };
 }
 
 /** {@link readSessionProvenance} bound to one database handle. */

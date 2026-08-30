@@ -40,11 +40,7 @@
  * would compete with the dot beside it that says what the work is doing.
  */
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import {
-  automationMarkName,
-  automationProvenanceName,
-  type SessionProvenance,
-} from "@volli/shared";
+import { automationMarkLabel, automationMarkName, type SessionProvenance } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
 
@@ -61,10 +57,11 @@ export function SessionProvenanceMark({
   rowTitle: string;
   className?: string;
 }) {
-  // The discriminant directly rather than `drawsSessionProvenanceMark`: this is
-  // the one site that goes on to read the Automation's own field, and only the
-  // narrowing form gives it that without a cast.
-  if (provenance.kind !== "automation") return null;
+  // The accessible sentence decides whether anything is drawn at all: it is
+  // non-null for exactly the arm that draws a bolt, so a mark can never reach
+  // the DOM without a name for a screen reader to read.
+  const label = automationMarkLabel(provenance);
+  if (label === null) return null;
   const name = automationMarkName(provenance, rowTitle);
   return (
     <span
@@ -72,8 +69,9 @@ export function SessionProvenanceMark({
       // One accessible sentence for the pair, rather than a labelled glyph
       // beside a text node a screen reader would read as two things. It names
       // the Automation even when the visible half declines to repeat it, so the
-      // fact never depends on a sighted comparison with the title.
-      aria-label={`Started by the Automation ${automationProvenanceName(provenance)}`}
+      // fact never depends on a sighted comparison with the title — and when
+      // there is no name to be had it still says an Automation was here.
+      aria-label={label}
     >
       <LightningIcon weight="bold" aria-hidden className="size-3 shrink-0" />
       {name === null ? null : <span className="truncate">{name}</span>}

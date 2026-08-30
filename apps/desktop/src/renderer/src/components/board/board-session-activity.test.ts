@@ -174,6 +174,19 @@ describe("buildBoardSessionActivity", () => {
       ).toEqual({ t1: "live" });
     });
 
+    // The pre-Run window: a Run whose `automation_runs` row has not landed is
+    // still a Run, and the card is the only place its existence is visible. A
+    // ring that went out because the bookkeeping behind it was incomplete would
+    // read as a Run that had finished.
+    it("holds the ring for a Run whose Automation cannot be named", () => {
+      expect(
+        build({
+          chatSessions: [chat({ activity: "idle" })],
+          provenance: { c1: { kind: "automation", automationName: null } },
+        }).byTicket,
+      ).toEqual({ t1: "live" });
+    });
+
     it("drops it when the attachment closes, which is what `live` means", () => {
       expect(
         build({ chatSessions: [chat({ activity: "idle", live: false })], provenance: RUN })

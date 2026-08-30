@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  automationMarkLabel,
   automationMarkName,
-  automationProvenanceName,
   drawsSessionProvenanceMark,
   PERSON_STARTED,
   sessionProvenanceHoverLine,
@@ -11,7 +11,12 @@ import {
 } from "./session-provenance";
 
 const AUTOMATION: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
-const UNBOUND: SessionProvenance = { kind: "automation", automationName: null };
+/**
+ * A Run whose Automation cannot be named: an Unbound Run, or one whose
+ * `automation_runs` row had not landed when the app stopped. The mark treats
+ * the two alike — see `SessionProvenance`.
+ */
+const UNNAMED: SessionProvenance = { kind: "automation", automationName: null };
 const PARENT: SessionProvenance = {
   kind: "session",
   parentSessionId: "session-parent",
@@ -46,7 +51,10 @@ describe("sessionProvenanceOf", () => {
 describe("drawsSessionProvenanceMark", () => {
   it("marks only a Run-started Session", () => {
     expect(drawsSessionProvenanceMark(AUTOMATION)).toBe(true);
-    expect(drawsSessionProvenanceMark(UNBOUND)).toBe(true);
+    // A Run whose Automation cannot be named is still a Run: the bolt and the
+    // board's live ring both hang off this answer, and losing them in the
+    // pre-Run window is what makes a Run read as person-started.
+    expect(drawsSessionProvenanceMark(UNNAMED)).toBe(true);
   });
 
   // The acceptance criterion, as a test rather than as a comment: a rail of
@@ -58,13 +66,20 @@ describe("drawsSessionProvenanceMark", () => {
   });
 });
 
-describe("automationProvenanceName", () => {
-  it("is the bound Automation's name at launch", () => {
-    expect(automationProvenanceName({ automationName: "Nightly sweep" })).toBe("Nightly sweep");
+describe("automationMarkLabel", () => {
+  it("names the Automation in full, whatever the visible half decided", () => {
+    expect(automationMarkLabel(AUTOMATION)).toBe("Started by the Automation Nightly sweep");
   });
 
-  it("names the act for an Unbound Run, which has no record to name", () => {
-    expect(automationProvenanceName({ automationName: null })).toBe("Run once");
+  // Not silence: the sentence keeps the half it knows rather than letting a
+  // Run's Session be announced as one nobody's machinery started.
+  it("still says an Automation started it when it cannot name which", () => {
+    expect(automationMarkLabel(UNNAMED)).toBe("Started by an Automation");
+  });
+
+  it("says nothing for the two arms that draw no bolt", () => {
+    expect(automationMarkLabel(PERSON_STARTED)).toBeNull();
+    expect(automationMarkLabel(PARENT)).toBeNull();
   });
 });
 
@@ -83,7 +98,12 @@ describe("automationMarkName", () => {
 
   it("prints the name once the title no longer carries it", () => {
     expect(automationMarkName(AUTOMATION, "Fixing the flaky worktree test")).toBe("Nightly sweep");
-    expect(automationMarkName(UNBOUND, "Fixing the flaky worktree test")).toBe("Run once");
+  });
+
+  // The bolt has already said the only thing that is known here, and a
+  // stand-in word beside it would be a name the reader could go looking for.
+  it("prints nothing for an Automation it cannot name", () => {
+    expect(automationMarkName(UNNAMED, "Fixing the flaky worktree test")).toBeNull();
   });
 });
 
@@ -94,7 +114,10 @@ describe("sessionProvenanceHoverLine", () => {
 
   it("leads with the noun for a Run, so the two lines cannot be confused", () => {
     expect(sessionProvenanceHoverLine(AUTOMATION)).toBe("Automation · Nightly sweep");
-    expect(sessionProvenanceHoverLine(UNBOUND)).toBe("Automation · Run once");
+  });
+
+  it("says the useful half for a Run whose Automation it cannot name", () => {
+    expect(sessionProvenanceHoverLine(UNNAMED)).toBe("Started by an Automation");
   });
 
   it("names the parent Session, which is the whole of that mark", () => {

@@ -193,17 +193,56 @@ describe("readSessionProvenance", () => {
     ).toEqual({ kind: "user" });
   });
 
-  // The three actors that are not a Session all answer the same way, and none of
-  // them may be read THROUGH into a parent id: an `automation` actor with no Run
-  // behind it, an `unauthenticated` one, and a stored token this build cannot
-  // read at all.
-  it("draws no parent from an actor that is not a Session", () => {
+  // ── THE PRE-RUN WINDOW ───────────────────────────────────────────────────
+  // A Run creates its Session, and its `session_started` event, one durable
+  // step BEFORE `automation_runs` is written. A crash in between (or a startup
+  // recovery that never finishes) leaves exactly this state, and reading the
+  // Run record alone answers `user` for it: no bolt, and no Run-scoped live
+  // ring on the board, for a Session no person opened.
+  it("marks a Run's Session from its launch event when the Run record is missing", () => {
+    const f = fixture();
+    f.session("session-run", "Nightly sweep");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-run",
+      now: 2_000,
+      // Exactly what `run.ts` passes, stored by `serializeActor` as the bare
+      // token `automation` because it carries no context.
+      actor: { kind: "automation" },
+    });
+
+    expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
+      { kind: "automation", automationName: null },
+    );
+  });
+
+  // The other spelling of the same actor: a session-driven Automation stores
+  // its context, so the token is JSON. Both must reach the same party — the
+  // `sessionId` inside it names the Session that ASKED, not a parent Session,
+  // and must never be read through into the `session` arm.
+  it("marks a session-driven Automation's launch as an Automation, not a parent", () => {
+    const f = fixture();
+    f.session("session-run", null);
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-run",
+      now: 2_000,
+      actor: { kind: "automation", sessionId: "session-asker", ticketId: f.ticketId },
+    });
+
+    expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
+      { kind: "automation", automationName: null },
+    );
+  });
+
+  // The actors that name NOBODY answer alike, and none of them may be read
+  // through into a parent id: an `unauthenticated` caller, and a stored token
+  // this build cannot read at all.
+  it("draws no mark from an actor that names no party", () => {
     const f = fixture();
     for (const [sessionId, actor] of [
-      ["session-a", "automation"],
       ["session-b", "unauthenticated"],
       ["session-c", "{not json"],
-      ["session-d", JSON.stringify({ kind: "automation", sessionId: "session-parent" })],
       ["session-e", JSON.stringify({ kind: "session" })],
       ["session-f", JSON.stringify(["session-parent"])],
       ["session-g", "{}"],
