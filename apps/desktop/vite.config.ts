@@ -245,6 +245,15 @@ export default defineConfig(({ mode }) => ({
         // gesture; which tab ended up where is arithmetic, and an off-by-one
         // in it is a tab that lands one slot from where it was let go.
         "src/components/ui/tab-reorder.ts",
+        // Split view's two pure modules (VC-202), enrolled for the same reason
+        // the tab-strip trio above is. The partition is the last step between
+        // "which pane holds this tab" and the strip that draws it — an
+        // off-by-one there draws one pane's tabs in another pane. The viewport
+        // registry is module state with several live entries, and what it gets
+        // wrong is a terminal drawn over the wrong box or not drawn at all,
+        // which no view test would catch.
+        "src/components/split/split-tab-partition.ts",
+        "src/components/split/terminal-viewport-registry.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
