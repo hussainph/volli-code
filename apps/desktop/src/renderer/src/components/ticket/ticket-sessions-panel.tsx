@@ -203,7 +203,9 @@ function SessionRow({
           />
         ) : (
           <span
-            className="flex min-w-0 flex-1 items-center gap-1.5"
+            // `gap-1` is the ladder's icon↔label rung (docs/DESIGN.md), and the
+            // same gap the mark sits at in the sidebar's rows.
+            className="flex min-w-0 flex-1 items-center gap-1"
             // The provenance line is the whole mark for a Session another
             // Session started, and it rides on a node the row already had.
             title={sessionProvenanceHoverLine(provenance) ?? undefined}
