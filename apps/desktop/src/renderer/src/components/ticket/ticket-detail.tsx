@@ -84,6 +84,7 @@ import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
+import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
@@ -883,6 +884,10 @@ export function TicketDetail({
     BODY_TAB_ID,
   );
   const paneStrips = partitionPaneTabs(split, tabs);
+
+  // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for this workspace. Home mounts the same hook; the
+  // chord asks which surface is in front and exactly one of them acts.
+  useSplitShortcuts({ projectId, ticketId: ticket.id, orderedTabIds: tabs.map((tab) => tab.id) });
 
   /**
    * The Session zen mode is holding, or null.

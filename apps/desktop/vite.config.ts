@@ -270,6 +270,11 @@ export default defineConfig(({ mode }) => ({
         "src/lib/chat-open-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
+        // The split chords (VC-202 §5), in the gate for the same reason the
+        // line above is: a chord predicate that is one modifier off answers to
+        // a keypress somebody meant for something else, and its own surface
+        // gate decides whether a keystroke may rearrange a persisted layout.
+        "src/lib/split-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         // Which rail ⌥⌘B is talking about (VC-55) — the same chrome-predicate
         // shape as its two neighbours here, and gated for the same reason: it

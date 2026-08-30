@@ -104,6 +104,7 @@ import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-ch
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
+import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { toastError } from "@renderer/lib/toast";
@@ -303,6 +304,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const visibleTabIds = split.panes.flatMap((pane) =>
     pane.activeTabId === null ? [] : [pane.activeTabId],
   );
+
+  // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
+  // front for itself, so this instance stands down while a ticket workspace has
+  // taken Home over (`hooks/use-split-shortcuts.ts`).
+  useSplitShortcuts({ projectId: selectedId, ticketId: null, orderedTabIds });
 
   // Terminal focus is an in-app zen mode: one terminal takes the whole canvas
   // and every piece of chrome steps aside, this strip included — exactly as the

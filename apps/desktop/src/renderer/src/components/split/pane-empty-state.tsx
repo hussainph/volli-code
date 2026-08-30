@@ -97,13 +97,22 @@ function PaneEmptyRow({
   return (
     <button
       type="button"
+      // The row a `⌘\` pane hands keyboard focus to — see
+      // `hooks/use-split-shortcuts.ts` for why a keyboard split moves focus
+      // when a pointer one deliberately does not.
+      data-slot="pane-empty-row"
       // Explicit, so the trailing chord is not read as part of the name.
       aria-label={label}
       {...(keyshortcuts === undefined ? {} : { "aria-keyshortcuts": keyshortcuts })}
       onClick={onSelect}
       className={cn(
         "flex h-8 w-full items-center gap-2 rounded-md px-2 text-ui text-foreground outline-none",
-        "transition-colors duration-150 ease-out hover:bg-accent/50 motion-reduce:transition-none",
+        // Colour on hover, and the house press feedback: a row that does not
+        // move under the finger reads as a label rather than a control
+        // (`ui/button.tsx` documents the scale and its reduced-motion cancel).
+        "transition-[color,background-color,scale] duration-150 ease-out",
+        "hover:bg-accent/50 active:scale-[0.99] active:bg-accent/70",
+        "motion-reduce:transition-[color,background-color] motion-reduce:scale-100!",
         "focus-visible:ring-2 focus-visible:ring-ring/45",
       )}
     >
