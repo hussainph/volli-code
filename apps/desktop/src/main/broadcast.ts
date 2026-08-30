@@ -15,6 +15,7 @@ import type {
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionStartedNotice,
+  TicketMovedNotice,
   UpdateUiState,
   VolliIpcEvent,
 } from "../ipc/contract";
@@ -160,6 +161,26 @@ export function broadcastSessionRetitled(sessionId: string, title: string): void
       "volli:session-retitled" satisfies VolliIpcEvent,
       { sessionId, title } satisfies SessionRetitledEvent,
     );
+  }
+}
+
+/**
+ * Announces a Deliberate move main committed for the agent socket (VC-128):
+ * `volli ticket move` is a Deliberate move exactly as a drag is (CONTEXT.md),
+ * so an armed column must hear it the same way.
+ *
+ * To every window, like the interrupt announcement above it, because the board
+ * this concerns is visible in whichever window has that project open. Windows
+ * that do not have it open ignore it — the arrival door reads that project's
+ * own armings, and a window showing another project has none of them armed.
+ * Two windows on the SAME project each open a countdown, and the Run door's
+ * one-Run-per-Ticket guard is what makes the second one harmless; a person
+ * cancelling in one window is cancelling the countdown they can see.
+ */
+export function broadcastTicketMoved(notice: TicketMovedNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:ticket-moved" satisfies VolliIpcEvent, notice);
   }
 }
 

@@ -5,11 +5,24 @@
  *
  * Two decisions worth keeping when this changes.
  *
- * **A committed move is the only trigger.** `noteDeliberateMove` is called by
- * the board store after `api.tickets.move` came back OK, never from a drag
- * preview and never from a hover. A move that main refused, or that the store
+ * **A committed move is the only trigger, and there is one door for it.**
+ * `noteDeliberateMove` is called by the board store after `api.tickets.move`
+ * came back OK, and by main's own announcement of a `volli ticket move` it
+ * committed — CONTEXT.md's two Deliberate moves, human drag and explicit CLI,
+ * arriving at the same function with the same semantics. Never from a drag
+ * preview and never from a hover: a move that main refused, or that the store
  * reverted, cannot have opened a window, so there is no failure mode where a
  * Run starts against a status change that did not happen.
+ *
+ * **A cold cache defers the question rather than answering it "unarmed".** The
+ * board reads its Automations and armings when it mounts, and an arrival can
+ * beat those reads — a drop a heartbeat after the board appears, or a CLI move
+ * into a project no window has opened. Classifying against an empty cache would
+ * silently lose the Run with no later sweep to recover it, so an arrival whose
+ * caches are cold waits for them (`ensureLoaded`) and is classified afterwards.
+ * The window therefore opens from the moment the answer is KNOWN, which can
+ * only make the Run later than the arrival's 3500 ms, never earlier — and the
+ * person always gets the whole delay to reach Cancel.
  *
  * **A timer is a request to reconsider, not a decision.** The timeout re-reads
  * the board, the Automations and the arming before it starts anything, and it
@@ -93,24 +106,66 @@ function ticketDisplayId(projectId: string, ticketId: string): string {
   return displayTicketId(project.ticketPrefix, ticket.ticketNumber);
 }
 
-/**
- * A committed Deliberate move. Opens a window when the destination column is
- * armed and the move was an arrival; does nothing at all otherwise, which is
- * every move on a board with no Automations on it.
- */
-export function noteDeliberateMove(input: {
+export interface DeliberateMove {
   projectId: string;
   ticketId: string;
   from: TicketStatus;
   to: TicketStatus;
-}): void {
+}
+
+/**
+ * Which arrival is the live one for a Ticket.
+ *
+ * A cold-cache arrival is classified after an await, and the board can move
+ * underneath it in that time. The token is what makes the late classification
+ * check whether it is still the arrival being asked about: a second move for
+ * the same Ticket bumps it, and the first one then opens nothing rather than a
+ * window for a column the Ticket has already left.
+ */
+const arrivals = new Map<string, number>();
+let nextArrival = 0;
+
+/**
+ * A committed Deliberate move — a human drag, a card's context menu, the
+ * ticket rail's status pill, or an explicit `volli ticket move` main confirmed.
+ * Opens a window when the destination column is armed and the move was an
+ * arrival; does nothing at all otherwise, which is every move on a board with
+ * no Automations on it.
+ */
+export function noteDeliberateMove(input: DeliberateMove): void {
   // Any earlier window for this Ticket is void: it was opened for an arrival
   // that this move has just replaced.
   clearWindow(input.ticketId);
+  const token = ++nextArrival;
+  arrivals.set(input.ticketId, token);
+  const automations = useAutomationsStore.getState();
+  // The warm path stays synchronous — no await, no frame — because that is
+  // every move on a board a person is already looking at.
+  if (
+    automations.byProject[input.projectId] !== undefined &&
+    automations.armingByProject[input.projectId] !== undefined &&
+    automations.enablementRead
+  ) {
+    classify(input, token);
+    return;
+  }
+  void useAutomationsStore
+    .getState()
+    .ensureLoaded(input.projectId)
+    .then(() => classify(input, token));
+}
+
+/** The arrival's whole decision, taken against caches that have landed. */
+function classify(input: DeliberateMove, token: number): void {
+  // A later move for this Ticket has replaced the arrival this was asked
+  // about; the board has already moved on and this one decides nothing.
+  if (arrivals.get(input.ticketId) !== token) return;
+  arrivals.delete(input.ticketId);
   const automations = useAutomationsStore.getState();
   const decision = armedMoveDecision({
     automations: automations.byProject[input.projectId] ?? [],
     armings: selectArmings(automations, input.projectId),
+    enabledAutomationIds: automations.enabledIds,
     from: input.from,
     to: input.to,
   });
@@ -150,6 +205,7 @@ async function settle(pending: PendingArmedRun): Promise<void> {
     now: Date.now(),
     currentStatus: currentStatus(pending.projectId, pending.ticketId),
     armedNow: selectArmedAutomation(automations, pending.projectId, pending.status),
+    enabledAutomationIds: automations.enabledIds,
   });
   if (verdict.kind === "wait") {
     // The clock disagrees with the timer — reschedule for what is really left
@@ -176,12 +232,15 @@ async function settle(pending: PendingArmedRun): Promise<void> {
 function announceAbandon(pending: PendingArmedRun, reason: ArmedRunAbandonReason): void {
   if (reason === "left-column") return;
   toast.info(`${pending.automationName} didn't start on ${pending.ticketDisplayId}`, {
-    description:
-      reason === "gone"
-        ? "The ticket is no longer on this board."
-        : "The column stopped arming it while the countdown ran.",
+    description: ABANDON_DESCRIPTIONS[reason],
   });
 }
+
+const ABANDON_DESCRIPTIONS: Record<Exclude<ArmedRunAbandonReason, "left-column">, string> = {
+  gone: "The ticket is no longer on this board.",
+  disarmed: "The column stopped arming it while the countdown ran.",
+  "switched-off": "It was switched off on this machine while the countdown ran.",
+};
 
 async function start(pending: PendingArmedRun): Promise<void> {
   let action: ReturnType<typeof runAutomationAction>;
@@ -250,9 +309,10 @@ export function cancelArmedRun(ticketId: string): void {
   clearWindow(ticketId);
 }
 
-/** Test seam: drop every open window and its timer. */
+/** Test seam: drop every open window, its timer, and any arrival mid-classification. */
 export function resetArmedRuns(): void {
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
+  arrivals.clear();
   useArmedRunStore.setState({ pending: {} });
 }

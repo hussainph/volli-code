@@ -95,14 +95,17 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
     <div
       data-armed-run-window={window.ticketId}
       className={cn(
-        "pointer-events-auto relative w-80 overflow-hidden rounded-lg border border-border",
-        "bg-popover shadow-card",
+        // `shadow-overlay` and not `shadow-card`: this floats over the whole
+        // window rather than sitting on a surface (docs/DESIGN.md, Elevation),
+        // which is the same tier menus, dialogs and the palette wear.
+        "pointer-events-auto relative w-80 overflow-hidden rounded-container border border-border",
+        "bg-popover shadow-overlay",
         // Entrance only — the bar below is information and never opts out.
         !reducedMotion && "transition-[opacity,translate] duration-200 ease-swift",
         !reducedMotion && "starting:translate-y-2 starting:opacity-0",
       )}
     >
-      <div className="flex items-center gap-2 px-3 py-2">
+      <div className="flex items-center gap-2 px-4 py-2">
         <LightningIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-ui text-foreground">
           {window.automationName}
@@ -113,7 +116,9 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
         </span>
         <Button
           variant="ghost"
-          className="h-7 px-2 text-ui"
+          // Height and type come from the primitive's default size, which IS
+          // the chip height (docs/DESIGN.md, Controls) — restating them here
+          // would be one more place for the scale to drift out of step.
           // The one control in the window. Named for what it does to the RUN,
           // not to the move: the move is already kept.
           onClick={() => cancelArmedRun(window.ticketId)}
@@ -131,9 +136,11 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
         aria-valuemax={100}
         aria-valuenow={Math.round(progress * 100)}
       >
+        {/* `/50` — half-present, the documented rung for a fill that must read
+            clearly against the `/10` wash behind it without becoming ink. */}
         <div
           data-armed-run-progress
-          className="h-full bg-foreground/40"
+          className="h-full bg-foreground/50"
           style={{ width: `${progress * 100}%` }}
         />
       </div>

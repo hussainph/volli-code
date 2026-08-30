@@ -58,11 +58,26 @@ function ticket(status: TicketStatus): Ticket {
 
 /** The Run door, plus the surfaces a started Run touches. */
 let run: ReturnType<typeof vi.fn>;
+/** The three reads a cold cache fills itself from. */
+let list: ReturnType<typeof vi.fn>;
+let armings: ReturnType<typeof vi.fn>;
+let enablement: ReturnType<typeof vi.fn>;
 
-function seed(options: { armings?: readonly ColumnArming[]; status?: TicketStatus } = {}) {
+function seed(
+  options: {
+    armings?: readonly ColumnArming[];
+    status?: TicketStatus;
+    /** Which Automations are switched on here; the armed one by default. */
+    enabledIds?: readonly string[];
+  } = {},
+) {
   useAutomationsStore.setState({
     byProject: { p1: [AUTOMATION] },
     armingByProject: { p1: options.armings ?? [ARMING] },
+    enabledIds: options.enabledIds ?? [AUTOMATION.id],
+    // Warm: these tests are about a board someone is already looking at. The
+    // cold-cache path has its own describe below.
+    enablementRead: true,
   });
   useBoardStore.getState().hydrate({ p1: [ticket(options.status ?? "doing")] }, { p1: [] });
   useProjectsStore.setState({
@@ -90,9 +105,12 @@ beforeEach(() => {
       receipt: { id: "r", commandId: "c", status: "completed", recordedAt: 0 },
     }),
   );
+  list = vi.fn(() => Promise.resolve({ ok: true, automations: [AUTOMATION] }));
+  armings = vi.fn(() => Promise.resolve({ ok: true, armings: [ARMING] }));
+  enablement = vi.fn(() => Promise.resolve({ ok: true, enabledAutomationIds: [AUTOMATION.id] }));
   vi.stubGlobal("window", {
     api: {
-      automations: { run },
+      automations: { run, list, armings, enablement },
       sessions: { list: vi.fn(() => Promise.resolve({ ok: true, sessions: [] })) },
       // Adopting the fresh Session opens the RPC link. Stubbed rather than
       // avoided: a Run that could not be adopted is a Run nothing on screen
@@ -110,6 +128,12 @@ beforeEach(() => {
 
 afterEach(() => {
   resetArmedRuns();
+  useAutomationsStore.setState({
+    byProject: {},
+    armingByProject: {},
+    enabledIds: [],
+    enablementRead: false,
+  });
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -230,6 +254,93 @@ describe("arming is not retroactive", () => {
   it("leaves the tickets already sitting in the column alone", async () => {
     // The column is armed with a ticket already in it, and nothing moves.
     seed({ status: "doing" });
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
+    expect(useArmedRunStore.getState().pending).toEqual({});
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a switched-off Automation", () => {
+  it("fires nothing on its Trigger, and leaves the column armed", async () => {
+    // VC-112: a new machine sees the Skills and fires nothing until someone
+    // turns something on there. Running by hand is unaffected and is not this
+    // door — the palette and the rail never come through here.
+    seed({ enabledIds: [] });
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
+
+    expect(useArmedRunStore.getState().pending).toEqual({});
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
+    expect(run).not.toHaveBeenCalled();
+    // The arming itself is untouched: the switch is about the Automation.
+    expect(useAutomationsStore.getState().armingByProject["p1"]).toEqual([ARMING]);
+  });
+
+  it("abandons a window when the switch goes off inside it", async () => {
+    seed();
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
+    useAutomationsStore.setState({ enabledIds: [] });
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a cold cache", () => {
+  /** Everything seed() sets, minus the Automations caches: nothing read yet. */
+  function seedCold() {
+    seed();
+    useAutomationsStore.setState({
+      byProject: {},
+      armingByProject: {},
+      enabledIds: [],
+      enablementRead: false,
+    });
+  }
+
+  it("waits for the reads instead of calling the arrival unarmed", async () => {
+    // The race the board could not win: it renders as interactive and starts
+    // its reads in an effect, so a drop a heartbeat later — or a CLI move into
+    // a project no window has opened — arrives before any of them resolved.
+    seedCold();
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
+
+    // Nothing decided yet: the answer is not knowable, so it is not guessed.
+    expect(useArmedRunStore.getState().pending).toEqual({});
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(armings).toHaveBeenCalledTimes(1);
+    expect(enablement).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Reconsidered once they landed, and the window opens with its WHOLE
+    // delay: the wait can only make the Run later than the arrival, never
+    // earlier, and the person still gets 3500 ms to reach Cancel.
+    const open = useArmedRunStore.getState().pending["t1"];
+    expect(open?.startAt).toBe(open!.openedAt + ARMED_RUN_DELAY_MS);
+
+    await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one read across a burst of arrivals", async () => {
+    seedCold();
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
+    noteDeliberateMove({ projectId: "p1", ticketId: "t2", from: "todo", to: "doing" });
+    noteDeliberateMove({ projectId: "p1", ticketId: "t3", from: "todo", to: "doing" });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(armings).toHaveBeenCalledTimes(1);
+    expect(enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a second move for the same ticket win the classification", async () => {
+    seedCold();
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
+    // The card is dragged straight out again while the reads are in flight.
+    // The first arrival must not open a window for a column it has left.
+    noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "doing", to: "todo" });
+    useBoardStore.getState().hydrate({ p1: [ticket("todo")] }, { p1: [] });
 
     await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS * 2);
     expect(useArmedRunStore.getState().pending).toEqual({});

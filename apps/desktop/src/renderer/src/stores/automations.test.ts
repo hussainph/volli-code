@@ -277,6 +277,28 @@ describe("arm", () => {
     expect(armings).not.toHaveBeenCalled();
   });
 
+  it("mints a durable command id: the projection is machine-local, the intent is not", async () => {
+    const arm = vi.fn(() => Promise.resolve({ ok: true, armings: [ARMING], receipt: {} }));
+    stubApi({});
+    (window.api.automations.arm as unknown) = arm;
+    const store = createAutomationsStore();
+
+    await store.getState().arm({ projectId: "p1", status: "doing", automationId: "automation-1" });
+
+    expect(arm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // A UUID the renderer minted, exactly as create/update/delete do
+        // (docs/BOUNDARIES.md rule 5) — main refuses anything else.
+        commandId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+        projectId: "p1",
+        status: "doing",
+        automationId: "automation-1",
+      }),
+    );
+  });
+
   it("resolves a refusal for the caller rather than toasting behind it", async () => {
     stubApi({ arm: () => Promise.resolve({ ok: false, error: "not offered here" }) });
     const store = createAutomationsStore();
@@ -634,5 +656,84 @@ describe("enablement", () => {
       "Couldn't change that automation: ipc gone",
       expect.anything(),
     );
+  });
+});
+
+describe("ensureLoaded", () => {
+  it("fills all three caches for a project nothing has read yet", async () => {
+    // The one caller that cannot answer from an empty cache: an arrival that
+    // beat the board's own reads, or a `volli ticket move` into a project no
+    // window has opened.
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(store.getState().byProject["p1"]).toHaveLength(1);
+    expect(store.getState().armingByProject["p1"]).toEqual([ARMING]);
+    expect(store.getState().enabledIds).toEqual(["automation-1"]);
+    expect(store.getState().enablementRead).toBe(true);
+  });
+
+  it("reads nothing when every cache has already landed", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({
+      byProject: { p1: [automation()] },
+      armingByProject: { p1: [ARMING] },
+      enabledIds: [],
+      // An EMPTY enabled set that has been read is not a cache that hasn't:
+      // "nothing on here" is an answer, and this flag is what says so.
+      enablementRead: true,
+    });
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).not.toHaveBeenCalled();
+    expect(window.api.automations.armings).not.toHaveBeenCalled();
+    expect(window.api.automations.enablement).not.toHaveBeenCalled();
+  });
+
+  it("fills only what is missing", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({ byProject: { p1: [automation()] } });
+
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).not.toHaveBeenCalled();
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one read across simultaneous callers", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+
+    await Promise.all([
+      store.getState().ensureLoaded("p1"),
+      store.getState().ensureLoaded("p1"),
+      store.getState().ensureLoaded("p1"),
+    ]);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a later caller try again after a failed read", async () => {
+    // The read toasted its own failure and left the cache empty, so the next
+    // arrival must not inherit a refusal nobody can see any more.
+    stubApi({ list: () => Promise.resolve({ ok: false, error: "Unknown project" }) });
+    const store = createAutomationsStore();
+
+    await store.getState().ensureLoaded("p1");
+    await store.getState().ensureLoaded("p1");
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(2);
   });
 });

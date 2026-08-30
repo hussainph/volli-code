@@ -3,9 +3,11 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationTrigger,
+  ColumnArming,
   ModelSelection,
   PromptResource,
   ResolvedAutomationModel,
+  TicketStatus,
 } from "@volli/shared";
 
 /** A value a durable host may answer synchronously today or asynchronously later. */
@@ -46,6 +48,25 @@ export type AutomationCommandIntent =
    * future account-side record inherits the record's history and not this.
    */
   | { kind: "automation.set-enabled"; automationId: string; enabled: boolean }
+  /**
+   * Arming one column with one Automation, or disarming it (`automationId:
+   * null`) — ON THIS MACHINE.
+   *
+   * The same shape as the switch above it, and for the same reason: this is
+   * user intent that decides whether work starts without a person, so it is
+   * recorded, evented and receipted rather than written straight into a table
+   * behind a raw channel (docs/BOUNDARIES.md rule 5). What is machine-local is
+   * the PROJECTION it writes — `automation_column_arming`, which never travels
+   * with a project and is not part of the record that will one day move to an
+   * account. One pattern, two switches: enablement says WHETHER an Automation
+   * may fire on this machine, arming says WHICH column fires it.
+   */
+  | {
+      kind: "automation.set-arming";
+      projectId: string;
+      status: TicketStatus;
+      automationId: string | null;
+    }
   | { kind: "automation.run"; plan: AutomationRunPlan };
 
 /**
@@ -75,6 +96,14 @@ export type AutomationReceiptResult =
       automationId: string;
       enabled: boolean;
       enabledAutomationIds: string[];
+    }
+  /** The project's whole new arming set, whole for the reason the set above is. */
+  | {
+      kind: "automation.arming.set";
+      projectId: string;
+      status: TicketStatus;
+      automationId: string | null;
+      armings: ColumnArming[];
     }
   | { kind: "automation.not-found"; automationId: string }
   | { kind: "automation.run.accepted"; plan: AutomationRunPlan }
@@ -139,6 +168,18 @@ export interface AutomationLedgerTransaction {
   enabledAutomationIds(): Awaitable<readonly string[]>;
   /** Replaces that set whole, inside the same transaction as the event that decided it. */
   putEnabledAutomationIds(ids: readonly string[], recordedAt: number): Awaitable<readonly string[]>;
+
+  /** The other machine-local projection: which Automation each of a project's columns arms. */
+  columnArmings(projectId: string): Awaitable<readonly ColumnArming[]>;
+  /**
+   * Arms one column, or disarms it with `automationId: null`, and answers with
+   * the project's whole new set. Called inside the same transaction as the
+   * event that decided it, so the row and the history of the row move together.
+   */
+  putColumnArming(
+    input: { projectId: string; status: TicketStatus; automationId: string | null },
+    recordedAt: number,
+  ): Awaitable<readonly ColumnArming[]>;
 
   getRun(runId: string): Awaitable<AutomationRun | null>;
   insertRun(run: AutomationRun): Awaitable<void>;
@@ -212,6 +253,15 @@ export interface AutomationEngine {
   }): Promise<AutomationCommandOutcome<string[]>>;
   /** That set, read back — the machine-local projection, never a record field. */
   enabledAutomationIds(): Promise<string[]>;
+  /** Arms one column with one Automation, or disarms it; answers with the project's whole set. */
+  setColumnArming(input: {
+    commandId: string;
+    projectId: string;
+    status: TicketStatus;
+    automationId: string | null;
+  }): Promise<AutomationCommandOutcome<ColumnArming[]>>;
+  /** Every armed column in one project — the machine-local projection, read back. */
+  columnArmings(projectId: string): Promise<ColumnArming[]>;
   acceptRun(input: {
     commandId: string;
     automation: Pick<Automation, "id" | "name"> & { runtime: ModelSelection | null };
@@ -544,6 +594,90 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
 
     async enabledAutomationIds() {
       return ports.ledger.transaction(async (tx) => [...(await tx.enabledAutomationIds())]);
+    },
+
+    async setColumnArming(input) {
+      const intent: AutomationCommandIntent = {
+        kind: "automation.set-arming",
+        projectId: input.projectId,
+        status: input.status,
+        automationId: input.automationId,
+      };
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await existingCommand(tx, input.commandId, intent);
+        if (existing !== null) {
+          return replay(tx, input.commandId, "automation.arming.set", (result) =>
+            result.kind === "automation.arming.set" ? result.armings : null,
+          );
+        }
+        const now = ports.now();
+        const command: AutomationCommand = { id: input.commandId, intent, createdAt: now };
+        await tx.insertCommand(command);
+        await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
+        // Arming names a record, so a record that is gone cannot be armed: the
+        // same refusal and the same replayable receipt the switch gives. A
+        // disarm names none and therefore skips this — emptying a column is
+        // valid however little is left to point at.
+        if (input.automationId !== null) {
+          const target = await tx.getAutomation(input.automationId);
+          if (target === null) {
+            const rejected = receipt(
+              command.id,
+              "rejected",
+              { kind: "automation.not-found", automationId: input.automationId },
+              now,
+            );
+            await recordReceipt(tx, rejected);
+            return { ok: false, error: "Unknown automation", receipt: publicReceipt(rejected) };
+          }
+        }
+        // The projection's own answer is what both the event and the receipt
+        // quote. Writing it first inside this transaction (rather than deriving
+        // the new set in memory and evented it ahead of the row) means the
+        // history and the row can never disagree about what a column arms: they
+        // are the same value, and one COMMIT decides whether both happened.
+        const armings = [
+          ...(await tx.putColumnArming(
+            {
+              projectId: input.projectId,
+              status: input.status,
+              automationId: input.automationId,
+            },
+            now,
+          )),
+        ];
+        await tx.appendEvent(
+          event(
+            command.id,
+            "automation.arming.changed",
+            {
+              projectId: input.projectId,
+              status: input.status,
+              automationId: input.automationId,
+              armings,
+            },
+            now,
+          ),
+        );
+        const completed = receipt(
+          command.id,
+          "completed",
+          {
+            kind: "automation.arming.set",
+            projectId: input.projectId,
+            status: input.status,
+            automationId: input.automationId,
+            armings,
+          },
+          now,
+        );
+        await recordReceipt(tx, completed);
+        return { ok: true, value: armings, receipt: publicReceipt(completed) };
+      });
+    },
+
+    async columnArmings(projectId) {
+      return ports.ledger.transaction(async (tx) => [...(await tx.columnArmings(projectId))]);
     },
 
     async acceptRun(input) {

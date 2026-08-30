@@ -76,6 +76,16 @@ interface AutomationsState {
    * switched on here — whether or not anyone ever asked.
    */
   enabledIds: readonly string[];
+  /**
+   * Whether {@link AutomationsState.enabledIds} has ever been READ, as opposed
+   * to resting at its empty default.
+   *
+   * The two are indistinguishable in the set itself — "nothing switched on
+   * here" and "never asked here" are deliberately one value (VC-112) — and a
+   * caller that must not act on a guess needs to tell them apart. Only
+   * {@link AutomationsState.ensureLoaded} reads this.
+   */
+  enablementRead: boolean;
   editor: AutomationEditorTarget | null;
   /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
   refresh(projectId: string): Promise<void>;
@@ -96,6 +106,21 @@ interface AutomationsState {
     status: TicketStatus;
     automationId: string | null;
   }): Promise<string | null>;
+  /**
+   * Fills whichever of this project's three caches has never landed, and
+   * resolves once they all have (VC-128).
+   *
+   * For the one caller that cannot answer from an empty cache: a Deliberate
+   * move arriving before the board's own reads resolved would otherwise be
+   * classified as unarmed and never reconsidered, so a Ticket dropped a
+   * heartbeat after the board mounted — or moved by `volli ticket move` into a
+   * window that never opened this project — would silently miss its Run.
+   *
+   * Only ever FILLS: a cache that has landed is left alone, so this is not a
+   * second refresh policy competing with the board's own read-on-mount. In
+   * flight is shared rather than repeated — a burst of arrivals is one read.
+   */
+  ensureLoaded(projectId: string): Promise<void>;
   openEditor(projectId: string): void;
   /** Opens the editor on an existing record. The only authoring surface (VC-112). */
   editAutomation(projectId: string, automation: Automation): void;
@@ -125,11 +150,19 @@ interface AutomationsState {
 
 /** Factory so tests get isolated instances (the store module's own convention). */
 export function createAutomationsStore() {
+  /**
+   * projectId → the cache-filling read in flight for it, so simultaneous
+   * arrivals share one instead of each starting their own. Module-local to this
+   * instance rather than store state: a promise is not something anything
+   * renders, and it must not survive the factory that made it.
+   */
+  const warming = new Map<string, Promise<void>>();
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
     armingByProject: {},
     runsByProject: {},
     enabledIds: [],
+    enablementRead: false,
     editor: null,
 
     async refresh(projectId) {
@@ -162,7 +195,12 @@ export function createAutomationsStore() {
 
     async arm(input) {
       try {
-        const result = await window.api.automations.arm(input);
+        const result = await window.api.automations.arm({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          ...input,
+        });
         // A refusal is resolved rather than toasted, like a save's: the menu
         // that asked is still on screen and is where the correction belongs.
         if (!result.ok) return result.error;
@@ -195,9 +233,31 @@ export function createAutomationsStore() {
           toastError(`Couldn't read which automations are on: ${result.error}`);
           return;
         }
-        set({ enabledIds: result.enabledAutomationIds });
+        set({ enabledIds: result.enabledAutomationIds, enablementRead: true });
       } catch (error) {
         toastError(`Couldn't read which automations are on: ${errorMessage(error)}`);
+      }
+    },
+
+    async ensureLoaded(projectId) {
+      const inFlight = warming.get(projectId);
+      if (inFlight !== undefined) return inFlight;
+      const state = get();
+      const reads: Promise<void>[] = [];
+      if (state.byProject[projectId] === undefined) reads.push(state.refresh(projectId));
+      if (state.armingByProject[projectId] === undefined)
+        reads.push(state.refreshArming(projectId));
+      if (!state.enablementRead) reads.push(state.refreshEnablement());
+      if (reads.length === 0) return;
+      const job = Promise.all(reads).then(() => undefined);
+      warming.set(projectId, job);
+      try {
+        await job;
+      } finally {
+        // Cleared whatever happened. Each read toasts its own failure and
+        // leaves its cache empty, so the next arrival tries again rather than
+        // inheriting a refusal nobody can see any more.
+        warming.delete(projectId);
       }
     },
 

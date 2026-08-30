@@ -54,6 +54,7 @@ import type {
   BootstrapResult,
   AutomationArmInput,
   AutomationArmingsResult,
+  AutomationArmResult,
   AutomationCreateInput,
   AutomationDeleteResult,
   AutomationEnablementResult,
@@ -157,6 +158,7 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
+  TicketMovedNotice,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
@@ -415,6 +417,20 @@ const api = {
     /** When each non-archived ticket entered its current status — one batched read backing the sidebar. */
     statusEntries: (input: ProjectIdInput): Promise<TicketStatusEntriesResult> =>
       invoke("volli:ticket-status-entries", input),
+    /**
+     * Subscribes to Deliberate moves main committed for someone else (VC-128):
+     * an explicit `volli ticket move`, or an agent's own through the tool door.
+     * The renderer's own moves never arrive here — they report their before and
+     * after themselves. Carries the column the Ticket LEFT, which a re-read can
+     * no longer recover and an armed column cannot do without.
+     */
+    onMoved: (callback: (notice: TicketMovedNotice) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: TicketMovedNotice) =>
+        callback(payload);
+      ipcRenderer.on("volli:ticket-moved" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:ticket-moved" satisfies VolliIpcEvent, listener);
+    },
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */
@@ -729,8 +745,12 @@ const api = {
      */
     armings: (input: ProjectIdInput): Promise<AutomationArmingsResult> =>
       invoke("volli:automation-arming-list", input),
-    /** Arms one column with one offered Automation, or disarms it with `automationId: null`. */
-    arm: (input: AutomationArmInput): Promise<AutomationArmingsResult> =>
+    /**
+     * Arms one column with one offered Automation, or disarms it with
+     * `automationId: null` (VC-128). A durable command like every other write
+     * here — only the projection it lands in is machine-local.
+     */
+    arm: (input: AutomationArmInput): Promise<AutomationArmResult> =>
       invoke("volli:automation-arm", input),
     /** Every Run on this project's Tickets, newest first — the page's history. */
     runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>

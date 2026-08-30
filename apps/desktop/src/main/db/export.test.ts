@@ -1,6 +1,6 @@
 import { NO_AUTOMATION_TRIGGER, USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createAutomation, recordAutomationRun } from "./automations-repo";
+import { createAutomation, recordAutomationRun, setColumnArming } from "./automations-repo";
 import { createComment } from "./comments-repo";
 import { recordTicketEvent } from "./events-repo";
 import {
@@ -91,6 +91,7 @@ describe("buildExportDocument — empty db", () => {
     expect(document.appState).toEqual([]);
     expect(document.automations).toEqual([]);
     expect(document.automationRuns).toEqual([]);
+    expect(document.automationColumnArmings).toEqual([]);
   });
 
   it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", async () => {
@@ -218,6 +219,11 @@ describe("buildExportDocument — populated db", () => {
         model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
       },
       71,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      72,
     );
 
     const document = await buildExportDocument(ctx.db, {
@@ -429,6 +435,17 @@ describe("buildExportDocument — populated db", () => {
         modelId: "claude-opus",
         reasoningLevel: "high",
         createdAt: 71,
+      },
+    ]);
+    // Column arming rides along even though it never travels with a PROJECT:
+    // this document is one machine's backup of its own database, and leaving
+    // the rows out would silently lose state somebody set by hand.
+    expect(document.automationColumnArmings).toEqual([
+      {
+        projectId: project.id,
+        status: "doing",
+        automationId: automation.id,
+        armedAt: 72,
       },
     ]);
   });

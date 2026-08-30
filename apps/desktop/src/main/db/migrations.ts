@@ -1304,10 +1304,13 @@ END;
  * it.
  *
  * `automation_column_arming` is NOT part of the record. It is the column's
- * machine-local choice of which offered Automation it fires on its own, and it
- * deliberately sits outside the Automation command ledger: that ledger is the
- * durable record VC-112 says moves to an account one day, and Arming must never
- * travel with it. A composite PRIMARY KEY is how "a column arms at most one
+ * machine-local choice of which offered Automation it fires on its own — the
+ * PROJECTION half of an ordinary Automation command (`automation.set-arming`),
+ * exactly as `app_state`'s enabled set is the projection half of
+ * `automation.set-enabled`. The intent rides the ledger like every other write;
+ * what stays here is the answer, and it never travels: a project directory
+ * cannot carry it, and when the record moves to an account this does not go
+ * with it. A composite PRIMARY KEY is how "a column arms at most one
  * Automation, or none" is a schema fact rather than a convention — the write is
  * an upsert on `(project_id, status)` and there is no shape in which a second
  * row could exist to disagree with the first. Both foreign keys cascade, so a

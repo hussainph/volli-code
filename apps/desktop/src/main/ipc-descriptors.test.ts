@@ -2765,6 +2765,33 @@ describe("AUTOMATION_IPC descriptor table", () => {
       ).toBe(false);
     });
 
+    it("judges the Trigger's wire GRAMMAR, and leaves its meaning to the parser", () => {
+      // Omitted is "Only when I run it" — a complete answer, not an unset field.
+      expect(guard([{ projectId: "p1", ...DRAFT }])).toBe(true);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "none" } }])).toBe(true);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["doing"] } }]),
+      ).toBe(true);
+      // Which column names are real, and whether the list collapses, is the
+      // shared parser's job on the way in — so an unknown name passes HERE.
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["shipped"] } }]),
+      ).toBe(true);
+      // Not a record at all: a string, a number, null, an array. This is the
+      // shape the parser cannot be asked to rescue, so the door refuses it.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: "columns" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: 7 }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: null }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: ["doing"] }])).toBe(false);
+      // A record, but not a Trigger this build can read.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: {} }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule" } }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: "doing" } }]),
+      ).toBe(false);
+    });
+
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid automation");
     });

@@ -330,23 +330,48 @@ export function latestRunForTicket(
 /* ------------------------------------- column arming (migration 031) ------- */
 
 /**
- * The Arming projection is read and written directly here rather than through
- * the Automation command ledger, and that is the design rather than a shortcut.
+ * The Arming PROJECTION — the machine-local half of a switch whose intent is an
+ * ordinary Automation command (`automations/engine.ts`,
+ * `automation.set-arming`).
  *
- * The ledger is the durable RECORD — the thing VC-112 says moves from local
- * SQLite to an account one day. Arming must never make that trip: it is the
- * choice one machine made about one column, and a second machine must see the
- * Automations and fire nothing until someone turns something on there. Writing
- * arming as a ledger command would file it in exactly the history that travels.
+ * The split is the same one `automations/enablement.ts` states for enablement,
+ * and this table is the second projection under that one pattern:
  *
- * Nothing is lost by the shortcut either. The write is a single upsert keyed by
- * `(project_id, status)`, so it is idempotent by construction — the retry
- * identity a command id exists to provide has no work to do here.
+ *  - **The intent is durable, evented and receipted.** Arming decides whether
+ *    work starts without a person, which is user intent under
+ *    docs/BOUNDARIES.md rule 5. Machine-locality decides where the projection
+ *    LANDS; it is not an exemption from the seam. So nothing outside the ledger
+ *    transaction calls the writers below — they are the projection's hands, not
+ *    a door.
+ *  - **The projection is machine-local and never travels.** These rows are the
+ *    choice one machine made about one column: they are absent from git, from a
+ *    project directory, and from the record that VC-112 says moves to an
+ *    account one day. A second machine sees the Automations and fires nothing
+ *    until someone arms something there.
+ *
+ * The composite primary key is what makes "a column arms at most one
+ * Automation, or none" true at the storage layer rather than by convention, and
+ * it also makes each row independent — see {@link mapArming} for why one
+ * unreadable row fails closed by itself instead of voiding the project's.
+ */
+/**
+ * One row, or `null` when this build cannot read it.
+ *
+ * Tolerant on read and FAILING CLOSED, the stance `enablement.ts` argues for at
+ * length: a row this build cannot understand can only have come from a future
+ * build or a hand edit, and guessing at it would FIRE something nobody armed
+ * here. Dropping it can only under-fire, which VC-112 already calls the resting
+ * state.
+ *
+ * Closed per ROW rather than per project, and that is the difference the key
+ * makes. Enablement is one JSON blob, so half of it being unreadable makes the
+ * whole blob a guess; arming is one row per column, each naming its own column
+ * in its own primary key, so an unreadable row can only ever be about a column
+ * this build does not have. Voiding the project's other columns would disarm
+ * ones we can read perfectly, which is a bigger lie than dropping the one we
+ * cannot.
  */
 function mapArming(row: ColumnArmingRow): ColumnArming | null {
-  // A status this build does not know is dropped rather than surfaced: it can
-  // only have come from a future/hand-edited row, and an arming on a column
-  // that does not exist can never fire.
   return isTicketStatus(row.status)
     ? {
         projectId: row.project_id,
@@ -370,7 +395,10 @@ export function listColumnArmings(db: Database.Database, projectId: string): Col
 }
 
 /**
- * Arms `status` with `automationId`, replacing whatever it held.
+ * Arms `status` with `automationId`, replacing whatever it held. The
+ * projection's hand: called from inside the ledger transaction that recorded
+ * the intent (`SqliteAutomationLedgerTransaction.putColumnArming`), never from
+ * a handler.
  *
  * The upsert is what makes "a column arms at most one Automation" true at the
  * storage layer: the composite primary key admits no second row, so there is no
@@ -390,7 +418,10 @@ export function setColumnArming(
   ).run(input.projectId, input.status, input.automationId, now);
 }
 
-/** Disarms one column. Silent when it was already unarmed — the end state is the point. */
+/**
+ * Disarms one column, the same hand as {@link setColumnArming}. Silent when it
+ * was already unarmed — the end state is the point.
+ */
 export function clearColumnArming(
   db: Database.Database,
   input: { projectId: string; status: TicketStatus },

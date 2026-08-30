@@ -217,6 +217,12 @@ export const Board = React.memo(function Board({
     const automations = useAutomationsStore.getState();
     void automations.refresh(projectId);
     void automations.refreshArming(projectId);
+    // And which of them are switched on HERE (VC-127): an armed column fires
+    // only what this machine has turned on, so the answer belongs beside the
+    // other two. An arrival that beats all three still gets a true answer —
+    // `noteDeliberateMove` waits for cold caches rather than reading them
+    // empty — but a board that is up should not be making it wait.
+    void automations.refreshEnablement();
   }, [projectId]);
 
   React.useEffect(() => {

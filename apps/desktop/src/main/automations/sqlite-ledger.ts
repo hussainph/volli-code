@@ -1,8 +1,21 @@
 import type Database from "better-sqlite3";
 import { isAutomationRuntimePin } from "@volli/shared";
-import type { Automation, AutomationRun, PromptResource } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  ColumnArming,
+  PromptResource,
+  TicketStatus,
+} from "@volli/shared";
 
-import { getAutomation, getAutomationRun, triggerColumnValue } from "../db/automations-repo";
+import {
+  clearColumnArming,
+  getAutomation,
+  getAutomationRun,
+  listColumnArmings,
+  setColumnArming,
+  triggerColumnValue,
+} from "../db/automations-repo";
 import { prepared } from "../db/prepared";
 import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
@@ -214,6 +227,38 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
 
   putEnabledAutomationIds(ids: readonly string[], recordedAt: number): readonly string[] {
     return putEnabledAutomationIds(this.db, ids, recordedAt);
+  }
+
+  /**
+   * The other machine-local projection (VC-128), the same shape as the switch
+   * above it: a table rather than an `app_state` row because arming is keyed by
+   * `(project_id, status)` and "a column arms at most one Automation" is then a
+   * schema fact rather than a convention. Read and written here, inside the
+   * transaction that appended the event, so a column's arming and the history
+   * of its arming commit together or neither does.
+   */
+  columnArmings(projectId: string): readonly ColumnArming[] {
+    return listColumnArmings(this.db, projectId);
+  }
+
+  putColumnArming(
+    input: { projectId: string; status: TicketStatus; automationId: string | null },
+    recordedAt: number,
+  ): readonly ColumnArming[] {
+    if (input.automationId === null) {
+      clearColumnArming(this.db, { projectId: input.projectId, status: input.status });
+    } else {
+      setColumnArming(
+        this.db,
+        {
+          projectId: input.projectId,
+          status: input.status,
+          automationId: input.automationId,
+        },
+        recordedAt,
+      );
+    }
+    return listColumnArmings(this.db, input.projectId);
   }
 
   getRun(runId: string): AutomationRun | null {

@@ -4,6 +4,7 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { ModelAccessSnapshot, ModelSelection } from "@volli/shared";
 import type {
   AutomationArmingsResult,
+  AutomationArmResult,
   AutomationDeleteResult,
   AutomationEnablementResult,
   AutomationResult,
@@ -33,15 +34,13 @@ import type { AutomationRunner } from "./run";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
-  clearColumnArming,
   createAutomation,
+  deleteAutomation,
   getAutomation,
   listAutomationsForProject,
-  listColumnArmings,
   listRunsForProject,
   listRunsForTicket,
   recordAutomationRun,
-  setColumnArming,
 } from "../db/automations-repo";
 import { insertProject } from "../db/projects-repo";
 import { insertSession } from "../session-control/test-support";
@@ -114,9 +113,6 @@ function setup(
     // database or repository.
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
-    listColumnArmings: (id) => listColumnArmings(ctx.db, id),
-    setColumnArming: (input) => setColumnArming(ctx.db, input, 5_000),
-    clearColumnArming: (input) => clearColumnArming(ctx.db, input),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
@@ -404,7 +400,8 @@ describe("automation IPC", () => {
     mutations.length = 0;
 
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: project.id,
         status: "doing",
         automationId: first.automation.id,
@@ -412,11 +409,13 @@ describe("automation IPC", () => {
     ).toMatchObject({
       ok: true,
       armings: [{ status: "doing", automationId: first.automation.id }],
+      receipt: { status: "completed" },
     });
 
     // At most one, enforced by the row's own key rather than by convention.
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: project.id,
         status: "doing",
         automationId: second.automation.id,
@@ -436,19 +435,61 @@ describe("automation IPC", () => {
     ).toMatchObject({ ok: true, armings: [{ automationId: second.automation.id }] });
 
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: project.id,
         status: "doing",
         automationId: null,
       }),
-    ).toEqual({ ok: true, armings: [] });
-    // Each write reaches the renderer; none of them is a ledger command.
-    expect(mutations).toEqual([
-      { projectId: project.id },
-      { projectId: project.id },
-      { projectId: project.id },
-    ]);
-    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_commands").get()).toEqual({ n: 2 });
+    ).toMatchObject({ ok: true, armings: [], receipt: { status: "completed" } });
+
+    // Nothing about the shared record moved, so no window is told to re-read
+    // its list: arming is this host's own choice about its own board.
+    expect(mutations).toEqual([]);
+    // Two creates plus three armings, each with its own durable command, event
+    // and receipt — the projection is machine-local, the intent is not.
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_commands").get()).toEqual({ n: 5 });
+    expect(
+      ctx.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM automation_events WHERE kind = 'automation.arming.changed'",
+        )
+        .get(),
+    ).toEqual({ n: 3 });
+  });
+
+  it("replays one arming command rather than arming twice", async () => {
+    const { project } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    const request = {
+      commandId: "55555555-5555-4555-8555-555555555555",
+      projectId: project.id,
+      status: "doing",
+      automationId: created.automation.id,
+    };
+
+    const once = await call<AutomationArmResult>("volli:automation-arm", request);
+    const twice = await call<AutomationArmResult>("volli:automation-arm", request);
+
+    expect(once).toMatchObject({ ok: true, receipt: { status: "completed" } });
+    // The SAME receipt comes back: a retry replays acceptance instead of
+    // deciding again, which is the whole point of the command id.
+    expect(twice).toEqual(once);
+    expect(
+      ctx.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM automation_events WHERE kind = 'automation.arming.changed'",
+        )
+        .get(),
+    ).toEqual({ n: 1 });
   });
 
   it("refuses to arm a column the Automation does not offer", async () => {
@@ -464,7 +505,8 @@ describe("automation IPC", () => {
     if (!created.ok) throw new Error("refused");
 
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: project.id,
         status: "doing",
         automationId: created.automation.id,
@@ -473,19 +515,24 @@ describe("automation IPC", () => {
     expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
       n: 0,
     });
+    // A refused write leaves no command behind: the live-fact check runs
+    // before the intent is recorded, exactly as create's does.
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_commands").get()).toEqual({ n: 1 });
   });
 
   it("refuses an unknown Automation and an unknown project", async () => {
     const { project } = setup();
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: project.id,
         status: "doing",
         automationId: "ghost",
       }),
     ).toEqual({ ok: false, error: "Unknown automation" });
     expect(
-      await call<AutomationArmingsResult>("volli:automation-arm", {
+      await call<AutomationArmResult>("volli:automation-arm", {
+        commandId: randomUUID(),
         projectId: "no-such-project",
         status: "doing",
         automationId: null,
@@ -496,6 +543,39 @@ describe("automation IPC", () => {
         projectId: "no-such-project",
       }),
     ).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("rejects an arming whose Automation disappeared between the check and the write", async () => {
+    const { project, engine } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Sweep",
+      instructions: "/review",
+      trigger: { kind: "columns", columns: ["doing"] },
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    // The service's live-fact checks guard the door; this is the engine's own
+    // guard behind it, for the record that vanished after they passed. Driven
+    // straight at the command core because no IPC caller can interleave there.
+    deleteAutomation(ctx.db, created.automation.id);
+
+    const outcome = await engine.setColumnArming({
+      commandId: randomUUID(),
+      projectId: project.id,
+      status: "doing",
+      automationId: created.automation.id,
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      error: "Unknown automation",
+      receipt: { status: "rejected" },
+    });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
   });
 
   it("drops a column's arming when the Automation behind it is deleted", async () => {
@@ -509,7 +589,8 @@ describe("automation IPC", () => {
       runtime: null,
     });
     if (!created.ok) throw new Error("refused");
-    await call<AutomationArmingsResult>("volli:automation-arm", {
+    await call<AutomationArmResult>("volli:automation-arm", {
+      commandId: randomUUID(),
       projectId: project.id,
       status: "doing",
       automationId: created.automation.id,

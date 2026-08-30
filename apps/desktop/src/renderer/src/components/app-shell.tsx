@@ -591,8 +591,14 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
       <Toaster />
       {/* The armed-column delay window (VC-128). Window-level beside the Toaster
           rather than inside the board: a Deliberate move can be made from a
-          ticket's own status pill, and its countdown must not depend on the
-          board being the surface on screen. */}
+          ticket's own status pill or by an explicit `volli ticket move`, and
+          its countdown must not depend on the board being the surface on
+          screen. It does depend on a WINDOW being open — which is not a gap,
+          because the CLI reaches main through a socket the running app owns, so
+          a move that could be made at all was made while this was mounted. What
+          a renderer cannot promise is that somebody is LOOKING: the countdown
+          and its Cancel are here for whoever is, and a Run that starts says so
+          in a toast either way (VC-133 owns notifying a person who is not). */}
       <ArmedRunWindows />
       <NewTicketDialog />
       <HarnessTrustDialog />

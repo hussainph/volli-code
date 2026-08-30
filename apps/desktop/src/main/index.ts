@@ -72,13 +72,10 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import {
-  clearColumnArming,
   getAutomation,
   listAutomationsForProject,
-  listColumnArmings,
   listRunsForProject,
   listRunsForTicket,
-  setColumnArming,
 } from "./db/automations-repo";
 import { getTicket, getTicketBrief } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
@@ -158,6 +155,7 @@ import {
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
+  broadcastTicketMoved,
   broadcastUpdateState,
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
@@ -1122,11 +1120,6 @@ app.whenReady().then(async () => {
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
-          // Column arming (VC-128) is a machine-local projection, so it is read
-          // and written beside the ledger rather than through it.
-          listColumnArmings: (projectId) => listColumnArmings(sessionDb, projectId),
-          setColumnArming: (input) => setColumnArming(sessionDb, input, Date.now()),
-          clearColumnArming: (input) => clearColumnArming(sessionDb, input),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           ...(piRuntimeHost === null
             ? {}
@@ -2571,6 +2564,13 @@ app.whenReady().then(async () => {
           // down. Read-only commands and no-ops (e.g. a same-column move) never
           // fire it, so a stray broadcast can't slip through.
           onMutation: (change) => broadcastDataChanged(change),
+          // The armed column's other reporter (VC-128). `volli ticket move` is
+          // a Deliberate move exactly as a drag is, so it reaches the same
+          // arrival door in the renderer — carrying the column the Ticket LEFT,
+          // which the broadcast above cannot say and a re-read can no longer
+          // recover. Same-column no-ops never fire it, so nothing arrives
+          // where nothing moved.
+          onDeliberateMove: (notice) => broadcastTicketMoved(notice),
           // The involuntary channel's fan-out (harness-events): every canonical
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.

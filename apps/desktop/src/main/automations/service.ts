@@ -24,10 +24,6 @@ export interface AutomationServiceDeps {
   findAutomation(automationId: string): Automation | undefined;
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
-  /** Machine-local column arming (VC-128); outside the ledger on purpose. */
-  listColumnArmings(projectId: string): ColumnArming[];
-  setColumnArming(input: { projectId: string; status: TicketStatus; automationId: string }): void;
-  clearColumnArming(input: { projectId: string; status: TicketStatus }): void;
   runsForProject(projectId: string): AutomationRun[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
@@ -45,10 +41,15 @@ export type AutomationDeleteOutcome =
   | { ok: true; receipt: AutomationCommandReceipt }
   | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
-/** Every armed column in the project, after the write — the caller's whole new truth. */
-export type AutomationArmingOutcome =
+/** Every armed column in the project — a read, with no command behind it. */
+export type AutomationArmingReadOutcome =
   | { ok: true; armings: ColumnArming[] }
   | { ok: false; error: string };
+
+/** The same set after a write, plus the receipt for the command that changed it. */
+export type AutomationArmingOutcome =
+  | { ok: true; armings: ColumnArming[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
 export type AutomationRunHistoryOutcome =
   | { ok: true; runs: AutomationRun[] }
@@ -105,14 +106,23 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       return deps.runsForTicket(ticketId);
     },
 
-    /** One project's armed columns — machine-local, never part of the record's list. */
-    armings(projectId: string): AutomationArmingOutcome {
+    /**
+     * One project's armed columns — machine-local, never part of the record's
+     * list. Project-guarded like {@link list}: an unknown id is a refusal
+     * rather than a convincing empty board.
+     */
+    async armings(projectId: string): Promise<AutomationArmingReadOutcome> {
       if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
-      return { ok: true, armings: deps.listColumnArmings(projectId) };
+      return { ok: true, armings: await deps.engine.columnArmings(projectId) };
     },
 
     /**
      * Arms one column with one Automation, or disarms it (`automationId: null`).
+     *
+     * A durable command like every other product write, and the same one the
+     * switch uses (docs/BOUNDARIES.md rule 5): what is machine-local is where
+     * the projection LANDS, not whether the intent is recorded. A retry repeats
+     * this command id and replays its receipt instead of arming twice.
      *
      * A column may only arm what it OFFERS — an Automation whose Trigger names
      * this column. Offering is the record's word and arming is the column's, and
@@ -120,43 +130,40 @@ export function createAutomationService(deps: AutomationServiceDeps) {
      * on a machine-local act: "fires here" is a stronger claim than "is offered
      * here", and the weaker one is a prerequisite, not a side effect.
      *
-     * No command id, and no ledger entry. The write is an upsert keyed by the
-     * column, so a repeat is the same end state rather than a second arming —
-     * the retry identity a command id exists to provide has no work to do. More
-     * importantly the ledger is the record that travels to an account one day,
-     * and this choice belongs to one machine.
+     * Those live-fact checks guard a NEW command only, exactly as create and
+     * update guard theirs: an already-accepted arming is a fact, and a Trigger
+     * edited afterwards must not turn its retry into a refusal.
+     *
+     * No `onMutation` fan-out — nothing about the shared record moved, and
+     * another window's list is unchanged by a choice belonging to this host.
      */
-    arm(input: {
+    async arm(input: {
+      commandId: string;
       projectId: string;
       status: TicketStatus;
       automationId: string | null;
-    }): AutomationArmingOutcome {
-      if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
-      if (input.automationId === null) {
-        deps.clearColumnArming({ projectId: input.projectId, status: input.status });
-        deps.onMutation?.({ projectId: input.projectId });
-        return { ok: true, armings: deps.listColumnArmings(input.projectId) };
+    }): Promise<AutomationArmingOutcome> {
+      if (!(await deps.engine.hasCommand(input.commandId))) {
+        if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        if (input.automationId !== null) {
+          const automation = deps.findAutomation(input.automationId);
+          if (automation === undefined) return { ok: false, error: "Unknown automation" };
+          // Ownership is the listing axis: a column may only arm what its own
+          // project lists — its own Automations plus the global ones.
+          if (automation.projectId !== null && automation.projectId !== input.projectId) {
+            return { ok: false, error: "That automation belongs to another project." };
+          }
+          if (!automationTriggersColumn(automation, input.status)) {
+            return {
+              ok: false,
+              error: `"${automation.name}" is not offered in this column. Add the column to its Trigger first.`,
+            };
+          }
+        }
       }
-      const automation = deps.findAutomation(input.automationId);
-      if (automation === undefined) return { ok: false, error: "Unknown automation" };
-      // Ownership is the listing axis: a column may only arm what its own
-      // project lists — its own Automations plus the global ones.
-      if (automation.projectId !== null && automation.projectId !== input.projectId) {
-        return { ok: false, error: "That automation belongs to another project." };
-      }
-      if (!automationTriggersColumn(automation, input.status)) {
-        return {
-          ok: false,
-          error: `"${automation.name}" is not offered in this column. Add the column to its Trigger first.`,
-        };
-      }
-      deps.setColumnArming({
-        projectId: input.projectId,
-        status: input.status,
-        automationId: automation.id,
-      });
-      deps.onMutation?.({ projectId: input.projectId });
-      return { ok: true, armings: deps.listColumnArmings(input.projectId) };
+      const outcome = await deps.engine.setColumnArming(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, armings: outcome.value, receipt: outcome.receipt };
     },
 
     /**

@@ -32,6 +32,9 @@ const ARMED: ColumnArming = {
   armedAt: 10,
 };
 
+/** The armed Automation, switched ON on this machine — the ordinary case. */
+const ENABLED: readonly string[] = ["a1"];
+
 function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
   return {
     ...openArmedRun({
@@ -50,13 +53,25 @@ describe("armedMoveDecision", () => {
   it("opens a window for an arrival in an armed column", () => {
     const armed = automation();
     expect(
-      armedMoveDecision({ automations: [armed], armings: [ARMED], from: "todo", to: "doing" }),
+      armedMoveDecision({
+        automations: [armed],
+        armings: [ARMED],
+        enabledAutomationIds: ENABLED,
+        from: "todo",
+        to: "doing",
+      }),
     ).toEqual({ kind: "open-window", automation: armed });
   });
 
   it("does nothing for an arrival in an unarmed column — today's behaviour, unchanged", () => {
     expect(
-      armedMoveDecision({ automations: [automation()], armings: [], from: "todo", to: "doing" }),
+      armedMoveDecision({
+        automations: [automation()],
+        armings: [],
+        enabledAutomationIds: ENABLED,
+        from: "todo",
+        to: "doing",
+      }),
     ).toEqual({ kind: "nothing" });
   });
 
@@ -65,7 +80,32 @@ describe("armedMoveDecision", () => {
       armedMoveDecision({
         automations: [automation()],
         armings: [ARMED],
+        enabledAutomationIds: ENABLED,
         from: "doing",
+        to: "doing",
+      }),
+    ).toEqual({ kind: "nothing" });
+  });
+
+  it("does nothing when the armed Automation is switched off on this machine", () => {
+    // VC-112: a machine fires nothing until someone turns something on there.
+    // The column keeps its arming — this is the other switch, not a disarm.
+    expect(
+      armedMoveDecision({
+        automations: [automation()],
+        armings: [ARMED],
+        enabledAutomationIds: [],
+        from: "todo",
+        to: "doing",
+      }),
+    ).toEqual({ kind: "nothing" });
+    // And a set that names some OTHER Automation is not this one being on.
+    expect(
+      armedMoveDecision({
+        automations: [automation()],
+        armings: [ARMED],
+        enabledAutomationIds: ["a2"],
+        from: "todo",
         to: "doing",
       }),
     ).toEqual({ kind: "nothing" });
@@ -76,6 +116,7 @@ describe("armedMoveDecision", () => {
       armedMoveDecision({
         automations: [automation({ trigger: NO_AUTOMATION_TRIGGER })],
         armings: [ARMED],
+        enabledAutomationIds: ENABLED,
         from: "todo",
         to: "doing",
       }),
@@ -110,6 +151,7 @@ describe("armedRunVerdict", () => {
         now: open.startAt,
         currentStatus: "doing",
         armedNow: automation(),
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "start" });
   });
@@ -121,6 +163,7 @@ describe("armedRunVerdict", () => {
         now: open.startAt - 400,
         currentStatus: "doing",
         armedNow: automation(),
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "wait", remainingMs: 400 });
   });
@@ -132,6 +175,7 @@ describe("armedRunVerdict", () => {
         now: open.startAt,
         currentStatus: "todo",
         armedNow: automation(),
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "abandon", reason: "left-column" });
   });
@@ -143,6 +187,7 @@ describe("armedRunVerdict", () => {
         now: open.startAt,
         currentStatus: null,
         armedNow: automation(),
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "abandon", reason: "gone" });
   });
@@ -154,6 +199,7 @@ describe("armedRunVerdict", () => {
         now: open.startAt,
         currentStatus: "doing",
         armedNow: null,
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "abandon", reason: "disarmed" });
     expect(
@@ -162,8 +208,23 @@ describe("armedRunVerdict", () => {
         now: open.startAt,
         currentStatus: "doing",
         armedNow: automation({ id: "a2" }),
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "abandon", reason: "disarmed" });
+  });
+
+  it("abandons an Automation switched off inside the window, and says which switch", () => {
+    expect(
+      armedRunVerdict({
+        pending: open,
+        now: open.startAt,
+        currentStatus: "doing",
+        armedNow: automation(),
+        enabledAutomationIds: [],
+      }),
+      // Named apart from "disarmed": the column still arms it, so sending the
+      // person to the column bolt to undo this would be the wrong control.
+    ).toEqual({ kind: "abandon", reason: "switched-off" });
   });
 
   it("checks the clock BEFORE the board — an early wake is never an abandonment", () => {
@@ -173,6 +234,7 @@ describe("armedRunVerdict", () => {
         now: open.openedAt,
         currentStatus: null,
         armedNow: null,
+        enabledAutomationIds: ENABLED,
       }),
     ).toEqual({ kind: "wait", remainingMs: ARMED_RUN_DELAY_MS });
   });

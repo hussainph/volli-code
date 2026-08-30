@@ -11,6 +11,7 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { toast } from "sonner";
 
 import App from "./App";
+import { noteDeliberateMove } from "./components/automations/armed-run";
 import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
@@ -168,6 +169,24 @@ async function main() {
     .catch(() => {
       // A failed boot read leaves the icon unrendered; the next push heals it.
     });
+
+  // A Deliberate move main committed for somebody else (VC-128): an explicit
+  // `volli ticket move`. CONTEXT.md gives it the same semantics as a drag, so
+  // it reaches the same arrival door the board store reports through, and an
+  // armed destination column opens the same 3500 ms window with the same one
+  // Cancel. Subscribed before the invalidation below and never awaiting it: the
+  // door warms whatever caches it needs itself, so an arrival cannot be lost to
+  // whichever of the two pushes a window happens to see first.
+  //
+  // The window only exists where a renderer is watching, and that is the honest
+  // bound of this design rather than a gap in it: the CLI reaches main through
+  // a socket the running app owns, so there IS a window process — but a person
+  // may not be looking at it. What must never happen is a Run swallowed in
+  // silence, so a started Run toasts here exactly as a dragged one does, and
+  // VC-133 will own turning that into a notification when nobody is.
+  window.api.tickets.onMoved((notice) => {
+    noteDeliberateMove(notice);
+  });
 
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so

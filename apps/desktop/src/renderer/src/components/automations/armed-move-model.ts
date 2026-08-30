@@ -20,6 +20,13 @@
  *  3. A Ticket dragged out again, an Automation deleted, or a column disarmed
  *     inside the window abandons it, because the arrival the window was opened
  *     for is no longer true at the moment it would fire.
+ *
+ * And one rule that is not about slips at all: **a switched-off Automation
+ * fires nothing** (VC-127, VC-112 — "a new machine sees the Skills and fires
+ * nothing until someone turns something on there"). Enablement is asked here,
+ * at both the arrival and the deadline, because it governs what starts an
+ * Automation BESIDES a person. Running one by hand is universal and is
+ * deliberately unaffected: the palette and the rail never consult this file.
  */
 import {
   ARMED_RUN_DELAY_MS,
@@ -69,6 +76,8 @@ export type ArmedMoveDecision =
 export function armedMoveDecision(input: {
   automations: readonly Automation[];
   armings: readonly ColumnArming[];
+  /** Which Automations are switched on ON THIS MACHINE — absent means off. */
+  enabledAutomationIds: readonly string[];
   from: TicketStatus;
   to: TicketStatus;
 }): ArmedMoveDecision {
@@ -78,7 +87,13 @@ export function armedMoveDecision(input: {
   if (!isColumnArrival(input.from, input.to)) return { kind: "nothing" };
   const automation = armedAutomationFor(input.automations, input.armings, input.to);
   // An unarmed column is a pure status change, exactly as it is today.
-  return automation === null ? { kind: "nothing" } : { kind: "open-window", automation };
+  if (automation === null) return { kind: "nothing" };
+  // An armed column whose Automation is switched off here is the same pure
+  // status change. The column keeps its arming and the bolt keeps saying so:
+  // the switch is about this MACHINE, and a person who turns it back on wants
+  // the column they armed still armed.
+  if (!input.enabledAutomationIds.includes(automation.id)) return { kind: "nothing" };
+  return { kind: "open-window", automation };
 }
 
 /** Opens a window for `automation`, at `now`. `startAt` is the only deadline anything reads. */
@@ -109,7 +124,9 @@ export type ArmedRunAbandonReason =
   /** It left the column it arrived in before the window closed. */
   | "left-column"
   /** The column stopped arming this Automation (disarmed, deleted, or its Trigger changed). */
-  | "disarmed";
+  | "disarmed"
+  /** The Automation was switched off on this machine while the countdown ran. */
+  | "switched-off";
 
 export type ArmedRunVerdict =
   | { kind: "start" }
@@ -135,6 +152,8 @@ export function armedRunVerdict(input: {
   currentStatus: TicketStatus | null;
   /** What the column arms NOW, resolved through the shared rule. */
   armedNow: Automation | null;
+  /** Which Automations are switched on here NOW — re-read like everything else. */
+  enabledAutomationIds: readonly string[];
 }): ArmedRunVerdict {
   const remainingMs = input.pending.startAt - input.now;
   if (remainingMs > 0) return { kind: "wait", remainingMs };
@@ -144,6 +163,13 @@ export function armedRunVerdict(input: {
   }
   if (input.armedNow === null || input.armedNow.id !== input.pending.automationId) {
     return { kind: "abandon", reason: "disarmed" };
+  }
+  // Switched off inside the window. Abandoned like a disarm but named apart
+  // from it: the column still arms this Automation, and telling someone their
+  // column was disarmed when they turned the Automation off on the Automations
+  // page would send them to the wrong control to undo it.
+  if (!input.enabledAutomationIds.includes(input.pending.automationId)) {
+    return { kind: "abandon", reason: "switched-off" };
   }
   return { kind: "start" };
 }

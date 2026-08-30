@@ -1215,13 +1215,15 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     invalidError: "Invalid automation arming request",
   },
   "volli:automation-arm": {
-    // No command id, unlike every other automation write: arming is an upsert
-    // keyed by the column, so a repeat is the same end state. `automationId:
+    // A `commandId` like every other automation write: the PROJECTION is
+    // machine-local (`db/automations-repo.ts`), the INTENT is a durable command
+    // with an event and a receipt (docs/BOUNDARIES.md rule 5). `automationId:
     // null` is disarm, and the status is checked against the board's own
     // vocabulary here because it is half of the row's primary key.
     guard: (args): args is IpcArgs<"volli:automation-arm"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
       typeof args[0]["projectId"] === "string" &&
       isTicketStatus(args[0]["status"]) &&
       (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
