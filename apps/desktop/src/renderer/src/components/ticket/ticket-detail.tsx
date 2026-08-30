@@ -6,8 +6,12 @@ import {
   displayTicketId,
   EMPTY_TAB_ORDER,
   errorMessage,
+  resolveSplitView,
+  singlePaneSplitView,
+  SPLIT_VIEW_ROOT_PANE_ID,
   type FileSource,
   type FileWorkspaceTab,
+  type ResolvedSplitViewPane,
   type Ticket,
 } from "@volli/shared";
 
@@ -56,13 +60,21 @@ import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
-import { TicketSessionPlane } from "@renderer/components/ticket/ticket-session-plane";
-import { TicketTabStrip, type TicketTabDescriptor } from "@renderer/components/ticket/ticket-tabs";
+import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
+import { paneStripLabel, partitionPaneTabs } from "@renderer/components/split/split-tab-partition";
+import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
+import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
+import {
+  TicketPaneTabStrip,
+  TicketTabStrip,
+  type TicketTabDescriptor,
+} from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
+import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
@@ -134,9 +146,18 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
  * the chrome bar's ←/→ history plus Escape; there's no breadcrumb. The tab
  * plane hosts the ticket's live terminals; those stay resident (engines outlive
  * the view via the module registry, decision #8) and are positioned by the
- * always-mounted overlay onto the plane's measured box in the main column — so
- * the rail collapsing (which hands the plane the full width) never unmounts a
+ * always-mounted overlay onto the measured box each pane publishes — so the
+ * rail collapsing (which hands the plane the full width) never unmounts a
  * terminal.
+ *
+ * SINCE VC-202 the plane is a SPLIT GRID (`split/split-view-grid.tsx`) rather
+ * than a single box. Nothing about the paragraph above changes with it: an
+ * unsplit workspace resolves to one pane and renders exactly what it did, the
+ * full-width strip is the primary pane's strip, and a second pane simply draws
+ * its own strip over its own content. What each pane's front tab renders is
+ * routed by kind below, once per pane rather than once per surface — which is
+ * why the file/diff editors bind their dirty and view-state reports to their
+ * own path instead of to "the active tab's".
  */
 export function TicketDetail({
   projectId,
@@ -160,6 +181,13 @@ export function TicketDetail({
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
   const moveTicketTab = useWorkspaceStore((state) => state.moveTicketTab);
+  // The split view's own writers (VC-202). Every one of them is a no-op while
+  // this workspace is unsplit, which is what keeps the unsplit path untouched.
+  const moveTicketTabInPane = useWorkspaceStore((state) => state.moveTicketTabInPane);
+  const focusTicketPane = useWorkspaceStore((state) => state.focusTicketPane);
+  const setTicketSplitRatio = useWorkspaceStore((state) => state.setTicketSplitRatio);
+  const closeTicketPane = useWorkspaceStore((state) => state.closeTicketPane);
+  const removeTicketTabFromSplit = useWorkspaceStore((state) => state.removeTicketTabFromSplit);
   const setTicketDiffViewState = useWorkspaceStore((state) => state.setTicketDiffViewState);
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
@@ -323,6 +351,9 @@ export function TicketDetail({
   const diffMeta = ticketTabsState?.diffMeta ?? NO_DIFF_META;
   // How this ticket's strip is arranged (VC-189) — empty until someone drags.
   const tabOrder = ticketTabsState?.tabOrder ?? EMPTY_TAB_ORDER;
+  // How its plane is SPLIT (VC-202) — null until someone splits it, and null
+  // again the moment a close leaves one pane.
+  const splitView = ticketTabsState?.splitView ?? null;
   const activeTabId = ticketTabsState?.active ?? BODY_TAB_ID;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
@@ -825,37 +856,64 @@ export function TicketDetail({
     activeTab.kind === "session"
       ? sessionTabs?.find((candidate) => candidate.sessionId === activeTab.id)
       : undefined;
-  const activeChatSessionId = activeTab.kind === "chat" ? parseChatTabId(activeTab.id) : null;
-  const terminalFocused =
-    terminalFocusTarget?.projectId === projectId &&
-    terminalFocusTarget.ticketId === ticket.id &&
-    terminalFocusTarget.sessionId === activeTab.id &&
-    activeSessionTab !== undefined;
 
-  // Only the active file/diff tab mounts an editor, so its dirty reports are for
-  // exactly one path — the one below it in the tab strip. File and diff of the
-  // same path share the dirty key.
-  const activeEditorRelPath =
-    activeTab.kind === "file" || activeTab.kind === "diff" ? (activeTab.relPath ?? null) : null;
+  /**
+   * The strip, projected onto the panes that draw it (VC-202).
+   *
+   * An UNSPLIT workspace resolves a single pane holding the whole strip, whose
+   * front tab is the one that would have been in front anyway — so the grid
+   * below draws today's plane and the split path is never a second rendering
+   * path. `activeTab.id` rather than `activeTabId` because the fallback above
+   * is exactly what a pane should show when the record names nothing live.
+   */
+  const split = resolveSplitView(
+    splitView ?? singlePaneSplitView([], activeTab.id, SPLIT_VIEW_ROOT_PANE_ID),
+    tabs.map((tab) => tab.id),
+    BODY_TAB_ID,
+  );
+  const paneStrips = partitionPaneTabs(split, tabs);
+
+  /**
+   * The Session zen mode is holding, or null.
+   *
+   * "In front" means in front IN SOME PANE: zen is entered from one pane of
+   * several and the panes beside it must not clear it. While it holds, that
+   * Session takes the whole plane and the grid steps aside — which unpublishes
+   * every other pane's anchor and hides those terminals without unmounting one.
+   */
+  const zenSessionId =
+    terminalFocusTarget !== null &&
+    terminalFocusTarget.projectId === projectId &&
+    terminalFocusTarget.ticketId === ticket.id &&
+    split.panes.some((pane) => pane.activeTabId === terminalFocusTarget.sessionId) &&
+    sessionTabs?.some((candidate) => candidate.sessionId === terminalFocusTarget.sessionId) === true
+      ? terminalFocusTarget.sessionId
+      : null;
+  const terminalFocused = zenSessionId !== null;
+
+  // A file/diff editor's dirty and view-state reports name their OWN path: with
+  // panes there can be two mounted at once, so "the active tab's path" is no
+  // longer a description of which editor is talking. Stable callbacks, bound to
+  // a path one level down (`TicketPaneFileView`) — `FileView` holds these in
+  // effect and callback dependencies, so a fresh closure per render would
+  // re-read the file on every render.
   const handleFileDirtyChange = React.useCallback(
-    (dirty: boolean) => {
-      if (activeEditorRelPath === null) return;
-      markFileDirty(activeEditorRelPath, dirty);
+    (relPath: string, dirty: boolean) => {
+      markFileDirty(relPath, dirty);
       // Decision #56: a dirty File tab is never replaced, so the first edit
       // promotes the preview slot to a persistent tab. Diff tabs are always
       // persistent already — markTicketFileEdited is a no-op when the path
       // isn't an open File preview.
-      if (dirty) markTicketFileEdited(projectId, ticket.id, activeEditorRelPath);
+      if (dirty) markTicketFileEdited(projectId, ticket.id, relPath);
     },
-    [activeEditorRelPath, markFileDirty, markTicketFileEdited, projectId, ticket.id],
+    [markFileDirty, markTicketFileEdited, projectId, ticket.id],
   );
 
   const handleDiffViewStateChange = React.useCallback(
-    (viewState: unknown) => {
-      if (activeEditorRelPath === null) return;
-      setTicketDiffViewState(projectId, ticket.id, activeEditorRelPath, viewState);
+    (relPath: string, viewState: unknown) => {
+      setTicketDiffViewState(projectId, ticket.id, relPath, viewState);
     },
-    [activeEditorRelPath, projectId, setTicketDiffViewState, ticket.id],
+    [projectId, setTicketDiffViewState, ticket.id],
   );
 
   // The fallback above is purely visual — it renders the Ticket Body without
@@ -923,9 +981,14 @@ export function TicketDetail({
   );
 
   // Toolbar clicks take DOM focus away from the canvas. Refit after either
-  // geometry transition, then return focus to the split tab's active pane.
+  // geometry transition, then return focus to the split tab's active pane. The
+  // zen Session takes precedence: entering and leaving zen is the geometry
+  // change this exists for, and while it holds that is the terminal on screen.
+  const focusedSessionTab = terminalFocused
+    ? sessionTabs?.find((candidate) => candidate.sessionId === zenSessionId)
+    : activeSessionTab;
   React.useEffect(() => {
-    const paneId = activeSessionTab?.activePaneId;
+    const paneId = focusedSessionTab?.activePaneId;
     if (paneId === undefined) return;
     const frame = window.requestAnimationFrame(() => {
       const engine = getEngine(paneId);
@@ -933,7 +996,7 @@ export function TicketDetail({
       engine?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [terminalFocused, activeSessionTab?.activePaneId]);
+  }, [terminalFocused, focusedSessionTab?.activePaneId]);
 
   const handleClose = React.useCallback(() => closeTicket(projectId), [closeTicket, projectId]);
 
@@ -1014,68 +1077,188 @@ export function TicketDetail({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleClose, terminalFocused]);
 
+  /**
+   * Close one tab, from whichever pane's strip raised it.
+   *
+   * The split view's half of a close is only owed by the two kinds this store
+   * does not own — chat and terminal Sessions live in the sessions stores, so
+   * their pane assignment has to be dropped explicitly. File and diff closes
+   * carry it already (`closeTicketFile`/`closeTicketDiff` write through).
+   */
+  function closeTab(tab: TicketTabDescriptor): void {
+    if (tab.kind === "file" && tab.relPath !== undefined) {
+      // A file tab with an unsaved draft routes through the Save / Discard /
+      // Cancel guard first (CONCEPT #49).
+      requestCloseFileTab(tab.relPath);
+      return;
+    }
+    if (tab.kind === "diff" && tab.relPath !== undefined) {
+      requestCloseDiffTab(tab.relPath);
+      return;
+    }
+    if (tab.kind === "chat") {
+      const chatId = parseChatTabId(tab.id);
+      if (chatId === null) return;
+      // No busy guard and no confirm: the Session is durable, so closing the
+      // view loses nothing — reopening it from the rail adopts the same
+      // history. Standing the active tab down first, because the relaunch
+      // effect would otherwise read the persisted id, find the Session still on
+      // record, and put the tab back. While SPLIT that stand-down is the split
+      // view's own: it knows which pane held the tab and what succeeds it
+      // there, where a blind reset to the Body would yank the eye into the
+      // primary pane.
+      if (splitView === null) {
+        if (activeTabId === tab.id) setActiveTab(BODY_TAB_ID);
+      } else {
+        removeTicketTabFromSplit(projectId, ticket.id, tab.id);
+      }
+      useChatSessionsStore.getState().closeChatTab(ticket.id, chatId);
+      return;
+    }
+    const sessionId = tab.id;
+    const sessionTab = sessionTabs?.find((candidate) => candidate.sessionId === sessionId);
+    const liveIds = sessionTab
+      ? sessionPanes(sessionTab.layout)
+          .filter((pane) => pane.exitCode === null)
+          .map((pane) => pane.sessionId)
+      : [sessionId];
+    // Inside the guard, so a close the person CANCELS leaves the panes exactly
+    // as they were.
+    closeGuard.guard(liveIds, () => {
+      removeTicketTabFromSplit(projectId, ticket.id, sessionId);
+      closeTicketSession(ticket.id, sessionId);
+    });
+  }
+
+  /**
+   * A drop on one pane's strip. While unsplit it arranges the SURFACE, exactly
+   * as it always did; while split it rewrites that pane's own order and leaves
+   * the surface arrangement alone (VC-202 §2) — where a pane's tabs sit is the
+   * pane's business.
+   */
+  function reorderInPane(paneId: string, movedId: string, ids: readonly string[]): void {
+    if (splitView === null) moveTicketTab(projectId, ticket.id, movedId, ids);
+    else moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids);
+  }
+
+  /** What one pane's front tab draws — or, for a pane holding nothing, its menu. */
+  function paneContent(pane: ResolvedSplitViewPane): React.ReactNode {
+    const tab = tabs.find((candidate) => candidate.id === pane.activeTabId);
+    if (tab === undefined) {
+      return (
+        <PaneEmptyState
+          onNewChat={() => void createChat()}
+          onNewTerminal={() => void createSession()}
+          onOpenFile={openQuickOpen}
+          onClosePane={() => closeTicketPane(projectId, ticket.id, pane.id)}
+        />
+      );
+    }
+    const chatSessionId = tab.kind === "chat" ? parseChatTabId(tab.id) : null;
+    return (
+      // No horizontal padding here: the Doc tab centers its title/body on the
+      // measure via <ContentColumn>; file views own their edges and pick their
+      // own tier (markdown reads on the measure, code/binary go fluid);
+      // terminals get every pixel. Only the Doc tab shows the ticket title + top
+      // air — file and session tabs are workbench surfaces the strip already
+      // names.
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-hidden",
+          tab.kind === "body" && "pt-5",
+        )}
+      >
+        {tab.kind === "body" && (
+          <ContentColumn>
+            <TicketTitle ticket={ticket} />
+          </ContentColumn>
+        )}
+        {/* Positioning context for the resident terminal plane: Doc/file tabs
+            scroll in-flow; the anchor overlays them, published only for a
+            session tab. */}
+        <div className={cn("relative flex min-h-0 flex-1 flex-col", tab.kind === "body" && "mt-4")}>
+          {tab.kind === "body" ? (
+            <div
+              // The Body tab is a drop target: this is where the Ticket is
+              // written, so a file dragged onto it attaches to the Ticket.
+              // Scoped to this tab rather than the whole detail view on purpose
+              // — a capture handler on the root would fire before the embedded
+              // chat composer's own and steal drops meant for the conversation.
+              {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+            >
+              <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} editorRef={bodyEditorRef} />
+            </div>
+          ) : null}
+          {tab.kind === "file" && tab.relPath !== undefined ? (
+            <TicketPaneFileView
+              key={tab.relPath}
+              projectId={projectId}
+              ticketId={ticket.id}
+              relPath={tab.relPath}
+              fileRefs={fileRefs}
+              onSource={reportFileSource}
+              onDirtyChange={handleFileDirtyChange}
+              onLocalSave={reportLocalSave}
+              onLoaded={handleFileLoaded}
+            />
+          ) : null}
+          {tab.kind === "diff" && tab.relPath !== undefined ? (
+            <TicketPaneDiffView
+              key={tab.relPath}
+              ticket={ticket}
+              projectId={projectId}
+              relPath={tab.relPath}
+              previousPath={tab.previousPath ?? diffMeta[tab.relPath]?.previousPath}
+              status={diffMeta[tab.relPath]?.status}
+              binary={diffMeta[tab.relPath]?.binary}
+              onDirtyChange={handleFileDirtyChange}
+              onLocalSave={reportLocalSave}
+              onLoaded={handleFileLoaded}
+              initialViewState={ticketDiffViewStates?.[tab.relPath]}
+              onViewStateChange={handleDiffViewStateChange}
+            />
+          ) : null}
+          {/* In flow, not on the resident overlay beside it: that host exists so
+              a GPU-owning terminal is never unmounted, and a chat needs nothing
+              of the sort — its stream, fold and queue live in the registry
+              client, which outlives this view either way. */}
+          {chatSessionId !== null ? (
+            <ChatPlane
+              key={chatSessionId}
+              sessionId={chatSessionId}
+              projectId={ticket.projectId}
+              ticketId={ticket.id}
+              onOpenFile={openFile}
+            />
+          ) : null}
+          {tab.kind === "session" ? (
+            <TerminalPaneAnchor tabId={tab.id} ownerId={ticket.id} />
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         {/* One full-width tab row above both the main column and the rail (the
           browser-window metaphor). The active tab fuses with the content plane
-          in the main column below it. */}
+          in the main column below it. While split it is the PRIMARY pane's
+          strip — the pane that holds the Body tab and never moves. */}
         {terminalFocused ? null : (
           <TicketTabStrip
             projectId={projectId}
             ticketId={ticket.id}
-            tabs={tabs}
-            activeTabId={activeTab.id}
+            tabs={paneStrips[0]!.tabs}
+            activeTabId={split.panes[0]!.activeTabId ?? activeTab.id}
             creating={creating || creatingChat}
             onSelectTab={setActiveTab}
-            onReorderTabs={(movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids)}
+            onReorderTabs={(movedId, ids) => reorderInPane(split.primaryPaneId, movedId, ids)}
             onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
-            onCloseTab={(tab) => {
-              if (tab.kind === "file" && tab.relPath !== undefined) {
-                // A file tab with an unsaved draft routes through the Save /
-                // Discard / Cancel guard first (CONCEPT #49).
-                requestCloseFileTab(tab.relPath);
-                return;
-              }
-              if (tab.kind === "diff" && tab.relPath !== undefined) {
-                requestCloseDiffTab(tab.relPath);
-                return;
-              }
-              if (tab.kind === "chat") {
-                const chatId = parseChatTabId(tab.id);
-                if (chatId === null) return;
-                // No busy guard and no confirm: the Session is durable, so
-                // closing the view loses nothing — reopening it from the rail
-                // adopts the same history. Standing the active tab down first,
-                // because the relaunch effect would otherwise read the persisted
-                // id, find the Session still on record, and put the tab back.
-                if (activeTabId === tab.id) setActiveTab(BODY_TAB_ID);
-                useChatSessionsStore.getState().closeChatTab(ticket.id, chatId);
-                return;
-              }
-              const sessionId = tab.id;
-              const sessionTab = sessionTabs?.find(
-                (candidate) => candidate.sessionId === sessionId,
-              );
-              const liveIds = sessionTab
-                ? sessionPanes(sessionTab.layout)
-                    .filter((pane) => pane.exitCode === null)
-                    .map((pane) => pane.sessionId)
-                : [sessionId];
-              closeGuard.guard(liveIds, () => closeTicketSession(ticket.id, sessionId));
-            }}
-            onRenameSessionTab={(tabId, title) => {
-              // The tab id says which Session kind this is, and each kind has
-              // its own optimistic surface to move before the durable write —
-              // a chat tab id must never reach the PTY rename, which would
-              // address a terminal that does not exist.
-              const chatSessionId = parseChatTabId(tabId);
-              if (chatSessionId !== null) {
-                void renameChatSession(chatSessionId, title);
-                return;
-              }
-              renameTerminalSession(tabId, title);
-            }}
+            onCloseTab={closeTab}
+            onRenameSessionTab={renameSessionTab}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
             skills={skills}
@@ -1085,93 +1268,44 @@ export function TicketDetail({
           />
         )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* No horizontal padding here: the Doc tab centers its title/body on
-            the measure via <ContentColumn>; file views own their edges and pick
-            their own tier (markdown reads on the measure, code/binary go fluid);
-            terminals get every pixel. Only the Doc tab shows the ticket title +
-            top air — file and session tabs are workbench surfaces the tab strip
-            already names. */}
-          <div
-            className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden",
-              activeTab.kind === "body" && "pt-5",
-            )}
-          >
-            {activeTab.kind === "body" && (
-              <ContentColumn>
-                <TicketTitle ticket={ticket} />
-              </ContentColumn>
-            )}
-            {/* Positioning context for the resident terminal plane: Doc/file tabs
-              scroll in-flow; the plane overlays them, shown only for a session tab. */}
-            <div
-              className={cn(
-                "relative flex min-h-0 flex-1 flex-col",
-                activeTab.kind === "body" && "mt-4",
-              )}
-            >
-              {activeTab.kind === "body" ? (
-                <div
-                  // The Body tab is a drop target: this is where the Ticket is
-                  // written, so a file dragged onto it attaches to the Ticket.
-                  // Scoped to this tab rather than the whole detail view on
-                  // purpose — a capture handler on the root would fire before
-                  // the embedded chat composer's own and steal drops meant for
-                  // the conversation.
-                  {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
-                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-                >
-                  <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} editorRef={bodyEditorRef} />
-                </div>
-              ) : null}
-              {activeTab.kind === "file" && activeTab.relPath !== undefined ? (
-                <FileView
-                  key={activeTab.relPath}
-                  projectId={projectId}
-                  ticketId={ticket.id}
-                  relPath={activeTab.relPath}
-                  fileRefs={fileRefs}
-                  onSource={reportFileSource}
-                  onDirtyChange={handleFileDirtyChange}
-                  onLocalSave={reportLocalSave}
-                  onLoaded={handleFileLoaded}
-                />
-              ) : null}
-              {activeTab.kind === "diff" && activeTab.relPath !== undefined ? (
-                <DiffView
-                  key={activeTab.relPath}
-                  projectId={projectId}
-                  ticket={ticket}
-                  relPath={activeTab.relPath}
-                  previousPath={activeTab.previousPath ?? diffMeta[activeTab.relPath]?.previousPath}
-                  status={diffMeta[activeTab.relPath]?.status}
-                  binary={diffMeta[activeTab.relPath]?.binary}
-                  onDirtyChange={handleFileDirtyChange}
-                  onLocalSave={reportLocalSave}
-                  onLoaded={handleFileLoaded}
-                  initialViewState={ticketDiffViewStates?.[activeTab.relPath]}
-                  onViewStateChange={handleDiffViewStateChange}
-                />
-              ) : null}
-              {/* In flow, not on the resident overlay beside it: that host
-                  exists so a GPU-owning terminal is never unmounted, and a chat
-                  needs nothing of the sort — its stream, fold and queue live in
-                  the registry client, which outlives this view either way. */}
-              {activeChatSessionId !== null ? (
-                <ChatPlane
-                  key={activeChatSessionId}
-                  sessionId={activeChatSessionId}
-                  projectId={ticket.projectId}
-                  ticketId={ticket.id}
-                  onOpenFile={openFile}
-                />
-              ) : null}
-              <TicketSessionPlane
-                ticketId={ticket.id}
-                activeSessionId={activeTab.kind === "session" ? activeTab.id : null}
-              />
+          {terminalFocused ? (
+            // Zen: the focused Session takes the whole plane. One anchor,
+            // spanning everything the strip and the rail have vacated — the
+            // grid is not rendered at all, so every other pane's anchor is
+            // unpublished and its terminal simply stops being drawn.
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <TerminalPaneAnchor tabId={zenSessionId} ownerId={ticket.id} />
             </div>
-          </div>
+          ) : (
+            <SplitViewGrid
+              view={split}
+              renderStrip={(pane) =>
+                // No strip on the primary pane (the surface's own is its) and
+                // none on a pane holding nothing: an empty tablist is a band of
+                // chrome about no tabs, and the pane's menu is the whole of
+                // what it has to say.
+                pane.isPrimary || pane.tabIds.length === 0 ? null : (
+                  <TicketPaneTabStrip
+                    label={paneStripLabel(pane)}
+                    projectId={projectId}
+                    ticketId={ticket.id}
+                    tabs={paneStrips[pane.index]?.tabs ?? []}
+                    activeTabId={pane.activeTabId ?? ""}
+                    onSelectTab={setActiveTab}
+                    onReorderTabs={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
+                    onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
+                    onCloseTab={closeTab}
+                    onRenameSessionTab={renameSessionTab}
+                  />
+                )
+              }
+              renderContent={paneContent}
+              onFocusPane={(paneId) => focusTicketPane(projectId, ticket.id, paneId)}
+              onResizeSplit={(splitId, ratio) =>
+                setTicketSplitRatio(projectId, ticket.id, splitId, ratio)
+              }
+            />
+          )}
           {railCollapsed || terminalFocused ? null : (
             // Resizable details rail: a grip on its inner (left) edge widens it
             // leftward, mirroring the left sidebar's outer-edge handle. `relative`
@@ -1240,5 +1374,77 @@ export function TicketDetail({
         }}
       />
     </>
+  );
+}
+
+/**
+ * Rename from either strip: the tab id says which Session kind this is.
+ *
+ * Each kind has its own optimistic surface to move before the durable write —
+ * a chat tab id must never reach the PTY rename, which would address a terminal
+ * that does not exist.
+ */
+function renameSessionTab(tabId: string, title: string): void {
+  const chatSessionId = parseChatTabId(tabId);
+  if (chatSessionId !== null) {
+    void renameChatSession(chatSessionId, title);
+    return;
+  }
+  renameTerminalSession(tabId, title);
+}
+
+/**
+ * One pane's file editor, with its reports bound to ITS path.
+ *
+ * A component rather than a closure built in the render above, and that is the
+ * whole reason it exists: `FileView` holds `onDirtyChange` in effect and
+ * callback dependencies, so a handler whose identity changed every render would
+ * re-read the file from disk on every render. Bound one level down, the binding
+ * changes only when the path does.
+ */
+function TicketPaneFileView({
+  relPath,
+  onDirtyChange,
+  ...rest
+}: Omit<React.ComponentProps<typeof FileView>, "relPath" | "onDirtyChange"> & {
+  relPath: string;
+  onDirtyChange(relPath: string, dirty: boolean): void;
+}) {
+  const handleDirtyChange = React.useCallback(
+    (dirty: boolean) => onDirtyChange(relPath, dirty),
+    [onDirtyChange, relPath],
+  );
+  return <FileView {...rest} relPath={relPath} onDirtyChange={handleDirtyChange} />;
+}
+
+/** {@link TicketPaneFileView} for a diff, which also reports its view state. */
+function TicketPaneDiffView({
+  relPath,
+  onDirtyChange,
+  onViewStateChange,
+  ...rest
+}: Omit<
+  React.ComponentProps<typeof DiffView>,
+  "relPath" | "onDirtyChange" | "onViewStateChange"
+> & {
+  relPath: string;
+  onDirtyChange(relPath: string, dirty: boolean): void;
+  onViewStateChange(relPath: string, viewState: unknown): void;
+}) {
+  const handleDirtyChange = React.useCallback(
+    (dirty: boolean) => onDirtyChange(relPath, dirty),
+    [onDirtyChange, relPath],
+  );
+  const handleViewStateChange = React.useCallback(
+    (viewState: unknown) => onViewStateChange(relPath, viewState),
+    [onViewStateChange, relPath],
+  );
+  return (
+    <DiffView
+      {...rest}
+      relPath={relPath}
+      onDirtyChange={handleDirtyChange}
+      onViewStateChange={handleViewStateChange}
+    />
   );
 }
