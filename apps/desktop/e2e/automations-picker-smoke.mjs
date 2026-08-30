@@ -132,9 +132,19 @@ function panelRows(page) {
  * next move, and a check that presses and reads makes none).
  */
 async function liftOver(page, displayId, status, { expectPanel = true, dwell = 120 } = {}) {
+  // The board scrolls SIDEWAYS, and the rail of collapsed pills sits at its
+  // right end. On a window narrower than this developer's — CI's macOS runners
+  // are 1024x768, and the app asks for 1400x900 — the pill hangs off the right
+  // edge: its box is real, but the centre this function then aims at lies
+  // outside the viewport, where `elementFromPoint` answers nothing and no
+  // pointer can land. Scrolled into view BEFORE either box is measured, because
+  // a person aiming at a column scrolls to it first. (The lane view needed the
+  // same thing for the same reason — `automations-page-smoke.mjs`'s `flipLane`.)
+  await columnFor(page, status).scrollIntoViewIfNeeded();
   // Both boxes measured only once they have stopped moving: a card that just
   // landed is still animating into its slot, and pressing down on where it WAS
-  // starts no drag at all.
+  // starts no drag at all. Measured AFTER the scroll above, so neither is a box
+  // for where its element used to be.
   const from = await stableBox(cardById(page, displayId).first());
   const column = await stableBox(columnFor(page, status));
   // Where the pointer parks inside the target, and it is aimed rather than
@@ -144,12 +154,28 @@ async function liftOver(page, displayId, status, { expectPanel = true, dwell = 1
   // check 8 says where to park rather than inheriting a depth measured for a
   // full column.
   const dwellY = column.y + dwell;
+  // Both ends of the gesture have to be somewhere a pointer can actually go.
+  // Asserted rather than discovered: an aim outside the viewport fails as a
+  // sentence naming the point and the window, instead of as a ten-second wait
+  // for a panel that was never going to open.
+  const dwellX = column.x + column.width / 2;
+  const viewport = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+  for (const [label, x, y] of [
+    ["the card to lift", from.x + from.width / 2, from.y + from.height / 2],
+    [`the ${status} column`, dwellX, dwellY],
+  ]) {
+    if (x < 0 || y < 0 || x > viewport[0] || y > viewport[1]) {
+      throw new Error(
+        `${label} sits at (${Math.round(x)}, ${Math.round(y)}), outside the ${viewport[0]}x${viewport[1]} window — no pointer can reach it`,
+      );
+    }
+  }
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   // Two moves: the first passes dnd-kit's 4px activation constraint, the second
   // carries the pointer onto the target column.
   await page.mouse.move(from.x + from.width / 2 + 30, from.y + 40, { steps: 8 });
-  await page.mouse.move(column.x + column.width / 2, dwellY, { steps: 20 });
+  await page.mouse.move(dwellX, dwellY, { steps: 20 });
   // dnd-kit has actually picked the card up. Asserted before anything is read,
   // because a drag that never activated and a panel that has not rendered yet
   // look identical from the outside.
@@ -165,7 +191,7 @@ async function liftOver(page, displayId, status, { expectPanel = true, dwell = 1
       "the column's Offered list to appear under the pointer",
       async () => {
         nudged = nudged === 0 ? 3 : 0;
-        await page.mouse.move(column.x + column.width / 2 + nudged, dwellY, { steps: 2 });
+        await page.mouse.move(dwellX + nudged, dwellY, { steps: 2 });
         return (await page.locator("[data-offered-panel]").count()) > 0;
       },
       { timeout: 10_000, interval: 150 },
@@ -185,7 +211,7 @@ async function liftOver(page, displayId, status, { expectPanel = true, dwell = 1
   return {
     /** A pointer move that changes nothing but makes the app read ⌥ again. */
     async nudge(dx = 2, dy = 0) {
-      await page.mouse.move(column.x + column.width / 2 + dx, dwellY + dy, { steps: 2 });
+      await page.mouse.move(dwellX + dx, dwellY + dy, { steps: 2 });
     },
     async moveTo(x, y) {
       await page.mouse.move(x, y, { steps: 6 });
