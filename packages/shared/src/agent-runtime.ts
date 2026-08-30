@@ -794,13 +794,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   return [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
-    ...verbs.map(
-      (verb): SessionToolBinding => ({
-        tool: verb,
-        verb,
-        port: callVerb as NonNullable<typeof callVerb>,
-      }),
-    ),
+    ...verbs.map((verb): SessionToolBinding => ({
+      tool: verb,
+      verb,
+      port: callVerb as NonNullable<typeof callVerb>,
+    })),
   ];
 }
 

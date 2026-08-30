@@ -3768,9 +3768,8 @@ describe("SessionRuntime transient transcript overlay", () => {
       await closing.runtime.subscribe(
         {
           sessionId: closedSession,
-          afterSequence: (
-            await closing.runtime.snapshot({ sessionId: closedSession })
-          ).throughSequence,
+          afterSequence: (await closing.runtime.snapshot({ sessionId: closedSession }))
+            .throughSequence,
         },
         (emission) => {
           afterClose.push(emission);
@@ -3798,9 +3797,8 @@ describe("SessionRuntime transient transcript overlay", () => {
       await releasing.runtime.subscribe(
         {
           sessionId: releasedSession,
-          afterSequence: (
-            await releasing.runtime.snapshot({ sessionId: releasedSession })
-          ).throughSequence,
+          afterSequence: (await releasing.runtime.snapshot({ sessionId: releasedSession }))
+            .throughSequence,
         },
         (emission) => {
           afterRelease.push(emission);
