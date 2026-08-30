@@ -1,4 +1,5 @@
-import type { SessionListingRow, SessionProjection } from "@volli/shared";
+import { PERSON_STARTED } from "@volli/shared";
+import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
 
 import { chatSessionRecord } from "./chat-attachment";
 import { terminalSessionRecord } from "./terminal-attachment";
@@ -18,8 +19,19 @@ import { terminalSessionRecord } from "./terminal-attachment";
  * the rows that are pushed into it afterwards. A push shaped even slightly
  * differently from the fetch would make a Session change appearance the moment
  * it moved, which is precisely the bug a push channel exists to remove.
+ *
+ * `provenance` is passed IN rather than derived here for that same rule read
+ * one level down: it is a fact about the Session that neither attachment
+ * projection can see (it lives in the Automation records and the planner log,
+ * not in the Session ledger), so the host reads it and hands it over. It
+ * defaults to {@link PERSON_STARTED} only for callers that have no reader —
+ * every caller in the app supplies one, and a caller that did not would mark
+ * nothing, which is the quiet failure rather than a wrong bolt.
  */
-export function sessionListingRow(session: SessionProjection): SessionListingRow {
+export function sessionListingRow(
+  session: SessionProjection,
+  provenance: SessionProvenance = PERSON_STARTED,
+): SessionListingRow {
   const terminal = terminalSessionRecord(session);
   // The fold's own total, taken whichever arm the row lands on. A terminal row
   // is normally empty here — a manual companion runs models Volli never
@@ -28,11 +40,20 @@ export function sessionListingRow(session: SessionProjection): SessionListingRow
   // disagreeing about the same Session.
   const usage = session.usage;
   return terminal !== null
-    ? { kind: "terminal", record: terminal, usage }
-    : { kind: "chat", record: chatSessionRecord(session), usage };
+    ? { kind: "terminal", record: terminal, usage, provenance }
+    : { kind: "chat", record: chatSessionRecord(session), usage, provenance };
 }
 
-/** {@link sessionListingRow} over a whole listing. */
-export function sessionListingRows(sessions: readonly SessionProjection[]): SessionListingRow[] {
-  return sessions.map(sessionListingRow);
+/**
+ * {@link sessionListingRow} over a whole listing.
+ *
+ * `provenanceOf` is asked per Session rather than handed a prebuilt map: the
+ * reader behind it is two indexed point queries against SQLite, and a map would
+ * have to be built from the same reads plus a second pass to key them.
+ */
+export function sessionListingRows(
+  sessions: readonly SessionProjection[],
+  provenanceOf: (session: SessionProjection) => SessionProvenance = () => PERSON_STARTED,
+): SessionListingRow[] {
+  return sessions.map((session) => sessionListingRow(session, provenanceOf(session)));
 }

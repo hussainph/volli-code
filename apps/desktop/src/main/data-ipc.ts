@@ -18,9 +18,18 @@ import {
 } from "@volli/shared";
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import type {
+  AuthorityPolicyOverride,
+  Label,
+  Project,
+  SessionProjection,
+  SessionProvenance,
+  Ticket,
+  TicketStatus,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -413,6 +422,17 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  /**
+   * Who started each Session in a listing (VC-131). Bound here rather than at
+   * each call site so both listing channels ask the same question the push
+   * channel asks (`activity-watch.ts`) — a fetch and a push that disagreed
+   * would make a Run's bolt flicker as its Session worked.
+   */
+  const provenanceOfSession = (session: SessionProjection): SessionProvenance =>
+    readSessionProvenance(db, {
+      sessionId: session.session.id,
+      ticketId: session.session.ticketId,
+    });
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
@@ -882,7 +902,7 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -893,7 +913,7 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {

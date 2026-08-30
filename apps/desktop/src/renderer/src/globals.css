@@ -864,7 +864,8 @@
  * an unmount without help, and the fade out is worth more here than the node.
  *
  * ── MOTION IS THE STATE, NOT JUST THE COLOUR ────────────────────────────
- * Only `working` travels. `waiting` is the same ring standing still.
+ * Only `working` travels. `waiting` and `live` are the same ring standing
+ * still.
  *
  * That is the honest mapping rather than a decoration: something is MOVING on
  * that card exactly when something is moving in the Session, and a blocked
@@ -872,6 +873,15 @@
  * wearing two colours, which asks the reader to know the colour code before
  * the card means anything; told apart by motion they are legible in
  * peripheral vision, before the eye has resolved either.
+ *
+ * `live` (VC-131) joins on exactly those terms and adds no third channel:
+ * motion still means "producing", so an unattended Run sitting between turns
+ * is still. Its colour is `working`'s, because nobody is being asked for
+ * anything — amber would send a reader to a chat that has no question in it.
+ * The two therefore differ by motion alone, which is the same axis `working`
+ * and `waiting` already differ on, read the other way round. The whole word
+ * means the Session is still ATTACHED; see `board-session-activity.ts` for why
+ * the ring must not go out the moment the agent pauses.
  *
  * It also lets the loud one stay rare. A board with four blocked agents on it
  * has four still outlines instead of four things crawling, and the one that is
@@ -1022,10 +1032,17 @@
   --session-ring-seed: var(--attention);
 }
 
-/* Waiting stands still — see MOTION IS THE STATE above. The whole perimeter is
- * lit rather than one arc parked somewhere on it: a stopped comet reads as an
- * animation that died, while a closed ring reads as a ring. */
-.session-ring[data-activity="waiting"]::before {
+/* Waiting and live both stand still — see MOTION IS THE STATE above. The whole
+ * perimeter is lit rather than one arc parked somewhere on it: a stopped comet
+ * reads as an animation that died, while a closed ring reads as a ring.
+ *
+ * This is also, deliberately, the same declaration reduced motion applies to
+ * every state below. A reader who has asked for less motion and one looking at
+ * an unattended Run see the same still ring, because in both cases the ring's
+ * job is to be PRESENT rather than to travel — which is what "reduced motion
+ * keeps the signifier and removes only the motion" means here. */
+.session-ring[data-activity="waiting"]::before,
+.session-ring[data-activity="live"]::before {
   animation: none;
   background: var(--session-ring-color);
 }

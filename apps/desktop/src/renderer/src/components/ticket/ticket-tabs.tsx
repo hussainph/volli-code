@@ -27,12 +27,13 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import type { SkillReference } from "@volli/shared";
+import { sessionProvenanceHoverLine, type SkillReference } from "@volli/shared";
 
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   runOnLivePanes,
   terminalTabDot,
@@ -48,6 +49,8 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
@@ -128,6 +131,33 @@ export interface TicketTabDescriptor {
    * the same flag.
    */
   dirty?: boolean;
+}
+
+/**
+ * The Session a tab is OF, or `null` for the four kinds that are not a Session
+ * (VC-131).
+ *
+ * A terminal tab's id is the Session id itself; a chat tab's is prefixed
+ * (`ticket-chat-tab.ts` owns both spellings). Written here rather than assumed
+ * at each call site because a tab strip is the Session's header — `chat-plane`
+ * draws no header of its own precisely because this tab is one — so getting
+ * this wrong silently costs the header its mark.
+ */
+function tabSessionId(tab: TicketTabDescriptor): string | null {
+  if (tab.kind === "session") return tab.id;
+  return tab.kind === "chat" ? parseChatTabId(tab.id) : null;
+}
+
+/**
+ * A tab's tooltip with the Session's provenance line under it, or the tooltip
+ * unchanged when there is nothing to add (VC-131).
+ *
+ * Exported because Home's strip is the same header one scope up and must not
+ * spell this differently — a Session that gained a line by moving between two
+ * strips would be two features wearing one name.
+ */
+export function tabTitleWithProvenance(title: string, provenanceLine: string | null): string {
+  return provenanceLine === null ? title : `${title}\n${provenanceLine}`;
 }
 
 interface TicketTabStripProps {
@@ -223,6 +253,12 @@ function TicketTab({
   // A terminal tab's own PTY facts. Called for every kind (hooks are not
   // conditional) and null for the four that have no PTY.
   const terminal = useTerminalTabState(tab.kind === "session" ? tab.id : null);
+  // And who started it. Unconditional for the same reason, and the resting
+  // answer — one frozen shared constant — for every tab that is not a Session
+  // and every Session no Automation started.
+  const sessionId = tabSessionId(tab);
+  const provenance = useSessionProvenance(projectId, sessionId);
+  const provenanceLine = sessionProvenanceHoverLine(provenance);
   const parked = terminal !== null && terminal.parked && !terminal.exited;
   const exited = terminal?.exited === true;
   const showParkControls = (terminal?.livePaneIds.length ?? 0) > 0;
@@ -260,15 +296,23 @@ function TicketTab({
       // surface where that dot stands with nothing beside it to say what it
       // means, and "a Session is asking you something" is not a colour anyone
       // should have to have learnt.
-      title={
+      //
+      // A Session a Run or another Session started appends its provenance line
+      // here, on the node that was going to exist anyway. The tab's accessible
+      // NAME stays the label alone — a name that grew a clause would be read
+      // out on every arrow through the strip — so this rides as the tab's
+      // description instead, which is what a `title` beside an explicit
+      // `aria-label` computes to.
+      title={tabTitleWithProvenance(
         exited
           ? `Exited (${terminal?.exitCode ?? "?"})`
           : parked
             ? "Terminal is parked to save memory. Select to wake it."
             : tab.status === "waiting"
               ? `${tab.label}\nWaiting for you`
-              : tab.label
-      }
+              : tab.label,
+        provenanceLine,
+      )}
       // Preview File tabs are italic (same convention as Project Files); an
       // exited terminal is struck through, the same as on the other strip.
       labelClassName={cn(preview && "italic", exited && "line-through")}
@@ -282,7 +326,15 @@ function TicketTab({
         ) : null
       }
       badge={
-        tab.badge === "worktree" ? (
+        // The bolt takes the badge slot — between the liveness dot and the
+        // label, which is the same order the sidebar's rows put it in, so a
+        // Session keeps its mark in the same place on the strip that names it
+        // as in the rail that lists it. Only one kind of tab can occupy this
+        // slot at a time: a File tab has no Session and a Session tab has no
+        // worktree badge.
+        sessionId !== null ? (
+          <SessionProvenanceMark provenance={provenance} rowTitle={tab.label} />
+        ) : tab.badge === "worktree" ? (
           // A quiet dot marking a file resolved from the ticket's worktree copy
           // rather than the main checkout (decision #6).
           <span

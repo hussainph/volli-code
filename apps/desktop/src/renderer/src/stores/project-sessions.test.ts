@@ -1,5 +1,6 @@
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionRecord,
@@ -79,8 +80,18 @@ describe("project-sessions store", () => {
 
   it("splits a fetched listing into the two record shapes", async () => {
     stubList([
-      { kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY },
-      { kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      {
+        kind: "terminal",
+        record: record(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+      {
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
     ]);
     const store = createProjectSessionsStore();
 
@@ -89,7 +100,77 @@ describe("project-sessions store", () => {
     expect(store.getState().byProject.p1).toEqual({
       terminal: [record()],
       chat: [chatRecord()],
+      // Empty rather than two `{ kind: "user" }` entries: the resting case is
+      // stored as its own absence, which is what makes an unautomated project
+      // cost this map nothing (VC-131).
+      provenance: {},
     });
+  });
+
+  // VC-131. The map is keyed by the id each row's own shape answers to, so both
+  // arms are exercised: a terminal row is found by `record.id` and a chat row by
+  // `record.sessionId`, and getting that backwards would file a mark under an id
+  // no surface ever asks for — a bolt that silently never draws.
+  it("keeps who started each Session, keyed by the id its own shape answers to", async () => {
+    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    const child = {
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    } as const;
+    stubList([
+      {
+        kind: "terminal",
+        record: record(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: child,
+      },
+      {
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: run,
+      },
+    ]);
+    const store = createProjectSessionsStore();
+
+    await store.getState().refresh("p1");
+
+    expect(store.getState().byProject.p1?.provenance).toEqual({ s1: child, c1: run });
+  });
+
+  // A Run started after this window opened arrives on the push channel before
+  // any baseline fetch has seen it, so the fold has to carry the mark — a push
+  // that dropped it would leave the newest Run as the one row with no bolt.
+  it("folds a pushed row's provenance in, and leaves the resting case absent", async () => {
+    const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+    stubList([]);
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("p1");
+
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord({ sessionId: "fresh" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: run,
+      }),
+    );
+    expect(store.getState().byProject.p1?.provenance).toEqual({ fresh: run });
+
+    const before = store.getState().byProject.p1?.provenance;
+    store.getState().applyActivity(
+      notice({
+        kind: "terminal",
+        record: record({ id: "human" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
+    // Not merely equal — the same object. A person-started row must not mint a
+    // fresh map identity, or every push in a project nobody automated would
+    // re-derive every listing built from it.
+    expect(store.getState().byProject.p1?.provenance).toBe(before);
   });
 
   it("surfaces a failed listing read instead of silently emptying the project", async () => {
@@ -124,10 +205,30 @@ describe("project-sessions store", () => {
     // Two rows per shape, so the upsert has to leave the untouched sibling
     // exactly as it was rather than rewriting the whole list.
     stubList([
-      { kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY },
-      { kind: "chat", record: chatRecord({ sessionId: "c2" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
-      { kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY },
-      { kind: "terminal", record: record({ id: "s2" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      {
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c2" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+      {
+        kind: "terminal",
+        record: record(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+      {
+        kind: "terminal",
+        record: record({ id: "s2" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
     ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
@@ -137,6 +238,7 @@ describe("project-sessions store", () => {
         kind: "chat",
         record: chatRecord({ activity: "working" }),
         usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
       }),
     );
     store.getState().applyActivity(
@@ -144,12 +246,14 @@ describe("project-sessions store", () => {
         kind: "terminal",
         record: record({ title: "Renamed" }),
         usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
       }),
     );
 
     expect(store.getState().byProject.p1).toEqual({
       terminal: [record({ title: "Renamed" }), record({ id: "s2" })],
       chat: [chatRecord({ activity: "working" }), chatRecord({ sessionId: "c2" })],
+      provenance: {},
     });
   });
 
@@ -158,18 +262,26 @@ describe("project-sessions store", () => {
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
 
-    store
-      .getState()
-      .applyActivity(
-        notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }),
-      );
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
 
     expect(store.getState().byProject.p1?.chat).toEqual([chatRecord()]);
   });
 
   it("moves a Session across the two lists when a terminal attaches to it", async () => {
     stubList([
-      { kind: "chat", record: chatRecord({ sessionId: "s1" }), usage: EMPTY_SESSION_USAGE_SUMMARY },
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "s1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
     ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
@@ -179,21 +291,29 @@ describe("project-sessions store", () => {
         kind: "terminal",
         record: record({ id: "s1" }),
         usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
       }),
     );
 
     // One Session, one row — never one of each shape, with the stale one frozen.
-    expect(store.getState().byProject.p1).toEqual({ terminal: [record({ id: "s1" })], chat: [] });
+    expect(store.getState().byProject.p1).toEqual({
+      terminal: [record({ id: "s1" })],
+      chat: [],
+      provenance: {},
+    });
   });
 
   it("drops a notice for a project with no baseline rather than seeding a partial one", () => {
     const store = createProjectSessionsStore();
 
-    store
-      .getState()
-      .applyActivity(
-        notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }),
-      );
+    store.getState().applyActivity(
+      notice({
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
 
     expect(store.getState().byProject.p1).toBeUndefined();
   });
@@ -209,12 +329,13 @@ describe("project-sessions store", () => {
           kind: "chat",
           record: chatRecord({ projectId: "p2" }),
           usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: PERSON_STARTED,
         },
         "p2",
       ),
     );
 
-    expect(store.getState().byProject.p1).toEqual({ terminal: [], chat: [] });
+    expect(store.getState().byProject.p1).toEqual({ terminal: [], chat: [], provenance: {} });
     expect(store.getState().byProject.p2).toBeUndefined();
   });
 
@@ -245,10 +366,19 @@ describe("project-sessions store", () => {
       return off;
     });
     Object.assign(globalThis, { window: { api: { sessions: { onActivity } } } });
-    useProjectSessionsStore.setState({ byProject: { p1: { terminal: [], chat: [] } } });
+    useProjectSessionsStore.setState({
+      byProject: { p1: { terminal: [], chat: [], provenance: {} } },
+    });
 
     const unsubscribe = subscribeProjectSessionActivity();
-    push!(notice({ kind: "chat", record: chatRecord(), usage: EMPTY_SESSION_USAGE_SUMMARY }));
+    push!(
+      notice({
+        kind: "chat",
+        record: chatRecord(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      }),
+    );
 
     expect(useProjectSessionsStore.getState().byProject.p1?.chat).toEqual([chatRecord()]);
     unsubscribe();
@@ -257,7 +387,14 @@ describe("project-sessions store", () => {
   });
 
   it("repoints a terminal row's running harness, and holds identity when nothing moved", async () => {
-    stubList([{ kind: "terminal", record: record(), usage: EMPTY_SESSION_USAGE_SUMMARY }]);
+    stubList([
+      {
+        kind: "terminal",
+        record: record(),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+    ]);
     const store = createProjectSessionsStore();
     await store.getState().refresh("p1");
     const before = store.getState().byProject.p1;

@@ -117,7 +117,7 @@ import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
-import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES, PERSON_STARTED } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
@@ -1296,6 +1296,9 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       // (VC-87). It rides on the ROW rather than inside the record, so both
       // arms of the listing carry the same fact in the same place.
       usage: EMPTY_SESSION_USAGE_SUMMARY,
+      // And who started it (VC-131), in the same place for the same reason. A
+      // Session nobody automated is the resting case and says so.
+      provenance: PERSON_STARTED,
     });
     expect(
       projectSessions.ok &&

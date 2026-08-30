@@ -79,8 +79,9 @@ try {
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
-      // Every write carries a Trigger since VC-128 — "Nothing else" is the
-      // union's own member rather than an absent field.
+      // Required since VC-128, and carried as the union's explicit member
+      // rather than left off: an optional field says "Nothing else" only on a
+      // transport that survives `undefined` (docs/BOUNDARIES.md rule 3).
       trigger: { kind: "none" },
       runtime: null,
     });

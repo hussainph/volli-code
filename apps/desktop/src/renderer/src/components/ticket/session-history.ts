@@ -8,6 +8,7 @@ import {
   type SessionHarnessState,
   type SessionListingIdentity,
   type SessionListingRow,
+  type SessionProvenance,
   type SessionRecord,
 } from "@volli/shared";
 
@@ -123,6 +124,28 @@ export function ticketOutputStamps(input: {
     if (at !== undefined) stamps[row.record.id] = at;
   }
   return stamps;
+}
+
+/**
+ * Who started each of a ticket's Sessions, keyed by Session id (VC-131).
+ *
+ * The rail splits its listing rows into two record arrays and builds its own
+ * view rows from those, so the row wrapper — which is where provenance rides,
+ * beside `usage`, because it is a fact about the Session rather than about the
+ * attachment — is gone by the time a row is drawn. This is the one read that
+ * keeps it, in the same sparse shape the sidebar's store uses: a miss is the
+ * resting case, so a ticket nobody automated contributes an empty object and
+ * the rail gains no weight from this feature at all.
+ */
+export function ticketSessionProvenance(
+  rows: readonly SessionListingRow[],
+): Readonly<Record<string, SessionProvenance>> {
+  const provenance: Record<string, SessionProvenance> = {};
+  for (const row of rows) {
+    if (row.provenance.kind === "user") continue;
+    provenance[row.kind === "terminal" ? row.record.id : row.record.sessionId] = row.provenance;
+  }
+  return provenance;
 }
 
 /** What an open pane knows about itself, indexed by {@link livePanesById}. */
