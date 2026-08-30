@@ -1074,21 +1074,28 @@ describe("createAutomationRunner", () => {
 /**
  * VC-220: a Run opened its Session and the kickoff never fired.
  *
- * Every Run door in the product funnels into the two methods below, so the
- * doors are pinned HERE rather than through five app runs: the renderer's
- * surfaces (the Ticket page's Run button, the rail's split button and its "Run
- * once", the board card's menu, the armed column's drop window, the palette)
- * all reach `volli:automation-run` → `run()` and differ only in the Target and
- * the per-invocation Runtime they name; the schedule timer and "Run now" on a
- * Skipped occurrence reach `runForProject()`; the agent verb reaches `run()`
- * unattended. What each door owes is identical and is what was missing: the
- * composed Instructions, delivered as the Session's FIRST turn, under the
- * Run's own durable message ids.
+ * This is the SEAM half of that claim: every request shape a door can arrive
+ * with, delivering its composed Instructions as the Session's FIRST turn under
+ * the Run's own durable message ids — which is the thing that was missing.
+ *
+ * The other half is each door actually arriving here, and it is not provable
+ * from inside this file: a surface that grew its own call, or stopped making
+ * one, would leave every case below passing. So the doors are driven from the
+ * controls a person presses in
+ * `renderer/src/components/automations/run-doors.test.tsx` (the rail's split
+ * button and its Run once, the board card's menu, the page's Ticket chooser,
+ * the palette's row, the armed column's countdown, the page's Play and Run now
+ * on a skip), which carries each of them as far as `volli:automation-run`;
+ * `automations/ipc.test.ts` carries that channel to `run()` and fills in the
+ * attendance no renderer may declare; the two doors with no renderer at all
+ * arrive in `agent-tool-door.test.ts` and `automations/scheduler.test.ts`.
+ * Between those files and the cases below, every door is joined to this seam
+ * end to end.
  */
 describe("every Run door delivers its Instructions as the kickoff turn (VC-220)", () => {
   const doors = [
     {
-      door: "the page Run button, the rail's split button, the board card, the armed column, the palette",
+      door: "a bound Run on a Ticket — the shape every renderer door funnels into",
       instructions: "/review src/a.ts\nAlso /tdd please, and read @docs/DESIGN.md",
       open: (h: Harness, automationId: string) =>
         h.runner.run({

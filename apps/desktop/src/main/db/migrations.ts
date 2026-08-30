@@ -1481,19 +1481,28 @@ CREATE TABLE IF NOT EXISTS automation_column_order (
  * every Automation Run opened a Session it could never deliver Instructions to.
  * The Run doors were innocent; the schema underneath them was not.
  *
- * Probed per table rather than assumed, because this must be a no-op on the
- * lineage that did run 020 — dropping and recreating `blobs` there would take
- * a person's attachments with it. `ticket_attachments` is dropped only when it
- * is still present AND empty: 020's own note says it never had a caller and so
- * has never held a row, and a row would mean this is some other database whose
- * data is worth more than this convergence.
+ * Landed OBJECT BY OBJECT rather than after a two-table probe, because the fork
+ * did not stop at all-or-nothing. A branch that wrote its own version 20 could
+ * leave `blobs` without `blob_links`, either table without 020's three indexes,
+ * or both tables beside the legacy `ticket_attachments` it never dropped — and
+ * a probe that returned as soon as it saw two table names would leave every one
+ * of those profiles diverged forever, since a version is only ever offered
+ * once. Every statement below says `IF NOT EXISTS`, so what is already there is
+ * kept (dropping and recreating `blobs` would take a person's attachments with
+ * it) and only what is missing is created. A table that exists in some OTHER
+ * shape is left exactly as it is: this reconciles an absence, it does not
+ * rewrite a table whose rows it cannot vouch for.
+ *
+ * `ticket_attachments` is dropped only when it is still present AND empty:
+ * 020's own note says it never had a caller and so has never held a row, and a
+ * row would mean this is some other database whose data is worth more than this
+ * convergence.
  */
 function applyMigration035BlobsReconcile(db: Database.Database): void {
   const has = (table: string): boolean =>
     (db
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get(table) as unknown) !== undefined;
-  if (has("blobs") && has("blob_links")) return;
   db.exec(MIGRATION_020_BLOBS_RECONCILE);
   if (!has("ticket_attachments")) return;
   const rows = db.prepare("SELECT COUNT(*) AS count FROM ticket_attachments").get() as {

@@ -2106,6 +2106,66 @@ function buildLineageWithout020(dbPath: string): Database.Database {
 }
 
 /**
+ * Migration 020's own statements, so a test can hand a lineage SOME of what 020
+ * owed in the exact text 020 wrote.
+ *
+ * Read out of the list rather than hand-copied: `sqlite_master` stores the
+ * statement verbatim, so a copy that differed by one space would compare
+ * unequal to the fresh schema for a reason that is not about the schema at all.
+ */
+function migration020Sql(): string {
+  const sql = MIGRATIONS.find((migration) => migration.version === 20)?.sql;
+  if (sql === undefined) throw new Error("migration 020 is no longer in the list");
+  return sql;
+}
+
+/**
+ * A lineage that skipped 020 and then had PART of it land anyway — the shapes a
+ * parallel branch actually leaves behind. `surgery` runs after 020's own
+ * statements, taking back whatever this fork never had.
+ */
+function buildPartial020Lineage(
+  dbPath: string,
+  options: { keepLegacyTable?: boolean; surgery?: string } = {},
+): Database.Database {
+  const db = buildLineageWithout020(dbPath);
+  db.exec(
+    options.keepLegacyTable === true
+      ? migration020Sql().replace("DROP TABLE ticket_attachments;", "")
+      : migration020Sql(),
+  );
+  if (options.surgery !== undefined) {
+    // Foreign keys off for the surgery itself: dropping a parent table under a
+    // child one is exactly the state being simulated, and SQLite refuses to
+    // stage it while it is enforcing. The migration then runs with them ON,
+    // which is how the app opens the database.
+    db.pragma("foreign_keys = OFF");
+    db.exec(options.surgery);
+    db.pragma("foreign_keys = ON");
+  }
+  return db;
+}
+
+/** The three indexes 020 put on `blob_links`, which a partial fork can lack. */
+const BLOB_LINK_INDEXES = [
+  "idx_blob_links_ticket",
+  "idx_blob_links_session",
+  "idx_blob_links_blob",
+] as const;
+
+/** A project and a ticket, so a `blob_links` row has an owner to name. */
+function seedTicket(db: Database.Database): void {
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('t1', 'p1', 1, 'Ticket', 'body', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+}
+
+/**
  * Every table and index, by name and by the statement that made it.
  *
  * `IF NOT EXISTS` is normalized away: it is stored verbatim in
@@ -2209,5 +2269,194 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
     expect(tableExists(db, "blob_links")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 1 });
     db.close();
+  });
+
+  /**
+   * The PARTIAL profiles, one shape per test.
+   *
+   * The fork did not stop at all-or-nothing: a branch's own version 20 could
+   * land one of the two tables, land both without 020's indexes, or land both
+   * and never drop the legacy table. Each is a database somebody is running,
+   * each reaches this migration exactly once, and a reconciler that returned
+   * early on any of them would leave it diverged for good. Every case asserts
+   * the same two things — nothing a person owns was lost, and the schema now
+   * equals a fresh install's — because those are the two ways this can go wrong.
+   */
+  describe("partial profiles", () => {
+    /** A fresh install's schema, to converge against. */
+    function freshSchema(): Array<{ name: string; sql: string }> {
+      const freshPath = tempDbPath();
+      const fresh = openRawDb(freshPath);
+      migrate(fresh, freshPath);
+      const shape = schema(fresh);
+      fresh.close();
+      return shape;
+    }
+
+    it("lands `blob_links` under a lineage that has only `blobs`", () => {
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });
+      // The attachment bytes this profile already holds — the rows a reconciler
+      // that dropped and recreated `blobs` would take with it.
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"a".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      expect(tableExists(db, "blobs")).toBe(true);
+      expect(tableExists(db, "blob_links")).toBe(false);
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT original_name FROM blobs").all()).toEqual([
+        { original_name: "shot.png" },
+      ]);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
+      // Dropping the table took its indexes with it; convergence means they are
+      // back, not merely that the table name is.
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(schema(db)).toEqual(freshSchema());
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      db.close();
+    });
+
+    it("lands `blobs` under a lineage that has only `blob_links`", () => {
+      // The half of the fork where the CHILD survived. It is necessarily EMPTY
+      // and that is not an omission in this fixture: every `blob_links` row
+      // names a `blobs` hash, so under the enforcement the app opens with, an
+      // insert on a profile whose parent table is missing fails outright. What
+      // this shape can lose is therefore the rest of the profile, and what it
+      // owes is a usable pair afterwards — both asserted below.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blobs;" });
+      seedTicket(db);
+      expect(tableExists(db, "blobs")).toBe(false);
+      expect(tableExists(db, "blob_links")).toBe(true);
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT id FROM tickets").all()).toEqual([{ id: "t1" }]);
+      expect(schema(db)).toEqual(freshSchema());
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      // Usable, and with the reference live: the two halves were landed as one
+      // schema, not as two table names that happen to both exist.
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"b".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      db.prepare(
+        `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+           VALUES ('l1', '${"b".repeat(64)}', 't1', NULL, 'shot.png', 3)`,
+      ).run();
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 1 });
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+               VALUES ('l2', '${"e".repeat(64)}', 't1', NULL, 'gone.png', 4)`,
+          )
+          .run(),
+      ).toThrow(/FOREIGN KEY/);
+      db.close();
+    });
+
+    it("lands the indexes under a lineage that has both tables and none of them", () => {
+      // Tables are not the whole of 020, and this is the shape that says so:
+      // both names are present, so a two-table probe calls this profile healthy
+      // while every attachment read scans.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, {
+        surgery: BLOB_LINK_INDEXES.map((index) => `DROP INDEX ${index};`).join("\n"),
+      });
+      seedTicket(db);
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"c".repeat(64)}', 'image/png', 9, 'kept.png', 2)`,
+      ).run();
+      db.prepare(
+        `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+           VALUES ('l1', '${"c".repeat(64)}', 't1', NULL, 'kept.png', 3)`,
+      ).run();
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(false);
+
+      migrate(db, dbPath);
+
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 1 });
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("lands one missing index without disturbing the two that are there", () => {
+      // Half an index set is the same class of divergence as none of it, and it
+      // is the one a fork that added an index later actually produces.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP INDEX idx_blob_links_blob;" });
+
+      migrate(db, dbPath);
+
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("tidies the legacy table a fork left beside both new ones", () => {
+      // The mid-fork state: a branch ran 020's CREATEs and not its DROP, so the
+      // profile carries all three tables. `ticket_attachments` never had a
+      // caller, so an empty one here is the same dead table 020 removed — and
+      // leaving it would be this profile's schema disagreeing with every other
+      // install's forever.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { keepLegacyTable: true });
+      expect(tableExists(db, "ticket_attachments")).toBe(true);
+      expect(tableExists(db, "blobs")).toBe(true);
+      expect(tableExists(db, "blob_links")).toBe(true);
+
+      migrate(db, dbPath);
+
+      expect(tableExists(db, "ticket_attachments")).toBe(false);
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("keeps a legacy table that holds rows even when both new tables are there", () => {
+      // The other side of that drop, on the partial shape: a row means this is
+      // not the database 020's note is about, and rows outrank a tidy schema
+      // whichever other tables happen to exist.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { keepLegacyTable: true });
+      seedTicket(db);
+      db.prepare(
+        `INSERT INTO ticket_attachments (id, ticket_id, kind, label, file_name, url, created_at)
+           VALUES ('a1', 't1', 'file', 'notes.txt', 'notes.txt', NULL, 1)`,
+      ).run();
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT id FROM ticket_attachments").all()).toEqual([{ id: "a1" }]);
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      db.close();
+    });
+
+    it("is idempotent on every shape it has just converged", () => {
+      // A version is offered once, but a database restored from a backup can
+      // meet it again — and these branches are the ones a second pass would
+      // have to be safe on, since they are the ones that DID something.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"d".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      migrate(db, dbPath);
+      const converged = schema(db);
+
+      db.pragma("user_version = 34");
+      expect(() => migrate(db, dbPath)).not.toThrow();
+
+      expect(schema(db)).toEqual(converged);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+      db.close();
+    });
   });
 });
