@@ -35,15 +35,8 @@ export function candidatesForColumn(
   });
 }
 
-/**
- * The list the drag picker offers for `status`, in digit order.
- *
- * Ids named in {@link ColumnOrder} come first, in that order. Anything new
- * (created after the last reorder, or never ranked) appends in the order the
- * automations array already had — so a fresh project without an order file
- * still gets a stable `1`–`n` from seed order.
- */
-export function offeredForColumn(
+/** The full ranked list, before the digit cap — see {@link offeredForColumn}. */
+function rankedForColumn(
   automations: readonly Automation[],
   status: TicketStatus,
   order: ColumnOrder,
@@ -62,7 +55,53 @@ export function offeredForColumn(
   for (const automation of candidates) {
     if (byId.has(automation.id)) result.push(automation);
   }
-  return result.slice(0, MAX_DIGIT);
+  return result;
+}
+
+/**
+ * The list the drag picker offers for `status`, in digit order.
+ *
+ * Ids named in {@link ColumnOrder} come first, in that order. Anything new
+ * (created after the last reorder, or never ranked) appends in the order the
+ * automations array already had — so a fresh project without an order file
+ * still gets a stable `1`–`n` from seed order.
+ */
+export function offeredForColumn(
+  automations: readonly Automation[],
+  status: TicketStatus,
+  order: ColumnOrder,
+): Automation[] {
+  return rankedForColumn(automations, status, order).slice(0, MAX_DIGIT);
+}
+
+/**
+ * The DRAG-TIME digit order for a column (VC-132): the armed Automation pinned
+ * to digit `1`, the authored rank standing for everything else.
+ *
+ * The pin is why `1` is safe to press while learning — in an armed column it
+ * reproduces exactly what a plain drop would do. It is applied at read time
+ * rather than written into {@link ColumnOrder}, so disarming returns the
+ * automation to its authored rank instead of wherever the pin last left it,
+ * and so the stored order never has to know about arming (which is a per-column,
+ * per-machine fact the order deliberately does not carry).
+ *
+ * Pinned BEFORE the digit cap, not after: an armed automation ranked past `9`
+ * would otherwise be sliced out of the very list whose digit `1` it owns.
+ *
+ * `armedId` naming an automation this column does not offer is ignored rather
+ * than an error — the same stale-arming tolerance `armedAutomationFor` has in
+ * `@volli/shared`, whose armed-first shape this mirrors.
+ */
+export function offeredForColumnWithArming(
+  automations: readonly Automation[],
+  status: TicketStatus,
+  order: ColumnOrder,
+  armedId: string | undefined,
+): Automation[] {
+  const ranked = rankedForColumn(automations, status, order);
+  const armed = armedId === undefined ? undefined : ranked.find((a) => a.id === armedId);
+  if (armed === undefined) return ranked.slice(0, MAX_DIGIT);
+  return [armed, ...ranked.filter((a) => a.id !== armed.id)].slice(0, MAX_DIGIT);
 }
 
 /** Digit shown on a card in a lane — `1`-based, or null past nine. */
