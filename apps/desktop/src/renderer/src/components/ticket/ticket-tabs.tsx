@@ -130,14 +130,22 @@ export interface TicketTabDescriptor {
   dirty?: boolean;
 }
 
-interface TicketTabStripProps {
+/**
+ * What a strip needs to draw a ticket's tabs, whatever strip it is.
+ *
+ * Two now: the surface's own full-width strip ({@link TicketTabStrip}) and a
+ * secondary pane's ({@link TicketPaneTabStrip}, VC-202). They differ in the
+ * tablist's name and in the trailing actions cluster — a pane strip has none,
+ * because those controls act on the SURFACE and there is exactly one of it.
+ * How a tab is DRAWN is shared, and shared as a component rather than as a
+ * convention, so two strips on one screen cannot drift apart.
+ */
+interface TicketTabListProps {
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
   tabs: readonly TicketTabDescriptor[];
   activeTabId: string;
-  /** Disables the session-start control while a session of either kind is booting. */
-  creating: boolean;
   onSelectTab(tabId: string): void;
   /** Closes a session, chat, file, or diff tab. Doc has no close affordance. */
   onCloseTab(tab: TicketTabDescriptor): void;
@@ -159,6 +167,11 @@ interface TicketTabStripProps {
    * a strip without it mounts no drag machinery.
    */
   onReorderTabs?(movedId: string, ids: readonly string[]): void;
+}
+
+interface TicketTabStripProps extends TicketTabListProps {
+  /** Disables the session-start control while a session of either kind is booting. */
+  creating: boolean;
   /** Boots a terminal session tab — the same path as the rail's Terminal control. */
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
@@ -391,38 +404,19 @@ function TicketTab({
 
 /** Purely presentational tab strip — content lives in the caller (ticket-detail.tsx). */
 export function TicketTabStrip({
-  projectId,
-  ticketId,
-  tabs,
-  activeTabId,
   creating,
-  onSelectTab,
-  onCloseTab,
-  onPinFileTab,
-  onRenameSessionTab,
-  onReorderTabs,
   onNewSession,
   onNewChat,
   skills,
   onNewChatWithSkill,
   railCollapsed,
   onToggleRail,
+  ...list
 }: TicketTabStripProps) {
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-  // Every tab but the permanent Body tab may be dragged; the strip holds this
-  // list's identity steady for dnd-kit itself.
-  const movableIds = tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id);
-
   return (
     <TabStrip
       label="Ticket tabs"
-      reorder={
-        onReorderTabs === undefined ? undefined : { ids: movableIds, onReorder: onReorderTabs }
-      }
+      reorder={reorderFor(list)}
       actions={
         <>
           <div className="flex items-center">
@@ -470,6 +464,56 @@ export function TicketTabStrip({
         </>
       }
     >
+      <TicketTabList {...list} />
+    </TabStrip>
+  );
+}
+
+/**
+ * ONE SECONDARY PANE's strip (VC-202): the same tabs, named for the pane, with
+ * no actions cluster — the session-start control and the rail toggle act on the
+ * whole workspace, and the workspace's own strip is where they stay.
+ */
+export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
+  return (
+    <TabStrip label={label} reorder={reorderFor(list)}>
+      <TicketTabList {...list} />
+    </TabStrip>
+  );
+}
+
+/**
+ * Every tab but the permanent Body tab may be dragged — the same statement the
+ * absent `dragId` below makes, spelled for the half that could disagree with
+ * it. A strip with no `onReorderTabs` mounts no drag machinery at all.
+ */
+function reorderFor({ tabs, onReorderTabs }: TicketTabListProps) {
+  if (onReorderTabs === undefined) return undefined;
+  return {
+    ids: tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id),
+    onReorder: onReorderTabs,
+  };
+}
+
+/** The tabs themselves, drawn the same wherever the strip around them is. */
+function TicketTabList({
+  projectId,
+  ticketId,
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onCloseTab,
+  onPinFileTab,
+  onRenameSessionTab,
+}: TicketTabListProps) {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const stop = tabStopIndex(
+    tabs.length,
+    tabs.findIndex((tab) => tab.id === activeTabId),
+  );
+
+  return (
+    <>
       {tabs.map((tab, index) => (
         <TicketTab
           key={tab.id}
@@ -498,6 +542,6 @@ export function TicketTabStrip({
           onCancelRename={() => setEditingId(null)}
         />
       ))}
-    </TabStrip>
+    </>
   );
 }
