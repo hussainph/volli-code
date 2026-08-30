@@ -513,6 +513,20 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       if (tabId === null) return;
       const edge = splitDropEdge(zone);
       if (edge === null) {
+        // On an UNSPLIT surface a centre drop cannot be a pane move — there is
+        // no split for `moveHomeTabToPane` to write to (it returns state
+        // unchanged), and a drop whose zone lit "Move here" must not land as
+        // nothing. "Here" is the surface's only pane, so the drop answers with
+        // the door the row's own tab click takes: the tab comes to the front
+        // (and a terminal onto the container's own ledger too — the same pair
+        // `handleSelect` writes).
+        if (splitView === null) {
+          setHomeActiveTab(selectedId, tabId);
+          if (payload.type === "session" && payload.kind === "terminal") {
+            setActiveSession(selectedId, tabId);
+          }
+          return;
+        }
         moveHomeTabToPane(selectedId, tabId, paneId);
         return;
       }
@@ -522,7 +536,17 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         surfaceTabIds: [...orderedTabIds, tabId],
       });
     },
-    [moveHomeTabToPane, orderedTabIds, previewHomeFile, selectedId, splitHomePane, terminalTabs],
+    [
+      moveHomeTabToPane,
+      orderedTabIds,
+      previewHomeFile,
+      selectedId,
+      setActiveSession,
+      setHomeActiveTab,
+      splitHomePane,
+      splitView,
+      terminalTabs,
+    ],
   );
 
   /**

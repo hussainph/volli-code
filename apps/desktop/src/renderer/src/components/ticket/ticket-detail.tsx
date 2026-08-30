@@ -1193,6 +1193,15 @@ export function TicketDetail({
     if (tabId === null) return;
     const edge = splitDropEdge(zone);
     if (edge === null) {
+      // On an UNSPLIT workspace a centre drop cannot be a pane move — there is
+      // no split for `moveTicketTabToPane` to write to (it returns state
+      // unchanged), and a drop whose zone lit "Move here" must not land as
+      // nothing. "Here" is the workspace's only pane, so the drop answers with
+      // the door a strip click takes: the tab comes to the front.
+      if (splitView === null) {
+        setActiveTab(tabId);
+        return;
+      }
       moveTicketTabToPane(projectId, ticket.id, tabId, paneId);
       return;
     }
