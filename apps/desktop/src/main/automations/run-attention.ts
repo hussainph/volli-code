@@ -35,11 +35,24 @@
  * no new bookkeeping — versus a per-Session subscription held open for the life
  * of the app, or a poll, which is what the alternatives are.
  *
- * It also gives the rule a property worth stating: only Sessions something
- * WROTE to are folded. A Session left in `waiting` when the app closed is not
- * re-announced on the next launch, because nothing has written to it — the
- * notification tracks live transitions, and the digest surface VC-75 owns is
- * the right home for "what is waiting on me right now".
+ * ── WHAT A RELAUNCH KNOWS, AND WHAT IT ONLY LEARNS ────────────────────────
+ * The memory below is per PROCESS, so at launch it knows nothing — and a
+ * Session that was already `waiting` when the app closed is not a Session that
+ * just entered `waiting`. Whatever eventually writes to it (its own reattach,
+ * a rename, a supervisor's move) folds it here for the first time, and reading
+ * that first sighting as an edge out of `null` would post a notification for a
+ * transition that happened yesterday, possibly for something already answered.
+ *
+ * So the first sighting of a Session SEEDS and stays silent. The one exception
+ * is a Session this process minted: {@link RunAttentionWatch.observeBirth} is
+ * called on the create itself, and a Session that does not exist yet has no
+ * need, so `null` there is a fact rather than an assumption. That is what keeps
+ * the case this rule exists for loud — a Run mints its Session, its attach
+ * fails, and the entry into `error` is a real edge from a seeded `null` even
+ * when both writes land inside one coalescing window.
+ *
+ * "What is waiting on me right now" — the standing question a relaunch cannot
+ * answer from edges — is the digest surface VC-75 owns, not this.
  *
  * ── EVERY FAILURE IS SWALLOWED ────────────────────────────────────────────
  * Like the watch it hangs off and the watchdog beside it: this is an observer
@@ -80,8 +93,21 @@ export interface RunAttentionWatch {
    * never throws, so the caller can hand it every fold without a guard.
    */
   observe(projection: SessionProjection): void;
-  /** Drops a Session's remembered state. Used when it is gone, and by tests. */
-  forget(sessionId: string): void;
+  /**
+   * A Session this process just minted, from the activity watch's own create.
+   *
+   * It records the only need a Session that did not exist a moment ago can
+   * have — none — so its first real fold is measured against a fact instead of
+   * being swallowed as an unknown baseline. Without it, a Run whose Session
+   * fails its attach inside one coalescing window would be seen for the first
+   * time already in `error`, and the rule would seed that and say nothing.
+   *
+   * Idempotent, and never overwrites: a Session already remembered keeps the
+   * need it was last seen in, so a create REPLAYED during recovery cannot
+   * rewrite live state. (A replayed create is for a Session whose Run never
+   * committed and which therefore never attached, so `null` is true of it too.)
+   */
+  observeBirth(sessionId: string): void;
 }
 
 /**
@@ -113,12 +139,18 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] run attention:", error));
   /**
-   * The last need seen per Session — `null` for one that needs nobody.
+   * The last need seen per Session — `null` for one that needs nobody, and NO
+   * ENTRY for one this process has never seen. The two are deliberately
+   * different answers: `has()` is what separates "we watched it become quiet"
+   * from "we have never looked", and only the first can make the next sighting
+   * an edge.
    *
-   * Bounded by the Sessions this process has written to, and never evicted for
-   * a live one: a dropped entry costs a duplicate notification, which is the
-   * failure this map exists to prevent, so `forget` is called only where the
-   * Session genuinely went away.
+   * Bounded by the Sessions this process wrote to during this run, and nothing
+   * evicts from it — deliberately, and it is why there is no `forget`. Dropping
+   * an entry no longer costs a duplicate notification, it costs a MISSED one:
+   * the next sighting would read as a first sighting and seed in silence. An
+   * id and a word per touched Session, for the life of one app run, is the
+   * cheaper side of that trade by a wide margin.
    */
   const seen = new Map<string, SessionPersonNeed | null>();
 
@@ -127,8 +159,14 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
       try {
         const sessionId = projection.session.id;
         const need = sessionPersonNeed(projection);
+        const known = seen.has(sessionId);
         const previous = seen.get(sessionId) ?? null;
         seen.set(sessionId, need);
+        // The first sighting of a Session this process did not mint teaches the
+        // rule where that Session stands; it does not claim it just moved
+        // there. See the header: an edge is a transition we watched, and a
+        // relaunch watched nothing.
+        if (!known) return;
         // Not an edge into a need: either nothing is needed, or the same thing
         // was already needed and has already been announced.
         if (need === null || need === previous) return;
@@ -146,8 +184,9 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
         onError(error);
       }
     },
-    forget(sessionId) {
-      seen.delete(sessionId);
+    observeBirth(sessionId) {
+      if (seen.has(sessionId)) return;
+      seen.set(sessionId, null);
     },
   };
 }

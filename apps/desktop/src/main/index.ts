@@ -722,6 +722,10 @@ app.whenReady().then(async () => {
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
           observe: (projection) => runAttention?.observe(projection),
+          // The baseline for the rule above: a Session minted in this process
+          // began with no need, which is what makes its first fold an edge
+          // rather than a first sighting (VC-133).
+          observeBirth: (sessionId) => runAttention?.observeBirth(sessionId),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;

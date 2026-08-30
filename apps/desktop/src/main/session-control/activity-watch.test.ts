@@ -364,7 +364,50 @@ describe("watchSessionActivity", () => {
     const engine = stubEngine(() => projection());
     const watch = watchSessionActivity(engine, { publish: vi.fn(), coalesceMs: 0 });
     await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.engine.createSession({} as never);
     await expect(watch.flush()).resolves.toBeUndefined();
+    watch.stop();
+  });
+
+  it("announces a Session it just minted, before any fold can read it (VC-133)", async () => {
+    // The notification rule speaks on ENTERING a need, which means it needs a
+    // baseline. A create is the one moment the baseline is knowable outright,
+    // and it has to be told synchronously: the coalescing timer can merge the
+    // create with the write that puts the Session in `error`, and by then a
+    // first fold cannot tell "it just broke" from "it was already broken".
+    const engine = stubEngine(() => projection());
+    const observeBirth = vi.fn();
+    const observe = vi.fn(() => {
+      expect(observeBirth).toHaveBeenCalledWith("session-1");
+    });
+    const watch = watchSessionActivity(engine, {
+      publish: vi.fn(),
+      observe,
+      observeBirth,
+      coalesceMs: 0,
+    });
+
+    await watch.engine.createSession({} as never);
+    expect(observeBirth).toHaveBeenCalledTimes(1);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(1);
+    watch.stop();
+  });
+
+  it("announces no birth for a write to a Session that already existed", async () => {
+    // Every other mutating method reaches a Session this process did not
+    // necessarily create, so none of them may claim a baseline.
+    const engine = stubEngine(() => projection());
+    const observeBirth = vi.fn();
+    const watch = watchSessionActivity(engine, { publish: vi.fn(), observeBirth, coalesceMs: 0 });
+
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.engine.observe({} as never);
+    await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
+    await watch.engine.completeModelSelection({ sessionId: "session-1" } as never);
+    await watch.flush();
+
+    expect(observeBirth).not.toHaveBeenCalled();
     watch.stop();
   });
 });

@@ -8,6 +8,13 @@
  *  - and the decision reads through VC-75's preferences.
  *
  * Most cases here assert SILENCE, which is what this feature is mostly made of.
+ *
+ * Note how nearly every loud case begins with `observeBirth`. That is not test
+ * ceremony: it is the shape of the real thing. The rule speaks on ENTERING a
+ * need, so it needs a baseline it actually watched, and the app's baseline
+ * comes from the create — a Session that did not exist a moment ago needs
+ * nobody. A case without it is a Session this process is meeting for the first
+ * time, which is a relaunch, and a relaunch has watched no transition at all.
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -66,6 +73,7 @@ function state(
 describe("createRunAttentionWatch", () => {
   it("notifies when an unattended Run's Session enters waiting", () => {
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("waiting"));
     expect(h.notified).toEqual([
@@ -78,6 +86,7 @@ describe("createRunAttentionWatch", () => {
     // unavailable fails its attach with `configuration_invalid` rather than
     // falling back, so it lands here and needs no second failure surface.
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("error"));
     expect(h.notified).toEqual([
@@ -85,10 +94,24 @@ describe("createRunAttentionWatch", () => {
     ]);
   });
 
+  it("notifies on the very first fold of a Session it watched being minted", () => {
+    // The Run whose pinned model went away, exactly as it happens: the door
+    // mints the Session, the attach fails, and the activity watch coalesces
+    // both durable writes into ONE fold. The birth is what makes that single
+    // fold an edge — without it the Session would be met already in `error`
+    // and seeded in silence, which is the whole point of announcing the create
+    // rather than waiting to be told by a projection.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("error"));
+    expect(h.notified.map((n) => n.title)).toEqual(["An Automation stopped"]);
+  });
+
   it("never notifies on start", () => {
     // A Run opens its Session and starts working. Neither is a moment a person
     // is needed, and neither is representable as a need — so there is no edge.
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("idle"));
     expect(h.notified).toEqual([]);
@@ -96,6 +119,7 @@ describe("createRunAttentionWatch", () => {
 
   it("never notifies on finish", () => {
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("waiting"));
     h.notified.length = 0;
@@ -109,6 +133,7 @@ describe("createRunAttentionWatch", () => {
     // A column drop, the rail's button, the palette. VC-112: a person is right
     // there, so the app has nothing to tell them.
     const h = harness({ attendance: "attended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("waiting"));
     h.watch.observe(state("error"));
@@ -120,6 +145,7 @@ describe("createRunAttentionWatch", () => {
     // Session is provably a Run's but its `automation_runs` row never landed:
     // both read `null`, and both stay quiet.
     const h = harness({ attendance: null });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     expect(h.notified).toEqual([]);
   });
@@ -129,6 +155,7 @@ describe("createRunAttentionWatch", () => {
     // A rule written on the state rather than the edge would post again on each
     // one, which is how a rescue becomes the reason someone mutes the app.
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     h.watch.observe(state("waiting"));
     h.watch.observe(state("waiting"));
@@ -139,6 +166,7 @@ describe("createRunAttentionWatch", () => {
     // The person was going to answer a question and now there is nothing to
     // answer. That is a different trip, so it is a different notification.
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     h.watch.observe(state("error"));
     expect(h.notified.map((n) => n.title)).toEqual([
@@ -149,6 +177,7 @@ describe("createRunAttentionWatch", () => {
 
   it("speaks again when a need is cleared and then returns", () => {
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     h.watch.observe(state("idle"));
     h.watch.observe(state("waiting"));
@@ -157,13 +186,71 @@ describe("createRunAttentionWatch", () => {
 
   it("stays silent for a Session that was stopped on purpose", () => {
     const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("stopped"));
     expect(h.notified).toEqual([]);
+  });
+
+  /* ---------------------------------------- the edge, across a relaunch --- */
+
+  it("seeds and stays silent when it meets a Session already in a need", () => {
+    // The relaunch case, and the one this rule is easiest to get wrong on. The
+    // app closed with an unattended Run waiting on a person; nothing about the
+    // next launch is a transition, so the first fold — whatever caused it —
+    // teaches the baseline and says nothing. "Enters `waiting`" is a verb.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observe(state("waiting"));
+    expect(h.notified).toEqual([]);
+  });
+
+  it("keeps quiet through every later fold of that same standing need", () => {
+    // The seeded state has to be the REAL one, not a placeholder: a rename, a
+    // move, any durable write near that Session re-folds it, and each one must
+    // find the need it already knows about rather than a fresh edge.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observe(state("waiting"));
+    h.watch.observe(state("waiting", "Renamed once"));
+    h.watch.observe(state("waiting", "Renamed twice"));
+    expect(h.notified).toEqual([]);
+  });
+
+  it("speaks on the first real transition after a silent first sighting", () => {
+    // Seeding is not muting. Once the baseline exists, the Session answering
+    // its question and stopping again is an edge this process actually
+    // watched — so a relaunch loses one announcement, never the channel.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observe(state("waiting"));
+    h.watch.observe(state("idle"));
+    h.watch.observe(state("waiting"));
+    expect(h.notified).toHaveLength(1);
+  });
+
+  it("treats a need that CHANGED since launch as the edge it is", () => {
+    // Seeded `waiting`, then the transport dies under it. The person's errand
+    // changed after launch, which this process did watch.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observe(state("waiting"));
+    h.watch.observe(state("error"));
+    expect(h.notified.map((n) => n.title)).toEqual(["An Automation stopped"]);
+  });
+
+  it("never lets a birth overwrite what it already knows about a Session", () => {
+    // `recover()` replays an accepted plan's create in a LATER process, so this
+    // announcement can arrive for a Session already being watched. Rewriting
+    // the baseline to `null` there would re-announce a need that never moved.
+    const h = harness({ attendance: "unattended" });
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("waiting"));
+    expect(h.notified).toHaveLength(1);
+    h.watch.observeBirth(SESSION_ID);
+    h.watch.observe(state("waiting"));
+    expect(h.notified).toHaveLength(1);
   });
 
   it("honours VC-75's needs-you switch rather than a setting of its own", () => {
     const off = parseNotificationPreferences({ enabled: true, events: { "needs-you": false } });
     const h = harness({ attendance: "unattended", preferences: off });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     expect(h.notified).toEqual([]);
   });
@@ -171,6 +258,7 @@ describe("createRunAttentionWatch", () => {
   it("honours the master switch", () => {
     const off = parseNotificationPreferences({ enabled: false, events: { "needs-you": true } });
     const h = harness({ attendance: "unattended", preferences: off });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     expect(h.notified).toEqual([]);
   });
@@ -183,6 +271,7 @@ describe("createRunAttentionWatch", () => {
       events: { "needs-you": true, finished: false, swept: false, update: false },
     });
     const h = harness({ attendance: "unattended", preferences: prefs });
+    h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
     expect(h.notified).toHaveLength(1);
   });
@@ -194,18 +283,12 @@ describe("createRunAttentionWatch", () => {
       preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
       notify: (input) => notified.push(input),
     });
+    watch.observeBirth("human-session");
+    watch.observeBirth("run-session");
     watch.observe(state("waiting", "Person's chat", "human-session"));
     watch.observe(state("waiting", "Nightly sweep", "run-session"));
     expect(notified).toHaveLength(1);
     expect(notified[0]?.body).toBe("Nightly sweep stopped to ask.");
-  });
-
-  it("re-announces a Session it was told to forget", () => {
-    const h = harness({ attendance: "unattended" });
-    h.watch.observe(state("waiting"));
-    h.watch.forget(SESSION_ID);
-    h.watch.observe(state("waiting"));
-    expect(h.notified).toHaveLength(2);
   });
 
   it("swallows a failing port rather than failing the write that triggered it", () => {
@@ -220,6 +303,7 @@ describe("createRunAttentionWatch", () => {
       },
       onError: (error) => errors.push(error),
     });
+    watch.observeBirth(SESSION_ID);
     expect(() => watch.observe(state("waiting"))).not.toThrow();
     expect(errors).toHaveLength(1);
   });
@@ -236,6 +320,7 @@ describe("createRunAttentionWatch", () => {
         preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
         notify: () => undefined,
       });
+      watch.observeBirth(SESSION_ID);
       watch.observe(state("waiting"));
     } finally {
       console.warn = original;

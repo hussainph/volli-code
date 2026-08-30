@@ -90,6 +90,24 @@ export interface SessionActivityWatchPorts {
    * without a guard because {@link RunAttentionWatch.observe} is total.
    */
   observe?: (projection: SessionProjection) => void;
+  /**
+   * A Session this process just minted, announced from the create itself
+   * rather than from a fold (VC-133).
+   *
+   * The observer above measures CHANGES, and a change needs a baseline. Every
+   * other Session it meets was already alive when this process started, so its
+   * first fold can only teach a baseline; a Session created here is the one
+   * case where the baseline is known outright, because a Session that did not
+   * exist a moment ago needs nobody.
+   *
+   * It cannot be folded out of the create instead: `getSession` is async and
+   * this decoration sits on the optimistic-open path VC-16 exists to keep
+   * fast, and the coalescing timer may well merge the create with the very
+   * write that puts the Session in `error` — which is exactly the Automation
+   * Run whose pinned model went away. The id alone, synchronously, says all
+   * the observer needs.
+   */
+  observeBirth?: (sessionId: string) => void;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
   /** Diagnostics seam. Defaults to `console.warn`. */
@@ -196,6 +214,8 @@ export function watchSessionActivity(
   const watched: SessionEngine = {
     async createSession(request) {
       const result = await engine.createSession(request);
+      // Before `mark`, so the baseline exists before any fold can read it.
+      ports.observeBirth?.(result.session.id);
       mark(result.session.id);
       return result;
     },
