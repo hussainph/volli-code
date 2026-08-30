@@ -2515,13 +2515,10 @@ describe("startSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
         scriptedStream(
-          ["first answer", "second answer"].map(
-            (answer): ScriptStep =>
-              (emit) => {
-                emit.text(answer);
-                emit.finish();
-              },
-          ),
+          ["first answer", "second answer"].map((answer): ScriptStep => (emit) => {
+            emit.text(answer);
+            emit.finish();
+          }),
         ),
       ),
     });

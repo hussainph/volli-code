@@ -232,9 +232,8 @@ export function createProjectsStore(
     },
 
     async addProject({ path, defaultName }) {
-      const result = await writeThrough(
-        "add project",
-        (): Promise<ProjectCreateResult> => gateway.create({ path, name: defaultName }),
+      const result = await writeThrough("add project", (): Promise<ProjectCreateResult> =>
+        gateway.create({ path, name: defaultName }),
       );
       if (!result) return;
 
@@ -312,9 +311,8 @@ export function createProjectsStore(
       // snapshot; the fresh re-read below handles what actually changed.
       if (!get().projects.some((project) => project.id === id)) return;
 
-      const result = await writeThrough(
-        "remove project",
-        (): Promise<ProjectMutationResult> => gateway.remove(id),
+      const result = await writeThrough("remove project", (): Promise<ProjectMutationResult> =>
+        gateway.remove(id),
       );
       if (!result) return;
 
@@ -373,10 +371,8 @@ export function createProjectsStore(
       const { projects } = get();
       if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
 
-      const result = await writeThrough(
-        "save project order",
-        (): Promise<ProjectMutationResult> =>
-          gateway.reorder(projects.map((project) => project.id)),
+      const result = await writeThrough("save project order", (): Promise<ProjectMutationResult> =>
+        gateway.reorder(projects.map((project) => project.id)),
       );
       if (result) return; // persisted — the optimistic order stands
 

@@ -536,20 +536,18 @@ export function createBoardStore(
         const trimmed = title.trim();
         if (trimmed === "") return null;
 
-        const result = await writeThrough(
-          "create ticket",
-          (): Promise<TicketResult> =>
-            gateway.createTicket({
-              projectId,
-              status,
-              title: trimmed,
-              priority: options?.priority,
-              body: options?.body,
-              labels: options?.labels,
-              usesWorktree: options?.usesWorktree,
-              preferredHarnessId: options?.preferredHarnessId,
-              baseBranch: options?.baseBranch,
-            }),
+        const result = await writeThrough("create ticket", (): Promise<TicketResult> =>
+          gateway.createTicket({
+            projectId,
+            status,
+            title: trimmed,
+            priority: options?.priority,
+            body: options?.body,
+            labels: options?.labels,
+            usesWorktree: options?.usesWorktree,
+            preferredHarnessId: options?.preferredHarnessId,
+            baseBranch: options?.baseBranch,
+          }),
         );
         if (!result) return null;
 
@@ -571,10 +569,8 @@ export function createBoardStore(
         if (optimistic === previous || fromStatus === undefined) return;
         set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
-        const result = await writeThrough(
-          "move ticket",
-          (): Promise<TicketsResult> =>
-            gateway.moveTicket({ projectId, ticketId, toStatus, toIndex }),
+        const result = await writeThrough("move ticket", (): Promise<TicketsResult> =>
+          gateway.moveTicket({ projectId, ticketId, toStatus, toIndex }),
         );
         if (!result) {
           // Revert to the pre-move list, but preserve any ticket created
@@ -607,9 +603,8 @@ export function createBoardStore(
             slice.map((existing) => (existing.id === ticket.id ? ticket : existing)),
           );
 
-        const result = await writeThrough(
-          "update priority",
-          (): Promise<TicketResult> => gateway.setTicketPriority({ ticketId, priority }),
+        const result = await writeThrough("update priority", (): Promise<TicketResult> =>
+          gateway.setTicketPriority({ ticketId, priority }),
         );
         if (!result) {
           patch(original);
@@ -654,9 +649,8 @@ export function createBoardStore(
           );
         patch({ ...original, color });
 
-        const result = await writeThrough(
-          "update label color",
-          (): Promise<LabelResult> => gateway.setLabelColor({ labelId, color }),
+        const result = await writeThrough("update label color", (): Promise<LabelResult> =>
+          gateway.setLabelColor({ labelId, color }),
         );
         if (!result) {
           patch(original);
@@ -666,9 +660,8 @@ export function createBoardStore(
       },
 
       async loadArchived(projectId) {
-        const result = await writeThrough(
-          "load archive",
-          (): Promise<ArchivedTicketsResult> => gateway.listArchived(projectId),
+        const result = await writeThrough("load archive", (): Promise<ArchivedTicketsResult> =>
+          gateway.listArchived(projectId),
         );
         if (!result) return false;
         // The project may have been forgotten (removed) while the fetch was in
@@ -694,9 +687,8 @@ export function createBoardStore(
         // Optimistically drop the card from the board.
         reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const result = await writeThrough(
-          "archive ticket",
-          (): Promise<Result> => gateway.archiveTicket({ ticketId }),
+        const result = await writeThrough("archive ticket", (): Promise<Result> =>
+          gateway.archiveTicket({ ticketId }),
         );
         if (!result) {
           // Revert: restore the card into the FRESH slice, unless a concurrent
@@ -743,9 +735,8 @@ export function createBoardStore(
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const result = await writeThrough(
-          "unarchive ticket",
-          (): Promise<TicketResult> => gateway.unarchiveTicket({ ticketId }),
+        const result = await writeThrough("unarchive ticket", (): Promise<TicketResult> =>
+          gateway.unarchiveTicket({ ticketId }),
         );
         if (!result) {
           // Revert: restore it to its old Archive slot unless already back.
@@ -777,9 +768,8 @@ export function createBoardStore(
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const result = await writeThrough(
-          "delete ticket",
-          (): Promise<Result> => gateway.deleteTicket({ ticketId }),
+        const result = await writeThrough("delete ticket", (): Promise<Result> =>
+          gateway.deleteTicket({ ticketId }),
         );
         if (!result) {
           // Revert: restore it to its old Archive slot unless already back.

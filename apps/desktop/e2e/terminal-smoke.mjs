@@ -98,7 +98,7 @@ async function visibleCanvasRects(page) {
         const rect = canvas.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })
-      .sort((a, b) => a.y - b.y || a.x - b.x),
+      .toSorted((a, b) => a.y - b.y || a.x - b.x),
   );
 }
 
