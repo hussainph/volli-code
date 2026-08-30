@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -7,9 +10,42 @@ import {
   closeAppBounded,
   createDeadline,
   createRunner,
+  evidenceDir,
   sleep,
   summarizeTurnFrames,
 } from "./smoke-kit.mjs";
+
+test("evidenceDir honours an explicit dir and creates nothing itself", async () => {
+  const named = join(os.tmpdir(), "volli-evidence-dir-test-not-created");
+  await fs.rm(named, { recursive: true, force: true });
+
+  assert.equal(await evidenceDir("probe", named), named);
+  // CI names the dir it will upload; whether it exists yet is the capture
+  // path's business (every probe mkdir -p's before it writes).
+  await assert.rejects(fs.stat(named), { code: "ENOENT" });
+});
+
+test("evidenceDir derives an unpredictable private dir and announces it", async (context) => {
+  const errors = [];
+  context.mock.method(console, "error", (line) => errors.push(line));
+
+  const first = await evidenceDir("probe", undefined);
+  const second = await evidenceDir("probe", undefined);
+  context.after(async () => {
+    await fs.rm(first, { recursive: true, force: true });
+    await fs.rm(second, { recursive: true, force: true });
+  });
+
+  // Under os.tmpdir() (never the repo), prefixed by the probe, and never the
+  // same name twice — a name a local attacker can predict is a name they can
+  // pre-create as a symlink before the failing run writes into it.
+  assert.equal(dirname(first), os.tmpdir());
+  assert.match(first, /volli-probe-evidence-[^/]+$/u);
+  assert.notEqual(first, second);
+  // mkdtemp's 0700: nobody else can read a screenshot of the developer's app.
+  assert.equal((await fs.stat(first)).mode & 0o777, 0o700);
+  assert.deepEqual(errors, [`  evidence dir: ${first}`, `  evidence dir: ${second}`]);
+});
 
 test("createRunner must summarizes a required failure before throwing", async (context) => {
   const lines = [];
