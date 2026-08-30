@@ -330,14 +330,20 @@ function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): v
 }
 
 /**
- * Who hears about a Deliberate move that actually committed (VC-128).
+ * Who hears about a Deliberate move this renderer made and main committed
+ * (VC-128).
  *
  * One seam rather than a call at each of the three move surfaces (the drag, the
  * card's context menu, the ticket rail's status pill): every Deliberate move
- * already funnels through {@link BoardState.moveTicket}, and an armed column
- * must treat all three identically. Reporting from here also means only a move
- * main CONFIRMED is ever heard — an optimistic position the store went on to
- * revert never reaches an Automation.
+ * this window makes already funnels through {@link BoardState.moveTicket}, and
+ * an armed column must treat all three identically. Reporting from here also
+ * means only a move main CONFIRMED is ever heard — an optimistic position the
+ * store went on to revert never reaches an Automation.
+ *
+ * It is one DOOR, not one reporter. An explicit `volli ticket move` is a
+ * Deliberate move too (CONTEXT.md), and main announces the ones it commits for
+ * somebody else; `main.tsx` hands those to the same `noteDeliberateMove`. A
+ * renderer's own move never arrives that way, so nothing is reported twice.
  */
 export type DeliberateMoveObserver = (move: {
   projectId: string;

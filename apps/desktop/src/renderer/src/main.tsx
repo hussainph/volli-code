@@ -178,12 +178,19 @@ async function main() {
   // door warms whatever caches it needs itself, so an arrival cannot be lost to
   // whichever of the two pushes a window happens to see first.
   //
-  // The window only exists where a renderer is watching, and that is the honest
-  // bound of this design rather than a gap in it: the CLI reaches main through
-  // a socket the running app owns, so there IS a window process — but a person
-  // may not be looking at it. What must never happen is a Run swallowed in
-  // silence, so a started Run toasts here exactly as a dragged one does, and
-  // VC-133 will own turning that into a notification when nobody is.
+  // The 3500 ms window and its Cancel exist WHERE A WINDOW IS MOUNTED, and
+  // that bound is stated rather than hidden. Two cases, both honest:
+  //
+  //  - A window is open (the normal one, including a window showing another
+  //    page): the countdown appears, Cancel is reachable for the whole delay,
+  //    and the Run announces itself in a toast whether or not anybody was
+  //    watching it — nothing is swallowed in silence.
+  //  - No window is open at all (macOS keeps the app alive after the last one
+  //    closes, and the CLI still reaches main through its socket): nothing
+  //    hears this, so the move is a pure status change and no Run starts. That
+  //    is the safe direction — an unattended Run nobody could cancel is worse
+  //    than one that did not start — and VC-133 owns notifying a person who
+  //    is not at the screen.
   window.api.tickets.onMoved((notice) => {
     noteDeliberateMove(notice);
   });

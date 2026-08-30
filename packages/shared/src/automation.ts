@@ -295,11 +295,17 @@ export function automationPinProblem(
  * offered in another, and neither column's choice is visible in the record they
  * both point at.
  *
- * It is machine-local by construction and deliberately kept out of the
- * Automation command ledger: that ledger is the durable record VC-112 says will
- * one day move to an account, and Arming must never travel with it — a new
- * machine sees the Automations and fires nothing until someone turns something
- * on there.
+ * It is machine-local by construction: it is the choice ONE machine made about
+ * one column, so it is absent from git, from a project directory, and from the
+ * record VC-112 says will one day move to an account — a new machine sees the
+ * Automations and fires nothing until someone turns something on there.
+ *
+ * Machine-local names where the ANSWER lives, not how it is written. Arming a
+ * column is user intent that decides whether work starts without a person, so
+ * the write is an ordinary durable command with an event and a receipt (the
+ * host's `automation.set-arming`); only this projection stays local. The same
+ * split governs an Automation's enabled set, and the two switches are
+ * deliberately one pattern.
  */
 export interface ColumnArming {
   projectId: string;

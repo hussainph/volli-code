@@ -61,12 +61,6 @@ export type AutomationEnablementOutcome =
   | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
 /**
- * The host-facing Automation application service. It owns validation against
- * live host facts (projects and Model Access), then delegates every durable
- * mutation to the command/event/projection core. It has no Electron IPC
- * knowledge; an IPC handler is only one caller of this service.
- */
-/**
  * The Trigger a write actually stores.
  *
  * An omitted Trigger is "Nothing else" — the default for a new Automation and a
@@ -81,6 +75,12 @@ function canonicalTrigger(trigger: AutomationTrigger | undefined): AutomationTri
   return trigger === undefined ? NO_AUTOMATION_TRIGGER : parseAutomationTrigger(trigger);
 }
 
+/**
+ * The host-facing Automation application service. It owns validation against
+ * live host facts (projects and Model Access), then delegates every durable
+ * mutation to the command/event/projection core. It has no Electron IPC
+ * knowledge; an IPC handler is only one caller of this service.
+ */
 export function createAutomationService(deps: AutomationServiceDeps) {
   async function writeProblem(input: {
     name: string;
