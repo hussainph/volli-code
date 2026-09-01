@@ -942,10 +942,6 @@ export const Board = React.memo(function Board({
                 // which cannot start reading a panel before dnd-kit has
                 // actually activated (`automations-picker-smoke.mjs`).
                 data-board-drag={drag === null ? undefined : drag.activeTicket.id}
-                // The built smoke waits for the resolved destination rather
-                // than releasing on a fixed delay while a loaded runner is
-                // still processing drag-over state.
-                data-board-drop-status={drag?.drop?.toStatus}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (Trello-style mouse pan). Scrollbar is

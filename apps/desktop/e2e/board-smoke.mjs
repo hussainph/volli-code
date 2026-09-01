@@ -231,41 +231,12 @@ async function volliLocalStorageKeys(page) {
 
 /** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
 async function drag(page, sourceBox, target) {
-  const boardView = (await page.locator("[data-board-column]").count()) > 0;
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await page.mouse.down();
-  try {
-    await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
-    if (boardView) {
-      await page.waitForFunction(
-        () => {
-          const board = document.querySelector("[data-board-drag]");
-          return board !== null && board.getAttribute("data-board-drag") !== null;
-        },
-        null,
-        { timeout: 30_000 },
-      );
-    }
-    await page.mouse.move(target.x, target.y, { steps: 20 });
-    if (boardView) {
-      // Group cards stay in their source slots while the detached overlay moves,
-      // so there is no preview DOM to poll. The board exposes its resolved
-      // destination specifically so a loaded CI runner is never released before
-      // React has committed the final drag-over.
-      await page.waitForFunction(
-        () => {
-          const board = document.querySelector("[data-board-drag]");
-          return board !== null && board.getAttribute("data-board-drop-status") !== null;
-        },
-        null,
-        { timeout: 30_000 },
-      );
-    }
-  } finally {
-    // A timed-out probe must not leave the PointerSensor holding the mouse down
-    // and turn every later smoke assertion into fallout from this one gesture.
-    await page.mouse.up();
-  }
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
+  await page.mouse.move(target.x, target.y, { steps: 20 });
+  await sleep(250);
+  await page.mouse.up();
   await waitForDragSettled(page);
 }
 
@@ -822,17 +793,34 @@ async function main() {
         const todoAfterDrop = await columnCardIds(page, "Todo");
         const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
 
-        // Restore the fixture's membership through the column's empty body.
-        // A one-card target is unnecessarily narrow under a loaded CI runner;
-        // the group-order rule itself is held by board.ts's unit tests.
-        const restoreSource = await cardById(page, first).boundingBox();
-        const backlogHeader = await columnHeaderBox(page, "Backlog");
-        if (!restoreSource || !backlogHeader) throw new Error("restore geometry not found");
-        await drag(page, restoreSource, {
-          x: backlogHeader.x + 20,
-          y: backlogHeader.y + 120,
-        });
-        await page.keyboard.press("Escape");
+        // Reset through the same atomic multi-ticket IPC after the UI gesture
+        // itself has been proved. A second synthetic mouse gesture only made
+        // this long smoke depend on CI pointer scheduling twice.
+        const restore = await page.evaluate(
+          async (ticketNumbers) => {
+            const boot = await window.api.data.bootstrap();
+            if (!boot.ok) return boot;
+            const project = boot.data.projects[0];
+            if (!project) return { ok: false, error: "project missing during restore" };
+            const ids = (boot.data.ticketsByProject[project.id] ?? [])
+              .filter((ticket) => ticketNumbers.includes(ticket.ticketNumber))
+              .map((ticket) => ticket.id);
+            if (ids.length !== ticketNumbers.length) {
+              return { ok: false, error: "selected Tickets missing during restore" };
+            }
+            return window.api.tickets.moveMany({
+              projectId: project.id,
+              ticketIds: ids,
+              toStatus: "backlog",
+              toIndex: 0,
+            });
+          },
+          [Number(first.slice(3)), Number(second.slice(3))],
+        );
+        if (!restore.ok) throw new Error(restore.error);
+        await page.reload();
+        await page.waitForLoadState("domcontentloaded");
+        await goToBoard(page);
         const backlogRestored = await columnCardIds(page, "Backlog");
         const todoRestored = await columnCardIds(page, "Todo");
 
@@ -842,7 +830,7 @@ async function main() {
           clusterCount === 1 &&
           slotted &&
           movedTogether &&
-          JSON.stringify(backlogRestored.toSorted()) === JSON.stringify(backlogBefore.toSorted()) &&
+          JSON.stringify(backlogRestored) === JSON.stringify(backlogBefore) &&
           JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
         return {
           ok,
