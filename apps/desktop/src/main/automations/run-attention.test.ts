@@ -18,6 +18,13 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+  createSessionEngine,
+  createSessionRuntime,
+  type NativeHarnessAdapter,
+} from "@volli/session-engine";
+import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   parseNotificationPreferences,
   type AutomationRunAttendance,
@@ -52,6 +59,62 @@ function harness(
 }
 
 /** A projection in one of the states the rule reads, with a title to print. */
+async function attachedRuntime() {
+  let engineId = 0;
+  let runtimeId = 0;
+  let now = 1;
+  const venue = { id: "machine-1", kind: "local" as const };
+  const adapter: NativeHarnessAdapter = {
+    id: "fake",
+    durableIdNamespace: "fake",
+    adapterVersion: "1.0.0",
+    runtime: { path: "/fake/runtime", version: "1.0.0", fingerprint: "sha256:fake" },
+    attach: async () => ({
+      native: { id: "native-1", detail: null },
+      dispatch: async (command) => ({
+        commandId: command.commandId,
+        status: "accepted" as const,
+        acceptedAt: now++,
+        native: null,
+      }),
+      reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
+      release: async () => undefined,
+    }),
+  };
+  const engine = createSessionEngine({
+    ledger: createInMemorySessionLedger(),
+    clock: { now: () => now++ },
+    ids: { next: (kind) => `${kind}-${++engineId}` },
+  });
+  const runtime = createSessionRuntime({
+    engine,
+    executor: adapter,
+    artifacts: createInMemoryTranscriptArtifactStore(),
+    locations: {
+      resolve: async () => ({ directory: "/fake/project", venue }),
+      prepare: async () => ({ directory: "/fake/project", venue }),
+      reaffirm: async () => undefined,
+    },
+    clock: { now: () => now++ },
+    ids: { next: (kind) => `${kind}-${++runtimeId}` },
+  });
+  const created = await runtime.command({
+    commandId: "create-notified-run",
+    command: {
+      kind: "session.create",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Nightly sweep",
+    },
+  });
+  await runtime.command({
+    commandId: "attach-notified-run",
+    sessionId: created.sessionId,
+    command: { kind: "adapter.attach", continuity: "fresh" },
+  });
+  return { runtime, sessionId: created.sessionId };
+}
+
 function state(
   kind: "idle" | "waiting" | "error" | "stopped",
   title: string | null = "Nightly sweep",
@@ -89,6 +152,23 @@ describe("createRunAttentionWatch", () => {
     h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("error"));
+    expect(h.notified).toEqual([
+      { title: "An Automation stopped", body: "Nightly sweep could not keep running." },
+    ]);
+  });
+
+  it("notifies from the runtime's durable post-attach message failure Attention", async () => {
+    const h = harness({ attendance: "unattended" });
+    const { runtime, sessionId } = await attachedRuntime();
+    h.watch.observeBirth(sessionId);
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+    h.watch.observe((await runtime.projection({ sessionId })).projection);
+
     expect(h.notified).toEqual([
       { title: "An Automation stopped", body: "Nightly sweep could not keep running." },
     ]);

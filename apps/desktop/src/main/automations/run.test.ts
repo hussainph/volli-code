@@ -77,6 +77,7 @@ interface Harness {
     resources: readonly PromptResource[];
   }>;
   logs: string[];
+  deliveryFailures: Array<{ sessionId: string; commandId: string; detail: string }>;
   projectId: string;
   ticketId: string;
   attachState: "ready" | "needs-recovery";
@@ -104,6 +105,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
   const logs: string[] = [];
+  const deliveryFailures: Harness["deliveryFailures"] = [];
   const sessionsByOperation = new Map<string, string>();
   let nextSession = 0;
   let attachState: Harness["attachState"] = "ready";
@@ -148,6 +150,9 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     deliverInstructions: async (input) => {
       delivered.push(input);
     },
+    reportInstructionDeliveryFailure: async (input) => {
+      deliveryFailures.push(input);
+    },
     readSessionActivity: async () => "idle",
     log: (message) => logs.push(message),
     ...overrides,
@@ -160,6 +165,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     attaches,
     delivered,
     logs,
+    deliveryFailures,
     projectId: project.id,
     ticketId: ticket.id,
     get attachState() {
@@ -1207,6 +1213,81 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
       });
     });
   }
+
+  it("turns a rejected kickoff receipt into Session failure Attention and retains the intent", async () => {
+    const h = harness({
+      deliverInstructions: async () => ({
+        receipt: {
+          status: "rejected",
+          code: "PI_MESSAGE_REJECTED",
+          detail: "Pi refused the kickoff turn",
+        },
+      }),
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    const [pending] = await h.engine.pendingDeliveriesForSession(outcome.run.sessionId);
+    expect(pending).toMatchObject({
+      runId: outcome.run.id,
+      sessionId: outcome.run.sessionId,
+      messageCommandId: expect.any(String),
+    });
+    expect(h.deliveryFailures).toEqual([
+      {
+        sessionId: outcome.run.sessionId,
+        commandId: pending?.messageCommandId,
+        detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+      },
+    ]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} first-message receipt is rejected; retaining its delivery intent`,
+    ]);
+  });
+
+  it("turns a thrown kickoff delivery into Session failure Attention and retains the intent", async () => {
+    const h = harness({
+      deliverInstructions: async () => {
+        throw new Error("Pi delivery socket closed");
+      },
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    const [pending] = await h.engine.pendingDeliveriesForSession(outcome.run.sessionId);
+    expect(pending).toMatchObject({ runId: outcome.run.id, sessionId: outcome.run.sessionId });
+    expect(h.deliveryFailures).toEqual([
+      {
+        sessionId: outcome.run.sessionId,
+        commandId: pending?.messageCommandId,
+        detail:
+          "The Automation Run's first message could not be delivered: Pi delivery socket closed",
+      },
+    ]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not deliver its Instructions: Pi delivery socket closed`,
+    ]);
+  });
 
   it("says so when the attach that would have delivered them is refused", async () => {
     // The owner's Run, at the seam. Its Session was minted, its attach was
