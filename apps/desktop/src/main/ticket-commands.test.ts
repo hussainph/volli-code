@@ -34,6 +34,7 @@ import {
   deleteTicketCommand,
   interruptOnBackwardMove,
   moveTicketCommand,
+  moveTicketsCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   unarchiveTicketCommand,
@@ -154,6 +155,83 @@ describe("ticket-commands event emission", () => {
       { now: 3, actor: USER },
     );
     expect(listTicketEvents(ctx.db, "t1").length).toBe(before);
+  });
+
+  it("moves several tickets atomically and emits a status event for each column change", () => {
+    seed();
+    createTicket("t1", "backlog");
+    createTicket("t2", "todo");
+    createTicket("t3", "doing");
+
+    const moved = moveTicketsCommand(
+      ctx.db,
+      {
+        projectId: PROJECT_ID,
+        // Deliberately reverse click order: canonical board order wins.
+        ticketIds: ["t2", "t1"],
+        toStatus: "doing",
+        toIndex: 0,
+      },
+      { now: 2, actor: USER },
+    );
+
+    expect(
+      moved
+        .filter((ticket) => ticket.status === "doing")
+        .toSorted((a, b) => a.order - b.order)
+        .map((ticket) => ticket.id),
+    ).toEqual(["t1", "t2", "t3"]);
+    expect(eventOfKind("t1", "status_changed")!.payload).toMatchObject({
+      from: "backlog",
+      to: "doing",
+    });
+    expect(eventOfKind("t2", "status_changed")!.payload).toMatchObject({
+      from: "todo",
+      to: "doing",
+    });
+    expect(eventOfKind("t3", "status_changed")).toBeUndefined();
+  });
+
+  it("persists the group timestamp even when one selected card keeps its exact slot", () => {
+    seed();
+    createTicket("t1", "todo");
+    createTicket("t2", "todo");
+    createTicket("t3", "todo");
+
+    moveTicketsCommand(
+      ctx.db,
+      {
+        projectId: PROJECT_ID,
+        // t1 remains at todo:0 while t3 joins it and t2 shifts around them.
+        ticketIds: ["t1", "t3"],
+        toStatus: "todo",
+        toIndex: 0,
+      },
+      { now: 7, actor: USER },
+    );
+
+    expect(getTicketRow(ctx.db, "t1")!.position).toBe(0);
+    expect(getTicketRow(ctx.db, "t1")!.updated_at).toBe(7);
+  });
+
+  it("rolls a multi-ticket move back when any selected ticket is invalid", () => {
+    seed();
+    createTicket("t1", "backlog");
+
+    expect(() =>
+      moveTicketsCommand(
+        ctx.db,
+        {
+          projectId: PROJECT_ID,
+          ticketIds: ["t1", "missing"],
+          toStatus: "doing",
+          toIndex: 0,
+        },
+        { now: 2, actor: USER },
+      ),
+    ).toThrow(/Unknown ticket/);
+    expect(getTicketRow(ctx.db, "t1")!.status).toBe("backlog");
+    expect(eventOfKind("t1", "status_changed")).toBeUndefined();
   });
 
   it("emits the right field event for each updated field, and nothing for a no-op", () => {
@@ -430,6 +508,21 @@ describe("ticket-commands guard edges", () => {
     expect(() =>
       updateTicketFieldsCommand(ctx.db, { ticketId: "nope", title: "x" }, { now: 2, actor: USER }),
     ).toThrow(/Unknown ticket/);
+  });
+
+  it("refuses a single-card move scoped to another project", () => {
+    seed();
+    createTicket("t1", "doing");
+    insertProject(ctx.db, testProject({ id: "p2", ticketPrefix: "PX" }));
+
+    expect(() =>
+      moveTicketCommand(
+        ctx.db,
+        { projectId: "p2", ticketId: "t1", toStatus: "todo", toIndex: 0 },
+        { now: 2, actor: USER },
+      ),
+    ).toThrow(/does not belong to project/);
+    expect(getTicketRow(ctx.db, "t1")!.status).toBe("doing");
   });
 
   it("refuses to move, update, or reprioritize an archived ticket", () => {

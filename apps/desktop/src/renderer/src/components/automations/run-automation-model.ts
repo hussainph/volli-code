@@ -15,10 +15,22 @@
  */
 import type { AutomationRunStartResult } from "../../../../ipc/contract";
 
+import { isTicketDragData } from "@renderer/components/board/board-dnd";
+
 export type RunAutomationAction =
   | { kind: "open-model-access" }
   | { kind: "toast"; message: string }
   | { kind: "open-session"; sessionId: string; projectId: string };
+
+/**
+ * Normalizes the board payload an Automation drop target accepts. The durable
+ * Run door stays one-command-per-ticket; the renderer fans this list out in
+ * parallel so each Session keeps its own retry identity and receipt.
+ */
+export function automationTicketIdsFromDrop(value: unknown): string[] | null {
+  if (!isTicketDragData(value)) return null;
+  return [...new Set(value.ticketIds)];
+}
 
 export function runAutomationAction(result: AutomationRunStartResult): RunAutomationAction {
   if (result.ok) {

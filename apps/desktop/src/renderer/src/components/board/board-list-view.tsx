@@ -13,6 +13,7 @@ import {
 
 import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
+import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
@@ -114,6 +115,8 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticketPrefix,
   projectLabels,
   selected,
+  dragHidden,
+  dragTicketIds,
   sessionActivity,
   onSelect,
   onOpen,
@@ -123,8 +126,10 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   ticketPrefix: string;
   projectLabels: readonly Label[];
   selected: boolean;
+  dragHidden: boolean;
+  dragTicketIds?: readonly string[];
   sessionActivity: TicketSessionActivity | null;
-  onSelect(ticketId: string): void;
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
 }) {
@@ -132,10 +137,14 @@ const SortableTicketRow = React.memo(function SortableTicketRow({
   // not the drag/sort identity (still the opaque `ticket.id` UUID, unchanged
   // below).
   const displayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
+  const ownDragIds = React.useMemo(() => [ticket.id], [ticket.id]);
   return (
     <SortableTicketShell
       ticket={ticket}
       projectId={projectId}
+      selected={selected}
+      dragHidden={dragHidden}
+      dragTicketIds={dragTicketIds ?? ownDragIds}
       onSelect={onSelect}
       onOpen={onOpen}
       dataAttributes={{ "data-ticket-row": "true", "data-ticket-id": displayId }}
@@ -164,7 +173,9 @@ function ListSection({
   projectId,
   ticketPrefix,
   projectLabels,
-  selectedId,
+  selectedIds,
+  draggingIds,
+  groupDragIds,
   onSelect,
   onOpen,
   dragActive,
@@ -174,8 +185,10 @@ function ListSection({
   projectId: string;
   ticketPrefix: string;
   projectLabels: readonly Label[];
-  selectedId: string | null;
-  onSelect(ticketId: string): void;
+  selectedIds: readonly string[];
+  draggingIds: readonly string[];
+  groupDragIds: readonly string[];
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   dragActive: boolean;
@@ -189,6 +202,8 @@ function ListSection({
   // caveat about how far that invalidation actually travels — read the comment
   // there rather than keep a second account of it here.
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
+  const selectedSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
+  const draggingSet = React.useMemo(() => new Set(draggingIds), [draggingIds]);
 
   return (
     <section data-list-section data-status={status}>
@@ -205,7 +220,9 @@ function ListSection({
               projectId={projectId}
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
-              selected={ticket.id === selectedId}
+              selected={selectedSet.has(ticket.id)}
+              dragHidden={draggingSet.has(ticket.id)}
+              dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
               sessionActivity={sessionActivity[ticket.id] ?? null}
               onSelect={onSelect}
               onOpen={onOpen}
@@ -297,8 +314,10 @@ interface BoardListViewProps {
   /** The project has no tickets at all — a different nothing from "no tickets match". */
   boardEmpty: boolean;
   dragActive: boolean;
-  selectedId: string | null;
-  onSelect(ticketId: string): void;
+  selectedIds: readonly string[];
+  draggingIds: readonly string[];
+  groupDragIds: readonly string[];
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
 }
@@ -319,7 +338,9 @@ export function BoardListView({
   emptyDropStatuses,
   boardEmpty,
   dragActive,
-  selectedId,
+  selectedIds,
+  draggingIds,
+  groupDragIds,
   onSelect,
   onOpen,
 }: BoardListViewProps) {
@@ -348,7 +369,9 @@ export function BoardListView({
               projectId={projectId}
               ticketPrefix={ticketPrefix}
               projectLabels={projectLabels}
-              selectedId={selectedId}
+              selectedIds={selectedIds}
+              draggingIds={draggingIds}
+              groupDragIds={groupDragIds}
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}

@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { runAutomationAction } from "./run-automation-model";
+import { automationTicketIdsFromDrop, runAutomationAction } from "./run-automation-model";
+
+describe("automationTicketIdsFromDrop", () => {
+  it("accepts and de-duplicates a multi-ticket board payload", () => {
+    expect(
+      automationTicketIdsFromDrop({
+        kind: "tickets",
+        projectId: "p1",
+        ticketIds: ["ticket-a", "ticket-b", "ticket-a"],
+      }),
+    ).toEqual(["ticket-a", "ticket-b"]);
+  });
+
+  it("rejects empty or unrelated drag payloads", () => {
+    expect(
+      automationTicketIdsFromDrop({ kind: "tickets", projectId: "p1", ticketIds: [] }),
+    ).toBeNull();
+    expect(automationTicketIdsFromDrop({ kind: "file", path: "a.ts" })).toBeNull();
+  });
+});
 
 describe("runAutomationAction", () => {
   it("navigates to the fresh Session on success", () => {

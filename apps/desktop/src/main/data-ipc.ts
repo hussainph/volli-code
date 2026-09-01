@@ -74,7 +74,7 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
-  TicketMoveInput,
+  TicketMoveRequest,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
@@ -137,6 +137,7 @@ import {
   deleteTicketCommand,
   interruptOnBackwardMove,
   moveTicketCommand,
+  moveTicketsCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   unarchiveTicketCommand,
@@ -631,43 +632,71 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-move": (input: TicketMoveInput): TicketsResult | Promise<TicketsResult> => {
+    "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
       const now = Date.now();
       const actor = { kind: "user" } as const;
-      // Snapshot the pre-move status BEFORE the move so the backward-move
-      // interrupt can decide whether the move left the active columns. Reading
-      // the raw row (never trusting the renderer) keeps the from-status honest.
-      const before = getTicketRow(db, input.ticketId);
-      const tickets = withTicketWake(db, input.ticketId, () =>
-        moveTicketCommand(db, input, { now, actor }),
-      );
-      // The move committed above (its own transaction); the interrupt is the
-      // side effect, fired only for a real backward move (issue #78).
-      if (before !== undefined) {
-        const interrupt = interruptOnBackwardMove(
-          {
-            ticketId: input.ticketId,
-            fromStatus: before.status as TicketStatus,
-            toStatus: input.toStatus,
-          },
-          options.interruptTicketSessions,
+      const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
+      // Snapshot every pre-move status BEFORE the atomic move so each
+      // backward-move interrupt decides from durable truth, never renderer data.
+      const before = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+
+      // One post-commit wake scope per selected ticket. Nesting is intentional:
+      // every mark is taken before the command, and every finally emits only
+      // after the command's one transaction has committed.
+      const runMove = () =>
+        "ticketIds" in input
+          ? moveTicketsCommand(db, input, { now, actor })
+          : moveTicketCommand(db, input, { now, actor });
+      const tickets = ticketIds.reduceRight<() => Ticket[]>(
+        (write, ticketId) => () => withTicketWake(db, ticketId, write),
+        runMove,
+      )();
+
+      // The move committed above; interrupt all affected Sessions in parallel.
+      // A delivery failure cannot roll durable board state back, but the person
+      // still needs to know some agents may be running in the old lifecycle.
+      const pending: Promise<string[]>[] = [];
+      let interruptFailed = false;
+      const recordInterruptFailure = (error: unknown): void => {
+        interruptFailed = true;
+        console.error(
+          `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
         );
-        if (interrupt instanceof Promise) {
-          return interrupt.then(
-            () => ({ ok: true, tickets }),
-            (error: unknown) => {
-              // The board mutation already committed. An after-the-fact Esc
-              // delivery failure is operational evidence, not grounds to lie
-              // to the renderer that its deliberate move failed.
-              console.error(
-                `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-              );
-              return { ok: true, tickets };
+      };
+      const moveResult = (): TicketsResult => ({
+        ok: true,
+        tickets,
+        ...(interruptFailed
+          ? {
+              warning:
+                "The move completed, but some active sessions could not be interrupted. Stop them manually.",
+            }
+          : {}),
+      });
+      for (const ticketId of ticketIds) {
+        const row = before.get(ticketId);
+        if (row === undefined) continue;
+        try {
+          const interrupt = interruptOnBackwardMove(
+            {
+              ticketId,
+              fromStatus: row.status as TicketStatus,
+              toStatus: input.toStatus,
             },
+            options.interruptTicketSessions,
           );
+          if (interrupt instanceof Promise) pending.push(interrupt);
+        } catch (error) {
+          recordInterruptFailure(error);
         }
       }
-      return { ok: true, tickets };
+      if (pending.length === 0) return moveResult();
+      return Promise.allSettled(pending).then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") recordInterruptFailure(result.reason);
+        }
+        return moveResult();
+      });
     },
 
     "volli:ticket-set-priority": (input: TicketSetPriorityInput): TicketResult => {

@@ -335,10 +335,18 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:ticket-move"> => {
       if (args.length !== 1) return false;
       const [input] = args;
+      if (!isRecord(input)) return false;
+      const hasSingle = "ticketId" in input;
+      const hasMany = "ticketIds" in input;
+      // Exactly one discriminator may be present. Dispatch uses key presence,
+      // so an invalid value in the other arm must not change which command runs.
+      if (hasSingle === hasMany) return false;
+      const validSelection = hasSingle
+        ? typeof input["ticketId"] === "string"
+        : isStringArray(input["ticketIds"]) && input["ticketIds"].length > 0;
       return (
-        isRecord(input) &&
+        validSelection &&
         typeof input["projectId"] === "string" &&
-        typeof input["ticketId"] === "string" &&
         isTicketStatus(input["toStatus"]) &&
         typeof input["toIndex"] === "number" &&
         Number.isInteger(input["toIndex"])

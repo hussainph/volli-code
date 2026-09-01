@@ -564,7 +564,7 @@ describe("openTicket", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicket("project-a", "ticket-1");
 
-    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toEqual(["ticket-1"]);
   });
 
   it("tracks the open ticket independently per project", () => {
@@ -628,7 +628,7 @@ describe("openTicketWorkspace", () => {
     const store = createWorkspaceStore(createMemoryStorage());
     store.getState().openTicketWorkspace("project-a", "ticket-1");
 
-    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toEqual(["ticket-1"]);
   });
 
   it("activates the given tab", () => {
@@ -689,7 +689,7 @@ describe("openTicketSession", () => {
       openTicketId: "ticket-1",
       ticketTabs: { "ticket-1": { files: [], active: "session-1" } },
     });
-    expect(useBoardStore.getState().selectedByProject["project-a"]).toBe("ticket-1");
+    expect(useBoardStore.getState().selectedByProject["project-a"]).toEqual(["ticket-1"]);
     expect(useSessionsStore.getState().byOwner["ticket-1"]?.activeSessionId).toBe("session-1");
     expect(useSessionsStore.getState().byOwner["ticket-1"]?.tabs[0]?.activePaneId).toBe(
       "session-2",

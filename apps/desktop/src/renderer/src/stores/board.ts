@@ -15,6 +15,7 @@
 import {
   EMPTY_TICKET_FILTER,
   moveTicket as moveTicketOp,
+  moveTickets as moveTicketsOp,
   setTicketPriority as setTicketPriorityOp,
   type ArchivedTicket,
   type HarnessId,
@@ -33,6 +34,7 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { toastError } from "@renderer/lib/toast";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -63,6 +65,12 @@ export interface BoardGateway {
   moveTicket(input: {
     projectId: string;
     ticketId: string;
+    toStatus: TicketStatus;
+    toIndex: number;
+  }): Promise<TicketsResult>;
+  moveTickets(input: {
+    projectId: string;
+    ticketIds: string[];
     toStatus: TicketStatus;
     toIndex: number;
   }): Promise<TicketsResult>;
@@ -111,6 +119,7 @@ export function planningChangeAffects(change: PlanningChange, ticketId: string):
 const defaultGateway: BoardGateway = {
   createTicket: (input) => window.api.tickets.create(input),
   moveTicket: (input) => window.api.tickets.move(input),
+  moveTickets: (input) => window.api.tickets.moveMany(input),
   setTicketPriority: (input) => window.api.tickets.setPriority(input),
   updateTicket: (input) => window.api.tickets.update(input),
   setLabels: (input) => window.api.tickets.setLabels(input),
@@ -133,8 +142,8 @@ interface BoardState {
   archivedByProject: Record<string, ArchivedTicket[]>;
   /** Session-only — never persisted; see module doc. */
   filterByProject: Record<string, TicketFilter>;
-  /** The selected card per project. Session-only — never persisted; see module doc. */
-  selectedByProject: Record<string, string | null>;
+  /** Selected card ids per project. Session-only — never persisted; see module doc. */
+  selectedByProject: Record<string, string[]>;
   /**
    * The last server-owned planning refresh, published after `refreshPlanningData`
    * (see lib/boot.ts) re-hydrates the board from SQLite. `version` is monotonic
@@ -182,6 +191,13 @@ interface BoardState {
   moveTicket(
     projectId: string,
     ticketId: string,
+    toStatus: TicketStatus,
+    toIndex: number,
+  ): Promise<void>;
+  /** Moves the current selection as one contiguous, atomically-persisted group. */
+  moveTickets(
+    projectId: string,
+    ticketIds: string[],
     toStatus: TicketStatus,
     toIndex: number,
   ): Promise<void>;
@@ -259,13 +275,25 @@ interface BoardState {
   togglePriority(projectId: string, priority: TicketPriority): void;
   toggleLabel(projectId: string, label: string): void;
   clearFilter(projectId: string): void;
+  /** Replaces the project's selection with one ticket, or clears it. */
   selectTicket(projectId: string, ticketId: string | null): void;
+  /** Replaces the project's selection with the given de-duplicated ids. */
+  selectTickets(projectId: string, ticketIds: readonly string[]): void;
   forget(projectId: string): void;
 }
 
 /** Toggles `value` in `values`: drops it if present, appends it otherwise. */
 function toggleValue<T>(values: readonly T[], value: T): T[] {
   return values.includes(value) ? values.filter((v) => v !== value) : [...values, value];
+}
+
+/** De-duplicates ids without turning click order into persistence semantics. */
+function uniqueIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 /**
@@ -464,6 +492,29 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       patchById(result.ticket);
     }
 
+    /** Shared optimistic/write-through/reconcile path for one-card and group moves. */
+    async function persistMove(
+      projectId: string,
+      optimisticMove: (previous: Ticket[]) => Ticket[],
+      verb: string,
+      call: () => Promise<TicketsResult>,
+    ): Promise<void> {
+      const previous = get().ticketsByProject[projectId] ?? [];
+      const optimistic = optimisticMove(previous);
+      if (optimistic === previous) return;
+      set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
+
+      const result = await writeThrough(verb, call);
+      if (!result) {
+        // Preserve tickets created while the move was in flight instead of
+        // restoring a stale whole-project snapshot over them.
+        reconcileSlice(projectId, (slice) => mergeAuthoritative(previous, slice));
+        return;
+      }
+      reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
+      if (result.warning !== undefined) toastError(result.warning);
+    }
+
     return {
       ticketsByProject: {},
       labelsByProject: {},
@@ -536,26 +587,22 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async moveTicket(projectId, ticketId, toStatus, toIndex) {
-        const previous = get().ticketsByProject[projectId] ?? [];
-        const optimistic = moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now());
-        if (optimistic === previous) return; // shared op's no-op guard: unknown id or unchanged position
-        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
-
-        const result = await writeThrough(
+        await persistMove(
+          projectId,
+          (previous) => moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now()),
           "move ticket",
-          (): Promise<TicketsResult> =>
-            gateway.moveTicket({ projectId, ticketId, toStatus, toIndex }),
+          () => gateway.moveTicket({ projectId, ticketId, toStatus, toIndex }),
         );
-        if (!result) {
-          // Revert to the pre-move list, but preserve any ticket created
-          // concurrently (in `current`, absent from `previous`) — restoring the
-          // bare snapshot would drop it, the confirmed race this fixes.
-          reconcileSlice(projectId, (slice) => mergeAuthoritative(previous, slice));
-          return;
-        }
-        // The authoritative post-move list wins for the rows it names; a ticket
-        // created concurrently and not yet in that snapshot is preserved.
-        reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
+      },
+
+      async moveTickets(projectId, ticketIds, toStatus, toIndex) {
+        const ids = uniqueIds(ticketIds);
+        await persistMove(
+          projectId,
+          (previous) => moveTicketsOp(previous, ids, toStatus, toIndex, Date.now()),
+          "move tickets",
+          () => gateway.moveTickets({ projectId, ticketIds: ids, toStatus, toIndex }),
+        );
       },
 
       async setTicketPriority(projectId, ticketId, priority) {
@@ -691,13 +738,16 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           delete next[projectId];
           set({ archivedByProject: next });
         }
-        // An archived card can't stay selected — `forget` clears selection on
-        // project removal; the archive lifecycle does the same on its way out
-        // (otherwise Escape-deselect binds to a phantom and a later restore
-        // reappears pre-selected).
+        // An archived card can't stay in a multi-selection. Keep its selected
+        // siblings; drop the project record only when this was the last one.
         const { selectedByProject } = get();
-        if (selectedByProject[projectId] === ticketId) {
-          set({ selectedByProject: { ...selectedByProject, [projectId]: null } });
+        const selected = selectedByProject[projectId];
+        if (selected?.includes(ticketId)) {
+          const remaining = selected.filter((id) => id !== ticketId);
+          const next = { ...selectedByProject };
+          if (remaining.length === 0) delete next[projectId];
+          else next[projectId] = remaining;
+          set({ selectedByProject: next });
         }
       },
 
@@ -791,20 +841,29 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         set({ filterByProject: next });
       },
 
-      // Clearing (ticketId === null) drops the project's record rather than
-      // storing an explicit null: a missing record already reads as "nothing
-      // selected" (`?? null` at use sites) — same shape as clearFilter above.
+      // Clearing drops the project's record: a missing record already reads as
+      // an empty selection everywhere. Single-ticket callers (opening a detail
+      // view, sidebar navigation) deliberately collapse any board multi-select.
       selectTicket(projectId, ticketId) {
-        const { selectedByProject } = get();
-        if (ticketId === null) {
-          if (!(projectId in selectedByProject)) return;
-          const next = { ...selectedByProject };
-          delete next[projectId];
-          set({ selectedByProject: next });
-          return;
-        }
-        if (selectedByProject[projectId] === ticketId) return;
-        set({ selectedByProject: { ...selectedByProject, [projectId]: ticketId } });
+        const selectedByProject = get().selectedByProject;
+        const selected = ticketId === null ? [] : [ticketId];
+        const current = selectedByProject[projectId] ?? [];
+        if (sameIds(current, selected)) return;
+        const next = { ...selectedByProject };
+        if (selected.length === 0) delete next[projectId];
+        else next[projectId] = selected;
+        set({ selectedByProject: next });
+      },
+
+      selectTickets(projectId, ticketIds) {
+        const selectedByProject = get().selectedByProject;
+        const selected = uniqueIds(ticketIds);
+        const current = selectedByProject[projectId] ?? [];
+        if (sameIds(current, selected)) return;
+        const next = { ...selectedByProject };
+        if (selected.length === 0) delete next[projectId];
+        else next[projectId] = selected;
+        set({ selectedByProject: next });
       },
 
       forget(projectId) {

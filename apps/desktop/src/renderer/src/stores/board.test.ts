@@ -70,6 +70,7 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
     }),
   }));
   const moveTicket = vi.fn<BoardGateway["moveTicket"]>(async () => ({ ok: true, tickets: [] }));
+  const moveTickets = vi.fn<BoardGateway["moveTickets"]>(async () => ({ ok: true, tickets: [] }));
   const setTicketPriority = vi.fn<BoardGateway["setTicketPriority"]>(async (input) => ({
     ok: true,
     ticket: ticket({ id: input.ticketId, status: "backlog", priority: input.priority }),
@@ -104,6 +105,7 @@ function fakeGateway(overrides: Partial<BoardGateway> = {}): BoardGateway {
   return {
     createTicket,
     moveTicket,
+    moveTickets,
     setTicketPriority,
     updateTicket,
     setLabels,
@@ -339,6 +341,30 @@ describe("moveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
+  it("keeps the committed move and surfaces a post-commit session warning", async () => {
+    const a = ticket({ id: "a", status: "doing", order: 0 });
+    const authoritative = [{ ...a, status: "todo" as const }];
+    const warning =
+      "The move completed, but some active sessions could not be interrupted. Stop them manually.";
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({
+        ok: true,
+        tickets: authoritative,
+        warning,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store.getState().moveTicket("p1", "a", "todo", 0);
+
+    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(warning, {
+      duration: 8000,
+      closeButton: true,
+    });
+  });
+
   it("is a no-op when the shared op reports an unchanged position", async () => {
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const gateway = fakeGateway();
@@ -445,6 +471,81 @@ describe("moveTicket", () => {
     await move;
 
     expect("p1" in store.getState().ticketsByProject).toBe(false);
+  });
+});
+
+describe("moveTickets", () => {
+  it("optimistically moves a group, then reconciles with one authoritative response", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "todo", order: 0 });
+    const c = ticket({ id: "c", status: "doing", order: 0 });
+    const authoritative = [
+      { ...a, status: "doing" as const, order: 0 },
+      { ...b, status: "doing" as const, order: 1 },
+      { ...c, order: 2 },
+    ];
+    const gateway = fakeGateway({
+      moveTickets: vi.fn<BoardGateway["moveTickets"]>(async () => ({
+        ok: true,
+        tickets: authoritative,
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b, c] }, {});
+
+    await store.getState().moveTickets("p1", ["b", "a", "a"], "doing", 0);
+
+    expect(gateway.moveTickets).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketIds: ["b", "a"],
+      toStatus: "doing",
+      toIndex: 0,
+    });
+    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
+  });
+
+  it("is a no-op for an unknown group on an unhydrated project", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+
+    await store.getState().moveTickets("p1", ["unknown"], "doing", 0);
+
+    expect(gateway.moveTickets).not.toHaveBeenCalled();
+    expect(store.getState().ticketsByProject.p1).toBeUndefined();
+  });
+
+  it("is a no-op when the selected group is already in the requested slot", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().moveTickets("p1", ["a", "b"], "backlog", 0);
+
+    expect(gateway.moveTickets).not.toHaveBeenCalled();
+  });
+
+  it("reverts the whole group and toasts when the batch write fails", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "todo", order: 0 });
+    const before = [a, b];
+    const gateway = fakeGateway({
+      moveTickets: vi.fn<BoardGateway["moveTickets"]>(async () => ({
+        ok: false,
+        error: "conflict",
+      })),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: before }, {});
+
+    await store.getState().moveTickets("p1", ["a", "b"], "doing", 0);
+
+    expect(store.getState().ticketsByProject.p1).toEqual(before);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Couldn't move tickets: conflict", {
+      duration: 8000,
+      closeButton: true,
+    });
   });
 });
 
@@ -1119,16 +1220,27 @@ describe("archiveTicket", () => {
     });
   });
 
-  it("clears the selection when the archived card was selected", async () => {
+  it("removes an archived card from the selection while keeping selected siblings", async () => {
     const a = ticket({ id: "a", status: "doing" });
     const b = ticket({ id: "b", status: "doing", order: 1 });
     const store = createBoardStore(fakeGateway());
     store.getState().hydrate({ p1: [a, b] }, {});
+    store.getState().selectTickets("p1", ["a", "b"]);
+
+    await store.getState().archiveTicket("p1", "a");
+
+    expect(store.getState().selectedByProject.p1).toEqual(["b"]);
+  });
+
+  it("drops the selection record when its last selected card is archived", async () => {
+    const a = ticket({ id: "a", status: "doing" });
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [a] }, {});
     store.getState().selectTicket("p1", "a");
 
     await store.getState().archiveTicket("p1", "a");
 
-    expect(store.getState().selectedByProject.p1).toBeNull();
+    expect(store.getState().selectedByProject.p1).toBeUndefined();
   });
 
   it("keeps the selection when a different card is archived", async () => {
@@ -1140,7 +1252,7 @@ describe("archiveTicket", () => {
 
     await store.getState().archiveTicket("p1", "a");
 
-    expect(store.getState().selectedByProject.p1).toBe("b");
+    expect(store.getState().selectedByProject.p1).toEqual(["b"]);
   });
 
   it("re-drops the card when a concurrent move's authoritative list resurrected it mid-flight", async () => {
@@ -1720,53 +1832,74 @@ describe("clearFilter", () => {
   });
 });
 
-describe("selectTicket", () => {
-  it("records the selected ticket id for the project", () => {
+describe("ticket selection", () => {
+  it("records a single selected ticket as a one-item selection", () => {
     const store = createBoardStore(fakeGateway());
 
     store.getState().selectTicket("p1", "t3");
 
-    expect(store.getState().selectedByProject.p1).toBe("t3");
+    expect(store.getState().selectedByProject.p1).toEqual(["t3"]);
   });
 
-  it("clears via null by dropping the project's record entirely", () => {
+  it("replaces a selection with de-duplicated ticket ids", () => {
     const store = createBoardStore(fakeGateway());
-    store.getState().selectTicket("p1", "t3");
+
+    store.getState().selectTickets("p1", ["t1", "t2", "t1"]);
+
+    expect(store.getState().selectedByProject.p1).toEqual(["t1", "t2"]);
+  });
+
+  it("replaces one same-sized selection with another", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTickets("p1", ["t1", "t2"]);
+
+    store.getState().selectTickets("p1", ["t2", "t3"]);
+
+    expect(store.getState().selectedByProject.p1).toEqual(["t2", "t3"]);
+  });
+
+  it("a single-ticket caller collapses an existing multi-selection", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTickets("p1", ["t1", "t2"]);
+
+    store.getState().selectTicket("p1", "t2");
+
+    expect(store.getState().selectedByProject.p1).toEqual(["t2"]);
+  });
+
+  it("clears via null or an empty list by dropping the project's record entirely", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().selectTickets("p1", ["t1", "t2"]);
 
     store.getState().selectTicket("p1", null);
+    expect("p1" in store.getState().selectedByProject).toBe(false);
 
-    expect(store.getState().selectedByProject.p1).toBeUndefined();
+    store.getState().selectTicket("p1", "t3");
+    store.getState().selectTickets("p1", []);
     expect("p1" in store.getState().selectedByProject).toBe(false);
   });
 
-  it("is a no-op (unchanged identity) when clearing with no selection", () => {
+  it("is a no-op (unchanged identity) when the requested selection already matches", () => {
     const store = createBoardStore(fakeGateway());
-    const before = store.getState();
-
+    const beforeEmpty = store.getState();
     store.getState().selectTicket("p1", null);
+    expect(store.getState()).toBe(beforeEmpty);
 
-    expect(store.getState()).toBe(before);
-  });
-
-  it("is a no-op (unchanged identity) when re-selecting the same ticket", () => {
-    const store = createBoardStore(fakeGateway());
-    store.getState().selectTicket("p1", "t3");
-    const before = store.getState();
-
-    store.getState().selectTicket("p1", "t3");
-
-    expect(store.getState()).toBe(before);
+    store.getState().selectTickets("p1", ["t1", "t2"]);
+    const beforeSelected = store.getState();
+    store.getState().selectTickets("p1", ["t1", "t2"]);
+    expect(store.getState()).toBe(beforeSelected);
   });
 
   it("keeps selections independent across projects", () => {
     const store = createBoardStore(fakeGateway());
 
-    store.getState().selectTicket("p1", "t3");
+    store.getState().selectTickets("p1", ["t1", "t2"]);
     store.getState().selectTicket("p2", "o1");
     store.getState().selectTicket("p1", null);
 
     expect(store.getState().selectedByProject.p1).toBeUndefined();
-    expect(store.getState().selectedByProject.p2).toBe("o1");
+    expect(store.getState().selectedByProject.p2).toEqual(["o1"]);
   });
 });
 
@@ -1877,6 +2010,26 @@ describe("createBoardStore() with the default gateway", () => {
     expect(move).toHaveBeenCalledWith({
       projectId: "p1",
       ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+    });
+  });
+
+  it("moveTickets calls window.api.tickets.moveMany", async () => {
+    const moveMany = vi.fn(async () => ({ ok: true as const, tickets: [] }));
+    vi.stubGlobal("window", {
+      api: { tickets: { create: vi.fn(), move: vi.fn(), moveMany, setPriority: vi.fn() } },
+    });
+    const store = createBoardStore();
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "todo", order: 0 });
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().moveTickets("p1", ["a", "b"], "doing", 0);
+
+    expect(moveMany).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketIds: ["a", "b"],
       toStatus: "doing",
       toIndex: 0,
     });

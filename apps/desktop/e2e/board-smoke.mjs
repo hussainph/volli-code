@@ -17,7 +17,7 @@
  *      labels to three via `tickets.setLabels`, then reload (the board store
  *      hydrates at boot) and assert they render.
  *   C. The board UI a user touches — collapsed-column rail, search, the
- *      priority + label facets, cross-column and pill drag-and-drop, the
+ *      priority + label facets, cross-column, multi-select, multi-drag, and pill drops, the
  *      column composer, the non-destructive context menu, priority mutation
  *      reconcile + persistence, the Ordering dropdown, the board/list view
  *      toggle (list-view add + drag parity),
@@ -364,6 +364,11 @@ async function main() {
     }
 
     let page = await app.firstWindow();
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    page.on("console", (message) => {
+      if (message.type() === "error") console.error(`[renderer] ${message.text()}`);
+    });
+    page.on("pageerror", (error) => console.error(`[renderer pageerror] ${error.message}`));
     await page.waitForLoadState("domcontentloaded");
     await sleep(1000);
 
@@ -673,6 +678,108 @@ async function main() {
           after.backlog === before.backlog - 1 &&
           after.doing === before.doing + 1;
         return { ok, detail: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}` };
+      },
+    );
+
+    // === 8.5. Command-select two cards and drag the group as one ===========
+    await attempt(
+      8.5,
+      "Multi-drag: Command-selected cards cluster, move together, and restore together",
+      async () => {
+        const backlogBefore = await columnCardIds(page, "Backlog");
+        const todoBefore = await columnCardIds(page, "Todo");
+        const [first, second, remaining] = backlogBefore;
+        const crossColumn = todoBefore[0];
+        if (!first || !second || !remaining || !crossColumn) {
+          throw new Error("need three Backlog cards and one Todo card");
+        }
+
+        // A modifier-click in another column starts a new selection rather
+        // than creating an ambiguous mixed-status group.
+        await cardById(page, first).click();
+        await cardById(page, crossColumn).click({ modifiers: ["Meta"] });
+        const crossColumnSelection = await Promise.all(
+          [first, crossColumn].map((id) =>
+            cardById(page, id).locator("..").getAttribute("aria-pressed"),
+          ),
+        );
+
+        await cardById(page, first).click();
+        await cardById(page, second).click({ modifiers: ["Meta"] });
+        const selected = await Promise.all(
+          [first, second].map((id) =>
+            cardById(page, id).locator("..").getAttribute("aria-pressed"),
+          ),
+        );
+
+        const sourceBox = await cardById(page, first).boundingBox();
+        const todoHeaderBox = await columnHeaderBox(page, "Todo");
+        if (!sourceBox || !todoHeaderBox) throw new Error("multi-drag geometry not found");
+        await page.mouse.move(
+          sourceBox.x + sourceBox.width / 2,
+          sourceBox.y + sourceBox.height / 2,
+        );
+        await page.mouse.down();
+        await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, {
+          steps: 8,
+        });
+        await page.mouse.move(todoHeaderBox.x + 20, todoHeaderBox.y + 120, { steps: 20 });
+        await sleep(150);
+        const clusterCount = await page.getByLabel("2 tickets selected").count();
+        await page.mouse.up();
+        const slotted = await waitUntil(
+          "multi-drag destination-slot transition",
+          async () =>
+            Promise.any(
+              [first, second].map(async (id) => {
+                const animation = await cardById(page, id).evaluate((article) => {
+                  const slot = article.parentElement?.parentElement;
+                  return slot instanceof HTMLElement
+                    ? {
+                        transform: getComputedStyle(slot).transform,
+                        started: slot.dataset.boardSlotAnimated === "true",
+                      }
+                    : { transform: "", started: false };
+                });
+                if (!animation.started) throw new Error("not moving yet");
+                return true;
+              }),
+            ),
+          { timeout: 250 },
+        )
+          .then(() => true)
+          .catch(() => false);
+        await sleep(500);
+
+        const todoAfterDrop = await columnCardIds(page, "Todo");
+        const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
+
+        // Restore the fixture exactly, not merely its counts: dropping over the
+        // one remaining Backlog card from another column inserts before it.
+        const restoreSource = await cardById(page, first).boundingBox();
+        const restoreTarget = await cardById(page, remaining).boundingBox();
+        if (!restoreSource || !restoreTarget) throw new Error("restore geometry not found");
+        await drag(page, restoreSource, {
+          x: restoreTarget.x + restoreTarget.width / 2,
+          y: restoreTarget.y + restoreTarget.height / 2,
+        });
+        await page.keyboard.press("Escape");
+        const backlogRestored = await columnCardIds(page, "Backlog");
+        const todoRestored = await columnCardIds(page, "Todo");
+
+        const ok =
+          crossColumnSelection[0] === "false" &&
+          crossColumnSelection[1] === "true" &&
+          selected.every((value) => value === "true") &&
+          clusterCount === 1 &&
+          slotted &&
+          movedTogether &&
+          JSON.stringify(backlogRestored) === JSON.stringify(backlogBefore) &&
+          JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
+        return {
+          ok,
+          detail: `crossColumn=${JSON.stringify(crossColumnSelection)} selected=${JSON.stringify(selected)} overlay=${clusterCount} slotted=${slotted} moved=${JSON.stringify(todoAfterDrop)} restored=${JSON.stringify(backlogRestored)}`,
+        };
       },
     );
 
