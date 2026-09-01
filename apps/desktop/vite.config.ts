@@ -145,9 +145,9 @@ export default defineConfig(({ mode }) => ({
         "src/chat/rename.ts",
         "src/chat/transport.ts",
         "src/components/attachments/attachment-model.ts",
-        // What the renderer does with the Run door's answer (VC-126): which
-        // refusal opens Model Access, which toasts, and what success opens —
-        // pure precisely so the gate can reach the classification.
+        // What the renderer does with the Run door's answer (VC-126/VC-234):
+        // which refusal opens Model Access, which toasts, and what success
+        // announces — pure precisely so the gate can reach the classification.
         "src/components/automations/run-automation-model.ts",
         // Renderer import seam for the armed-column arithmetic. The executable
         // rules moved to @volli/shared with main's countdown ownership (VC-226)

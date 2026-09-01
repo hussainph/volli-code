@@ -16,22 +16,18 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import {
-  openRunSession,
-  runAutomationFromListing,
-  runAutomationForProject,
-} from "./run-automation";
+import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 
-// The Run glue is the palette's too, and it is where a Run's no-redirect
-// landing is decided; what this file owns is whether the PAGE calls it, and
-// with which Automation and which Ticket.
+// The Run glue is the palette's too, and it owns VC-234's universal toast
+// landing; this file owns whether the PAGE calls it, and with which Automation
+// and which Ticket.
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
-  runAutomationFromListing: vi.fn(),
+  runAutomationOnTicket: vi.fn(),
   runAutomationForProject: vi.fn(),
 }));
 
@@ -227,7 +223,7 @@ beforeEach(() => {
   }));
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
-  vi.mocked(runAutomationFromListing).mockReset();
+  vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationForProject).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
@@ -378,8 +374,8 @@ describe("running by hand", () => {
       ticketRow?.click();
     });
 
-    expect(runAutomationFromListing).toHaveBeenCalledWith({
-      automationId: "automation-1",
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "automation", automationId: "automation-1" },
       automationName: "Review sweep",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
@@ -644,7 +640,7 @@ describe("schedules (VC-130)", () => {
     });
 
     expect(document.body.textContent).not.toContain("Run “Nightly sweep” on");
-    expect(runAutomationFromListing).not.toHaveBeenCalled();
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
     expect(runAutomationForProject).toHaveBeenCalledTimes(1);
     expect(runAutomationForProject).toHaveBeenCalledWith({
       automationId: "automation-1",

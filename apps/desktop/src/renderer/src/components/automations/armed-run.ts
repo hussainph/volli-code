@@ -106,12 +106,12 @@ export function announcePendingArmedRunSettlement(notice: PendingArmedRunSettled
     case "toast":
       toastError(action.message);
       return;
-    case "open-session": {
+    case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
       void useTicketSessionRecordsStore.getState().refresh(pending.ticketId);
-      // A Deliberate move never redirects. The toast action remains the only
-      // door into the fresh Session, exactly as before main owned the timer.
+      // VC-234's universal Run landing: the toast action is the only door into
+      // the fresh Session, exactly as before main owned the timer.
       toast.success(
         `${action.automationName ?? pending.automationName} started on ${pending.ticketDisplayId}`,
         {

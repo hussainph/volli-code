@@ -257,11 +257,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 value={`run automation ${item.name} ${item.ticketDisplayId}`}
                 keywords={[item.name, item.ticketDisplayId, "run", "automation"]}
                 onSelect={() => {
-                  // The palette closes now; the run navigates to the fresh
-                  // Session itself the moment main answers (run-automation.ts).
+                  // The palette closes now, but VC-234's universal landing
+                  // rule keeps the current workspace in place. Success toasts
+                  // with the fresh Session as an explicit action.
                   void runAutomationOnTicket({
                     target: { kind: "automation", automationId: item.automationId },
+                    automationName: item.name,
                     ticketId: item.ticketId,
+                    ticketDisplayId: item.ticketDisplayId,
                     // Run by name, on the Automation's own Runtime. The
                     // per-invocation override lives where a person has already
                     // stopped to choose (VC-112), not on a name typed in flight.

@@ -2,17 +2,15 @@
  * What a Ticket can be made to RUN, as context-menu rows — the one nested menu
  * VC-112 names, drawn once and hosted twice.
  *
- * Two surfaces mount it, and the difference between them is only where the Run
- * lands:
+ * Two surfaces mount it, and both obey VC-234's universal landing rule: a Run
+ * stays in place and toasts with an "Open session" action. Their only
+ * difference is whether they can collect Instructions:
  *
- *  - **The ticket rail's split button** right-clicks onto it (VC-129), where
- *    the person already has the Ticket open, so a Run opens beside them and
- *    **Run once…** is offered because the rail owns that dialog.
+ *  - **The ticket rail's split button** right-clicks onto it (VC-129) and
+ *    offers **Run once…** because the rail owns that dialog.
  *  - **The board card's context menu** — VC-112's "run one without opening the
- *    Ticket" — hosts it under one `Automations ▸` row. Nothing navigates from
- *    there (VC-13 decision 2: the person is working through a board), and it
- *    offers no Run once, because an Unbound Run has to be TYPED and a card has
- *    nowhere to type it.
+ *    Ticket" — hosts it under one `Automations ▸` row and offers no Run once,
+ *    because an Unbound Run has to be TYPED and a card has nowhere to type it.
  *
  * Both carry the nested **Run on model ▸**: the per-invocation override on the
  * deliberate surfaces, never on the drag path (VC-112). Model and reasoning
@@ -38,7 +36,7 @@ import {
 } from "@volli/shared";
 
 import { SWITCHED_OFF_NOTE } from "./automations-page-model";
-import { runAutomationFromListing } from "./run-automation";
+import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
   overridePressable,
@@ -304,10 +302,9 @@ export function OffNote({
  * The board card's own `Automations ▸` submenu (VC-112: "run one without
  * opening the Ticket"), including the nested per-invocation override.
  *
- * It NEVER navigates. The person is working through a board and a Session that
- * seized the window would be VC-13 decision 2's redirect, so the finished Run
- * becomes a toast whose action is the door — the same landing the Automations
- * page's own row action uses, through the same `runAutomationFromListing`.
+ * It never navigates. VC-234 makes the same success toast and "Open session"
+ * action universal across the board, rail, page, and palette; this menu reaches
+ * that one `runAutomationOnTicket` landing.
  *
  * Its own component because it reads three project-wide slices and the whole
  * board holds one menu per card: mounted inside the submenu's content, those
@@ -331,8 +328,8 @@ export function TicketAutomationMenuItems({
     // Only a record can be run from here. `run-once` and `unread` are states
     // this menu never offers a press for, so they cannot arrive.
     if (action.kind !== "automation") return;
-    void runAutomationFromListing({
-      automationId: action.automation.id,
+    void runAutomationOnTicket({
+      target: { kind: "automation", automationId: action.automation.id },
       automationName: action.automation.name,
       ticketId: ticket.id,
       ticketDisplayId:
