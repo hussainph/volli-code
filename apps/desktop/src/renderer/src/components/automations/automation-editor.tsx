@@ -312,7 +312,10 @@ function AutomationEditorForm({
         <DialogHeader>
           <DialogTitle>{automation === null ? "New Automation" : "Edit Automation"}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        {/* DialogContent is a grid. Its child needs an explicit zero minimum
+            so a long picker row cannot use its intrinsic width to push the
+            dialog past its own max width. */}
+        <div data-slot="automation-editor-body" className="flex min-w-0 flex-col gap-3">
           <div className="flex items-center gap-2">
             <Input
               autoFocus
