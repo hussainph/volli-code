@@ -65,8 +65,10 @@ interface SessionsLayerProps {
    */
   rail?: React.ReactNode;
   /**
-   * Home's plane: its split grid, with whatever each pane draws inside it
-   * (VC-202). Null only while no project is selected.
+   * Home's plane: its split grid, with whatever each pane draws inside it —
+   * editors, chats, the Board, terminal anchors, a Browser Tab's renderer
+   * chrome and native-view anchor (VC-202). Null only while no project is
+   * selected or a ticket workspace has taken Home over.
    *
    * It arrives as a node for the reason {@link SessionsLayerProps.rail} does,
    * and it stands in the SAME column as the terminals this layer hosts — which

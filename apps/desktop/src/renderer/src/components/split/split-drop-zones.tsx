@@ -125,6 +125,12 @@ function ActiveDropZones({ paneId, native }: { paneId: string; native: boolean }
     <div
       data-slot="split-drop-zones"
       data-pane-id={paneId}
+      // A native Browser view composites above every renderer pixel, so a zone
+      // over a browser pane would be invisible and its preview unreadable.
+      // This attribute is the browser plane's own duck-out hook
+      // (`browser-pane.tsx`): while any drag has these zones mounted, native
+      // views hide and the drag reads the same over every kind of pane.
+      data-native-plane-overlay=""
       className={cn(
         "absolute inset-0 z-20",
         // A dnd-kit drag is MEASURED, never hit-tested, so the overlay must not

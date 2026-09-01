@@ -140,6 +140,10 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
+  // Sparse and stable: the store replaces this object only when a marked
+  // Session arrives, so a project nobody has automated hands the same empty
+  // map to every rebuild and the memo below is never defeated by it (VC-131).
+  const sessionProvenance = projectRows.provenance;
   const refreshProjectSessions = useProjectSessionsStore((state) => state.refresh);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
     {},
@@ -373,6 +377,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
         parkState,
         harness,
         statusEnteredAt,
+        provenance: sessionProvenance,
         filter: sessionListingFilter(filter),
         now: listingNow,
       }),
@@ -387,6 +392,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
       parkState,
       harness,
       statusEnteredAt,
+      sessionProvenance,
       filter,
       listingNow,
     ],

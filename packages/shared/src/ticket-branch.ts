@@ -7,17 +7,33 @@
 
 const MAX_SLUG_LENGTH = 48;
 
+/** `-`, by code point. */
+const HYPHEN = 0x2d;
+
+/**
+ * Strips leading and trailing `-` by index. The regex form (`/^-+|-+$/g`)
+ * backtracks quadratically on a long run of hyphens — a title is the user's
+ * own text, so that is only a hang-your-own-app risk, but two scans are both
+ * cheaper and plainer (CodeQL js/polynomial-redos).
+ */
+function trimHyphens(text: string): string {
+  let start = 0;
+  let end = text.length;
+  while (start < end && text.charCodeAt(start) === HYPHEN) start += 1;
+  while (end > start && text.charCodeAt(end - 1) === HYPHEN) end -= 1;
+  return text.slice(start, end);
+}
+
 /**
  * Lowercase `text`, collapse every run of non-`[a-z0-9]` characters into a
  * single hyphen, trim leading/trailing hyphens, and truncate to
  * {@link MAX_SLUG_LENGTH} characters without leaving a trailing hyphen.
  */
 export function slugify(text: string): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug.slice(0, MAX_SLUG_LENGTH).replace(/-+$/g, "");
+  const slug = trimHyphens(text.toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+  // The truncated slug can only pick up a *trailing* hyphen — it starts at
+  // index 0 of an already-trimmed slug — so one trim covers both cuts.
+  return trimHyphens(slug.slice(0, MAX_SLUG_LENGTH));
 }
 
 /**

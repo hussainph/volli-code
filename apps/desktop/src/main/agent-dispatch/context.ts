@@ -39,6 +39,7 @@ import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionStartedNotice,
+  TicketMovedNotice,
 } from "../../ipc/contract";
 
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
@@ -108,12 +109,14 @@ export interface AgentCommandServiceOptions {
   /**
    * The `env` block `volli identify` reports (VC-94): the session's resolved
    * PATH, its provenance, the measured tools resolved against it and the
-   * subset this project implies, and whether its dependencies are installed. Injected because
-   * main is the only process that knows HOW the PATH came to be — it ran the
-   * boot probe and owns the adoption outcome — and absent (tests) means
-   * identify answers without an env block rather than inventing one.
+   * subset this project implies, and whether its dependencies are installed.
+   * The cwd and its project root keep workspace walks inside the resolved
+   * checkout. Injected because main is the only process that knows HOW the PATH
+   * came to be — it ran the boot probe and owns the adoption outcome — and
+   * absent (tests) means identify answers without an env block rather than
+   * inventing one.
    */
-  sessionEnv?: (cwd: string) => Promise<SessionEnvReport>;
+  sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
   /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is
@@ -177,6 +180,18 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
+  /**
+   * Called after `ticket.move` COMMITS a real column change, carrying the
+   * before/after fact main's pending-arrival coordinator cannot reconstruct
+   * afterward (VC-226).
+   *
+   * Separate from {@link AgentCommandOptions.onMutation}, which only tells
+   * renderers to re-read planning data. CONTEXT.md makes an explicit `volli
+   * ticket move` a Deliberate move with the same semantics as a drag, so this
+   * seam creates the same one durable countdown even when no renderer exists.
+   * Never called for a same-column no-op. Absent in tests means no observer.
+   */
+  onDeliberateMove?: (notice: TicketMovedNotice) => void;
   /**
    * Called for every canonical harness event this door ingests (harness-events),
    * after any session-record write it implies has committed — the notice

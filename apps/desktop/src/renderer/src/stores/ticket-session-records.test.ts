@@ -1,5 +1,6 @@
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionRecord,
@@ -33,7 +34,12 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
 }
 
 function terminalRow(overrides: Partial<SessionRecord> = {}): SessionListingRow {
-  return { kind: "terminal", record: record(overrides), usage: EMPTY_SESSION_USAGE_SUMMARY };
+  return {
+    kind: "terminal",
+    record: record(overrides),
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  };
 }
 
 function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow {
@@ -54,6 +60,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
   };
 }
 

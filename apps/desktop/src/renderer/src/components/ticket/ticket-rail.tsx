@@ -31,13 +31,12 @@ import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDot
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import type { SkillReference, Ticket } from "@volli/shared";
+import type { Ticket } from "@volli/shared";
 
+import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
 import { TicketUsageRailBlock } from "@renderer/components/usage/usage-rail";
-import { cn } from "@renderer/lib/utils";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
@@ -75,8 +74,7 @@ export function TicketRail({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
   activeTabId,
@@ -89,10 +87,8 @@ export function TicketRail({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   /** Focus (or open) a session tab in the main strip — deliberate selection only. */
   onActivateSession(sessionId: string): void;
   /** Open (adopting first, if nothing is attached) a chat Session's tab. */
@@ -174,19 +170,23 @@ export function TicketRail({
             <TicketProperties projectId={projectId} ticket={ticket} />
             {/* What this Ticket cost, between the facts about it and the
                 Sessions that ran on it (VC-87) — which is where the owner's
-                question sits. Renders nothing when the reader has turned cost
-                off, or when no Session on this Ticket has metered a call. */}
-            <div className={cn("flex flex-col gap-2 pt-4", RAIL_PANEL_INSET)}>
-              <TicketUsageRailBlock ticketId={ticket.id} />
-            </div>
+                question sits. It owns its own inset and top padding, so an
+                absent card (cost turned off, or nothing metered on this Ticket)
+                leaves no gap behind it rather than sixteen pixels of dead rail. */}
+            <TicketUsageRailBlock ticketId={ticket.id} />
+            {/* What can be STARTED on this Ticket, between what it cost and who
+                is working on it (VC-129). Above the Sessions roster because it
+                is an act and the roster is a record of acts — and because the
+                Runs it lists are the doors into the Sessions listed under it.
+                The rail never authors: this block runs and links to the page. */}
+            <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
             <TicketSessionsPanel
               projectId={projectId}
               ticketId={ticket.id}
               creating={creating}
               onNewSession={onNewSession}
               onNewChat={onNewChat}
-              skills={skills}
-              onNewChatWithSkill={onNewChatWithSkill}
+              onNewBrowser={onNewBrowser}
               onActivateSession={onActivateSession}
               onActivateChat={onActivateChat}
             />

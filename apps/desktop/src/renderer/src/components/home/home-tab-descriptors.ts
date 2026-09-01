@@ -22,12 +22,15 @@
  */
 import { useShallow } from "zustand/react/shallow";
 import type { FileWorkspaceTab } from "@volli/shared";
+import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { fileTabLabels } from "@renderer/components/files/file-tab-labels";
 import { HOME_BOARD_TAB, type HomeTabDescriptor } from "@renderer/components/home/home-tab-strip";
+import { browserTabId } from "@renderer/components/home/home-tabs";
 import { chatTabId, CHAT_TAB_FALLBACK_LABEL } from "@renderer/components/ticket/ticket-chat-tab";
 import { chatTabStatus } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
+import { browserTabDisplayTitle } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import type { SessionTab } from "@renderer/stores/sessions";
 
@@ -35,6 +38,7 @@ export interface HomeTabDescriptorsInput {
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
+  browserTabs: readonly BrowserTabState[];
   dirtyFilePaths: ReadonlySet<string>;
 }
 
@@ -43,6 +47,7 @@ export function useHomeTabDescriptors({
   terminalTabs,
   chatIds,
   fileTabs,
+  browserTabs,
   dirtyFilePaths,
 }: HomeTabDescriptorsInput): readonly HomeTabDescriptor[] {
   const chatTitles = useChatSessionsStore(
@@ -64,15 +69,13 @@ export function useHomeTabDescriptors({
   return [
     HOME_BOARD_TAB,
     ...terminalTabs.map((tab): HomeTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab })),
-    ...chatIds.map(
-      (sessionId, index): HomeTabDescriptor => ({
-        kind: "chat",
-        id: chatTabId(sessionId),
-        sessionId,
-        title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-        status: chatStatuses[index] ?? "idle",
-      }),
-    ),
+    ...chatIds.map((sessionId, index): HomeTabDescriptor => ({
+      kind: "chat",
+      id: chatTabId(sessionId),
+      sessionId,
+      title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index] ?? "idle",
+    })),
     ...fileTabs.map((tab, index): HomeTabDescriptor => {
       const label = fileLabels[index] ?? { name: tab.relPath, hint: null };
       return {
@@ -85,5 +88,12 @@ export function useHomeTabDescriptors({
         dirty: dirtyFilePaths.has(tab.relPath),
       };
     }),
+    ...browserTabs.map((tab): HomeTabDescriptor => ({
+      kind: "browser",
+      id: browserTabId(tab.tabId),
+      tabId: tab.tabId,
+      title: browserTabDisplayTitle(tab),
+      loading: tab.loading,
+    })),
   ];
 }

@@ -192,6 +192,23 @@ exists. What a search returns is third-party text, references rather than
 contents, and reading one of them is a new decision judged from scratch.
 _Avoid_: web search setting, browsing, internet permission
 
+**Browser Tab**:
+A sandboxed web page hosted inside the workspace as a native Electron
+`WebContentsView`, owned and placed by the desktop's main-process
+BrowserTabHost — never loaded into the app's own renderer. A tab has a
+product-owned opaque id, a mode-scoped session partition isolated from the app
+renderer and from every other mode, and a per-tab generation that advances on
+navigation. People browse in them; Sessions reach them only through the Browser
+port's six `browser_*` tools, which speak the accessibility-snapshot/ref
+dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
+remote debugging port ever opens. Everything a page contributes — title,
+snapshot, console, pixels — is untrusted third-party content in the same
+envelope discipline Web Access established. A tab is not Web Access: reading
+the public web through `web_fetch` and rendering a page a person can also see
+are different capabilities with different policies.
+_Avoid_: webview, BrowserView, preview pane (for the tab itself), browser
+session (when meaning a tab)
+
 **Agent CLI**:
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
@@ -547,10 +564,26 @@ _Avoid_: default automation (collides with project defaults and the default base
 
 **Offered list**:
 The Automations a column presents during a Deliberate move, in the order their
-digit accelerators read, with a `Move only` target beside them. A column's Armed
-automation is always first. Offering is not arming: a column offers many and
-fires at most one on its own.
+digit accelerators read, with a `Move only` target beside them. Membership is
+each Automation's Trigger; the order is the column's own **rank**, arranged by
+dragging the lanes on the Automations page and stored per column, like the
+arming and on the same machine. A column's Armed automation is pinned to digit
+`1` while it is switched on here, so `1` reproduces a plain drop. Digits run
+`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place and
+simply has no digit. Offering is not arming: a column offers many and fires at
+most one on its own.
 _Avoid_: column automations, automation menu
+
+**Option-drag picker**:
+What holding ⌥ during a drag does: the hovered column grows its Offered list
+into large landing targets — every offered row plus `Move only` — and the picker,
+not the pointer, is what a release obeys, so every release under ⌥ lands on a
+named target. Landing on a named Automation opens the same delay window a plain
+drop into an armed column opens, with the same single Cancel; `Move only` moves
+the ticket and starts nothing. ⌥ is a state rather than an edge: the column is
+expanded whenever ⌥ is held over it, however the two became true. Escape ends
+the drag; ⌥-up only closes the picker.
+_Avoid_: palette, radial menu, drag menu
 
 **Instructions**:
 The prompt an Automation sends when it opens its Session: authored prose plus
@@ -591,11 +624,28 @@ case, authored where it is launched. It writes no file and saves no record
 beyond the Run, so there is nothing left afterwards to name, disable, or delete.
 _Avoid_: ad-hoc automation, draft automation, one-shot automation
 
+**Enabled automation**:
+An Automation somebody switched on for this machine, and therefore the only
+kind whose Trigger has an effect here. Off is the resting state: a machine that
+was never asked has not said yes, so a record fires on its own only where it
+was turned on — the same rule that lets the Skills travel through git while the
+record and its switch do not. Run by hand is universal, so an Automation that
+is off is still runnable from every surface that lists one; the switch narrows
+what _else_ starts it, exactly as the Trigger does. Like arming, it is local to
+the machine that set it and never travels with the project, which is why it is
+not a field on the record. Distinct from deleting, which removes the record;
+there is no third state between them, because for a Skill git is already the
+archive.
+_Avoid_: paused, archived, active, on (alone)
+
 **Skipped occurrence**:
-A scheduled Trigger's due time that passed without a Run, because the app was
-not open. It is recorded with its reason and never replayed — the next
+A scheduled Trigger's due time that passed without a Run — usually because the
+app was not open, otherwise because this machine never woke to it (asleep, or
+too busy), or because the Run door refused when the moment came. It is recorded
+with the reason that is actually true of it and never replayed — the next
 occurrence stands — and a person may start it by hand from the Run history
-afterwards. A skip and a silence must not look the same.
+afterwards, as one Run rather than as the backlog it stood for. A skip and a
+silence must not look the same, and neither must two different skips.
 _Avoid_: missed run, failed run
 
 **Skill**:

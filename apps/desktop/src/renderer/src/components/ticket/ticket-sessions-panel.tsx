@@ -7,9 +7,11 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   errorMessage,
+  sessionProvenanceHoverLine,
+  sessionProvenanceOf,
   type SessionListingRow,
+  type SessionProvenance,
   type SessionRecord,
-  type SkillReference,
 } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -30,6 +32,7 @@ import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -43,6 +46,7 @@ import {
   nextTicketSessionStatusChangeAt,
   sessionRailRowStampAt,
   ticketOutputStamps,
+  ticketSessionProvenance,
   type SessionRailRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
@@ -145,6 +149,7 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
 function SessionRow({
   kind,
   title,
+  provenance,
   trailing,
   editing,
   drag,
@@ -157,6 +162,14 @@ function SessionRow({
   kind: "chat" | "terminal";
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
+  /**
+   * Who started this Session (VC-131). The rail is a listing like any other, so
+   * it draws the same mark the sidebar's bands do, from the same component —
+   * the rule is that a Run's Session is distinguishable everywhere a Session
+   * appears, and a rail with its own idea of that would be the second place to
+   * fix when the mark changes.
+   */
+  provenance: SessionProvenance;
   /** Right-edge metadata: live status for current rows, relative end time for history rows. */
   trailing: React.ReactNode;
   editing: boolean;
@@ -200,8 +213,22 @@ function SessionRow({
             onCancel={onCancelRename}
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
-            {title}
+          <span
+            // `gap-1` is the ladder's icon↔label rung (docs/DESIGN.md), and the
+            // same gap the mark sits at in the sidebar's rows.
+            className="flex min-w-0 flex-1 items-center gap-1"
+            // The provenance line is the whole mark for a Session another
+            // Session started, and it rides on a node the row already had.
+            title={sessionProvenanceHoverLine(provenance) ?? undefined}
+          >
+            {/* Left of the title rather than after it: this row's right edge is
+                the status column, and a mark that drifted between the title and
+                that column depending on title length would stop being scannable
+                down the list. */}
+            <SessionProvenanceMark provenance={provenance} rowTitle={title} />
+            <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+              {title}
+            </span>
           </span>
         )
       }
@@ -231,6 +258,7 @@ function SessionRow({
 function SessionList({
   rows,
   variant,
+  provenance,
   now,
   projectId,
   ticketId,
@@ -246,6 +274,8 @@ function SessionList({
   rows: readonly SessionRailRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
   variant: "current" | "history";
+  /** Sparse, keyed by Session id — a miss is the resting case (VC-131). */
+  provenance: Readonly<Record<string, SessionProvenance>>;
   /**
    * The clock the History variant's relative stamps are read against. A current
    * row prints no stamp, so for that variant this is unread — the panel hands
@@ -275,11 +305,12 @@ function SessionList({
               key={sessionId}
               kind="chat"
               title={title}
+              provenance={sessionProvenanceOf(provenance, sessionId)}
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
-              // rather than a status beside a "Chat · Live". Most History rows
-              // say only when they last said anything; a stopped chat retains
+              // rather than repeating source metadata. Most History rows say
+              // only when they last said anything; a stopped chat retains
               // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (
@@ -319,6 +350,7 @@ function SessionList({
             key={record.id}
             kind="terminal"
             title={title}
+            provenance={sessionProvenanceOf(provenance, record.id)}
             trailing={
               variant === "current" ? (
                 <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
@@ -397,8 +429,7 @@ export function TicketSessionsPanel({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
 }: {
@@ -408,10 +439,8 @@ export function TicketSessionsPanel({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
 }) {
@@ -580,6 +609,9 @@ export function TicketSessionsPanel({
 
   const listProps = {
     projectId,
+    // Read off the listing rows before the panel splits them into two record
+    // arrays, which is where the row wrapper carrying it is lost (VC-131).
+    provenance: ticketSessionProvenance(rows),
     ticketId,
     editingId,
     setEditingId,
@@ -607,9 +639,8 @@ export function TicketSessionsPanel({
             placement="rail"
             align="end"
             shortcuts
-            skills={skills}
             onNewChat={onNewChat}
-            onNewChatWithSkill={onNewChatWithSkill}
+            onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
         </SectionHeadingRow>

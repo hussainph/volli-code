@@ -314,6 +314,26 @@ export function listWorktreePaths(db: Database.Database): string[] {
 }
 
 /**
+ * The same set for ONE project — live AND archived alike, since a retained
+ * worktree is still a directory a session can be standing in.
+ *
+ * The project-scoped sibling of {@link listWorktreePaths}, for a caller that
+ * wants a project's worktrees and nothing else about its tickets: `identify`
+ * asks this on every call to find the boundary of the workspace it is
+ * measuring. Composing it from {@link listTicketsByProject} and
+ * {@link listArchivedTicketsByProject} would hydrate every body and every
+ * label to read one column, and would put the Archive's deliberately
+ * on-demand read on the first command every agent runs.
+ */
+export function listWorktreePathsByProject(db: Database.Database, projectId: string): string[] {
+  const rows = prepared<[string], { worktree_path: string }>(
+    db,
+    "SELECT worktree_path FROM tickets WHERE project_id = ? AND worktree_path IS NOT NULL",
+  ).all(projectId);
+  return rows.map((row) => row.worktree_path);
+}
+
+/**
  * The retention watch's poll set (issue #76): every NON-ARCHIVED ticket that
  * has a worktree path OR a branch — the only tickets a merge-watch / Done-TTL
  * can act on. Archived tickets are already off the board (retention's terminal

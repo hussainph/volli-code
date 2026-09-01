@@ -1,5 +1,5 @@
 /**
- * Home: the board, the project's own Sessions, and Main-checkout Files as tabs.
+ * Home: the Board, Project Sessions, Project Files, and Browser Tabs.
  *
  * The shape (VC-54, VC-42 phase 3). The nav row used to hold a "Board" page and
  * a "Sessions" page, and the second was the app's most confusing taxonomy — it
@@ -22,7 +22,7 @@
  *   -----------+--------------+-----------------------------------------------
  *   Board      | null         | Home strip + the board
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
- *   a Session  | either       | Home strip + that Session's plane
+ *   a work tab | either       | Home strip + that Session/File/Browser plane
  *
  * "Active tab" reads as the FOCUSED PANE's front tab since VC-202, which is the
  * same sentence while nothing is split — the plane below the strip is a split
@@ -61,21 +61,30 @@ import { useShallow } from "zustand/react/shallow";
 import {
   arrangeTabs,
   EMPTY_TAB_ORDER,
+  errorMessage,
   resolveSplitView,
   singlePaneSplitView,
   SPLIT_VIEW_ROOT_PANE_ID,
   type FileWorkspaceTab,
   type ResolvedSplitViewPane,
-  type SkillReference,
 } from "@volli/shared";
+import { BROWSER_START_URL } from "../../../../browser-start-page";
+import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { renameChatSession } from "@renderer/chat/rename";
+import { BrowserPane } from "@renderer/components/browser/browser-pane";
 import { HomePaneTabStrip, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
 import { useHomeTabDescriptors } from "./home-tab-descriptors";
 import { HomeRail } from "./home-rail";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
-import { HOME_BOARD_TAB_ID, isHomeBoardTab, resolveHomeTabs } from "./home-tabs";
+import {
+  HOME_BOARD_TAB_ID,
+  browserTabId,
+  isHomeBoardTab,
+  parseBrowserTabId,
+  resolveHomeTabs,
+} from "./home-tabs";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
@@ -107,13 +116,17 @@ import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
-import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import {
+  hydrateBrowserTabs,
+  subscribeBrowserTabs,
+  useBrowserTabsStore,
+} from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
@@ -128,6 +141,34 @@ const NO_OPEN_CHATS: readonly string[] = [];
 export function HomeSurface({ visible }: { visible: boolean }) {
   const selected = useSelectedProject();
   const selectedId = selected?.id ?? null;
+  const browserApi = window.api.browser;
+
+  // Browser state is main-owned and pushed for every scope. Home is the app's
+  // always-mounted workspace owner, so it owns the one subscription too; a
+  // Ticket detail can come and go without losing title/loading updates.
+  React.useEffect(() => subscribeBrowserTabs(browserApi), [browserApi]);
+  React.useEffect(() => {
+    if (selectedId === null) return;
+    void hydrateBrowserTabs(browserApi, selectedId)
+      .then((result) => {
+        if (!result.ok) toastError(`Could not load Browser Tabs: ${result.error}`);
+      })
+      .catch((reason: unknown) => {
+        toastError(`Could not load Browser Tabs: ${errorMessage(reason)}`);
+      });
+  }, [browserApi, selectedId]);
+  const browserTabs = useBrowserTabsStore(
+    useShallow((state) =>
+      selectedId === null
+        ? []
+        : Object.values(state.byId).filter(
+            (tab) => tab.projectId === selectedId && tab.ticketId === null,
+          ),
+    ),
+  );
+  const browserTabsHydrated = useBrowserTabsStore((state) =>
+    selectedId === null ? true : state.hydratedProjects.has(selectedId),
+  );
 
   // ── The strip's inputs ───────────────────────────────────────────────────
   // Ids only. A chat's slice is replaced on every folded frame batch, and this
@@ -207,9 +248,13 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       // a Session the user closed while the guard was waiting.
       const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
       const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
+      const browsers = Object.values(useBrowserTabsStore.getState().byId).filter(
+        (tab) => tab.projectId === selectedId && tab.ticketId === null,
+      );
       closeHomeFile(selectedId, relPath, [
         ...sessions.map((tab) => tab.sessionId),
         ...chats.map(chatTabId),
+        ...browsers.map((tab) => browserTabId(tab.tabId)),
       ]);
     },
     [closeHomeFile, selectedId],
@@ -219,14 +264,19 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     fileWorkspace;
   const fileTabs = fileWorkspace.files.tabs;
   const tabIds = React.useMemo(
-    () => [...sessionTabIds, ...fileTabs.map((tab) => fileTabId(tab.relPath))],
-    [fileTabs, sessionTabIds],
+    () => [
+      ...sessionTabIds,
+      ...fileTabs.map((tab) => fileTabId(tab.relPath)),
+      ...browserTabs.map((tab) => browserTabId(tab.tabId)),
+    ],
+    [browserTabs, fileTabs, sessionTabIds],
   );
   const { active: activeTabId, restore } = resolveHomeTabs({
     tabIds,
     recorded: recordedTab,
     containerActive,
     durableChatIds,
+    browserTabsHydrated,
     hydrated: selectedId === null || hydratedRef.current.has(selectedId),
   });
   const restoreKind = restore.kind;
@@ -262,6 +312,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
 
   // ── What is on screen ────────────────────────────────────────────────────
   const boardTabActive = isHomeBoardTab(activeTabId);
+  // The surface-active browser tab, or undefined. Under the split view this is
+  // the FOCUSED pane's front tab being a browser — the rail steps aside for it
+  // (main's own gating), while every pane's browser renders in its own cell.
+  const activeBrowserTabId = parseBrowserTabId(activeTabId);
+  const activeBrowserTab =
+    activeBrowserTabId === null
+      ? undefined
+      : browserTabs.find((tab) => tab.tabId === activeBrowserTabId);
   const ticket = useBoardStore((state) =>
     selectedId !== null && openTicketId !== null
       ? state.ticketsByProject[selectedId]?.find((candidate) => candidate.id === openTicketId)
@@ -344,7 +402,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const railCollapsed = useUiStore((state) => state.railCollapsed);
   const railWidth = useUiStore((state) => state.railWidth);
   const toggleRailCollapsed = useUiStore((state) => state.toggleRailCollapsed);
-  const railVisible = stripVisible && !boardTabActive && !railCollapsed;
+  const railVisible =
+    stripVisible && !boardTabActive && activeBrowserTab === undefined && !railCollapsed;
 
   // ── Starting a Session ───────────────────────────────────────────────────
   const startingTerminal = useSessionsStore((state) =>
@@ -356,9 +415,26 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // One control mints both kinds, so it goes quiet while EITHER is starting —
   // the one place ORing the two flags is the honest reading (session-create.ts).
   const creating = startingTerminal || startingChat;
-  // The selected project's skills, for the session-start control's "Chat with
-  // skill" submenu.
-  const { skills } = usePromptTemplates(selectedId);
+
+  // Opens the tab first and asks where to go second — the address bar is the
+  // question, and it focuses itself on a blank tab. The shape this replaces
+  // called `window.prompt`, which Electron defines as `throw new Error(...)`:
+  // the press raised before it reached the try below, so the button did
+  // nothing at all, silently.
+  const createBrowser = React.useCallback(async () => {
+    if (selectedId === null) return;
+    try {
+      const result = await browserApi.open({ projectId: selectedId, url: BROWSER_START_URL });
+      if (!result.ok) {
+        toastError(`Could not open Browser Tab: ${result.error}`);
+        return;
+      }
+      useBrowserTabsStore.getState().receive(result.tab);
+      setHomeActiveTab(selectedId, browserTabId(result.tab.tabId));
+    } catch (reason) {
+      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
+    }
+  }, [browserApi, selectedId, setHomeActiveTab]);
 
   // The guard for closing a TAB. `SessionsLayer` keeps its own for closing a
   // PANE: the two surfaces own different closes now that the strip lives here,
@@ -378,6 +454,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const setHomeSplitRatio = useWorkspaceStore((state) => state.setHomeSplitRatio);
   const closeHomePane = useWorkspaceStore((state) => state.closeHomePane);
   const removeHomeTabFromSplit = useWorkspaceStore((state) => state.removeHomeTabFromSplit);
+  const closeHomeBrowserTab = useWorkspaceStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
   const handleSelect = React.useCallback(
@@ -408,6 +485,40 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const handleClose = React.useCallback(
     (descriptor: HomeTabDescriptor) => {
       if (selectedId === null || descriptor.kind === "board") return;
+      if (descriptor.kind === "browser") {
+        void browserApi
+          .close({ tabId: descriptor.tabId })
+          .then((result) => {
+            if (!result.ok) {
+              toastError(`Could not close Browser Tab: ${result.error}`);
+              return;
+            }
+            useBrowserTabsStore.getState().remove(descriptor.tabId);
+            // The split-view half of a close this store does not own — the same
+            // statement the chat and terminal branches make below. While split
+            // it lands the surface on the pane's own successor, so the MRU
+            // return inside closeHomeBrowserTab only ever runs unsplit.
+            removeHomeTabFromSplit(selectedId, descriptor.id);
+            const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
+            const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
+            const workspace = useWorkspaceStore.getState().byProject[selectedId];
+            const files = workspace?.projectFiles.tabs ?? [];
+            const browsers = Object.values(useBrowserTabsStore.getState().byId).filter(
+              (tab) => tab.projectId === selectedId && tab.ticketId === null,
+            );
+            closeHomeBrowserTab(selectedId, descriptor.id, [
+              HOME_BOARD_TAB_ID,
+              ...sessions.map((tab) => tab.sessionId),
+              ...chats.map(chatTabId),
+              ...files.map((tab) => fileTabId(tab.relPath)),
+              ...browsers.map((tab) => browserTabId(tab.tabId)),
+            ]);
+          })
+          .catch((reason: unknown) => {
+            toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
+          });
+        return;
+      }
       if (descriptor.kind === "chat") {
         // No busy guard and no confirm: the Session is durable, so closing the
         // view loses nothing — reopening it from the sidebar adopts the same
@@ -436,7 +547,14 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // The controller's own callback, not the controller: its object identity
     // moves whenever a tab, a dirty flag or a pending close does, and this memo
     // also holds the terminal close guard.
-    [closeGuard, removeHomeTabFromSplit, requestCloseFile, selectedId],
+    [
+      browserApi,
+      closeGuard,
+      closeHomeBrowserTab,
+      removeHomeTabFromSplit,
+      requestCloseFile,
+      selectedId,
+    ],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
@@ -607,6 +725,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     }
     const relPath = parseFileTabId(tabId);
     const chatSessionId = parseChatTabId(tabId);
+    const paneBrowserTabId = parseBrowserTabId(tabId);
+    const paneBrowserTab =
+      paneBrowserTabId === null
+        ? undefined
+        : browserTabs.find((tab) => tab.tabId === paneBrowserTabId);
     return (
       // The positioning context a terminal anchor needs, below whatever strip
       // this pane draws — so a terminal fills its pane's content box and not the
@@ -644,7 +767,24 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             onOpenFile={openProjectFile}
           />
         ) : null}
-        {relPath === null && chatSessionId === null && !isHomeBoardTab(tabId) ? (
+        {paneBrowserTab !== undefined ? (
+          // The native view is attached over this cell's own rectangle, and the
+          // main-process host shows any number of tabs at once (tab-host), so
+          // one browser per pane composes exactly as files and chats do.
+          // `visible` reaches the controller because a native view ignores the
+          // CSS `hidden` that stands the rest of this plane down.
+          <BrowserPane
+            key={paneBrowserTab.tabId}
+            tab={paneBrowserTab}
+            visible={visible}
+            api={browserApi}
+            onTabState={useBrowserTabsStore.getState().receive}
+          />
+        ) : null}
+        {relPath === null &&
+        chatSessionId === null &&
+        paneBrowserTabId === null &&
+        !isHomeBoardTab(tabId) ? (
           <TerminalPaneAnchor tabId={tabId} ownerId={selected.id} />
         ) : null}
       </div>
@@ -691,6 +831,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           terminalTabs={terminalTabs}
           chatIds={openChatIds}
           fileTabs={fileTabs}
+          browserTabs={browserTabs}
           dirtyFilePaths={fileWorkspace.dirtyPaths}
           onSelect={handleSelect}
           onClose={handleClose}
@@ -700,12 +841,13 @@ export function HomeSurface({ visible }: { visible: boolean }) {
           onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
           actions={{
             creating,
-            skills,
             onNewChat: () => void startProjectChat(selectedId),
-            onNewChatWithSkill: (name: string) => void startProjectChat(selectedId, [name]),
             onNewSession: () => void startProjectTerminal(selectedId),
+            onNewBrowser: () => void createBrowser(),
             railCollapsed,
-            railTogglable: !boardTabActive,
+            // A browser tab in front hides the rail (main's own gating): the
+            // native view owns that edge of the window.
+            railTogglable: !boardTabActive && activeBrowserTab === undefined,
             onToggleRail: toggleRailCollapsed,
           }}
         />
@@ -749,6 +891,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
                     terminalTabs={terminalTabs}
                     chatIds={openChatIds}
                     fileTabs={fileTabs}
+                    browserTabs={browserTabs}
                     dirtyFilePaths={fileWorkspace.dirtyPaths}
                     onSelect={handleSelect}
                     onClose={handleClose}
@@ -824,10 +967,9 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
 /** The trailing cluster's props — only the surface's own strip carries them. */
 interface HomeStripActions {
   creating: boolean;
-  skills?: readonly SkillReference[];
   onNewSession(): void;
   onNewChat(): void;
-  onNewChatWithSkill(name: string): void;
+  onNewBrowser(): void;
   /** The rail's collapse state and its corner control — see `home-rail.tsx`. */
   railCollapsed: boolean;
   railTogglable: boolean;
@@ -842,6 +984,7 @@ interface HomePaneStripProps {
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
+  browserTabs: readonly BrowserTabState[];
   dirtyFilePaths: ReadonlySet<string>;
   onSelect(tab: HomeTabDescriptor): void;
   onClose(tab: HomeTabDescriptor): void;

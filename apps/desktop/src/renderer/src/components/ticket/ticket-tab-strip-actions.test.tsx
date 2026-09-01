@@ -23,6 +23,7 @@ function strip(creating: boolean, railCollapsed = false): string {
       onRenameSessionTab={noop}
       onNewSession={noop}
       onNewChat={noop}
+      onNewBrowser={noop}
       railCollapsed={railCollapsed}
       onToggleRail={noop}
     />,
@@ -35,8 +36,51 @@ describe("TicketTabStrip", () => {
 
     expect(html).toContain('aria-label="New chat"');
     expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other session kinds")).toContain('aria-haspopup="menu"');
+    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('aria-label="New session"');
+  });
+
+  it("offers a Browser Tab from inside the one menu, not beside it", () => {
+    const html = strip(false);
+
+    // The strip's trailing cluster is one pill of two halves. The Browser row
+    // moved into that menu (covered in `new-session-control.test.tsx`, where
+    // the portalled rows are reachable), so no third button may appear here.
+    expect(html).not.toContain('aria-label="New Browser Tab"');
+    expect(html.match(/<button/g)).toHaveLength(3); // two halves + rail toggle
+  });
+
+  it("draws a live-titled, closable Browser Tab", () => {
+    const html = renderToStaticMarkup(
+      <TicketTabStrip
+        projectId="project-1"
+        ticketId="ticket-1"
+        tabs={[
+          { id: "doc", kind: "body", label: "VC-6" },
+          {
+            id: "browser:tab-7",
+            kind: "browser",
+            label: "Volli docs",
+            browserTabId: "tab-7",
+            loading: true,
+          },
+        ]}
+        activeTabId="browser:tab-7"
+        creating={false}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onRenameSessionTab={noop}
+        onNewSession={noop}
+        onNewChat={noop}
+        onNewBrowser={noop}
+        railCollapsed={false}
+        onToggleRail={noop}
+      />,
+    );
+
+    expect(html).toContain('data-testid="ticket-browser-tab"');
+    expect(html).toContain("Volli docs");
+    expect(html).toContain('aria-label="Close Volli docs"');
   });
 
   it("puts creation in the trailing action cluster, out of the tab scroller", () => {
@@ -69,7 +113,7 @@ describe("TicketTabStrip", () => {
     const html = strip(true);
 
     expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other session kinds")).toContain('disabled=""');
+    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
   });
 
   it("puts the details-rail toggle in the corner, above the pane it collapses", () => {

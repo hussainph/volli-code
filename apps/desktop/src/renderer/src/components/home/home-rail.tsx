@@ -56,10 +56,7 @@ import { splitDragSourceProps } from "@renderer/components/split/split-drag-sour
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import {
-  ProjectUsageRailBlock,
-  SessionUsageRailFacts,
-} from "@renderer/components/usage/usage-rail";
+import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import {
@@ -191,14 +188,13 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
         <SectionHeading as="h3">Session</SectionHeading>
         <SessionFacts activeTabId={activeTabId} />
       </div>
-      {/* The third scope (VC-87). Usage is a fact each scope carries rather
-          than a section of its own — a block headed "Usage" under a Session
-          block that also reports usage would be two sections with one name. It
-          renders nothing when the reader has turned cost off, or when this
-          project has never metered a model call. */}
-      <div className={SECTION}>
-        <ProjectUsageRailBlock projectId={projectId} />
-      </div>
+      {/* The third scope (VC-87), as ONE card carrying both the project rollup
+          and what the Session in front has contributed to it (VC-203). The
+          Session's cost used to be three extra rows in the block above; two
+          drawings of the same kind of number, a section apart, is what that
+          bought. It renders nothing — padding included — when the reader has
+          turned cost off, or when this project has never metered a model call. */}
+      <HomeUsageRailCard projectId={projectId} sessionId={parseHomeChatTab(activeTabId)} />
     </>
   );
 }
@@ -305,11 +301,10 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
           {ACTIVITY_LABEL[activity]}
         </span>
       </Fact>
-      {/* Cost, tokens and cached share, as three more facts about this Session
-          (VC-87) — inside the same `<dl>` because they describe the thing the
-          rows above name, not a new subject. Silent until something has been
-          metered, so a Session that has not replied yet shows no zeroes. */}
-      <SessionUsageRailFacts sessionId={sessionId} />
+      {/* Cost is NOT a fourth row here. It used to be three (VC-87), and they
+          were the one part of this block drawn in a shape the page repeated
+          somewhere else — the usage card below reports the same figures beside
+          the project total they belong to (VC-203). */}
     </dl>
   );
 }

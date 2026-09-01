@@ -201,7 +201,23 @@ interface FailAttachInput {
   code: string;
   detail: string;
   attachmentId?: string;
-  attentionKind?: AttachFailureAttentionKind;
+  /**
+   * REQUIRED, since VC-220: an attach that failed always leaves the Session
+   * saying so.
+   *
+   * It was optional, and the two failures that named nothing — a location that
+   * could not be prepared, and an adapter that threw something other than a
+   * {@link NativeAttachmentError} — wrote `attachment.failed` into history and
+   * raised no Attention at all. `sessionPersonNeed` reads Attentions, so such a
+   * Session projected as plain `idle`: indistinguishable from a chat nobody has
+   * typed into. An Automation Run that met one opened its Session, could not
+   * deliver its Instructions, and left no error state for VC-133's notification
+   * rule to fire on — the empty Session VC-220 was reported for.
+   *
+   * Non-optional so the compiler asks the question at every new failure site:
+   * what does a person see when the attach fails this way?
+   */
+  attentionKind: AttachFailureAttentionKind;
 }
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
@@ -313,6 +329,20 @@ export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot
   transcript: readonly SessionTranscriptArtifact[];
 }
 
+/**
+ * A host-observed message delivery failure that the adapter command path could
+ * not express as Session state on its own.
+ *
+ * The command id is the durable message intent's identity. Re-reporting the
+ * same failed intent therefore updates one Attention instead of accumulating a
+ * fresh error on every recovery sweep.
+ */
+export interface SessionMessageDeliveryFailure {
+  sessionId: string;
+  commandId: string;
+  detail: string;
+}
+
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
@@ -351,6 +381,15 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /**
+   * Make a message refusal that happened after attach durable and visible.
+   *
+   * This is deliberately a host-only report rather than a client command. A
+   * product workflow such as an Automation Run decides that an unobserved
+   * delivery refusal is fatal; an ordinary chat client still receives and
+   * handles its own command receipt without being allowed to mint Attentions.
+   */
+  reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void>;
   /**
    * Every native binding this process currently holds open.
    *
@@ -589,6 +628,48 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: spec.attachmentId,
       lastProgressAt,
     }));
+  }
+
+  async reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void> {
+    this.#assertOpen();
+    const projection = await this.#requireSession(input.sessionId);
+    this.#assertOpen();
+    const attachment = projection.liveExecutor;
+    const adapter =
+      attachment === null ? this.ports.executor : this.#adapterIdentityFor(attachment.adapterId);
+    const attentionId = messageDeliveryFailureAttentionId(
+      input.sessionId,
+      adapter.id,
+      input.commandId,
+    );
+    const existing = projection.attention.active.find(({ id }) => id === attentionId);
+    if (
+      existing?.kind === "adapter_unrecoverable" &&
+      existing.attachmentId === null &&
+      existing.detail === input.detail
+    ) {
+      return;
+    }
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(adapter, attachment?.venue ?? null),
+      kind: "attention.raised",
+      attention: {
+        id: attentionId,
+        // The delivery intent outlives the binding that happened to refuse it.
+        // Keep the failure on the Session so an attachment closing in the same
+        // instant cannot erase (or reject) the only account of the empty Run.
+        // A later successful fresh attach retires this kind through the same
+        // path as VC-220's attach failures.
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([attention]);
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -830,6 +911,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
+        // Where a Session runs is part of how it is configured, and a worktree
+        // that cannot be prepared is that configuration failing — the same
+        // Attention an unavailable pinned model raises, and cleared by the same
+        // successful attach once the directory can be made.
+        attentionKind: "configuration_invalid",
       });
     }
 
@@ -859,7 +945,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
-        attentionKind: nativeFailure?.attentionKind,
+        // An adapter that threw without naming a kind still failed to bind, and
+        // nothing but a fresh attach can disprove it. `adapter_unrecoverable`
+        // is what that is, and reading it as "no Attention" was how a broken
+        // attach came to look like a quiet one.
+        attentionKind: nativeFailure?.attentionKind ?? "adapter_unrecoverable",
       });
     }
 
@@ -1041,31 +1131,24 @@ class DefaultSessionRuntime implements SessionRuntime {
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    const attention =
-      input.attentionKind === undefined
-        ? null
-        : await this.ports.engine.observe({
-            id: this.#id("event"),
-            sessionId: input.request.sessionId,
-            occurredAt: this.ports.clock.now(),
-            provenance: adapterProvenance(input.adapter, input.location.venue),
-            kind: "attention.raised",
-            attention: {
-              id: freshAttachAttentionId(
-                input.request.sessionId,
-                input.adapter.id,
-                input.attentionKind,
-              ),
-              // The attachment attempt is already a closed fact. This Attention
-              // belongs to the Session until a fresh attach succeeds, rather
-              // than pretending a failed binding can receive recovery work.
-              attachmentId: null,
-              kind: input.attentionKind,
-              detail: input.detail,
-              diagnostic: null,
-            },
-          });
-    await this.#publish(attention === null ? [failed] : [failed, attention]);
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.request.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(input.adapter, input.location.venue),
+      kind: "attention.raised",
+      attention: {
+        id: freshAttachAttentionId(input.request.sessionId, input.adapter.id, input.attentionKind),
+        // The attachment attempt is already a closed fact. This Attention
+        // belongs to the Session until a fresh attach succeeds, rather
+        // than pretending a failed binding can receive recovery work.
+        attachmentId: null,
+        kind: input.attentionKind,
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
@@ -2894,7 +2977,7 @@ function userProvenance(venue: SessionExecutionVenue | null): SessionEventProven
 
 function adapterProvenance(
   adapter: AdapterIdentity,
-  venue: SessionExecutionVenue,
+  venue: SessionExecutionVenue | null,
 ): SessionEventProvenance {
   return {
     source: {
@@ -3005,6 +3088,15 @@ function freshAttachAttentionId(
   return ["attach", sessionId, adapterId, FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT, kind]
     .map(encodeURIComponent)
     .join(":");
+}
+
+/** One durable failure marker per first-message command, across every replay. */
+function messageDeliveryFailureAttentionId(
+  sessionId: string,
+  adapterId: string,
+  commandId: string,
+): string {
+  return ["message-delivery", sessionId, adapterId, commandId].map(encodeURIComponent).join(":");
 }
 
 function nativeObservationId(

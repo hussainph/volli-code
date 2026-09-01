@@ -790,6 +790,62 @@ describe("agent command service", () => {
     expect(notifications).toEqual([{ title: "VC-1 → Doing", message: "Moved via VC-2's session" }]);
   });
 
+  describe("ticket.move is a Deliberate move (VC-128)", () => {
+    /** A service whose Deliberate-move seam records what it was told. */
+    function serviceWithDeliberateMoves() {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      let id = 0;
+      let timestamp = 100;
+      const moves: unknown[] = [];
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => timestamp++,
+        newId: () => `ticket-${++id}`,
+        onDeliberateMove: (notice) => moves.push(notice),
+      });
+      const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+      return { exec, moves };
+    }
+
+    it("announces the columns it left and entered, which a re-read cannot recover", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+      await exec("ticket.create", { title: "T", status: "todo" });
+
+      await exec("ticket.move", { id: "VC-1", to: "doing" });
+
+      // CONTEXT.md: an explicit `volli ticket move` is a Deliberate move with
+      // the same semantics as a drag, so an armed destination column must be
+      // able to tell this was an ARRIVAL — which needs the previous status.
+      expect(moves).toEqual([
+        { projectId: "project-one", ticketId: "ticket-1", from: "todo", to: "doing" },
+      ]);
+    });
+
+    it("says nothing about a same-column move, because nothing arrived", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+      await exec("ticket.create", { title: "T", status: "doing" });
+
+      const moved = await exec("ticket.move", { id: "VC-1", to: "doing" });
+
+      expect((moved as { ok: boolean }).ok).toBe(true);
+      expect(moves).toEqual([]);
+    });
+
+    it("says nothing about a move it refused", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+
+      await exec("ticket.move", { id: "VC-404", to: "doing" });
+
+      expect(moves).toEqual([]);
+    });
+  });
+
   describe("ticket.move backward-move interrupt (issue #78)", () => {
     /** Builds a service whose interrupt seam records its calls and returns `ids`. */
     function serviceWithInterrupt(ids: string[]) {
@@ -4894,13 +4950,13 @@ describe("identify env block (VC-94)", () => {
         ticketPrefix: "VC",
       }),
     );
-    const askedCwds: string[] = [];
+    const askedScopes: Array<{ cwd: string; projectRoot: string }> = [];
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
       now: () => 100,
-      sessionEnv: async (cwd) => {
-        askedCwds.push(cwd);
+      sessionEnv: async (cwd, projectRoot) => {
+        askedScopes.push({ cwd, projectRoot });
         return report;
       },
     });
@@ -4909,13 +4965,58 @@ describe("identify env block (VC-94)", () => {
       v: 1,
       cmd: "identify",
       args: {},
-      ctx: { cwd: "/repo/volli", env: { socket: "/tmp/volli.sock" } },
+      ctx: {
+        cwd: "/repo/volli/packages/shared",
+        env: { socket: "/tmp/volli.sock" },
+      },
     });
     expect(inSession).toMatchObject({ ok: true, data: { env: report, ticket: null } });
 
-    // The env seam is asked about the CALLER's cwd — the agent drives its own
-    // directory through bash, so where it stands is only knowable at ask time.
-    expect(askedCwds).toEqual(["/repo/volli"]);
+    // The walk starts at the caller's live cwd but carries the registered
+    // project root as its outer boundary, so a package Session can still read
+    // a monorepo-root manifest without ever escaping the project.
+    expect(askedScopes).toEqual([
+      { cwd: "/repo/volli/packages/shared", projectRoot: "/repo/volli" },
+    ]);
+  });
+
+  // A worktree is not under the main checkout, so the checkout cannot be the
+  // boundary for a caller standing in one. The most specific stamped worktree
+  // containing the cwd is, whether or not the asking Session owns that ticket.
+  it("bounds a caller standing in a ticket worktree at that worktree", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    insertTicket(ctx.db, testTicket("project-one", { id: "ticket-1", worktreePath: "/wt/VC-1" }));
+    const askedScopes: Array<{ cwd: string; projectRoot: string }> = [];
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 100,
+      sessionEnv: async (cwd, projectRoot) => {
+        askedScopes.push({ cwd, projectRoot });
+        return report;
+      },
+    });
+
+    await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: {},
+      ctx: {
+        cwd: "/wt/VC-1/packages/shared",
+        env: { socket: "/tmp/volli.sock" },
+      },
+    });
+
+    expect(askedScopes).toEqual([{ cwd: "/wt/VC-1/packages/shared", projectRoot: "/wt/VC-1" }]);
   });
 
   it("omits the env block rather than inventing one when main has no env facts", async () => {

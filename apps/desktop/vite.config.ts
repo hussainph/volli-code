@@ -145,15 +145,40 @@ export default defineConfig(({ mode }) => ({
         "src/chat/rename.ts",
         "src/chat/transport.ts",
         "src/components/attachments/attachment-model.ts",
-        // What the renderer does with the Run door's answer (VC-126): which
-        // refusal opens Model Access, which toasts, and what success opens —
-        // pure precisely so the gate can reach the classification.
+        // What the renderer does with the Run door's answer (VC-126/VC-234):
+        // which refusal opens Model Access, which toasts, and what success
+        // announces — pure precisely so the gate can reach the classification.
         "src/components/automations/run-automation-model.ts",
+        // Renderer import seam for the armed-column arithmetic. The executable
+        // rules moved to @volli/shared with main's countdown ownership (VC-226)
+        // and are held at 100% by that package's gate; keeping this seam listed
+        // prevents a second renderer implementation from quietly returning.
+        "src/components/automations/armed-move-model.ts",
+        // What the Automations page SAYS (VC-127). In the gate because a Run
+        // is durable evidence: it records the RESOLVED model and reasoning so
+        // the pin/inherit decision is self-correcting, and a label that
+        // silently re-derived one from today's catalogue would erase exactly
+        // that — with nothing on screen to show it had happened.
+        "src/components/automations/automations-page-model.ts",
+        // And what the TICKET RAIL offers (VC-129): which Automation one press
+        // starts, and what a per-invocation override is allowed to name. In
+        // the gate because both are rules about records the button is not — an
+        // arming row that no longer offers its column must not press, and an
+        // override naming a model without a level it can run is a Run that
+        // fails at the Session mint with nothing on screen to explain it.
+        "src/components/automations/ticket-rail-automations-model.ts",
         // The drop/paste decision (VC-106) is a pure `.ts` beside the views
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
+        // The ⌥-drag picker's whole decision surface (VC-132): whether a column
+        // is expanded into landing targets, which row a release obeys, and what
+        // that release chose. Gated for `armed-move-model.ts`'s reason one file
+        // below — a missed branch here is a Run a person did not aim at, or an
+        // ambiguous drop region in the one gesture whose promise is that none
+        // remains.
+        "src/components/board/drag-picker-model.ts",
         "src/components/board/board-session-activity.ts",
         // What the board's header says now that it no longer says its own name
         // (VC-55): the count that qualifies itself under a filter, and the live
