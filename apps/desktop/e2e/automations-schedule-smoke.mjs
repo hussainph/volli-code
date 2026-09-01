@@ -281,8 +281,11 @@ try {
   await must(7, "the skip is visible in the Run history, and says so", async () => {
     await openAutomationsPage();
     await page.locator("[data-automation-rail-row]").filter({ hasText: "Nightly sweep" }).click();
-    await page.getByText("Skipped \u2014 Volli wasn\u2019t running").waitFor({ timeout: 15000 });
-    await page.getByText("3 occurrences").waitFor({ timeout: 10000 });
+    const editor = page.locator('[data-slot="automation-editor"]');
+    const skipped = editor.getByText("Skipped \u2014 Volli wasn\u2019t running");
+    await skipped.scrollIntoViewIfNeeded();
+    await skipped.waitFor({ timeout: 15000 });
+    await editor.getByText("3 occurrences").waitFor({ timeout: 10000 });
     return { ok: true, detail: "a skip does not look like a silence" };
   });
 
