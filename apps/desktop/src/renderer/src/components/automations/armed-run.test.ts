@@ -1,8 +1,10 @@
-/** Renderer projection and Cancel wiring for main-owned armed countdowns. */
+/** Renderer projection plus Cancel and retained Retry wiring for main-owned armed countdowns. */
 import type { PendingArmedRun } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { toast } from "sonner";
 
 import {
+  announcePendingArmedRunSettlement,
   cancelArmedRun,
   receivePendingArmedRuns,
   resetArmedRuns,
@@ -10,7 +12,12 @@ import {
 } from "./armed-run";
 
 vi.mock("sonner", () => ({
-  toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
+  toast: Object.assign(vi.fn(), {
+    dismiss: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    success: vi.fn(),
+  }),
 }));
 
 function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
@@ -30,11 +37,18 @@ function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
 }
 
 let cancel: ReturnType<typeof vi.fn>;
+let retry: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   cancel = vi.fn(async () => ({ ok: true, cancelled: true }));
+  retry = vi.fn(async () => ({ ok: true, retrying: true }));
   vi.stubGlobal("window", {
-    api: { automations: { cancelPendingArmedRun: cancel } },
+    api: {
+      automations: {
+        cancelPendingArmedRun: cancel,
+        retryPendingArmedRun: retry,
+      },
+    },
   });
 });
 
@@ -69,5 +83,23 @@ describe("main-owned armed Run projection", () => {
     // Main broadcasts the removal to every renderer; this client does not
     // invent a private cancelled state ahead of the shared truth.
     expect(useArmedRunStore.getState().pending).toEqual({ "arrival-1": row });
+  });
+
+  it("leaves a Retry toast whose action names the exact failed arrival", async () => {
+    const row = pending();
+
+    announcePendingArmedRunSettlement({ kind: "failed", pending: row, error: "IPC reply lost" });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't run automation: IPC reply lost",
+      expect.objectContaining({
+        id: "armed-run-failure:arrival-1",
+        action: expect.objectContaining({ label: "Retry" }),
+      }),
+    );
+    const options = vi.mocked(toast.error).mock.calls[0]?.[1];
+    const action = options?.action as { onClick(): void } | undefined;
+    action?.onClick();
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledWith({ id: "arrival-1" }));
   });
 });

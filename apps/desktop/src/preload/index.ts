@@ -75,6 +75,8 @@ import type {
   AutomationUpdateInput,
   PendingArmedRunCancelInput,
   PendingArmedRunCancelResult,
+  PendingArmedRunRetryInput,
+  PendingArmedRunRetryResult,
   PendingArmedRunsResult,
   PendingArmedRunSettledNotice,
   CliDoctorInput,
@@ -787,6 +789,9 @@ const api = {
       input: PendingArmedRunCancelInput,
     ): Promise<PendingArmedRunCancelResult> =>
       invoke("volli:automation-cancel-pending-armed-run", input),
+    /** Retries one expired arrival; main reuses the command id retained for that exact move. */
+    retryPendingArmedRun: (input: PendingArmedRunRetryInput): Promise<PendingArmedRunRetryResult> =>
+      invoke("volli:automation-retry-pending-armed-run", input),
     /** Every window receives the same whole pending snapshot from main. */
     onPendingArmedRunsChanged: (callback: (pending: PendingArmedRun[]) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, pending: PendingArmedRun[]) =>

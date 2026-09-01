@@ -182,8 +182,15 @@ async function main() {
   window.api.automations
     .pendingArmedRuns()
     .then((pending) => {
-      if (pending.ok) receivePendingArmedRuns(pending.pending);
-      else toastError(`Couldn't load pending automations: ${pending.error}`);
+      if (pending.ok) {
+        receivePendingArmedRuns(pending.pending);
+        // A failed expiry can outlive every renderer and the app process. Its
+        // retained command id stays in main; a newly opened window restores
+        // the retry action from this renderer-safe projection.
+        for (const failure of pending.failures) {
+          announcePendingArmedRunSettlement({ kind: "failed", ...failure });
+        }
+      } else toastError(`Couldn't load pending automations: ${pending.error}`);
     })
     .catch((error: unknown) => {
       toastError(`Couldn't load pending automations: ${errorMessage(error)}`);

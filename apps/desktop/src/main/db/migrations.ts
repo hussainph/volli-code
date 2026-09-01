@@ -1640,6 +1640,36 @@ CREATE TABLE IF NOT EXISTS automation_pending_armed_runs (
 CREATE INDEX IF NOT EXISTS idx_pending_armed_runs_start ON automation_pending_armed_runs(start_at, id);
 `;
 
+/**
+ * Migration 038: the retained Run command behind an expired armed arrival (VC-228).
+ *
+ * Expiry moves the countdown snapshot here and mints its Run command id in the
+ * same transaction. The row is deleted only after a typed Run answer arrives;
+ * a throw or process exit therefore leaves the exact command available to
+ * Retry without reopening the countdown or minting a second Session.
+ *
+ * These are historical attempts, not planning children, so they deliberately
+ * have no Ticket or Project foreign keys. A Run may have reached the durable
+ * Automation core before its reply was lost; deleting the Ticket afterwards
+ * must not erase the only key that can recover that reply idempotently.
+ */
+const MIGRATION_038_ARMED_RUN_ATTEMPTS = `
+CREATE TABLE IF NOT EXISTS automation_pending_armed_run_attempts (
+  id                TEXT PRIMARY KEY,
+  command_id        TEXT NOT NULL UNIQUE,
+  ticket_id         TEXT NOT NULL,
+  project_id        TEXT NOT NULL,
+  ticket_display_id TEXT NOT NULL CHECK (ticket_display_id <> ''),
+  automation_id     TEXT NOT NULL,
+  automation_name   TEXT NOT NULL CHECK (automation_name <> ''),
+  status            TEXT NOT NULL CHECK (status IN ('backlog', 'todo', 'doing', 'needs_review', 'done')),
+  origin            TEXT NOT NULL CHECK (origin IN ('armed', 'chosen')),
+  opened_at         INTEGER NOT NULL,
+  start_at          INTEGER NOT NULL CHECK (start_at >= opened_at),
+  error             TEXT NOT NULL CHECK (error <> '')
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1827,6 +1857,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 37,
     name: "automations — main-owned pending armed-column arrivals",
     sql: MIGRATION_037_PENDING_ARMED_RUNS,
+  },
+  {
+    version: 38,
+    name: "automations — retained armed-Run command ids for idempotent Retry",
+    sql: MIGRATION_038_ARMED_RUN_ATTEMPTS,
   },
 ];
 

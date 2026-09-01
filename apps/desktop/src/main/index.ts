@@ -87,11 +87,16 @@ import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { readAutomationRunAttendance } from "./db/automations-repo";
 import {
+  beginPendingArmedRunAttempt,
   deletePendingArmedRun,
+  deletePendingArmedRunAttempt,
   deletePendingArmedRunForTicket,
   getPendingArmedRun,
+  getPendingArmedRunAttempt,
+  listPendingArmedRunAttempts,
   listPendingArmedRuns,
   putPendingArmedRun,
+  updatePendingArmedRunAttemptError,
 } from "./db/pending-armed-runs-repo";
 import { enabledAutomationIds } from "./automations/enablement";
 import {
@@ -1966,6 +1971,12 @@ app.whenReady().then(async () => {
       putPending: (pending) => putPendingArmedRun(pendingDb, pending),
       deletePending: (id) => deletePendingArmedRun(pendingDb, id),
       deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
+      beginAttempt: (id, commandId, fallbackError) =>
+        beginPendingArmedRunAttempt(pendingDb, id, commandId, fallbackError),
+      listAttempts: () => listPendingArmedRunAttempts(pendingDb),
+      getAttempt: (id) => getPendingArmedRunAttempt(pendingDb, id),
+      updateAttemptError: (id, error) => updatePendingArmedRunAttemptError(pendingDb, id, error),
+      deleteAttempt: (id) => deletePendingArmedRunAttempt(pendingDb, id),
       readTicket: (ticketId) => {
         const row = getTicketRow(pendingDb, ticketId);
         if (row === undefined || row.archived_at !== null) return undefined;

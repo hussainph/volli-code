@@ -22,6 +22,7 @@ import type {
   AutomationRunsResult,
   AutomationsResult,
   PendingArmedRunCancelResult,
+  PendingArmedRunRetryResult,
   PendingArmedRunsResult,
   AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
@@ -40,8 +41,8 @@ export interface AutomationIpcDeps {
   service: AutomationService | null;
   /** The Run host, absent when the Session runtime never came up this launch. */
   runner: AutomationRunner | null;
-  /** Main's canonical pending-arrival projection and Cancel door. */
-  pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "cancel">;
+  /** Main's canonical pending-arrival projection plus its Cancel and retained Retry doors. */
+  pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "failures" | "cancel" | "retry">;
 }
 
 export function registerAutomationIpcHandlers(handle: DbHandle, deps: AutomationIpcDeps): void {
@@ -123,12 +124,21 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
     "volli:automation-pending-armed-runs": (): PendingArmedRunsResult =>
       deps.pendingArmedRuns === undefined
         ? { ok: false, error: "Armed-column countdowns are not available this launch." }
-        : { ok: true, pending: deps.pendingArmedRuns.list() },
+        : {
+            ok: true,
+            pending: deps.pendingArmedRuns.list(),
+            failures: deps.pendingArmedRuns.failures(),
+          },
 
     "volli:automation-cancel-pending-armed-run": (input): PendingArmedRunCancelResult =>
       deps.pendingArmedRuns === undefined
         ? { ok: false, error: "Armed-column countdowns are not available this launch." }
         : { ok: true, cancelled: deps.pendingArmedRuns.cancel(input.id) },
+
+    "volli:automation-retry-pending-armed-run": (input): PendingArmedRunRetryResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : { ok: true, retrying: deps.pendingArmedRuns.retry(input.id) },
 
     "volli:automation-skips-for-project": (input): AutomationSkipsResult =>
       service.skipsForProject(input.projectId),

@@ -2,9 +2,9 @@
  * Main's one armed-column countdown owner (VC-226).
  *
  * A committed Deliberate move is classified here, persisted here and timed
- * here. Renderer windows only project the full pending list and send Cancel
- * for an exact arrival id. Window count therefore cannot decide whether the
- * Run fires or how many timers exist.
+ * here. Renderer windows project the pending list and send Cancel or retained
+ * Retry for an exact arrival id. Window count therefore cannot decide whether
+ * the Run fires, how many timers exist, or which command a retry uses.
  */
 import {
   armedAutomationFor,
@@ -15,6 +15,8 @@ import {
   type ColumnArming,
   type DeliberateMoveChoice,
   type PendingArmedRun,
+  type PendingArmedRunAttempt,
+  type PendingArmedRunFailure,
   type TicketStatus,
 } from "@volli/shared";
 
@@ -45,6 +47,16 @@ export interface PendingArmedRunCoordinatorDeps {
   putPending(pending: PendingArmedRun): void;
   deletePending(id: string): boolean;
   deletePendingForTicket(ticketId: string): boolean;
+  /** Moves the exact countdown into a retained command intent in one durable transaction. */
+  beginAttempt(
+    id: string,
+    commandId: string,
+    fallbackError: string,
+  ): PendingArmedRunAttempt | undefined;
+  listAttempts(): PendingArmedRunAttempt[];
+  getAttempt(id: string): PendingArmedRunAttempt | undefined;
+  updateAttemptError(id: string, error: string): boolean;
+  deleteAttempt(id: string): boolean;
   readTicket(ticketId: string):
     | {
         projectId: string;
@@ -75,18 +87,34 @@ export interface PendingArmedRunCoordinator {
   noteDeliberateMove(move: DeliberateMoveArrival): void;
   cancel(id: string): boolean;
   list(): PendingArmedRun[];
+  /** Expired attempts whose retained command id can be retried. */
+  failures(): PendingArmedRunFailure[];
+  /** Retries one exact arrival in detached work, reusing its retained command id. */
+  retry(id: string): boolean;
   /** Work currently detached behind timer callbacks; tests use this instead of sleeping. */
   settled(): Promise<void>;
 }
+
+const INTERRUPTED_ATTEMPT_ERROR =
+  "The armed automation Run stopped before confirming whether it started.";
 
 export function createPendingArmedRunCoordinator(
   deps: PendingArmedRunCoordinatorDeps,
 ): PendingArmedRunCoordinator {
   const timers = new Map<string, unknown>();
   const inFlight = new Set<Promise<void>>();
+  const attemptsInFlight = new Set<string>();
   let running = false;
 
   const list = (): PendingArmedRun[] => deps.listPending();
+  const failures = (): PendingArmedRunFailure[] =>
+    deps
+      .listAttempts()
+      .flatMap((attempt) =>
+        attemptsInFlight.has(attempt.pending.id)
+          ? []
+          : [{ pending: attempt.pending, error: attempt.error }],
+      );
 
   function publish(): void {
     deps.onPendingChanged?.(list());
@@ -124,6 +152,50 @@ export function createPendingArmedRunCoordinator(
     );
   }
 
+  async function runAttempt(attempt: PendingArmedRunAttempt): Promise<void> {
+    const id = attempt.pending.id;
+    if (attemptsInFlight.has(id)) return;
+    attemptsInFlight.add(id);
+    try {
+      let result: RunAutomationOutcome;
+      try {
+        result = await deps.run({
+          commandId: attempt.commandId,
+          automationId: attempt.pending.automationId,
+          ticketId: attempt.pending.ticketId,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          deps.updateAttemptError(id, message);
+        } catch (storageError) {
+          const storageMessage =
+            storageError instanceof Error ? storageError.message : String(storageError);
+          deps.log?.(`[volli] armed automation failure could not be updated: ${storageMessage}`);
+        }
+        deps.log?.(`[volli] armed automation run failed: ${message}`);
+        deps.onSettled?.({ kind: "failed", pending: attempt.pending, error: message });
+        return;
+      }
+
+      try {
+        if (!deps.deleteAttempt(id)) {
+          throw new Error(`Retained armed Run ${id} disappeared before completion`);
+        }
+      } catch (error) {
+        // The fallback failure was stored before Run. If cleanup cannot commit,
+        // leave that row retryable rather than claiming this reply completed.
+        const message = error instanceof Error ? error.message : String(error);
+        deps.log?.(`[volli] armed automation completion could not be recorded: ${message}`);
+        deps.onSettled?.({ kind: "failed", pending: attempt.pending, error: message });
+        return;
+      }
+      deps.onSettled?.({ kind: "attempted", pending: attempt.pending, result });
+    } finally {
+      attemptsInFlight.delete(id);
+    }
+  }
+
   async function settle(id: string): Promise<void> {
     const pending = deps.getPending(id);
     // Replaced, cancelled, cascaded away, or already claimed by another
@@ -149,32 +221,24 @@ export function createPendingArmedRunCoordinator(
       return;
     }
 
-    // Claim settlement by deleting the exact row before any detached work.
-    // There is one main timer, but this also makes an accidental duplicate
-    // callback harmless and publishes the closed window before Run startup.
-    if (!deps.deletePending(pending.id)) return;
-    clearScheduled(pending.id);
-    publish();
-
     if (verdict.kind === "abandon") {
+      // Claim settlement by deleting the exact row before announcing it. There
+      // is one main timer, but this also makes a duplicate callback harmless.
+      if (!deps.deletePending(pending.id)) return;
+      clearScheduled(pending.id);
+      publish();
       deps.onSettled?.({ kind: "abandoned", pending, reason: verdict.reason });
       return;
     }
 
-    try {
-      // Deliberately minted only at expiry and not retained with the pending
-      // row. Durable command-id retry for this door is VC-228.
-      const result = await deps.run({
-        commandId: deps.nextId(),
-        automationId: pending.automationId,
-        ticketId: pending.ticketId,
-      });
-      deps.onSettled?.({ kind: "attempted", pending, result });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      deps.log?.(`[volli] armed automation run failed: ${message}`);
-      deps.onSettled?.({ kind: "failed", pending, error: message });
-    }
+    // Mint and retain the command BEFORE Run crosses a process/runtime
+    // boundary. The atomic transition also closes the countdown, and a crash
+    // anywhere after it leaves one exact arrival-shaped Retry intent.
+    const attempt = deps.beginAttempt(pending.id, deps.nextId(), INTERRUPTED_ATTEMPT_ERROR);
+    if (attempt === undefined) return;
+    clearScheduled(pending.id);
+    publish();
+    await runAttempt(attempt);
   }
 
   return {
@@ -243,6 +307,15 @@ export function createPendingArmedRunCoordinator(
     },
 
     list,
+
+    failures,
+
+    retry(id) {
+      const attempt = deps.getAttempt(id);
+      if (attempt === undefined) return false;
+      if (!attemptsInFlight.has(id)) track(runAttempt(attempt));
+      return true;
+    },
 
     async settled() {
       while (inFlight.size > 0) await Promise.all(inFlight);
