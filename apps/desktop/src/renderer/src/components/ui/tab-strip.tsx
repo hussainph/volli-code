@@ -725,15 +725,12 @@ function TabShell({
  * animating a thing whose whole job is to follow the pointer would put it
  * behind the pointer. It draws no close, takes no focus and is inert.
  */
-export function TabDragGhost({
-  label,
-  variant = "folder",
-}: {
-  label: string;
-  variant?: TabVariant;
-}) {
+export function TabDragGhost({ label }: { label: string }) {
   return (
-    <TabVariantContext.Provider value={variant}>
+    // Folder, spelled rather than parameterized: both split surfaces draw
+    // folder strips, so a variant prop would be a knob nothing turns. The strip
+    // that first joins a split surface wearing the pill drawing gets to add it.
+    <TabVariantContext.Provider value="folder">
       <TabShell
         // Hidden from AT: the strip the tab came from still lists it, and
         // dnd-kit narrates the drag itself through its own live region — a
