@@ -19,9 +19,11 @@
  *  - **One Automation can hold a different rank in two columns.** A row is a
  *    (column, Automation) pair, never a record — hence the composite drag id,
  *    and hence a lane that reorders without touching any other lane.
- *  - **The armed row is pinned to `1` and does not drag.** Its stored rank is
- *    untouched by everything that moves around it, so disarming returns it to
- *    the slot it was authored in rather than to wherever the pin left it.
+ *  - **The armed row is pinned to `1` only while it is switched on here.** In
+ *    that effective state it does not drag, and its stored rank is untouched by
+ *    everything that moves around it. When switched off it keeps its authored
+ *    digit, stays draggable, and is annotated instead: a plain drop then starts
+ *    nothing, so a pin would promise a Run that will not come.
  *
  * A row does not move BETWEEN lanes. Which lanes an Automation appears in is
  * its Trigger, and the Trigger is authored in the editor; a cross-lane drag
@@ -50,13 +52,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVertical";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import {
+  armedAutomationFor,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Automation,
   type TicketStatus,
 } from "@volli/shared";
 
-import { laneDropRank, laneRowId } from "./automations-page-model";
+import { laneDropRank, laneRowId, SWITCHED_OFF_NOTE } from "./automations-page-model";
 import { ColumnArmingButton } from "@renderer/components/board/column-arming";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
@@ -78,10 +81,12 @@ const LANE_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
 /** One lane's whole content, composed once for both the drawing and the drop. */
 interface Lane {
   status: TicketStatus;
-  /** The digit order, armed pinned to `1` and capped at nine — what the drag answers. */
+  /** The digit order, effective arming pinned to `1` and capped at nine. */
   digits: readonly Automation[];
   /** The authored rank, uncapped: the list a drop rewrites. */
   authored: readonly Automation[];
+  /** The valid arming row, whether switched on here or not. */
+  armedId: string | null;
   /** The effective armed Automation's id, pinned to slot 1 and not draggable. */
   pinnedId: string | null;
 }
@@ -106,6 +111,7 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
       status,
       digits: offeredInDigitOrder(slices, status),
       authored: offeredInRankOrder(slices, status),
+      armedId: armedAutomationFor(automations, armings, status)?.id ?? null,
       pinnedId: effectiveArmedIn(slices, status)?.id ?? null,
     }));
   }, [automations, armings, orders, enabledIds]);
@@ -221,6 +227,7 @@ function LaneColumn({
             automation={automation}
             digit={index + 1}
             pinned={automation.id === lane.pinnedId}
+            switchedOff={automation.id === lane.armedId && automation.id !== lane.pinnedId}
             reducedMotion={reducedMotion}
           />
         ))}
@@ -234,12 +241,14 @@ function LaneRow({
   automation,
   digit,
   pinned,
+  switchedOff,
   reducedMotion,
 }: {
   status: TicketStatus;
   automation: Automation;
   digit: number;
   pinned: boolean;
+  switchedOff: boolean;
   reducedMotion: boolean;
 }) {
   // Two components would need two hook orders; one component with a disabled
@@ -257,6 +266,7 @@ function LaneRow({
       ref={setNodeRef}
       data-lane-row={laneRowId(status, automation.id)}
       data-lane-digit={digit}
+      data-lane-arming={pinned ? "ready" : switchedOff ? "switched-off" : undefined}
       // Whether dnd-kit has actually picked this row up — for the page smoke,
       // which cannot aim a drop before the drag it is aiming has begun
       // (`automations-page-smoke.mjs`, the same hook the board's own drag
@@ -273,8 +283,8 @@ function LaneRow({
     >
       {pinned ? (
         // The bolt stands in for the grip on the one row that does not move:
-        // it is armed, so it IS digit 1 — and its stored rank is waiting
-        // underneath for the day the column is disarmed.
+        // it is armed and switched on here, so it IS digit 1 — and its stored
+        // rank is waiting underneath for the day the effective pin lets go.
         <LightningIcon weight="fill" className="size-3 shrink-0 text-foreground" />
       ) : (
         <DotsSixVerticalIcon className="size-3 shrink-0 text-muted-foreground" />
@@ -283,6 +293,12 @@ function LaneRow({
         {digit}
       </kbd>
       <span className="min-w-0 flex-1 truncate text-ui text-foreground">{automation.name}</span>
+      {switchedOff ? (
+        <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
+          <LightningIcon weight="bold" className="size-3" />
+          Armed · {SWITCHED_OFF_NOTE}
+        </span>
+      ) : null}
     </div>
   );
 }
