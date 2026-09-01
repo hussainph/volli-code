@@ -68,13 +68,28 @@ export function createTicketSessionRecordsStore() {
             // kind is rebuilt as itself — the id it answers to differs (`id` vs
             // `sessionId`) and so does everything else on the record.
             [ticketId]: rows.map((row) => {
+              // `usage` and `provenance` are carried across untouched on every
+              // rebuilt row. One is a measurement of what the Session spent and
+              // the other is who started it; renaming a Session or re-reading
+              // its harness changes neither. Dropping `provenance` here would
+              // take a Run's bolt off the row the moment somebody retitled it.
               if (row.kind === "chat") {
                 return row.record.sessionId === sessionId
-                  ? { kind: "chat" as const, record: Object.assign({}, row.record, { title }) }
+                  ? {
+                      kind: "chat" as const,
+                      record: Object.assign({}, row.record, { title }),
+                      usage: row.usage,
+                      provenance: row.provenance,
+                    }
                   : row;
               }
               return row.record.id === sessionId
-                ? { kind: "terminal" as const, record: Object.assign({}, row.record, { title }) }
+                ? {
+                    kind: "terminal" as const,
+                    record: Object.assign({}, row.record, { title }),
+                    usage: row.usage,
+                    provenance: row.provenance,
+                  }
                 : row;
             }),
           },
@@ -97,6 +112,8 @@ export function createTicketSessionRecordsStore() {
                 ? {
                     kind: "terminal" as const,
                     record: Object.assign({}, row.record, { activeHarnessId: harnessId }),
+                    usage: row.usage,
+                    provenance: row.provenance,
                   }
                 : row,
             ),

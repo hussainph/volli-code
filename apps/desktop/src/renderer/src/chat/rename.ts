@@ -26,15 +26,6 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
 /**
- * A new renderer chat has no durable title until its first delivered message.
- * Any string, including a human-entered `Chat 1`, is an explicit title and is
- * never eligible for automatic replacement.
- */
-export function isUntitledChatSession(title: string | null): boolean {
-  return title === null;
-}
-
-/**
  * Retitles a chat Session everywhere it is named and persists it. No-ops on a
  * blank title. Resolves `true` when the write stuck, `false` on a no-op or a
  * failure (which also toasts — CLAUDE.md: never silently swallow a mutation).

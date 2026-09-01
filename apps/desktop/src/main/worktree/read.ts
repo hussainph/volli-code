@@ -15,6 +15,11 @@
  * to their own vocabulary (agent error codes vs. renderer toasts). The contract
  * unifies on the CLI's stance: a stamped-but-deleted worktree is its own
  * `missing-on-disk` state, NEVER the errs-dirty `uncommitted: true` lie.
+ *
+ * The resolution itself ({@link resolveWorktreeTarget}) is exported, because
+ * `sync.ts` — the one worktree verb that WRITES (VC-185) — has to make exactly
+ * the same three discriminations before it merges anything, and a second copy
+ * of them is how the two doors drifted apart the first time.
  */
 import { existsSync } from "node:fs";
 
@@ -24,7 +29,12 @@ import type { WorktreeDiffMode } from "../../ipc/contract";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
-import { changeSetSnapshot, readChangeSetBaseFile, type ChangeSetBaseFile } from "./change-set";
+import {
+  changeSetPaths,
+  changeSetSnapshot,
+  readChangeSetBaseFile,
+  type ChangeSetBaseFile,
+} from "./change-set";
 import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
@@ -50,8 +60,8 @@ export interface WorktreeReadDeps {
   worktreeExists?: (path: string) => boolean;
 }
 
-/** The failure arms both read verbs share, discriminated by `kind`. */
-type WorktreeReadFailure =
+/** The failure arms every ticketId-in worktree verb shares, discriminated by `kind`. */
+export type WorktreeReadFailure =
   | { kind: "missing-ticket" }
   /**
    * `usesWorktree` separates the two futures this arm used to collapse: a
@@ -88,14 +98,20 @@ export type WorktreeChangeSetRead =
   | { kind: "change-set-error"; displayId: string; error: string }
   | { kind: "ok"; displayId: string; changeSet: ChangeSetSnapshot };
 
+/** The uncapped current Change Set paths a collision scan needs. */
+export type WorktreeChangeSetPathsRead =
+  | WorktreeReadFailure
+  | { kind: "change-set-error"; displayId: string; error: string }
+  | { kind: "ok"; displayId: string; paths: readonly string[] };
+
 /** The discriminated result of {@link readWorktreeBaseFile}. */
 export type WorktreeBaseFileRead =
   | WorktreeReadFailure
   | { kind: "base-read-error"; displayId: string; error: string }
   | { kind: "ok"; displayId: string; baseRevision: string; file: ChangeSetBaseFile };
 
-/** The resolved, on-disk worktree identity a read verb git-queries against. */
-interface ReadTarget {
+/** The resolved, on-disk worktree identity a verb git-queries against. */
+export interface ReadTarget {
   displayId: string;
   worktreePath: string;
   branch: string | null;
@@ -108,7 +124,7 @@ interface ReadTarget {
  * stamped-but-deleted disk check. Returns the failure arm directly, or the
  * resolved {@link ReadTarget} to compose a git query from.
  */
-function resolveReadTarget(
+export function resolveWorktreeTarget(
   deps: WorktreeReadDeps,
   ticketId: string,
 ): WorktreeReadFailure | { kind: "ok"; target: ReadTarget } {
@@ -145,7 +161,7 @@ function resolveReadTarget(
  * `missing-on-disk`, never the errs-dirty `uncommitted: true`.
  */
 export function readWorktreeStatus(deps: WorktreeReadDeps, ticketId: string): WorktreeStatusRead {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const status = getWorktreeStatus(deps.git, {
@@ -174,7 +190,7 @@ export function readWorktreeDiff(
   ticketId: string,
   mode: WorktreeDiffMode,
 ): WorktreeDiffRead {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const result = diffStat(
@@ -201,7 +217,7 @@ export async function readWorktreeChangeSet(
   deps: WorktreeReadDeps,
   ticketId: string,
 ): Promise<WorktreeChangeSetRead> {
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   const result = await changeSetSnapshot(deps.gitAsync ?? runGitCapturingAsync, {
@@ -212,6 +228,28 @@ export async function readWorktreeChangeSet(
     return { kind: "change-set-error", displayId: target.displayId, error: result.error };
   }
   return { kind: "ok", displayId: target.displayId, changeSet: result.value };
+}
+
+/**
+ * Composes the complete uncapped path set for a collision scan. This stays a
+ * sibling of the capped Change Set snapshot: UI transport may cap its rows,
+ * while scheduling must not miss a path merely because it appears late.
+ */
+export async function readWorktreeChangeSetPaths(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeChangeSetPathsRead> {
+  const resolved = resolveWorktreeTarget(deps, ticketId);
+  if (resolved.kind !== "ok") return resolved;
+  const { target } = resolved;
+  const result = await changeSetPaths(deps.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: target.worktreePath,
+    baseBranch: target.baseBranch,
+  });
+  if (!result.ok) {
+    return { kind: "change-set-error", displayId: target.displayId, error: result.error };
+  }
+  return { kind: "ok", displayId: target.displayId, paths: result.value };
 }
 
 /**
@@ -233,7 +271,7 @@ export async function readWorktreeBaseFile(
   pinnedRevision?: string,
 ): Promise<WorktreeBaseFileRead> {
   const git = deps.gitAsync ?? runGitCapturingAsync;
-  const resolved = resolveReadTarget(deps, ticketId);
+  const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
   if (pinnedRevision !== undefined && pinnedRevision.length > 0) {

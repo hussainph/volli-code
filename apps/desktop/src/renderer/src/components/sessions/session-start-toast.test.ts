@@ -45,4 +45,14 @@ describe("sessionStartToastModel", () => {
       "Automation started a session on VC-4",
     );
   });
+
+  // VC-163 widened the actor union, and the old `: "You"` fallback would have
+  // announced a caller Volli could not identify as the person reading the
+  // toast. No door produces this today; the point of the test is that the day
+  // one does, it does not arrive wearing the user's name.
+  it("never announces an unidentified caller as the person reading the toast", () => {
+    expect(sessionStartToastModel(notice({ actor: "unauthenticated" })).message).toBe(
+      "An unauthenticated caller started a session on VC-4",
+    );
+  });
 });

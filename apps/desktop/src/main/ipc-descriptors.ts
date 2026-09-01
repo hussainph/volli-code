@@ -29,6 +29,7 @@ import { isExternalAppId } from "./external-apps";
 import type {
   AgentObservabilityIpcChannel,
   BrowserIpcChannel,
+  AutomationIpcChannel,
   CliIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
@@ -57,6 +58,34 @@ export interface IpcRequestDescriptor<C extends keyof VolliInvokeContract> {
 // The status/priority/harness vocabulary guards live in @volli/shared next to
 // the vocab constants they guard (isTicketStatus/isTicketPriority/parseHarnessId),
 // imported above; isValidBranchName lives next to the branch-naming rules.
+
+/**
+ * The usage scope's four arms, checked structurally.
+ *
+ * Written out rather than accepting any record with a `kind`, because this is
+ * the boundary where a renderer's word becomes a database predicate: an
+ * unrecognised arm must be rejected here rather than fall through the ledger's
+ * switch and read a scope nobody asked for.
+ */
+function isUsageScope(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (value["kind"]) {
+    case "all":
+      return true;
+    case "project":
+      return typeof value["projectId"] === "string";
+    case "ticket":
+      return typeof value["ticketId"] === "string";
+    case "session":
+      return typeof value["sessionId"] === "string";
+    default:
+      return false;
+  }
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -323,6 +352,27 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session defaults",
   },
+  "volli:project-authority-policy": {
+    /**
+     * Shape only — an id and a slot that is an object or `null`. The document
+     * itself is judged by `validateAuthorityPolicyOverride` in the handler,
+     * NOT here, and the split is deliberate: a guard can only refuse, and a
+     * refused policy write has to come back saying which field was wrong. A
+     * duplicate structural check here would be a second validator to keep in
+     * agreement with the first, which is how the two drift apart.
+     */
+    guard: (args): args is IpcArgs<"volli:project-authority-policy"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || typeof input["id"] !== "string") return false;
+      const override = input["override"];
+      // `isRecord` admits an array (`typeof [] === "object"`), and an array is
+      // not a policy document. The handler's validator refuses one too, so this
+      // is the cheap half of a check that exists on both sides.
+      return override === null || (isRecord(override) && !Array.isArray(override));
+    },
+    invalidError: "Invalid authority policy",
+  },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
       if (args.length !== 1) return false;
@@ -383,7 +433,12 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         typeof input["ticketId"] === "string" &&
         isTicketStatus(input["toStatus"]) &&
         typeof input["toIndex"] === "number" &&
-        Number.isInteger(input["toIndex"])
+        Number.isInteger(input["toIndex"]) &&
+        (input["choice"] === undefined ||
+          (isRecord(input["choice"]) &&
+            (input["choice"]["kind"] === "move-only" ||
+              (input["choice"]["kind"] === "automation" &&
+                typeof input["choice"]["automationId"] === "string"))))
       );
     },
     invalidError: "Invalid ticket move",
@@ -578,6 +633,29 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       typeof args[0]["sinceMs"] === "number" &&
       Number.isFinite(args[0]["sinceMs"]),
     invalidError: "Invalid session window",
+  },
+  "volli:usage-report": {
+    guard: (args): args is IpcArgs<"volli:usage-report"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (!isUsageScope(input["scope"])) return false;
+      // Absent is legal for all three; present must be usable. A NaN bound
+      // would otherwise reach SQLite as a comparison that silently matches
+      // nothing, and the surface would draw an empty report as if it were a
+      // measured zero.
+      if (!isOptionalFiniteNumber(input["sinceMs"])) return false;
+      if (!isOptionalFiniteNumber(input["untilMs"])) return false;
+      const groupBy = input["groupBy"];
+      return (
+        groupBy === undefined ||
+        groupBy === "ticket" ||
+        groupBy === "session" ||
+        groupBy === "model" ||
+        groupBy === "day"
+      );
+    },
+    invalidError: "Invalid usage query",
   },
   "volli:venue-snapshot": {
     guard: (args): args is IpcArgs<"volli:venue-snapshot"> => {
@@ -788,13 +866,42 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 // external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
+/**
+ * The `{ projectId, ticketId? }` scope pair the file index is listed for
+ * (VC-190) — {@link isFilePathInput} minus the path. An absent `ticketId` means
+ * the project's main checkout; a present one means that ticket's worktree, and
+ * main re-checks the pair against the db before it resolves anything.
+ */
+function isFileIndexInput(value: unknown): value is { projectId: string; ticketId?: string } {
+  if (!isRecord(value)) return false;
+  if (typeof value["projectId"] !== "string") return false;
+  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+}
+
 /** The `{ projectId, ticketId?, relPath }` shape shared by read/reveal/watch/unwatch. */
 function isFilePathInput(
   value: unknown,
 ): value is { projectId: string; ticketId?: string; relPath: string } {
-  if (!isRecord(value)) return false;
-  if (typeof value["projectId"] !== "string" || typeof value["relPath"] !== "string") return false;
-  return value["ticketId"] === undefined || typeof value["ticketId"] === "string";
+  return isRecord(value) && typeof value["relPath"] === "string" && isFileIndexInput(value);
+}
+
+/**
+ * The search shape (plan §4.7): the index's scope pair plus the literal text.
+ * Only its TYPE is judged here — an empty or whitespace-only query is a request
+ * main answers with an empty result rather than a malformed-request refusal,
+ * because it is what a Search page holds every time it is opened.
+ */
+function isFileSearchInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["query"] === "string" && isFileIndexInput(value);
+}
+
+/**
+ * The rename shape: the file-path input plus the destination path (VC-191).
+ * Both are checked as strings HERE; whether either is a safe relative path, and
+ * whether the two resolve against the same checkout, is main's two-layer job.
+ */
+function isFileRenameInput(value: unknown): boolean {
+  return isRecord(value) && typeof value["toRelPath"] === "string" && isFilePathInput(value);
 }
 
 /** The file-path shape plus one closed app id — callers never name a bundle or command. */
@@ -838,12 +945,17 @@ function isDirPathInput(value: unknown): value is { projectId: string; relPath: 
 export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C> } = {
   "volli:file-index": {
     guard: (args): args is IpcArgs<"volli:file-index"> =>
-      args.length === 1 && isProjectIdInput(args[0]),
+      args.length === 1 && isFileIndexInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:file-read": {
     guard: (args): args is IpcArgs<"volli:file-read"> =>
       args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:search": {
+    guard: (args): args is IpcArgs<"volli:search"> =>
+      args.length === 1 && isFileSearchInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:external-app-list": {
@@ -872,6 +984,33 @@ export const FILE_IPC: { readonly [C in FileIpcChannel]: IpcRequestDescriptor<C>
       if (typeof input["content"] !== "string") return false;
       return input["expectedMtime"] === undefined || typeof input["expectedMtime"] === "number";
     },
+    invalidError: "Invalid request",
+  },
+  // The creation track (plan §4.5). Four of the five carry nothing beyond the
+  // scoped path the read channels already take; only rename names a second one.
+  "volli:file-create": {
+    guard: (args): args is IpcArgs<"volli:file-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:dir-create": {
+    guard: (args): args is IpcArgs<"volli:dir-create"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-rename": {
+    guard: (args): args is IpcArgs<"volli:file-rename"> =>
+      args.length === 1 && isFileRenameInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-duplicate": {
+    guard: (args): args is IpcArgs<"volli:file-duplicate"> =>
+      args.length === 1 && isFilePathInput(args[0]),
+    invalidError: "Invalid request",
+  },
+  "volli:file-delete": {
+    guard: (args): args is IpcArgs<"volli:file-delete"> =>
+      args.length === 1 && isFilePathInput(args[0]),
     invalidError: "Invalid request",
   },
   "volli:artifact-create": {
@@ -1058,6 +1197,234 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
 
 /** Every channel the theme-IPC surface owns, derived — never hand-synced. */
 export const THEME_CHANNELS = Object.keys(THEME_IPC) as readonly ThemeIpcChannel[];
+
+// ---- automations descriptor table (VC-126) ---------------------------------
+
+/**
+ * A stored-shape guard for a Runtime pin: the exact `ModelSelection` fields
+ * and a reasoning level from Volli's own scale. Whether the pair is one the
+ * catalog can actually run is judged in the handler against Model Access —
+ * that is a fact about accounts, not about the request's shape.
+ */
+function isModelSelectionShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["providerId"] === "string" &&
+    value["providerId"].length > 0 &&
+    typeof value["modelId"] === "string" &&
+    value["modelId"].length > 0 &&
+    (REASONING_LEVELS as readonly unknown[]).includes(value["reasoningLevel"])
+  );
+}
+
+/**
+ * Automation commands are durable retry identities, not an IPC-local counter.
+ * The renderer mints UUIDs, so a retry can carry the exact same intent through
+ * another host without deriving an id from this machine.
+ */
+function isAutomationCommandId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+/**
+ * A transported Trigger's shape (VC-128, widened for VC-130's schedule). Only
+ * the wire grammar is judged here — which column names are real, whether a zone
+ * is one this build's ICU knows, and whether either collapses to "Nothing
+ * else", is the shared parser's job on the way into the record, so this guard
+ * never has to be kept in step with the board's columns or with the tz database.
+ *
+ * A MISSING Trigger is refused rather than read as the default. "Nothing else"
+ * has its own union member (`{ kind: "none" }`) precisely so the default is a
+ * value a JSON transport can carry, and a door that also accepted absence would
+ * be the second spelling docs/BOUNDARIES.md rule 3 exists to prevent.
+ */
+function isAutomationTriggerShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value["kind"] === "none") return true;
+  if (value["kind"] === "schedule") return isRecord(value["schedule"]);
+  return value["kind"] === "columns" && Array.isArray(value["columns"]);
+}
+
+/** What a Run names: a saved Automation, or an Unbound Run's own Instructions. */
+function isAutomationRunTargetShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value["kind"] === "automation") return typeof value["automationId"] === "string";
+  if (value["kind"] === "unbound") return typeof value["instructions"] === "string";
+  return false;
+}
+
+/** The editable fields every automation write carries, shape-checked once. */
+function isAutomationDraftShape(value: Record<string, unknown>): boolean {
+  return (
+    typeof value["name"] === "string" &&
+    typeof value["instructions"] === "string" &&
+    isAutomationTriggerShape(value["trigger"]) &&
+    (value["runtime"] === null || isModelSelectionShape(value["runtime"]))
+  );
+}
+
+export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:automation-list": {
+    guard: (args): args is IpcArgs<"volli:automation-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation list request",
+  },
+  "volli:automation-create": {
+    guard: (args): args is IpcArgs<"volli:automation-create"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input) || !isAutomationCommandId(input["commandId"])) return false;
+      const projectId = input["projectId"];
+      if (projectId !== null && typeof projectId !== "string") return false;
+      return isAutomationDraftShape(input);
+    },
+    invalidError: "Invalid automation",
+  },
+  "volli:automation-update": {
+    guard: (args): args is IpcArgs<"volli:automation-update"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (
+        !isRecord(input) ||
+        !isAutomationCommandId(input["commandId"]) ||
+        typeof input["automationId"] !== "string"
+      ) {
+        return false;
+      }
+      return isAutomationDraftShape(input);
+    },
+    invalidError: "Invalid automation",
+  },
+  "volli:automation-delete": {
+    guard: (args): args is IpcArgs<"volli:automation-delete"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation delete request",
+  },
+  "volli:automation-run": {
+    // The target is a union at the door, not a nullable id: a request naming an
+    // Automation and a request carrying its own Instructions (VC-129) are two
+    // shapes, and one that is somehow both never reaches the runner. Wire SHAPE
+    // only, as ever — whether the Instructions say anything is the domain's own
+    // rule (`unboundRunProblem`), stated once and re-checked by main.
+    guard: (args): args is IpcArgs<"volli:automation-run"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      isAutomationRunTargetShape(args[0]["target"]) &&
+      typeof args[0]["ticketId"] === "string" &&
+      (args[0]["modelOverride"] === null || isModelSelectionShape(args[0]["modelOverride"])),
+    invalidError: "Invalid automation run request",
+  },
+  "volli:automation-runs-for-ticket": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-ticket"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-arming-list": {
+    guard: (args): args is IpcArgs<"volli:automation-arming-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation arming request",
+  },
+  "volli:automation-arm": {
+    // A `commandId` like every other automation write: the PROJECTION is
+    // machine-local (`db/automations-repo.ts`), the INTENT is a durable command
+    // with an event and a receipt (docs/BOUNDARIES.md rule 5). `automationId:
+    // null` is disarm, and the status is checked against the board's own
+    // vocabulary here because it is half of the row's primary key.
+    guard: (args): args is IpcArgs<"volli:automation-arm"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isTicketStatus(args[0]["status"]) &&
+      (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
+    invalidError: "Invalid automation arm request",
+  },
+  "volli:automation-column-order-list": {
+    guard: (args): args is IpcArgs<"volli:automation-column-order-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation order request",
+  },
+  "volli:automation-set-column-order": {
+    // A `commandId` like every other write: the PROJECTION is machine-local
+    // (`automation_column_order`), the INTENT is a durable command with an
+    // event and a receipt (docs/BOUNDARIES.md rule 5). The whole list travels
+    // and every element must be a string, because this is what a lane's drop
+    // MEANS — a shape-check here is the last place a non-id can be turned away
+    // before it is stored as somebody's digit.
+    guard: (args): args is IpcArgs<"volli:automation-set-column-order"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isTicketStatus(args[0]["status"]) &&
+      Array.isArray(args[0]["rankedAutomationIds"]) &&
+      args[0]["rankedAutomationIds"].every((id) => typeof id === "string"),
+    invalidError: "Invalid automation order request",
+  },
+  "volli:automation-runs-for-project": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-project"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-enablement": {
+    guard: (args): args is IpcArgs<"volli:automation-enablement"> => args.length === 0,
+    invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-set-enabled": {
+    // A `commandId` like every other write: the projection is machine-local
+    // (`enablement.ts`), the INTENT is a durable command with an event and a
+    // receipt (docs/BOUNDARIES.md rule 5). `enabled` is a value rather than a
+    // toggle, so a replayed command is also the same end state.
+    guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["enabled"] === "boolean",
+    invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-pending-armed-runs": {
+    guard: (args): args is IpcArgs<"volli:automation-pending-armed-runs"> => args.length === 0,
+    invalidError: "Invalid pending armed runs request",
+  },
+  "volli:automation-cancel-pending-armed-run": {
+    guard: (args): args is IpcArgs<"volli:automation-cancel-pending-armed-run"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
+    invalidError: "Invalid pending armed run cancellation",
+  },
+  "volli:automation-retry-pending-armed-run": {
+    guard: (args): args is IpcArgs<"volli:automation-retry-pending-armed-run"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
+    invalidError: "Invalid pending armed run retry",
+  },
+  "volli:automation-skips-for-project": {
+    guard: (args): args is IpcArgs<"volli:automation-skips-for-project"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation skips request",
+  },
+  "volli:automation-run-for-project": {
+    // The Project is named rather than implied: this door's whole difference
+    // from `volli:automation-run` is the Target, so the Target is a required
+    // field instead of an absent one (docs/BOUNDARIES.md rule 3).
+    guard: (args): args is IpcArgs<"volli:automation-run-for-project"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      isAutomationCommandId(args[0]["commandId"]) &&
+      typeof args[0]["automationId"] === "string" &&
+      typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid automation run request",
+  },
+};
+
+/** Every channel the automations surface owns, derived — never hand-synced. */
+export const AUTOMATION_CHANNELS = Object.keys(AUTOMATION_IPC) as readonly AutomationIpcChannel[];
 
 // ---- harness-trust descriptor table ---------------------------------------
 // A manifest declares a command line Volli will execute, so this is the one

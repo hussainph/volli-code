@@ -464,7 +464,7 @@ function StopCountControls({
         // Names which one goes: the last stop, unless the last stop is the
         // primary — then the one below it, so "−" never recolours the window.
         aria-label={dropped === null ? "Remove a colour" : `Remove colour ${dropped + 1}`}
-        title={dropped === null ? "A canvas needs at least one colour" : undefined}
+        title={dropped === null ? "You need at least one colour" : undefined}
       >
         <MinusIcon />
       </Button>
@@ -476,7 +476,7 @@ function StopCountControls({
         aria-label="Add a colour"
         title={
           canvas.stops.length >= MAX_STOPS
-            ? `A canvas carries at most ${MAX_STOPS} colours`
+            ? `A canvas can have at most ${MAX_STOPS} colours`
             : undefined
         }
       >

@@ -17,6 +17,8 @@ import {
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
+import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
   Session,
@@ -48,6 +50,20 @@ const attachment: SessionAttachment = {
   venue: { id: "local", kind: "local" },
   continuity: "fresh",
   native: { id: "native-1", detail: { runtime: "session" } },
+  authority: null,
+};
+
+/** A Snapshot as it sits in history, for the decode cases below. */
+const recordedAuthority: AuthoritySnapshot = {
+  mode: "auto",
+  location: "worktree",
+  enforcement: "enforce",
+  judgmentMode: "ask",
+  tools: ["read"],
+  rulePackId: BUILTIN_RULE_PACK_ID,
+  rulePackHash: BUILTIN_RULE_PACK_HASH,
+  classifierModel: null,
+  fallback: { consecutiveDenials: 3, sessionDenials: 20 },
 };
 
 const interaction: SessionInteraction = {
@@ -126,6 +142,10 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
     },
     { kind: "session.signaled", signal: "done", reason: null },
     { kind: "session.signaled", signal: "blocked", reason: "stuck" },
+    // The stop fact (VC-86): each actor arm crosses whole.
+    { kind: "session.stopped", reason: "Wedged for 3h", by: { kind: "session", sessionId: "s-1" } },
+    { kind: "session.stopped", reason: null, by: { kind: "user" } },
+    { kind: "session.stopped", reason: "Silent 10m mid-turn", by: { kind: "watchdog" } },
     { kind: "attachment.opened", attachment },
     { kind: "attachment.opened", attachment: { ...attachment, native: null } },
     {
@@ -331,6 +351,42 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       name: "message",
       native: { parts: [true, 1, "text"] },
     },
+    {
+      kind: "usage.recorded",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 412,
+        outputTokens: 1_204,
+        cacheReadTokens: 96_000,
+        cacheWriteTokens: 2_100,
+        costUsd: 0.418_23,
+        costBasis: "catalog-estimate",
+      },
+    },
+    {
+      kind: "usage.recorded",
+      attachmentId: null,
+      turnId: null,
+      // Project spend: a Session born without a Ticket still records what
+      // project it belongs to, so an unticketed total is attributable.
+      attribution: { projectId: "project-1", ticketId: null },
+      usage: {
+        cause: "utility",
+        providerId: "openai",
+        modelId: "gpt-5",
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      },
+    },
   ];
 
   for (const payload of payloads) {
@@ -346,6 +402,8 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       { kind: "session.archive" },
       { kind: "session.retitle", title: null },
       { kind: "session.signal", signal: "done", reason: null },
+      { kind: "session.stop", reason: "Wedged", by: { kind: "session", sessionId: "s-1" } },
+      { kind: "session.stop", reason: null, by: { kind: "watchdog" } },
       {
         kind: "model.select",
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
@@ -379,6 +437,28 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         command: withRoute,
       });
     }
+  });
+
+  it("keeps an unpriced usage record null rather than reading it back as free", () => {
+    const decoded = roundTrip({
+      kind: "usage.recorded",
+      attachmentId: null,
+      turnId: null,
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
+      usage: {
+        cause: "compaction",
+        providerId: "anthropic",
+        modelId: "claude-haiku-4-5",
+        inputTokens: 10,
+        outputTokens: 2,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      },
+    });
+    expect(decoded.kind === "usage.recorded" && decoded.usage.costUsd).toBeNull();
+    expect(decoded.kind === "usage.recorded" && decoded.usage.cacheReadTokens).toBeNull();
   });
 
   it("keeps absent interaction prompts and resolution answers absent, not synthesized", () => {
@@ -462,6 +542,20 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.signal has an unsupported value");
+    // An actor kind this build does not know is malformed, not tolerated —
+    // the same discipline as the signal value above (VC-86).
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.stopped", reason: null, by: { kind: "scheduler" } },
+        "payload",
+      ),
+    ).toThrow("payload.by.kind has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.stopped", reason: null, by: { kind: "session" } },
+        "payload",
+      ),
+    ).toThrow("payload.by.sessionId must be a string");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },
@@ -564,6 +658,89 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.reason has an unsupported value");
+    const usage = {
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: null,
+      costBasis: "unavailable",
+    };
+    const attribution = { projectId: "project-1", ticketId: "ticket-1" };
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution,
+          usage: { ...usage, cause: "auto-title" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.cause has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution,
+          usage: { ...usage, costBasis: "guessed" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.costBasis has an unsupported value");
+    // A fractional token count is nothing any provider reports; it is corruption.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution,
+          usage: { ...usage, inputTokens: 12.5 },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.inputTokens must be an integer");
+    // A cost that is not a finite number would poison every total it enters.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution,
+          usage: { ...usage, costUsd: Number.NaN },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.usage.costUsd must be a finite number");
+    // Attribution is what makes the projection rebuildable, so a fact without
+    // it is corrupt rather than old: no build has ever been able to write one,
+    // and reading it as unattributed would file real spend under nothing.
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "usage.recorded", attachmentId: null, turnId: null, usage },
+        "payload",
+      ),
+    ).toThrow("payload.attribution must be an object");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "usage.recorded",
+          attachmentId: null,
+          turnId: null,
+          attribution: { projectId: null, ticketId: null },
+          usage,
+        },
+        "payload",
+      ),
+    ).toThrow("payload.attribution.projectId must be a string");
   });
 
   it("rejects a malformed session entity inside session.created", () => {
@@ -603,6 +780,101 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
     expect(() => openedAttachment({ ...attachment, native: { id: 7, detail: null } })).toThrow(
       "payload.attachment.native.id must be a string",
     );
+  });
+
+  it("round-trips a recorded Authority Snapshot, so a denial can name the pack that ruled", () => {
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+
+    const decoded = openedAttachment({ ...attachment, authority });
+
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority).toEqual(authority);
+  });
+
+  it("reads an attachment written before authority was recorded as governed by nothing", () => {
+    // Every attachment in history predates VC-44 and carries no `authority` key.
+    // Refusing to decode without one would make those Sessions unopenable rather
+    // than merely quiet about the policy they ran under.
+    const { authority: _dropped, ...legacy } = attachment;
+
+    expect(openedAttachment(legacy)).toEqual({
+      kind: "attachment.opened",
+      attachment: { ...legacy, authority: null },
+    });
+  });
+
+  it("keeps a tool name this build no longer offers, because history outlives a vocabulary", () => {
+    // The record is most valuable precisely here: it is how a reader learns that
+    // the Session which made a call held a tool that has since been retired.
+    const decoded = openedAttachment({
+      ...attachment,
+      authority: { ...recordedAuthority, tools: ["read", "a_tool_that_was_retired"] },
+    });
+
+    expect(decoded.kind === "attachment.opened" && decoded.attachment.authority?.tools).toEqual([
+      "read",
+      "a_tool_that_was_retired",
+    ]);
+  });
+
+  it("rejects a corrupt Authority Snapshot rather than guessing what governed a Session", () => {
+    expect(() => openedAttachment({ ...attachment, authority: "enforce" })).toThrow(
+      "payload.attachment.authority must be an object",
+    );
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, enforcement: "off" } }),
+    ).toThrow("payload.attachment.authority.enforcement has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, mode: "manual" } }),
+    ).toThrow("payload.attachment.authority.mode has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, location: "orbit" } }),
+    ).toThrow("payload.attachment.authority.location has an unsupported value");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, judgmentMode: "vibes" },
+      }),
+    ).toThrow("payload.attachment.authority.judgmentMode has an unsupported value");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: "read" } }),
+    ).toThrow("payload.attachment.authority.tools must be an array");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, tools: [7] } }),
+    ).toThrow("payload.attachment.authority.tools[0] must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackId: 1 } }),
+    ).toThrow("payload.attachment.authority.rulePackId must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, rulePackHash: 1 } }),
+    ).toThrow("payload.attachment.authority.rulePackHash must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, classifierModel: 1 } }),
+    ).toThrow("payload.attachment.authority.classifierModel must be a string");
+    expect(() =>
+      openedAttachment({ ...attachment, authority: { ...recordedAuthority, fallback: null } }),
+    ).toThrow("payload.attachment.authority.fallback must be an object");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, fallback: { consecutiveDenials: "three" } },
+      }),
+    ).toThrow("payload.attachment.authority.fallback.consecutiveDenials must be an integer");
+    expect(() =>
+      openedAttachment({
+        ...attachment,
+        authority: { ...recordedAuthority, fallback: { consecutiveDenials: 3 } },
+      }),
+    ).toThrow("payload.attachment.authority.fallback.sessionDenials must be an integer");
   });
 
   it("rejects malformed attention, prompts, and answers", () => {
@@ -892,6 +1164,42 @@ describe("the renderer-safe scrub", () => {
       kind: "attachment.failed",
       failure: { code: "spawn", detail: "no binary", diagnostic: null },
     });
+  });
+
+  // Usage is metadata about a request, never any of its content. There is no
+  // prompt, reply, path, credential or account identity in it to strip, so it
+  // crosses whole — and a scrub that dropped the cost would leave the renderer
+  // unable to say what a Session had spent.
+  it("lets a metered operation cross the product edge whole", () => {
+    const payload: SessionEventPayload = {
+      kind: "usage.recorded",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      attribution: { projectId: "project-1", ticketId: "ticket-1" },
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 412,
+        outputTokens: 1_204,
+        cacheReadTokens: 96_000,
+        cacheWriteTokens: 2_100,
+        costUsd: 0.418_23,
+        costBasis: "catalog-estimate",
+      },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(payload);
+  });
+
+  // The stop fact is Volli's own vocabulary end to end — reason and actor
+  // cross the product edge whole (VC-86).
+  it("lets a stop cross the product edge whole", () => {
+    const payload: SessionEventPayload = {
+      kind: "session.stopped",
+      reason: "Wedged for 3h",
+      by: { kind: "session", sessionId: "supervisor-1" },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(payload);
   });
 
   it("nulls native references, attention diagnostics, and adapter observations", () => {

@@ -1,6 +1,7 @@
 import {
   observationPayload,
   projectSession,
+  reportSessionUsage,
   sameCommandReceipt,
   sameSessionCommand,
   sameCommandReceiptOutcome,
@@ -16,6 +17,7 @@ import type {
   ListSessionStartsQuery,
   ListLatestTicketSignalsQuery,
   ListSessionEventsQuery,
+  ListSessionUsageQuery,
   Session,
   SessionAttachment,
   SessionCommand,
@@ -32,6 +34,8 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  SessionUsageReport,
+  SessionUsageReportQuery,
   LatestSessionSignal,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -118,7 +122,17 @@ export interface SessionEngine {
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
+  /**
+   * What a scope consumed, over a window, optionally broken down.
+   *
+   * One indexed read plus one pass of arithmetic — no Session histories folded
+   * and no transcript artifacts opened, which is the difference between a cost
+   * question that is cheap to ask and one nobody asks twice.
+   */
+  reportUsage(query: ReportSessionUsageQuery): Promise<SessionUsageReport>;
 }
+
+export type ReportSessionUsageQuery = ListSessionUsageQuery & SessionUsageReportQuery;
 
 export interface SessionEnginePorts {
   ledger: SessionLedger;
@@ -301,7 +315,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return event;
         }
 
-        const payload = observationPayload(observation);
+        // Attribution is stamped from the Session row this event is being
+        // appended against, inside the same transaction, and becomes part of
+        // the immutable fact. Read at rebuild time instead, it would be
+        // whatever `sessions.ticket_id` had become by then — null, after a
+        // Ticket delete — and the rebuilt projection would disagree with the
+        // one the live path wrote. A read model that cannot be derived again
+        // to the same answer is not rebuildable.
+        const payload = observationPayload(observation, {
+          projectId: session.projectId,
+          ticketId: session.ticketId,
+        });
         const commandId = observation.commandId ?? null;
         assertObservationCausation(transaction, session, observation);
         assertAttachmentStartRoute(transaction, observation);
@@ -391,6 +415,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           command.intent.kind !== "session.archive" &&
           command.intent.kind !== "session.retitle" &&
           command.intent.kind !== "session.signal" &&
+          command.intent.kind !== "session.stop" &&
           (command.intent.kind !== "model.select" || command.route !== null)
         ) {
           return { command, commandEvent, receipt: null, receiptEvent: null };
@@ -411,11 +436,17 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 ? { kind: "session.retitled", title: command.intent.title }
                 : command.intent.kind === "model.select"
                   ? { kind: "model.selected", selection: command.intent.selection }
-                  : {
-                      kind: "session.signaled",
-                      signal: command.intent.signal,
-                      reason: command.intent.reason,
-                    },
+                  : command.intent.kind === "session.stop"
+                    ? {
+                        kind: "session.stopped",
+                        reason: command.intent.reason,
+                        by: command.intent.by,
+                      }
+                    : {
+                        kind: "session.signaled",
+                        signal: command.intent.signal,
+                        reason: command.intent.reason,
+                      },
         };
         transaction.appendEvent(sessionEvent);
         const receiptEvent = receiptRecordedEvent(
@@ -435,7 +466,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 ? { kind: "session.retitled", sessionId: session.id }
                 : command.intent.kind === "model.select"
                   ? { kind: "model.selected", sessionId: session.id }
-                  : { kind: "session.signaled", sessionId: session.id },
+                  : command.intent.kind === "session.stop"
+                    ? { kind: "session.stopped", sessionId: session.id }
+                    : { kind: "session.signaled", sessionId: session.id },
           ),
         );
         transaction.appendReceipt(receiptEvent.payload.receipt);
@@ -572,6 +605,18 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async listEvents(query) {
       return ports.ledger.transaction((transaction) => transaction.listEvents(query));
+    },
+
+    async reportUsage(query) {
+      return ports.ledger.transaction((transaction) =>
+        // The floor is read in the SAME transaction as the rows. Two reads
+        // would let an upgrade land between them and produce a report that
+        // claimed complete coverage of rows it had not seen.
+        reportSessionUsage(transaction.listUsage(query), {
+          ...query,
+          meteredFrom: transaction.usageMeteredFrom(),
+        }),
+      );
     },
   };
 }
@@ -920,6 +965,7 @@ function resolveCommandRoute(
     case "session.archive":
     case "session.retitle":
     case "session.signal":
+    case "session.stop":
       return { route: null, rejection: null };
   }
 }
@@ -1162,6 +1208,7 @@ function expectedResultKind(intent: SessionCommandIntent["kind"]): CommandReceip
     "session.archive": "session.archived",
     "session.retitle": "session.retitled",
     "session.signal": "session.signaled",
+    "session.stop": "session.stopped",
     "model.select": "model.selected",
     "executor.start": "executor.start.requested",
     "executor.stop": "executor.stop.requested",

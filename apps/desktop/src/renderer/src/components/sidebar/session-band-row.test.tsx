@@ -15,6 +15,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import { PERSON_STARTED } from "@volli/shared";
 import type { Ticket } from "@volli/shared";
 
 import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
@@ -56,6 +57,8 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
     activitySource: "reported",
     attention: null,
     waitingOn: null,
+    lastActivityAt: 60_000,
+    provenance: PERSON_STARTED,
     target: { kind: "terminal", tabId: "s1", paneId: "p1" },
     ...overrides,
   };
@@ -64,7 +67,13 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
 function render(subject: ActiveSessionRow): string {
   return renderToStaticMarkup(
     <SidebarProvider>
-      <ActiveBandRow row={subject} ticketPrefix="VC" selected={false} onSelect={() => {}} />
+      <ActiveBandRow
+        row={subject}
+        ticketPrefix="VC"
+        now={120_000}
+        selected={false}
+        onSelect={() => {}}
+      />
     </SidebarProvider>,
   );
 }
@@ -91,6 +100,18 @@ function hoverTitle(markup: string): string {
   return /title="([^"]*)"/.exec(markup)?.[1] ?? "";
 }
 
+/**
+ * The text the mark itself PRINTS, as distinct from the name it announces.
+ *
+ * Anchored on the mark's own accessible name and read past its bolt, rather
+ * than on `<span class="truncate">` — the row's state line wears exactly
+ * that class too, and matching it would have read the state as the mark.
+ */
+const markText = (markup: string): string | null =>
+  /aria-label="Started by the Automation [^"]*"><svg[^]*?<\/svg>(?:<span class="truncate">([^<]*)<\/span>)?<\/span>/.exec(
+    markup,
+  )?.[1] ?? null;
+
 describe("ActiveBandRow", () => {
   it("names the ticket's column in the slot the harness name used to hold", () => {
     const markup = render(row());
@@ -100,16 +121,18 @@ describe("ActiveBandRow", () => {
     expect(hoverTitle(markup)).toContain("Claude Code");
   });
 
-  it("says where a chat Session lives instead of saying it is Live", () => {
-    // The whole point of the change: `Live` told a reader nothing the Active
-    // band was not already telling them by holding the row.
+  it("shows the age of the row's newest activity", () => {
+    expect(render(row())).toContain("last 1m");
+  });
+
+  it("says where a ticketed chat Session lives and keeps its source plain", () => {
     const markup = render(
-      row({ id: "chat:c1", source: "Chat · Live", ticket: { ...ticket, status: "needs_review" } }),
+      row({ id: "chat:c1", source: "Chat", ticket: { ...ticket, status: "needs_review" } }),
     );
 
     expect(stateLine(markup)).toBe("Needs Review · Working");
-    expect(stateLine(markup)).not.toContain("Live");
-    expect(hoverTitle(markup)).toContain("Chat · Live");
+    expect(hoverTitle(markup)).toContain("Chat");
+    expect(markup).not.toContain("Live");
   });
 
   it("keeps the source on a ticketless row, which has no column to name", () => {
@@ -122,6 +145,61 @@ describe("ActiveBandRow", () => {
     const markup = render(row({ activitySource: "silent" }));
 
     expect(stateLine(markup)).toBe("Doing · Not reporting");
+  });
+
+  // VC-131's three marks, at the surface VC-112 calls out by name. Everything
+  // asserted here is about a RESTING band: what it draws, and what it refuses
+  // to draw for the two parties that get no ink.
+  describe("who started the Session", () => {
+    const RUN = { kind: "automation", automationName: "Nightly sweep" } as const;
+
+    it("carries a bolt and the Automation's name for a Run's Session", () => {
+      const markup = render(row({ title: "Fix the flaky worktree test", provenance: RUN }));
+
+      expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
+      expect(markText(markup)).toBe("Nightly sweep");
+      expect(hoverTitle(markup)).toContain("Automation · Nightly sweep");
+    });
+
+    // A Run titles its Session after its Automation, so the word is usually
+    // already the largest text on the row and the mark declines to repeat it.
+    it("draws the bolt alone when the title already is the name", () => {
+      const markup = render(row({ title: "Nightly sweep", provenance: RUN }));
+
+      // Still announced in full — the fact never depends on a sighted
+      // comparison with the title beside it.
+      expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
+      expect(markText(markup)).toBeNull();
+    });
+
+    it("names the parent in the tooltip for a Session another Session started, and mints no glyph", () => {
+      const markup = render(
+        row({
+          provenance: {
+            kind: "session",
+            parentSessionId: "session-parent",
+            parentTitle: "Orchestrator",
+          },
+        }),
+      );
+
+      expect(hoverTitle(markup)).toContain("Started by Orchestrator");
+      // No bolt, and no mark of any kind: a link answers "which agent" where a
+      // glyph answers neither question (VC-112).
+      expect(markup).not.toContain("Started by the Automation");
+      expect(markup).not.toContain("text-primary");
+    });
+
+    it("gives a person's Session no mark at all — the resting rail stays quiet", () => {
+      const marked = render(row({ provenance: RUN }));
+      const resting = render(row());
+
+      expect(resting).not.toContain("Started by the Automation");
+      expect(hoverTitle(resting)).toBe("Session 1\nClaude Code");
+      // The resting row is strictly SHORTER: the feature adds no node, no
+      // class and no character to a band nobody automated.
+      expect(resting.length).toBeLessThan(marked.length);
+    });
   });
 
   it("leaves an errand row saying the errand, which never held a source", () => {
@@ -239,6 +317,7 @@ describe("PreviousBandRow identity", () => {
     title: "Review fixes",
     kind: "chat",
     endedOrQuietAt: 0,
+    provenance: PERSON_STARTED,
     target: null,
     cleaned: false,
   };
@@ -260,6 +339,33 @@ describe("PreviousBandRow identity", () => {
 
   it("draws its ticket id when standing on its own", () => {
     expect(renderPrevious()).toContain("VC-7");
+  });
+
+  it("carries the same mark, from the same slot, once a Run's Session ages into it", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarProvider>
+        <PreviousBandRow
+          row={{
+            ...previous,
+            title: "Fix the flaky worktree test",
+            provenance: { kind: "automation", automationName: "Nightly sweep" },
+          }}
+          ticketPrefix="VC"
+          now={60_000}
+          selected={false}
+          onSelect={() => {}}
+        />
+      </SidebarProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Started by the Automation Nightly sweep"');
+    expect(markup).toContain("Automation · Nightly sweep");
+  });
+
+  it("stays entirely unmarked for the Sessions a person opened", () => {
+    expect(renderPrevious()).not.toContain("Started by the Automation");
+    // No `title` at all on a row with nothing to add, rather than an empty one.
+    expect(renderPrevious()).toContain('title="Review fixes"');
   });
 
   it("drops the id under a ticket entry, which already said it", () => {

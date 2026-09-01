@@ -14,6 +14,13 @@
  *   Manual   out of the index, still `/slug`-invokable. Costs nothing idle.
  *   Off      gone.
  *
+ * EACH PROJECT MODE IS THE COMPLETE MATRIX (VC-181): Auto opens model and user
+ * routes, Manual keeps only the user routes, and Off closes both. An author's
+ * `user-invocable: false` is the fourth, model-only combination only while the
+ * Project has no rule. Settings displays that state as “Model only (author)”;
+ * choosing any real mode then overrides both axes rather than preserving a
+ * hidden author veto.
+ *
  * A `Select` rather than three pills: `docs/DESIGN.md` reserves the pill for a
  * control that acts, and this is one-of-N repeated down a column, where a
  * segmented control per row would be the second control language `ui/segmented`
@@ -32,15 +39,21 @@ import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
+  AUTHOR_MODEL_ONLY_MODE,
+  authorSkillMode,
   resolveSkillMode,
+  skillModeMatchesAuthor,
+  SKILL_MODES,
   type Project,
   type SkillMode,
+  type SkillModeReadout,
   type SkillModes,
   type SkillReference,
 } from "@volli/shared";
 
-import { formatTokens } from "@renderer/chat/context-usage";
+import { formatTokens } from "@volli/session-presentation";
 import {
   AsyncSection,
   CONTROL_W,
@@ -69,16 +82,19 @@ const MODE_LABEL: Record<SkillMode, string> = {
 };
 
 /**
- * The modes a row's picker may offer.
+ * The modes a row's picker may offer — all three, for every skill (VC-181).
  *
- * A skill whose own frontmatter says user-invoke-only cannot be promoted into
- * the index: `parseSkillModes` drops `auto` (it is the absence of a rule), so
- * for that skill "Auto" resolves straight back to Manual. Offering it anyway
- * was a Select that snapped back the moment it was picked — so the option is
- * simply not offered.
+ * This used to hide "Auto" from a skill whose frontmatter withheld itself from
+ * the model, because `parseSkillModes` dropped an `auto` rule and the Select
+ * snapped straight back to Manual the moment it was picked. That was the UI
+ * working around a storage bug: an override the pane could not keep was an
+ * override it had to stop offering. Storage now keeps all three modes, so a
+ * project can promote an author-manual skill into its index and the answer
+ * holds — which is what "the Project overrides the author in both directions"
+ * has to mean to be worth anything.
  */
-export function offerableModes(skill: SkillReference): readonly SkillMode[] {
-  return skill.userInvokeOnly ? (["manual", "off"] as const) : (["auto", "manual", "off"] as const);
+export function offerableModes(_skill: SkillReference): readonly SkillMode[] {
+  return SKILL_MODES;
 }
 
 /**
@@ -130,22 +146,34 @@ export function SkillsPane({ project }: { project: Project }) {
 }
 
 /**
- * The modes map after ruling `slugs`.
+ * The modes map after ruling `targets`.
  *
- * `auto` DELETES rather than storing "auto", because the map holds only
- * departures from the frontmatter default — storing the default would make
- * "never touched" and "set back to normal" two states that behave alike and
- * read differently.
+ * THE MAP HOLDS DEPARTURES, AND THIS IS THE LAYER THAT KNOWS WHAT FROM
+ * (VC-181). A rule equal to the skill's own author default is deleted rather
+ * than stored, so "never touched" and "set back to what the file says" stay
+ * one state; a rule that departs is stored whatever it is, `auto` included.
+ *
+ * The comparison needs each skill's frontmatter policy, which is exactly why
+ * it lives here and not in `parseSkillModes`: the parser reads a project row
+ * with no skill list in hand and used to approximate the rule by dropping
+ * every `auto`, which threw away the one override that mattered. Minimality is
+ * the writer's job because the writer is the layer holding both halves.
  *
  * Pure, and at module scope so one bulk write and one row write share exactly
  * the same rule rather than two that agree today.
  */
-function ruled(current: SkillModes, slugs: readonly string[], mode: SkillMode): SkillModes {
-  const targeted = new Set(slugs);
+export function ruled(
+  current: SkillModes,
+  targets: readonly SkillReference[],
+  mode: SkillModeReadout,
+): SkillModes {
+  const targeted = new Set(targets.map((skill) => skill.name));
   const kept = Object.entries(current).filter(([key]) => !targeted.has(key));
-  return mode === "auto"
-    ? Object.fromEntries(kept)
-    : { ...Object.fromEntries(kept), ...Object.fromEntries(slugs.map((slug) => [slug, mode])) };
+  if (mode === AUTHOR_MODEL_ONLY_MODE) return Object.fromEntries(kept);
+  const departures = targets
+    .filter((skill) => !skillModeMatchesAuthor(mode, skill))
+    .map((skill) => [skill.name, mode] as const);
+  return { ...Object.fromEntries(kept), ...Object.fromEntries(departures) };
 }
 
 function SkillsTable({
@@ -179,8 +207,8 @@ function SkillsTable({
     if (saved !== null) adoptProject(saved.project);
   }
 
-  const setMode = (slug: string, mode: SkillMode): Promise<void> =>
-    write(ruled(modes, [slug], mode));
+  const setMode = (skill: SkillReference, mode: SkillModeReadout): Promise<void> =>
+    write(ruled(modes, [skill], mode));
 
   /**
    * ONE write for the whole set, not one per skill. Sixty sequential round
@@ -188,13 +216,7 @@ function SkillsTable({
    * would strand the project half-ruled with no way to say which half.
    */
   const setAllModes = (targets: readonly SkillReference[], mode: SkillMode): Promise<void> =>
-    write(
-      ruled(
-        modes,
-        targets.map((skill) => skill.name),
-        mode,
-      ),
-    );
+    write(ruled(modes, targets, mode));
 
   return (
     <DataTable
@@ -223,7 +245,29 @@ function SkillsTable({
           key: "name",
           header: "Skill",
           width: "20%",
-          cell: (skill) => <Cell strong>{skill.name}</Cell>,
+          cell: (skill) => (
+            <Cell strong>
+              <span className="inline-flex items-center gap-1">
+                {skill.name}
+                {/*
+                 * A declared policy Volli could not take at face value — two
+                 * spellings that disagree, or a flag that is not a boolean.
+                 * It belongs on the row rather than in a log because the
+                 * symptom is invisible: the skill simply behaves as though the
+                 * author had written nothing, and nothing on screen would
+                 * otherwise say why.
+                 */}
+                {skill.policyDiagnostic === null ? null : (
+                  <WarningIcon
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-label={`${skill.name}: ${skill.policyDiagnostic}`}
+                  >
+                    <title>{skill.policyDiagnostic}</title>
+                  </WarningIcon>
+                )}
+              </span>
+            </Cell>
+          ),
         },
         {
           key: "description",
@@ -267,31 +311,39 @@ function SkillsTable({
           key: "mode",
           header: "Mode",
           width: "8.5rem",
-          cell: (skill) => (
-            <Select
-              value={resolveSkillMode(modes, skill)}
-              onValueChange={(next) => void setMode(skill.name, next as SkillMode)}
-            >
-              <SelectTrigger
-                size="sm"
-                className={CONTROL_W.sm}
-                // The scope is named, because a PERSONAL skill ruled from a
-                // project page is otherwise ambiguous: off here, or off
-                // everywhere? This one writes to the project.
-                aria-label={`${skill.name} in this project`}
-                data-testid={`skill-mode-${skill.name}`}
+          cell: (skill) => {
+            const readout = resolveSkillMode(modes, skill);
+            const hasAuthorModelOnly =
+              authorSkillMode(skill.authorPolicy) === AUTHOR_MODEL_ONLY_MODE;
+            return (
+              <Select
+                value={readout}
+                onValueChange={(next) => void setMode(skill, next as SkillModeReadout)}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {offerableModes(skill).map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    {MODE_LABEL[mode]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ),
+                <SelectTrigger
+                  size="sm"
+                  className={CONTROL_W.sm}
+                  // The scope is named, because a PERSONAL skill ruled from a
+                  // project page is otherwise ambiguous: off here, or off
+                  // everywhere? This one writes to the project.
+                  aria-label={`${skill.name} in this project`}
+                  data-testid={`skill-mode-${skill.name}`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {hasAuthorModelOnly ? (
+                    <SelectItem value={AUTHOR_MODEL_ONLY_MODE}>Model only (author)</SelectItem>
+                  ) : null}
+                  {offerableModes(skill).map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {MODE_LABEL[mode]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          },
         },
       ]}
     />
@@ -339,7 +391,7 @@ function BulkMode({
         <SelectValue placeholder={label} />
       </SelectTrigger>
       <SelectContent>
-        {(["auto", "manual", "off"] as const).map((mode) => (
+        {SKILL_MODES.map((mode) => (
           <SelectItem key={mode} value={mode}>
             {MODE_LABEL[mode]}
           </SelectItem>

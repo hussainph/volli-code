@@ -709,19 +709,27 @@ function seedStep(
  * is done — chaining on exit is a lie. If you want triage later, that is a
  * second automation on a later column move.
  *
- * "Grill the ticket" fires in two columns, which is the other case worth seeding
+ * "Standards sweep" fires in two columns, which is the other case worth seeding
  * — on the board it appears in both lanes, because one file genuinely does fire
- * in both places and a board that showed it once would have to pick a lie.
+ * in both places and a board that showed it once would have to pick a lie. It
+ * also holds a DIFFERENT digit in each lane once either is reordered, which is
+ * the fact VC-132's lane view exists to author.
  *
  * "Pull product signals" is the off-board case: a schedule, not a column move,
  * whose job may be to CREATE tickets rather than to work one.
+ *
+ * The census is deliberate (VC-132's drag rig reads it): Backlog offers
+ * nothing, Todo and Done offer one, Doing two, Needs Review three. The picker
+ * has to be judged against a column with several rows to aim between, a column
+ * with one, and a column with none — a board where every column offers exactly
+ * one automation can only flatter it.
  */
 export const SEEDED_AUTOMATIONS: Automation[] = [
   {
     id: "atm-grill",
     scope: "project",
     name: "Grill the ticket",
-    trigger: { kind: "enters-column", columns: ["backlog", "todo"] },
+    trigger: { kind: "enters-column", columns: ["todo"] },
     steps: [
       seedStep(
         "grill",
@@ -805,6 +813,37 @@ export const SEEDED_AUTOMATIONS: Automation[] = [
         "pi",
         { model: "anthropic/claude-opus-5", effort: "high" },
         "/tdd\n\nRed, green, refactor. Write the failing test first and show it to me failing before you make it pass.",
+      ),
+    ],
+  },
+  // Appended AFTER the original six: `file.test.ts` reads seeds by position
+  // ([1], [2], [5]), and the census these two widen is judged by the drag rig,
+  // not by anything that cares where they sit in this array.
+  {
+    id: "atm-standards",
+    scope: "project",
+    name: "Standards sweep",
+    trigger: { kind: "enters-column", columns: ["doing", "needs_review"] },
+    steps: [
+      seedStep(
+        "standards",
+        "claude-code",
+        { model: "claude-sonnet-5", effort: "medium", approvals: "plan" },
+        "Read the change set on this branch against the repo's documented coding standards — naming, layering, the spacing ladder, the IPC shape rules.\n\nReport violations with file and line. Do not review the design; another automation has that.",
+      ),
+    ],
+  },
+  {
+    id: "atm-spec",
+    scope: "project",
+    name: "Spec check",
+    trigger: { kind: "enters-column", columns: ["needs_review"] },
+    steps: [
+      seedStep(
+        "spec",
+        "codex",
+        { model: "gpt-5.1-codex", effort: "medium", approvals: "read-only" },
+        "Compare what this branch actually does against what its ticket asked for.\n\nList what the ticket asked for that the diff does not do, and what the diff does that the ticket never asked for. Nothing else.",
       ),
     ],
   },

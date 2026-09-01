@@ -17,9 +17,11 @@ import {
   isAgentActor,
   TICKET_PRIORITY_LABELS,
   TICKET_STATUS_LABELS,
+  UNAUTHENTICATED_ACTOR,
   USER_ACTOR,
   type TicketComment,
   type TicketEvent,
+  type TicketEventActorKind,
   type TicketEventKind,
   type TicketEventPayload,
   type WorktreeFailureStage,
@@ -59,6 +61,11 @@ function belongsToSameBunch(previousAt: number, nextAt: number, now: number): bo
 export const EVENT_KIND_PRIORITY: readonly TicketEventKind[] = [
   "worktree_failed",
   "status_changed",
+  // A verdict outranks everything except a broken worktree and a board move
+  // (VC-85): it is the one line in a bunch that says where the work STANDS,
+  // and a bunch fronted by "edited the description" while a review failed
+  // inside it is the feed hiding its own headline.
+  "signaled",
   "pr_merged",
   "pr_opened",
   "created",
@@ -107,9 +114,18 @@ export function pickBunchLabel(events: readonly TicketEvent[]): TicketEvent {
  * A comment/event author's display name: the human is "You"; a first-class
  * harness shows its label (via @volli/shared's `harnessLabel`); a custom
  * `agent:<id>` harness shows its bare id; any other actor is shown verbatim.
+ *
+ * `unauthenticated` is spelled out rather than shown raw (VC-163). The column
+ * is a plain string, so a new actor kind reaches this function with nothing to
+ * fail the build — and the fallback would have printed the bare enum token as
+ * a person's name, on a row that a reader has every reason to read as a name.
+ * A caller Volli could not identify is the one author whose label has to say so
+ * on the row itself: it is the only kind that means an absence of evidence, and
+ * a default install never writes one at all.
  */
 export function commentAuthorLabel(actor: string): string {
   if (actor === USER_ACTOR) return "You";
+  if (actor === UNAUTHENTICATED_ACTOR) return "Unauthenticated caller";
   const harnessId = actorHarnessId(actor);
   if (harnessId !== null) return harnessLabel(harnessId);
   if (isAgentActor(actor)) return actor.slice(AGENT_ACTOR_PREFIX.length);
@@ -179,8 +195,20 @@ function worktreeFailureExcerpt(stderr: string): string {
  * The one-line sentence for a property-change event (`null` for `commented`,
  * which the feed renders as its comment instead). Verb-phrase style, no
  * subject — the feed row supplies the actor/timestamp chrome.
+ *
+ * `actor` is read by exactly one kind and is optional for that reason: a start
+ * is the only event whose SUBJECT is the news (VC-131). Every other line here
+ * describes a change to the Ticket, where who made it is chrome; a Session
+ * start describes a worker appearing, and "started a session" attributed to
+ * nobody is precisely the line that cannot tell a Run from a person sitting
+ * down at the keyboard. Callers that have the event pass its actor; a caller
+ * holding only a payload (a fixture, a summary) still gets the neutral
+ * sentence rather than a compile error.
  */
-export function describeEvent(payload: TicketEventPayload): string | null {
+export function describeEvent(
+  payload: TicketEventPayload,
+  actor?: TicketEventActorKind,
+): string | null {
   switch (payload.kind) {
     case "created":
       return "created the ticket";
@@ -228,7 +256,22 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return "pull request merged";
     case "commented":
       return null;
+    // The detail rides the line rather than being dropped to a second one: a
+    // verdict without its reason is the `VERDICT:` convention again, and the
+    // whole point of the typed channel is that the reason travels WITH it.
+    case "signaled":
+      return payload.detail === null
+        ? `signalled ${payload.signalKind}: ${payload.verdict}`
+        : `signalled ${payload.signalKind}: ${payload.verdict} — ${payload.detail}`;
+    // Three actors can start a Session and each gets its own reading, which is
+    // the timeline's half of "a Run's Session is distinguishable everywhere".
+    // The Automation is not NAMED here: the event's payload cannot carry which
+    // one ran, and inventing a name from a second lookup would let the timeline
+    // and the Run record disagree. The Session's own row says which — this line
+    // only has to stop reading as a person.
     case "session_started":
+      if (actor === "automation") return "an Automation started a session";
+      if (actor === "session") return "an agent started a session";
       return "started a session";
     case "attachment_added":
       return `attached "${payload.label}"`;

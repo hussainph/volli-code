@@ -66,7 +66,17 @@ const packedElectronDeps = {
   // It must stay a runtime require() of the real package — the same treatment
   // electron gets — which is why apps/desktop declares it directly and
   // electron-builder.yml whitelists its tree.
-  neverBundle: ["electron", "jsdom"],
+  // sharp loads its platform binary and libvips files relative to its package;
+  // keep it external just like jsdom, then ship/unpack that tree explicitly.
+  //
+  // @vscode/ripgrep (VC-193) is the same shape as jsdom for the same reason:
+  // its entire body is a `require.resolve("@vscode/ripgrep-<platform>-<arch>/
+  // bin/rg")` that answers relative to ITS OWN package directory. Inlined into
+  // dist-electron/main.cjs that lookup runs from dist-electron instead, where
+  // pnpm's strict layout has no such package to find — search would be broken
+  // in development and in the packaged app alike. Keep it a runtime import of
+  // the real package, then ship and unpack the tree (electron-builder.yml).
+  neverBundle: ["electron", "jsdom", "sharp", "@vscode/ripgrep"],
 };
 
 export default defineConfig(({ mode }) => ({
@@ -127,25 +137,48 @@ export default defineConfig(({ mode }) => ({
       // lifecycle bootstrap: excluded on purpose, never add ../main/**.
       include: [
         "src/stores/**",
-        "src/chat/activity.ts",
-        "src/chat/client.ts",
-        "src/chat/compaction-boundary.ts",
-        "src/chat/composer-effort.ts",
+        // The chat projection modules — and, in slice 2, the resident client
+        // and its registry — moved to @volli/session-presentation (VC-169)
+        // and took their gate entries with them; see that package's
+        // vite.config.ts. What stays here is the desktop-coupled remainder.
         "src/chat/composer-picker.ts",
-        "src/chat/interaction.ts",
-        "src/chat/markdown-source.ts",
-        "src/chat/message-projection.ts",
-        "src/chat/registry.ts",
         "src/chat/rename.ts",
-        "src/chat/session-model.ts",
-        "src/chat/transcript.ts",
-        "src/chat/wire.ts",
+        "src/chat/transport.ts",
         "src/components/attachments/attachment-model.ts",
+        // What the renderer does with the Run door's answer (VC-126/VC-234):
+        // which refusal opens Model Access, which toasts, and what success
+        // announces — pure precisely so the gate can reach the classification.
+        "src/components/automations/run-automation-model.ts",
+        // Renderer import seam for the armed-column arithmetic. The executable
+        // rules moved to @volli/shared with main's countdown ownership (VC-226)
+        // and are held at 100% by that package's gate; keeping this seam listed
+        // prevents a second renderer implementation from quietly returning.
+        "src/components/automations/armed-move-model.ts",
+        // What the Automations page SAYS (VC-127). In the gate because a Run
+        // is durable evidence: it records the RESOLVED model and reasoning so
+        // the pin/inherit decision is self-correcting, and a label that
+        // silently re-derived one from today's catalogue would erase exactly
+        // that — with nothing on screen to show it had happened.
+        "src/components/automations/automations-page-model.ts",
+        // And what the TICKET RAIL offers (VC-129): which Automation one press
+        // starts, and what a per-invocation override is allowed to name. In
+        // the gate because both are rules about records the button is not — an
+        // arming row that no longer offers its column must not press, and an
+        // override naming a model without a level it can run is a Run that
+        // fails at the Session mint with nothing on screen to explain it.
+        "src/components/automations/ticket-rail-automations-model.ts",
         // The drop/paste decision (VC-106) is a pure `.ts` beside the views
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
+        // The ⌥-drag picker's whole decision surface (VC-132): whether a column
+        // is expanded into landing targets, which row a release obeys, and what
+        // that release chose. Gated for `armed-move-model.ts`'s reason one file
+        // below — a missed branch here is a Run a person did not aim at, or an
+        // ambiguous drop region in the one gesture whose promise is that none
+        // remains.
+        "src/components/board/drag-picker-model.ts",
         "src/components/board/board-session-activity.ts",
         // What the board's header says now that it no longer says its own name
         // (VC-55): the count that qualifies itself under a filter, and the live
@@ -157,6 +190,24 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
+        // what a query matches, and whether an invocation previews or pins.
+        // Pure `.ts` beside the overlay for the gate's sake — a scope that
+        // silently answered "Main" inside a Ticket workspace would open the
+        // wrong file with no error anywhere.
+        "src/components/files/quick-open-model.ts",
+        // Search's own decisions (VC-193): the scope pair a query is sent
+        // under, and what the page says when a cap ended the search. Enrolled
+        // for the second one especially — a truncated result presented as the
+        // whole answer is a lie no view test would catch.
+        "src/components/files/search-model.ts",
+        // What the navigators' inline field is allowed to mean (VC-191). Pure
+        // `.ts` beside the panels for the gate's sake: this is the last place a
+        // typed name is judged before it becomes a path main creates, renames
+        // or moves — a branch missed here is a file made somewhere nobody
+        // looked, and the two-layer safety in main would have refused it with a
+        // sentence written for a channel rather than for a person.
+        "src/components/files/navigator-mutations.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
@@ -168,6 +219,12 @@ export default defineConfig(({ mode }) => ({
         "src/components/home/home-tabs.ts",
         // Home's rail pages and their persisted-value sanitizer (VC-55).
         "src/components/home/home-rail-model.ts",
+        // How a metered total is written down (VC-87). The whole feature's
+        // correctness risk lives in this one module: a missing tilde prints a
+        // catalogue estimate as provider spend, and a `—` collapsed to `$0.00`
+        // tells an owner their pass was free. Both are one-character mistakes
+        // that no view test would catch.
+        "src/usage/usage-format.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -186,6 +243,7 @@ export default defineConfig(({ mode }) => ({
         "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
         "src/components/sidebar/active-session-listing.ts",
+        "src/components/sidebar/session-band-filter.ts",
         "src/components/sidebar/edge-region.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/project-appearance-model.ts",
@@ -208,6 +266,10 @@ export default defineConfig(({ mode }) => ({
         // component installs the listener, but this module owns when it may
         // remap the gesture into horizontal travel.
         "src/components/ui/tab-scroll.ts",
+        // And what a DROP on the strip means (VC-189). dnd-kit owns the
+        // gesture; which tab ended up where is arithmetic, and an off-by-one
+        // in it is a tab that lands one slot from where it was let go.
+        "src/components/ui/tab-reorder.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
@@ -233,8 +295,23 @@ export default defineConfig(({ mode }) => ({
         "src/editor/document-identity.ts",
         "src/editor/document-mode.ts",
         "src/editor/document-registry.ts",
+        // Which repository Markdown may open as a document, and what a file
+        // that may not is told (VC-192). In the gate because this is the one
+        // place a rendered surface is allowed to disagree with the bytes: a
+        // branch missed here shows frontmatter as a heading, and the person
+        // editing it would have no way to know.
+        "src/editor/document-view-policy.ts",
         "src/editor/emphasis-wrap.ts",
         "src/editor/file-refs.ts",
+        // Which editor an outside-Monaco Go to Line lands in (VC-187), and
+        // whether there is one at all — a pure `.ts` beside the two editor
+        // components precisely so the gate can reach it.
+        "src/editor/go-to-line.ts",
+        // And where a search result lands (VC-193). Module state with a single
+        // pending slot: the failure it guards against — an unclaimed request
+        // resurfacing as a jump in a file opened for another reason — is
+        // invisible except in a test that can reach the slot.
+        "src/editor/reveal-line.ts",
         "src/editor/link-open.ts",
         "src/editor/markdown-projection.ts",
         "src/editor/monaco-runtime.ts",
@@ -375,7 +452,7 @@ export default defineConfig(({ mode }) => ({
       },
       build: {
         command:
-          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-packed-requires.mjs",
+          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
         cache: false,
       },
       // The UI lab (src/renderer/lab) — the renderer dev server alone, no

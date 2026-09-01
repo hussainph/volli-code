@@ -16,7 +16,13 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
-import { makeShortScratch, runVolliShim, shimPathFor, socketPathFor } from "./lib/agent-kit.mjs";
+import {
+  grantUnauthenticatedWrites,
+  makeShortScratch,
+  runVolliShim,
+  shimPathFor,
+  socketPathFor,
+} from "./lib/agent-kit.mjs";
 import {
   assertProfileIsolated,
   createRunner,
@@ -87,6 +93,17 @@ async function main() {
       "shim + socket to exist",
       async () => (await pathExists(shimPath)) && (await pathExists(socketPath)),
     );
+    // What this bench measures is the SIZE of the CLI's output, so every verb in
+    // the workflow has to actually answer. A bare shell is the unauthenticated
+    // actor since VC-163; the refusals are shorter than the answers, and a
+    // ceiling met by refusing is a ceiling that measures nothing.
+    await grantUnauthenticatedWrites(page, "bench-project", [
+      "ticket.create",
+      "ticket.update",
+      "ticket.move",
+      "ticket.comment",
+      "session.done",
+    ]);
 
     const run = (args, extraEnv) => runVolliShim(shimPath, args, extraEnv);
 

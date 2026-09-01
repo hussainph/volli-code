@@ -8,12 +8,14 @@
  * model.
  */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, KnownApi, Usage } from "@earendil-works/pi-ai";
 import type {
   AttentionObservation,
+  CostBasis,
   RuntimeFailure,
   RuntimeRecoveryRef,
   SanitizedUsage,
+  SessionUsage,
   SettledAssistantMessage,
 } from "@volli/shared";
 
@@ -130,6 +132,122 @@ function usageOf(usage: {
     ...(Number.isFinite(usage.cacheWrite) ? { cacheWriteTokens: usage.cacheWrite } : {}),
     ...(Number.isFinite(usage.cost.total) ? { costUsd: usage.cost.total } : {}),
   };
+}
+
+/**
+ * Which of Pi's API families price a request themselves, and which one is
+ * merely repeating what a backend told it.
+ *
+ * Keyed by {@link KnownApi} rather than written as a condition, so a Pi upgrade
+ * that adds an API family fails to compile here — which is the only place that
+ * failure is cheap. The alternative is a new adapter silently inheriting
+ * whichever basis the fallthrough happened to pick, and a report calling a
+ * guess a bill.
+ *
+ * All nine of the direct adapters call Pi's own `calculateCost(model, usage)`,
+ * multiplying provider token counts by the local model catalogue. That number
+ * is right about consumption and only an estimate of the invoice — most
+ * sharply for subscription-backed models, where the list-price value can be
+ * calculated for traffic the person is not marginally billed for at all.
+ * `pi-messages` is the exception: it copies the backend's own usage event
+ * through untouched.
+ */
+const COST_BASIS_BY_API: Record<KnownApi, CostBasis> = {
+  "openai-completions": "catalog-estimate",
+  "mistral-conversations": "catalog-estimate",
+  "openai-responses": "catalog-estimate",
+  "azure-openai-responses": "catalog-estimate",
+  "openai-codex-responses": "catalog-estimate",
+  "anthropic-messages": "catalog-estimate",
+  "bedrock-converse-stream": "catalog-estimate",
+  "google-generative-ai": "catalog-estimate",
+  "google-vertex": "catalog-estimate",
+  "pi-messages": "provider-reported",
+};
+
+/**
+ * How much to trust a cost from this API family. An unrecognised family — a
+ * custom `models.json` provider, or an adapter newer than this build — is
+ * `unavailable` rather than a guessed basis: a report that says it does not
+ * know is recoverable, and one that quietly assumes is not.
+ */
+export function costBasisForApi(api: string): CostBasis {
+  return COST_BASIS_BY_API[api as KnownApi] ?? "unavailable";
+}
+
+/** A measured count, or null when the provider reported nothing usable. */
+function measured(value: number): number | null {
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Which model was billed, from whichever Pi shape happens to be at hand. */
+export interface BilledModel {
+  provider: string;
+  model: string;
+  api: string;
+}
+
+/**
+ * One Pi usage block, read as a Volli measurement.
+ *
+ * The single definition of that conversion, and it is single on purpose:
+ * assistant replies and Context Compaction both produce one, and two spellings
+ * would be one rule until the first time they disagreed about a NaN.
+ *
+ * Null means the provider metered nothing at all. Pi seeds every assistant
+ * message with an all-zero usage placeholder and fills it when the provider
+ * answers, so a block still carrying the seed describes a request nobody made
+ * — recording it would pad every request count in every report. A request with
+ * real tokens and a zero price is a different thing and is kept: free is a
+ * measurement, and only an absent number is an absence.
+ *
+ * The block itself is optional because Pi's compaction result declares it so.
+ * An absent block and an empty one mean the same thing here, which is why both
+ * are answered in one place rather than guarded separately by each caller.
+ */
+export function sessionUsageFrom(
+  usage: Usage | undefined,
+  model: BilledModel,
+  cause: SessionUsage["cause"],
+): SessionUsage | null {
+  if (usage === undefined) return null;
+  const costUsd = measured(usage.cost.total);
+  const measurements = {
+    inputTokens: measured(usage.input),
+    outputTokens: measured(usage.output),
+    cacheReadTokens: measured(usage.cacheRead),
+    cacheWriteTokens: measured(usage.cacheWrite),
+    costUsd,
+  };
+  if (Object.values(measurements).every((value) => value === null || value === 0)) return null;
+  return {
+    cause,
+    providerId: model.provider,
+    modelId: model.model,
+    ...measurements,
+    // A cost that did not survive the finite check has no basis to report. The
+    // tokens beside it are still true and still worth keeping.
+    costBasis: costUsd === null ? "unavailable" : costBasisForApi(model.api),
+  };
+}
+
+/**
+ * What one model operation consumed, from any assistant message — settled,
+ * tool-use-only, or failed.
+ *
+ * Deliberately separate from {@link classifyAssistantMessage}, which answers a
+ * different question: whether the message says anything worth putting in a
+ * transcript. Most agentic spend answers no. A turn is often several tool-use
+ * replies and one short sentence, and usage read off the settled message alone
+ * would report the sentence and lose the turn. A reply that failed has usually
+ * been billed for its prompt before it failed.
+ */
+export function assistantUsage(message: AssistantMessage): SessionUsage | null {
+  return sessionUsageFrom(
+    message.usage,
+    { provider: message.provider, model: message.model, api: message.api },
+    "assistant",
+  );
 }
 
 /**

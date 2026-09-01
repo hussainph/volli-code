@@ -48,9 +48,9 @@ processes, the Agent Runtime, UI surfaces, and execution venues. It remains
 openable after an attachment, turn, or Run completes; only explicit archival
 changes its availability. A Session may belong to one Ticket or be
 project-scoped.
-Each Session has a Role and model policy. The planned authority model also
-freezes an Authority Snapshot at Session start. Reconnect, restart, and recovery
-may replace its live executor attachment without changing
+Each Session has a Role and model policy, and each of its attachments is
+governed by an Authority Snapshot frozen when that attachment opens. Reconnect,
+restart, and recovery may replace its live executor attachment without changing
 that identity. A model change is an explicit recorded action, never a silent
 fallback.
 _Avoid_: pane session, split session, harness process, terminal pane, UI tab
@@ -66,13 +66,32 @@ involvement, and is recorded in Session history exactly as a Ticket Session is.
 _Avoid_: harness mode, agent mode, plan mode, scratch session
 
 **Authority Snapshot**:
-The planned durable policy granted to one Session when it starts: which actions
-are automatic, which require a decision, which are forbidden, and the
-classifier model allowed to help within deterministic boundaries. The current
-desktop host does not supply one, so the authority gate is inactive. In the
-target model, a Settings change does not silently change a running Session's
-authority; changing authority is an explicit Session action.
+The durable policy one attachment runs under: which actions are
+automatic, which require a decision, which are forbidden, and the classifier
+model allowed to help within deterministic boundaries. Built at every
+attachment from the project's Authority Policy and recorded on the attachment,
+so a refusal can name the rule pack that produced it. A Settings change does
+not silently change a running Session's authority: the Snapshot is pinned for
+the life of the attachment, and a policy change applies at the next one. An
+attachment rebuilt after a relaunch replays its recorded Snapshot rather than
+re-resolving policy, so "the life of the attachment" outlives the process.
 _Avoid_: permission preset (when meaning live authority), auto-approve flag
+
+**Authority Policy**:
+The per-project document an Authority Snapshot is built from: the enforcement
+posture, the judgment mode, the fallback thresholds, and what each actor kind
+may do. It is app-owned state, never a file in the worktree and never
+repo-committed — a policy store the agent can write would let the thing being
+governed author its own permissions. Built-in defaults with per-project
+departures; a project list that names `$defaults` extends rather than replaces.
+_Avoid_: rule pack (that is the compiled rules the policy runs), settings
+
+**Enforcement posture**:
+What a project's Authority Policy does with the rule pack. `off` builds no
+Snapshot, so no gate is installed and the Session runs at the runtime's own
+defaults. `observe` pins and records the Snapshot and installs no gate. `enforce`
+hands the Snapshot to the runtime and the pack binds. `observe` is the default.
+_Avoid_: auto mode (that is the judgment mode), permission mode
 
 **Session Event**:
 An immutable fact in a Session's locally ordered ledger: an attachment outcome,
@@ -168,15 +187,20 @@ session (when meaning a tab)
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
 and the low-risk coordination surface: reads, plus writes that are visible,
-attributable, and reversible. It attributes its caller and cannot authenticate
-one — any process running as the user can reach it — so a verb whose misuse
-cannot be tolerated from an arbitrary such process does not belong here.
+attributable, and reversible. Any process running as the user can reach it, so
+a Session proves itself with a per-attachment token rather than by naming
+itself; a caller without one is the unauthenticated Actor and reads only. The
+token defeats an injected string and cross-session confusion, not a hostile
+same-uid process — so a verb whose misuse cannot be tolerated from an arbitrary
+such process still does not belong here.
 _Avoid_: agent surface (alone), planning CLI
 
 **Agent Tool Surface**:
-The named, schema'd tools a Session's Role bundle offers inside the Agent
-Runtime. A tool call is bound to the Session that made it and never crosses the
-agent socket, so availability itself is enforcement: what a Role was not handed
+The named, schema'd tools a Session receives inside the Agent Runtime:
+`bundle(Role) ∪ grants(session)`. A grant is durable app-owned data, scoped with
+its verb, and frozen at Session birth; it is never a hot bundle edit. A tool call
+is bound to the Session that made it and never crosses the agent socket, so
+availability itself is enforcement: what a Role or birth grant did not hand it
 cannot be called.
 _Avoid_: Pi tools (as product vocabulary)
 
@@ -195,17 +219,20 @@ _Avoid_: MCP surface (as a synonym for the Agent Tool Surface)
 
 **Verb Registry**:
 The single enumerable declaration of every agent-facing verb: its name, what it
-does, and which surfaces project it. Each surface exposes a projection of the
-registry; no surface owns verbs of its own.
+does, which surfaces project it, and the one handler binding that answers it —
+where that handler lives, and which handler it is. Each surface exposes a
+projection of the registry; no surface owns verbs of its own, and the socket's
+dispatch is a table keyed by the binding rather than a chain checked against it.
 _Avoid_: command list, tool list (when meaning the declaration rather than one
 surface's projection)
 
 **Verb Tier**:
 The governance class a verb's access modes imply, never a stored field. Read
 tier: Agent CLI, any caller. Coordination tier: Agent CLI, authenticated
-session actor, judged by per-actor policy. Control tier: named tool only,
-Role-bundled, absent from the agent socket. No verb needs a higher tier than
-the ambient authority its effect already lies within.
+session actor, judged by per-actor policy. Control tier: named tool only, held
+through a Role bundle or a scoped birth grant, absent from the agent socket. A
+verb on no agent surface at all holds no tier. No verb needs a higher tier than the ambient authority its
+effect already lies within.
 _Avoid_: dangerous tier, middle tier
 
 **Cache Prefix**:
@@ -245,6 +272,50 @@ the same class prices differently there: it is appended once and can invalidate
 no Cache Prefix ahead of it.
 _Avoid_: cache tier, TTL (the provider's retention window, not a section's
 stability), static/dynamic (says nothing about how often)
+
+**Metered operation**:
+One model call Volli made on a Session's behalf, and what the provider said it
+consumed: uncached input, output, cache-read and cache-write tokens, each
+counted apart because each is priced apart. Its `cause` says which kind of work
+bought it — an `assistant` reply, a Context Compaction, or `utility` work such
+as auto-titling. A reply that only called tools, a reply that failed after its
+prompt was billed, and every attempt in a retry storm are each one of these; a
+turn is usually several. Recorded as a `usage.recorded` Session Event, never as
+metadata on the message it happened to produce — most metered operations produce
+no message at all. An unreported number is absent, never zero: a provider that
+charged nothing and a provider that said nothing are different facts.
+_Avoid_: request (says nothing about billing), token count (only one of four),
+message usage (most spend has no message)
+
+**Cost basis**:
+What a cost number IS: `provider-reported` when a backend supplied its own
+accounting, `catalog-estimate` when the executor multiplied token counts by a
+local price table, `unavailable` when Volli cannot vouch for either. Almost all
+of Volli's costs are estimates — right about consumption, only approximate about
+the invoice, and sharply so for subscription-backed models where a list-price
+value can be calculated for traffic nobody is marginally billed for. A report
+summarising several bases says `mixed` rather than choosing one, and no local
+total may be presented as provider account spend.
+_Avoid_: bill, actual cost, spend (all claim an invoice Volli has not seen)
+
+**Usage projection**:
+The rebuildable index of metered operations, one row per operation, keyed by the
+Session Event that proves it. It is a fact index and never a stored total:
+nothing writes a running sum a later fact could contradict, and dropping the
+whole table loses nothing that the ledger cannot derive again. Ticket, Session,
+model and time rollups are query-time aggregation over it. Attribution is
+copied when the operation is recorded rather than joined at read time, so
+deleting a Ticket cannot move its old spend into unticketed Project spend.
+_Avoid_: usage table (understates that it is derived), cost cache, running total
+
+**Cached input share**:
+Cache reads as a fraction of all prompt tokens — `cacheRead / (input + cacheRead
+
+- cacheWrite)`. It is the measurement that a **Cache class** predicts, and a
+  falling share is an operational incident rather than a curiosity: cache reads
+  bill at roughly a tenth of an uncached input token and writes at more than one.
+  _Avoid_: cache hit rate (providers report token classes, not one hit-or-miss bit
+  per request)
 
 **Session Semantic Fact**:
 A product-owned fact produced at the Agent Runtime boundary and committed to the
@@ -375,6 +446,31 @@ One append-only planner-history record of something that happened to a Ticket
 planner-level consequences only; executor conversation facts live in the
 Session Event ledger. A Ticket Event may cite a Session as provenance.
 
+**Ticket Signal**:
+A typed verdict on a Ticket — a fixed kind (validate, implement, review,
+merge, human-gate, budget), a verdict (pass, fail, blocked), and optional
+prose detail — recorded as a `signaled` Ticket Event by an authenticated
+Session actor (VC-85). Signals carry state; comments carry prose. A signal
+never moves the board: Deliberate moves and Run Outcomes own movement.
+_Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
+
+**Ticket Wake**:
+One committed Ticket Event, fanned out in-process after its transaction
+commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
+stream: every mutation door feeds it, and the await tool parks on it. A wake
+is never a source of truth — the durable event it reports already is.
+_Avoid_: notification, broadcast (that is the window fan-out)
+
+**Await**:
+The control-tier wait: a Session's `ticket_await` tool call parks its turn
+until a watched Ticket signals, is commented on, or moves — then wakes with
+that one event (VC-85). Runtime-native like `ask_user`: no bash sleeps, no
+polling, and never a CLI verb, because a CLI verb must never wait. What may
+be awaited is per-actor policy data (`awaitable`); chaining the opaque `cursor`
+returned by every wake or timeout makes the watch window continuous. A cursor
+is ledger order; `occurredAt` is metadata and must never be used as one.
+_Avoid_: watch verb, `volli ticket wait`, polling loop
+
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
@@ -399,7 +495,7 @@ _Avoid_: artifact, diff (when referring to the whole body of work)
 The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
-Who a ticket event is attributed to: `user`, `session`, or `automation`. The app derives this from how the mutation arrived; callers never self-declare it.
+Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
 _Avoid_: agent (as an actor value — the app cannot know an agent typed it, only which session it came from)
 
 **Deliberate move**:
@@ -438,10 +534,26 @@ _Avoid_: default automation (collides with project defaults and the default base
 
 **Offered list**:
 The Automations a column presents during a Deliberate move, in the order their
-digit accelerators read, with a `Move only` target beside them. A column's Armed
-automation is always first. Offering is not arming: a column offers many and
-fires at most one on its own.
+digit accelerators read, with a `Move only` target beside them. Membership is
+each Automation's Trigger; the order is the column's own **rank**, arranged by
+dragging the lanes on the Automations page and stored per column, like the
+arming and on the same machine. A column's Armed automation is pinned to digit
+`1` while it is switched on here, so `1` reproduces a plain drop. Digits run
+`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place and
+simply has no digit. Offering is not arming: a column offers many and fires at
+most one on its own.
 _Avoid_: column automations, automation menu
+
+**Option-drag picker**:
+What holding ⌥ during a drag does: the hovered column grows its Offered list
+into large landing targets — every offered row plus `Move only` — and the picker,
+not the pointer, is what a release obeys, so every release under ⌥ lands on a
+named target. Landing on a named Automation opens the same delay window a plain
+drop into an armed column opens, with the same single Cancel; `Move only` moves
+the ticket and starts nothing. ⌥ is a state rather than an edge: the column is
+expanded whenever ⌥ is held over it, however the two became true. Escape ends
+the drag; ⌥-up only closes the picker.
+_Avoid_: palette, radial menu, drag menu
 
 **Instructions**:
 The prompt an Automation sends when it opens its Session: authored prose plus
@@ -469,7 +581,9 @@ _resolved_ model and reasoning produced a given Session. A Run owns exactly one
 Session and always starts a fresh one: it never wakes an existing Session, whose
 Authority Snapshot was granted while a person was present and whose context is
 stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. Runs outlive the app — one whose Session died is interrupted, never lost,
+time. A Project Session can start one too, through the `automation.run` tool its
+Role bundle holds; the Run it starts carries the automation Actor and is
+indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
 and only a human restarts it. A Session a user opens from the composer belongs
 to no Run and never moves the board.
 _Avoid_: job, task, session (a Run has a Session — it is not one)
@@ -480,9 +594,91 @@ case, authored where it is launched. It writes no file and saves no record
 beyond the Run, so there is nothing left afterwards to name, disable, or delete.
 _Avoid_: ad-hoc automation, draft automation, one-shot automation
 
+**Enabled automation**:
+An Automation somebody switched on for this machine, and therefore the only
+kind whose Trigger has an effect here. Off is the resting state: a machine that
+was never asked has not said yes, so a record fires on its own only where it
+was turned on — the same rule that lets the Skills travel through git while the
+record and its switch do not. Run by hand is universal, so an Automation that
+is off is still runnable from every surface that lists one; the switch narrows
+what _else_ starts it, exactly as the Trigger does. Like arming, it is local to
+the machine that set it and never travels with the project, which is why it is
+not a field on the record. Distinct from deleting, which removes the record;
+there is no third state between them, because for a Skill git is already the
+archive.
+_Avoid_: paused, archived, active, on (alone)
+
 **Skipped occurrence**:
-A scheduled Trigger's due time that passed without a Run, because the app was
-not open. It is recorded with its reason and never replayed — the next
+A scheduled Trigger's due time that passed without a Run — usually because the
+app was not open, otherwise because this machine never woke to it (asleep, or
+too busy), or because the Run door refused when the moment came. It is recorded
+with the reason that is actually true of it and never replayed — the next
 occurrence stands — and a person may start it by hand from the Run history
-afterwards. A skip and a silence must not look the same.
+afterwards, as one Run rather than as the backlog it stood for. A skip and a
+silence must not look the same, and neither must two different skips.
 _Avoid_: missed run, failed run
+
+**Skill**:
+A directory holding a `SKILL.md` — frontmatter naming and describing it, body
+of instructions — under the `.agents/skills/` convention, in either the
+project's own tier or the personal `~/.agents/skills/`. Its identity is the
+directory slug, not the frontmatter `name`: the slug is what a person types
+after `/`, what the picker offers, and what the delivered RESOURCE block
+carries, so the reference and the injection can never disagree about what the
+thing is called. A Skill's body reaches a model three ways, each visible in the
+prompt or the transcript — an explicit `/slug` in the composer, an attach-time
+selection, or the model's own read of a SKILL.md it found in the Skills index.
+_Avoid_: plugin, tool, extension, macro
+
+**Invocation policy**:
+What one Skill is currently allowed to do, on two independent axes: **Model
+discoverable** (its metadata rides the Skills index and the model may activate
+it unprompted) and **User invokable** (it appears in `/` completion and an
+explicit reference resolves). A Skill that is neither is **Unavailable**. The
+two are separate questions — the index is a prompt-budget question, the picker
+a discoverability question for a person — and every consumer resolves the same
+policy, so the index, the picker, explicit submit, attach-time selection and
+Settings can never disagree.
+_Avoid_: enabled, visibility, permission, scope
+
+**Skill mode**:
+A Project's complete per-Skill override: `Auto` opens model discovery and user
+invocation, `Manual` closes model discovery and keeps user invocation, and
+`Off` closes both. The author-only fourth combination — model discoverable but
+not user invokable — applies only where the Project has no override; Settings
+names it `Model only (author)` rather than mislabelling it Auto. A stored mode
+outranks both author axes and is removed when it exactly restores the file's
+declaration.
+_Avoid_: skill setting, toggle, enablement
+
+**Author invocation default**:
+What a `SKILL.md` asks for before any Project has its say. The top-level
+`disable-model-invocation` spelling is the portable manual default honoured by
+Claude Code, Cursor, Copilot and Pi. `user-invocable` is the independent
+Claude/Copilot spelling Volli also accepts; neither extension belongs to the
+Agent Skills core format. Volli's legacy
+`metadata.volli-user-invoke-only` remains an alias, the portable top-level key
+wins a conflict, and any declaration that cannot be read earns a surfaced
+diagnostic. Unparseable YAML fails closed until the file or a Project override
+fixes it.
+_Avoid_: frontmatter flag (alone), skill config
+
+**Skill activation lifecycle**:
+An explicit `/slug` is attached to one user message: the transcript keeps the
+person's reference and one typed delivery receipt containing the exact resource
+bytes and Skill root. Repeating the same resolved name in that message delivers
+it once; invoking it again in a later message creates a new receipt and delivers
+it again. Context compaction restores one exact active resource per Skill name,
+using the latest delivered bytes, so summarization cannot silently replace its
+instructions. This preservation is user-message context, not a persistent mode;
+starting a Session with a Skill is the separate attach-time route and places its
+resource in the attachment's stable system prompt. Attach-time names are also
+deduplicated.
+
+Project policy writes automatically invalidate every mounted supply. Consumers
+expose no previous-policy rows while the replacement disk read is in flight,
+and main resolves policy again after that read before index or delivery. Skill
+file adds, edits and removals are intentionally not watched: `/reload` is the
+explicit disk rescan and recovery action. A past transcript receipt never
+changes when either policy or disk content changes.
+_Avoid_: active plugin, sticky slash command

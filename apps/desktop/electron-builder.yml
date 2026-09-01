@@ -28,8 +28,10 @@ directories:
 # chunks (all @volli/* source and, with it, their third-party deps), and vite
 # compiles every renderer dep into dist/. What the packaged main process
 # require()s from node_modules at runtime is therefore a tiny closed set:
-#   @trpc/server, better-sqlite3 (-> bindings -> file-uri-to-path), node-pty
-# (node-pty via a lazy `import("node-pty")`), yaml (prompt-template
+#   @trpc/server, better-sqlite3, node-pty
+# (node-pty via a lazy `import("node-pty")`), sharp (and its platform-native
+# `@img` binary/libvips packages, loaded lazily by the read-image processor —
+# see the optionalDependencies note below), yaml (prompt-template
 # frontmatter), jsdom + its runtime tree (@asamuzakjp, @bramus, @csstools,
 # @exodus, bidi-js, css-tree, data-urls, decimal.js, entities,
 # html-encoding-sniffer, is-potential-custom-element-name, lru-cache, mdn-data,
@@ -39,7 +41,10 @@ directories:
 # xmlchars — jsdom reads files relative to its own package layout at module
 # load, so it is neverBundle'd rather than bundled; bidi-js is imported at
 # module load by @asamuzakjp/dom-selector, whose absence shipped the
-# canary.7 boot crash), and
+# canary.7 boot crash), @vscode/ripgrep (VC-193: find-across-files, kept
+# external for jsdom's reason — its whole body resolves a path relative to its
+# own package — plus its platform binary package, see the optionalDependencies
+# note below), and
 # electron-updater (VC-24) with its own runtime tree
 # (builder-util-runtime -> debug -> ms, sax; fs-extra -> graceful-fs,
 # jsonfile, universalify; js-yaml -> argparse; lazy-val; lodash.escaperegexp;
@@ -53,25 +58,78 @@ files:
   - dist/**
   - dist-electron/**
   - "!dist-electron/*.map"
-  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@trpc|argparse|better-sqlite3|bidi-js|bindings|builder-util-runtime|css-tree|data-urls|debug|decimal.js|electron-updater|entities|file-uri-to-path|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
+  - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@exodus|@img|@trpc|@vscode|argparse|better-sqlite3|bidi-js|builder-util-runtime|css-tree|data-urls|debug|decimal.js|detect-libc|electron-updater|entities|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|require-from-string|sax|saxes|semver|sharp|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
   - "!node_modules/@trpc/!(server)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
-  # SQLite source, prebuilds/ is the Node-ABI cache that cache-node-sqlite.mjs
-  # maintains for plain-Node tests. The packaged app loads only the
-  # Electron-ABI build/Release binary.
+  # SQLite source (9 MB of sqlite3.c), needed only to compile the addon.
   - "!node_modules/better-sqlite3/deps/**"
-  - "!node_modules/better-sqlite3/prebuilds/**"
+  # PREBUILDS IS NOT DEV-ONLY ANY MORE (VC-213). better-sqlite3 13 is N-API and
+  # ships one binary per platform in `prebuilds/<platform>-<arch>.node`; its
+  # `lib/binding.js` prefers that file over `build/Release`, and `binding.gyp`
+  # skips the compile entirely while it exists — so `rebuild:native` leaves
+  # `build/Release` empty and this directory holds the ONLY addon the packaged
+  # app can load. Excluding it wholesale (which is what shipped under v12,
+  # where it held a plain-Node test cache) would ship an app with no database.
+  # Drop the seven platforms this arm64-only mac target cannot run, keep ours.
+  - "!node_modules/better-sqlite3/prebuilds/!(darwin-arm64).node"
 
-# Native modules ship exactly as rebuild:native left them (Electron ABI in
-# build/Release). electron-builder must not run its own rebuild pass — that
-# would fight the repo's Node-ABI/Electron-ABI coexistence scheme.
+# Native modules ship exactly as the install left them: node-pty as
+# rebuild:native rebuilt it for the Electron ABI, better-sqlite3 as its own
+# N-API prebuild. electron-builder must not run its own rebuild pass — it would
+# fight rebuild:native for node-pty and has nothing to do for better-sqlite3.
 npmRebuild: false
 
+# sharp reaches its native binding through a two-link chain of OPTIONAL
+# dependencies: sharp -> @img/sharp-darwin-arm64 (the .node addon) ->
+# @img/sharp-libvips-darwin-arm64 (the libvips-cpp dylib the addon dlopen()s by
+# @rpath). electron-builder's pnpm collector does not follow a transitive
+# optional platform package — its own log calls this "platform-specific optional
+# dependencies not bundled — add them to your project's optionalDependencies",
+# and pnpm 10+ does not preserve them across a lockfile regeneration either.
+# Whitelisting `@img` above is necessary but NOT sufficient. BOTH links are
+# therefore listed in apps/desktop/package.json's optionalDependencies, and both
+# must be bumped in lockstep with the `sharp` pin.
+#
+# Getting this wrong is quiet, which is why it is spelled out. Miss the first
+# link and the app ships sharp's JavaScript and no binary; miss the second and it
+# ships the addon but no dylib. Either way `require("sharp")` throws "Could not
+# load the sharp module using the darwin-arm64 runtime" — and because the
+# read-image processor catches that and degrades, the only symptom is that every
+# image read in the packaged app returns "[Image omitted]" while `pnpm start`,
+# which resolves through the pnpm store, keeps working perfectly.
+#
+# They are optionalDependencies rather than plain ones so Linux CI, which
+# installs the same workspace, skips them on `os`/`cpu` instead of failing.
+# arm64-only mirrors the mac target below; an Intel or universal target needs
+# `@img/sharp-darwin-x64` + `@img/sharp-libvips-darwin-x64` beside them.
+#
+# `@vscode/ripgrep-darwin-arm64` is listed there for exactly the same reason
+# and behaves the same way (VC-193): `@vscode/ripgrep` reaches its `rg` binary
+# through an optional per-platform package, which the pnpm collector would not
+# follow on its own. Miss it and `volli:search` reports "Search is unavailable"
+# in the packaged app while `pnpm start` keeps finding matches.
+
 # Native modules cannot load from inside an asar; node-pty also exec()s its
-# sibling spawn-helper binary, so both packages stay unpacked wholesale.
+# sibling spawn-helper binary, and sharp loads native bindings plus libvips from
+# its `@img` packages, so all of those trees stay unpacked wholesale.
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/node-pty/**"
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
+  # An executable cannot be spawned from inside an asar, and `rg` is one. The
+  # whole @vscode tree is unpacked rather than just `bin/`: the resolver that
+  # names the binary is `@vscode/ripgrep`'s own ES module, and keeping the two
+  # halves on the same side of the archive is what makes the runtime import
+  # find the file it then reports.
+  #
+  # UNPACKING IS ONLY HALF OF IT. `require.resolve` still answers with the path
+  # INSIDE app.asar for a file unpacked beside it, and Electron supports only
+  # `execFile` — not `spawn` — on such a path (it fails with ENOTDIR). The
+  # `app.asar` -> `app.asar.unpacked` rewrite that finishes the job lives in
+  # `unpackedBinaryPath` in src/main/file-search.ts; a search that reports
+  # "Search is unavailable" only in the packaged app is that rewrite missing.
+  - "**/node_modules/@vscode/**"
 
 electronLanguages:
   - en

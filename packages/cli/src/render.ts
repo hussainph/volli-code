@@ -1,4 +1,10 @@
-import { SESSION_ENV_TOOLS, TICKET_STATUS_LABELS } from "@volli/shared";
+import {
+  ERROR_RECOVERY,
+  isAgentMutationPlan,
+  SESSION_ENV_TOOLS,
+  TICKET_STATUS_LABELS,
+  untrustedProseResponseLines,
+} from "@volli/shared";
 import type {
   AgentError,
   AgentErrorCode,
@@ -144,12 +150,258 @@ function renderTicketResult(data: unknown): string | null {
   return ticketLine(data["ticket"]);
 }
 
+/** The most prose one ticket-show log field may hand an agent in text mode. */
+export const TICKET_SHOW_PROSE_MAX_CHARS = 1_000;
+
+interface TicketLogProse {
+  /** The `[n]` token the citing row prints, so a hoisted block names its own row. */
+  ref: string;
+  label: string;
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Collects the prose a ticket read surface hoists into its one response-wide
+ * envelope, handing each row back the reference token that finds it again.
+ *
+ * Prose leaves the row it belongs to so the envelope can be stated once, which
+ * is what makes a poll cheap. That trade only works if the reader can still
+ * pair the two: two `validate` signals or two comments produce blocks whose
+ * labels alone would be identical.
+ */
+interface TicketLogProseCollector {
+  /** Bounds and records one block, returning the `[n]` token its row cites. */
+  cite(label: string, text: string): string;
+  blocks(): readonly TicketLogProse[];
+}
+
+function ticketLogProse(): TicketLogProseCollector {
+  const blocks: TicketLogProse[] = [];
+  return {
+    cite(label, text) {
+      // A text-mode read must not let one prose field consume the caller's context.
+      const truncated = text.length > TICKET_SHOW_PROSE_MAX_CHARS;
+      const ref = `[${blocks.length + 1}]`;
+      blocks.push({
+        ref,
+        label,
+        text: truncated ? text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) : text,
+        truncated,
+      });
+      return ref;
+    },
+    blocks: () => blocks,
+  };
+}
+
+/** The verdict columns shared by ticket.signal's receipt and ticket show's latest-signal rows. */
+function ticketSignalLine(signal: Record<string, unknown>): string {
+  return ["ticket", "kind", "verdict"]
+    .map((field) => (typeof signal[field] === "string" ? terminalSafeInline(signal[field]) : "-"))
+    .join("  ");
+}
+
+/**
+ * Event fields a text row may render bare. Everything else is another author's
+ * data below the response-wide envelope, so a newly added free-text payload
+ * cannot silently bypass the bound and framing contract.
+ */
+const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  created: ["status"],
+  status_changed: ["from", "to"],
+  priority_changed: ["from", "to"],
+  harness_changed: ["from", "to"],
+  // Label names are short tokens this same response already prints bare on the
+  // ticket line; quoting them below as prose would say two things about one
+  // vocabulary.
+  labels_changed: ["added", "removed"],
+  body_edited: [],
+  archived: [],
+  unarchived: [],
+  commented: ["commentId"],
+  signaled: ["signalKind", "verdict"],
+  worktree_changed: ["from", "to"],
+  worktree_scope_changed: ["from", "to"],
+  worktree_failed: ["stage"],
+  worktree_committed: [],
+  pr_opened: ["url"],
+  pr_merged: ["url"],
+  worktree_reclaimed: ["branch", "daysInDone"],
+  attachment_added: ["attachmentId"],
+  attachment_removed: ["attachmentId"],
+  session_started: ["sessionId"],
+};
+
+/** Ticket events cross the socket under `payload`; a top-level kind is not an event payload. */
+function ticketEventPayload(event: Record<string, unknown>): Record<string, unknown> | null {
+  return isRecord(event["payload"]) ? event["payload"] : null;
+}
+
+/** One scalar or scalar list as a scan-friendly event field, with no silent record drop. */
+function ticketEventValue(value: unknown): string {
+  let text: string;
+  if (value === null) {
+    text = "-";
+  } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    text = String(value);
+  } else if (Array.isArray(value)) {
+    text = value.length === 0 ? "[]" : value.map(ticketEventValue).join(",");
+  } else {
+    text = "<record>";
+  }
+  // Inline fields are structured facts, not prose, but malformed or future
+  // data must still not turn one event line into an unbounded response.
+  const bounded =
+    text.length > TICKET_SHOW_PROSE_MAX_CHARS
+      ? `${text.slice(0, TICKET_SHOW_PROSE_MAX_CHARS)}…`
+      : text;
+  return terminalSafeInline(bounded);
+}
+
+/** Flatten a nested structured fact instead of dropping its identities from the event row. */
+function ticketEventFacts(field: string, value: unknown): string[] {
+  if (!isRecord(value)) return [`${terminalSafeInline(field)}=${ticketEventValue(value)}`];
+  const entries = Object.entries(value);
+  if (entries.length === 0) return [`${terminalSafeInline(field)}=<empty>`];
+  return entries.flatMap(([nestedField, nestedValue]) =>
+    ticketEventFacts(`${field}.${nestedField}`, nestedValue),
+  );
+}
+
+/** A readable data representation for a field the response envelope quotes line by line. */
+function ticketEventProseText(value: unknown): string {
+  if (value === null) return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0
+      ? "(empty)"
+      : value.map((entry, index) => `${index + 1}. ${ticketEventProseText(entry)}`).join("\n");
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    return entries.length === 0
+      ? "(empty)"
+      : entries
+          .map(([field, nestedValue]) => `${field}: ${ticketEventProseText(nestedValue)}`)
+          .join("\n");
+  }
+  return "<unrenderable>";
+}
+
+/** An empty container is a fact the row can state, not prose worth a block of its own. */
+function emptyContainerFact(value: unknown): string | null {
+  if (Array.isArray(value) && value.length === 0) return "[]";
+  if (isRecord(value) && Object.keys(value).length === 0) return "<empty>";
+  return null;
+}
+
+/** One durable event as columns plus any prose it directs to the response envelope. */
+function renderTicketEvent(
+  event: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const payload = ticketEventPayload(event);
+  const metadata: string[] = [];
+  if (typeof event["actor"] === "string") {
+    metadata.push(`actor=${terminalSafeInline(event["actor"])}`);
+  }
+  if (isRecord(event["actorContext"]) && typeof event["actorContext"]["session"] === "string") {
+    metadata.push(`session=${terminalSafeInline(event["actorContext"]["session"])}`);
+  }
+  if (typeof event["createdAt"] === "number") metadata.push(`at=${event["createdAt"]}`);
+  if (payload === null) {
+    return [["event", "-", "payload=<missing>", ...metadata].join("  ")];
+  }
+
+  const kindValue = payload["kind"];
+  const kind = typeof kindValue === "string" ? kindValue : "-";
+  const inlineFields = new Set(TICKET_EVENT_INLINE_FIELDS[kind] ?? []);
+  const facts = Object.entries(payload).flatMap(([field, value]) => {
+    if (field === "kind") return [];
+    if (inlineFields.has(field)) return ticketEventFacts(field, value);
+    // An omitted signal detail carries no prose; every other present field is
+    // named on the row and handed over as bounded, quoted data below it.
+    if (
+      field === "detail" &&
+      (value === null || (typeof value === "string" && value.trim().length === 0))
+    ) {
+      return [];
+    }
+    if (value === null || value === undefined) return [`${terminalSafeInline(field)}=-`];
+    const empty = emptyContainerFact(value);
+    if (empty !== null) return [`${terminalSafeInline(field)}=${empty}`];
+    const ref = prose.cite(
+      `event ${terminalSafeInline(kind)} ${terminalSafeInline(field)}`,
+      ticketEventProseText(value),
+    );
+    return [`${terminalSafeInline(field)}=${ref}`];
+  });
+  return [["event", terminalSafeInline(kind), ...facts, ...metadata].join("  ")];
+}
+
+function renderTicketSignal(
+  signal: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const row = `signal  ${ticketSignalLine(signal)}`;
+  if (typeof signal["detail"] !== "string" || signal["detail"].trim().length === 0) return [row];
+  // The signal kind is in the label because at most one signal per kind stands
+  // on a ticket, which makes it the block's own name rather than a repetition.
+  const kind = typeof signal["kind"] === "string" ? terminalSafeInline(signal["kind"]) : "-";
+  return [`${row}  detail=${prose.cite(`signal ${kind} detail`, signal["detail"])}`];
+}
+
+function renderTicketComment(
+  comment: Record<string, unknown>,
+  prose: TicketLogProseCollector,
+): string[] {
+  const metadata = [
+    typeof comment["ticket"] === "string" ? terminalSafeInline(comment["ticket"]) : "-",
+    typeof comment["actor"] === "string" ? terminalSafeInline(comment["actor"]) : "-",
+    typeof comment["session"] === "string"
+      ? `session=${terminalSafeInline(comment["session"])}`
+      : null,
+    typeof comment["createdAt"] === "number" ? `at=${comment["createdAt"]}` : null,
+  ].filter((value): value is string => value !== null);
+  const row = `comment  ${metadata.join("  ")}`;
+  if (typeof comment["body"] !== "string") return [row];
+  return [`${row}  body=${prose.cite("ticket comment", comment["body"])}`];
+}
+
+/** Rows first, then the one envelope that carries every prose block they cite. */
+function ticketLogLines(
+  response: string,
+  rows: readonly string[],
+  prose: TicketLogProseCollector,
+): string[] {
+  const blocks = prose.blocks();
+  if (blocks.length === 0) return [...rows];
+  const truncations = blocks
+    .filter((block) => block.truncated)
+    .map(
+      (block) =>
+        `The ${block.label} in ${block.ref} was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters.`,
+    );
+  return [
+    ...rows,
+    ...truncations,
+    ...untrustedProseResponseLines({
+      response,
+      blocks: blocks.map(({ ref, label, text }) => ({ label: `${ref} ${label}`, text })),
+    }),
+  ];
+}
+
 function renderDetail(data: unknown): string | null {
   if (!isRecord(data) || !isRecord(data["ticket"])) return null;
   const ticket = data["ticket"];
   const first = ticketLine(ticket);
   if (first === null) return null;
   const lines = [first];
+  const prose = ticketLogProse();
   for (const key of ["priority", "harness", "baseBranch", "branch"] as const) {
     const value = ticket[key];
     if (typeof value === "string") lines.push(`${key}  ${terminalSafeInline(value)}`);
@@ -157,12 +409,19 @@ function renderDetail(data: unknown): string | null {
   if (typeof ticket["body"] === "string" && ticket["body"].length > 0) {
     lines.push("", ticket["body"]);
   }
-  for (const event of recordsAt(data, "events") ?? [])
-    lines.push(`event  ${JSON.stringify(event)}`);
-  for (const comment of recordsAt(data, "comments") ?? []) {
-    lines.push(`comment  ${JSON.stringify(comment)}`);
+  // Signals lead the three logs because they are the only one that says where
+  // the ticket STANDS (VC-85): at most one line per kind, and the line an
+  // orchestrator polling this ticket came to read.
+  for (const signal of recordsAt(data, "signals") ?? []) {
+    lines.push(...renderTicketSignal(signal, prose));
   }
-  return lines.join("\n");
+  for (const event of recordsAt(data, "events") ?? []) {
+    lines.push(...renderTicketEvent(event, prose));
+  }
+  for (const comment of recordsAt(data, "comments") ?? []) {
+    lines.push(...renderTicketComment(comment, prose));
+  }
+  return ticketLogLines("ticket show response", lines, prose).join("\n");
 }
 
 /** A nullable ahead/behind/unpushed count: `-` when unknown, else the number. */
@@ -264,11 +523,120 @@ function renderWorktreeDiff(data: Record<string, unknown>): string {
 }
 
 /**
+ * The worktree.sync report (VC-185): one outcome line, then only what that
+ * outcome has to say.
+ *
+ * `status` leads because it is what a reader (and a script) branches on, and
+ * because the four outcomes want four different second halves: a merge names
+ * what moved, a conflict names the paths and the way out, an up-to-date branch
+ * has nothing more to say, and an abort says only that it undid one.
+ *
+ * The conflict block carries the recovery command literally. That is the whole
+ * "decide and document the abort story" clause: a session reading its own
+ * conflict is exactly the reader who needs to know that `--abort` exists, and
+ * that nothing has cleaned up behind the failed merge.
+ */
+function renderWorktreeSync(data: Record<string, unknown>): string {
+  const branch = typeof data["branch"] === "string" ? data["branch"] : "(detached)";
+  const header = `${terminalSafeInline(data["ticket"])}  ${terminalSafeInline(data["status"])}  ${terminalSafeInline(branch)} ← ${terminalSafeInline(data["mergedRef"])}`;
+  const lines = [header];
+
+  const conflicts = Array.isArray(data["conflicts"])
+    ? data["conflicts"].filter((path): path is string => typeof path === "string")
+    : [];
+  if (conflicts.length > 0) {
+    lines.push(`  conflicts  ${conflicts.length}`);
+    for (const path of conflicts) lines.push(`    ${terminalSafeInline(path)}`);
+    lines.push(
+      `  Resolve them here and commit, or volli worktree sync ${terminalSafeInline(data["ticket"])} --abort.`,
+    );
+    return lines.join("\n");
+  }
+
+  if (data["status"] !== "merged") return lines.join("\n");
+  // A merge that landed unmeasured says so. Printing `0 commits  0 files` would
+  // be a measurement claiming nothing moved, which is the one thing it is not.
+  if (data["totalFiles"] === null || data["totalFiles"] === undefined) {
+    lines.push("  merged, but what moved could not be measured");
+    return lines.join("\n");
+  }
+  lines.push(
+    `  ${countCell(data["commits"])} commits  ${countCell(data["totalFiles"])} files  +${terminalSafeInline(data["insertions"])} -${terminalSafeInline(data["deletions"])}`,
+  );
+  const files = Array.isArray(data["files"]) ? data["files"].filter(isRecord) : [];
+  for (const file of files) lines.push(diffFileLine(file));
+  const omitted = data["omittedFiles"];
+  if (typeof omitted === "number" && omitted > 0) {
+    lines.push(`  … and ${terminalSafeInline(omitted)} more files`);
+  }
+  return lines.join("\n");
+}
+
+/** How many of one pair's shared paths print before the rest are rolled up. */
+const COLLISION_PATH_CAP = 20;
+
+/**
+ * The conflicts radar (VC-185): what was compared, then one block per pair of
+ * tickets that will collide.
+ *
+ * The header counts first because the empty case is the common one and it is
+ * only reassuring WITH a denominator — "no overlapping paths" across twelve
+ * worktrees is a clean bill, and across zero worktrees is a scan that found
+ * nothing to look at. Those are different answers and print differently.
+ *
+ * Skipped worktrees print last and always. A radar that quietly drops a
+ * worktree it could not read gives the healthy answer for a collision it never
+ * examined.
+ */
+function renderConflicts(data: Record<string, unknown>): string {
+  const scanned = typeof data["scanned"] === "number" ? data["scanned"] : 0;
+  const overlaps = recordsAt(data, "overlaps") ?? [];
+  const pairs = recordsAt(data, "pairs") ?? [];
+  const skipped = recordsAt(data, "skipped") ?? [];
+
+  const lines: string[] = [];
+  if (scanned === 0) {
+    lines.push("no active worktrees to compare");
+  } else {
+    const count =
+      overlaps.length === 0
+        ? "no overlapping paths"
+        : `${overlaps.length} overlapping ${overlaps.length === 1 ? "path" : "paths"}`;
+    lines.push(`${terminalSafeInline(scanned)} worktrees  ${count}`);
+  }
+
+  for (const pair of pairs) {
+    const tickets = Array.isArray(pair["tickets"])
+      ? pair["tickets"].filter((ticket): ticket is string => typeof ticket === "string")
+      : [];
+    const paths = Array.isArray(pair["paths"])
+      ? pair["paths"].filter((path): path is string => typeof path === "string")
+      : [];
+    lines.push(
+      `${tickets.map(terminalSafeInline).join(" ")}  ${paths.length} ${paths.length === 1 ? "path" : "paths"}`,
+    );
+    for (const path of paths.slice(0, COLLISION_PATH_CAP)) {
+      lines.push(`  ${terminalSafeInline(path)}`);
+    }
+    if (paths.length > COLLISION_PATH_CAP) {
+      lines.push(`  … and ${paths.length - COLLISION_PATH_CAP} more paths`);
+    }
+  }
+
+  for (const entry of skipped) {
+    lines.push(
+      `  skipped ${terminalSafeInline(entry["ticket"])}  ${terminalSafeInline(entry["reason"])}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
  * The model.list catalog: the app default first, then one header line per
  * provider with its copyable `provider/model` rows and reasoning levels
- * beneath it, and honest rollups for everything the default view withholds
- * (unavailable providers, and unavailable models inside a shown provider —
- * they are behind --all, not missing).
+ * beneath it, and honest rollups for unavailable providers and models inside
+ * a shown provider. The command never offers that signed-out catalog to an
+ * agent, so the rollups explain the smaller answer without advertising it.
  */
 function renderModelList(data: Record<string, unknown>): string | null {
   const providers = recordsAt(data, "providers");
@@ -288,20 +656,18 @@ function renderModelList(data: Record<string, unknown>): string | null {
       const levels = Array.isArray(model["reasoning"])
         ? model["reasoning"].filter((level): level is string => typeof level === "string")
         : [];
-      // The default view holds only available models, so the state cell earns
-      // its width exactly when it says something other than "available".
+      // The command holds only available models, so the state cell earns its
+      // width exactly when it says something other than "available".
       const state = model["state"] === "available" ? "" : `  ${terminalSafeInline(model["state"])}`;
       lines.push(
         `  ${terminalSafeInline(model["model"])}  ${levels.length > 0 ? levels.map(terminalSafeInline).join("|") : "-"}${state}`,
       );
     }
-    // Models the default view withheld inside this shown provider get the same
+    // Models the command withheld inside this shown provider get the same
     // honesty counter the provider rollup has — nothing disappears silently.
     const omittedModels = provider["omittedModels"];
     if (typeof omittedModels === "number" && omittedModels > 0) {
-      lines.push(
-        `  … and ${terminalSafeInline(omittedModels)} more models not available (use --all)`,
-      );
+      lines.push(`  … and ${terminalSafeInline(omittedModels)} more models not available`);
     }
   }
   // "not available", not "not signed in": a provider can be signed in and
@@ -309,7 +675,129 @@ function renderModelList(data: Record<string, unknown>): string | null {
   // stay honest in both cases.
   const omitted = data["omittedProviders"];
   if (typeof omitted === "number" && omitted > 0) {
-    lines.push(`… and ${terminalSafeInline(omitted)} more providers not available (use --all)`);
+    lines.push(`… and ${terminalSafeInline(omitted)} more providers not available`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * A metered total, written so it cannot be read as more than it is.
+ *
+ * The hedge is one glyph, the same notation the app's rails use, because the
+ * two surfaces quote the same money and a reader who learns it in one has
+ * learned it in the other:
+ *
+ *     $8.42     provider-reported and wholly priced — the only bare case
+ *     ~$8.42    a catalogue estimate, or a mix of bases
+ *     ~$8.42+   partial: at least this much of the window was priced
+ *     —         operations happened and none could be priced
+ *
+ * `unavailable` never prints bare and never prints `$0.00`. A basis Volli
+ * cannot vouch for is hedged like an estimate and NAMED differently below, on
+ * the basis line — calling it "estimated" would claim we know it came from a
+ * price catalogue, which is exactly what `unavailable` says we do not know.
+ */
+function usdCell(data: Record<string, unknown>): string {
+  const cost = data["costUsd"];
+  if (typeof cost !== "number" || !Number.isFinite(cost)) return "\u2014";
+  const prefix = data["costBasis"] === "provider-reported" ? "" : "~";
+  const suffix = data["costCoverage"] === "partial" ? "+" : "";
+  // `<$0.01` rather than `$0.00`: rounding a real charge to zero prints the
+  // one sentence this whole feature exists to prevent.
+  const amount =
+    cost > 0 && cost < 0.01
+      ? "<$0.01"
+      : `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${prefix}${amount}${suffix}`;
+}
+
+/** Cache reads as a share of all prompt tokens. Never called a hit rate. */
+function cachedShareCell(data: Record<string, unknown>): string {
+  const share = data["cachedInputShare"];
+  if (typeof share !== "number" || !Number.isFinite(share)) return "-";
+  const percent = share * 100;
+  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+}
+
+function usageCountCell(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * What kind of number the cost is, in words rather than in a glyph.
+ *
+ * Three answers, not two. `provider-reported` is the backend's own accounting;
+ * `catalog-estimate` (and a `mixed` total containing one) is priced locally at
+ * list; and `unavailable` is a cost from an executor whose pricing Volli cannot
+ * vouch for — real tokens, a real number, and no claim about where it came
+ * from. Printing that third case as "estimated" would assert a provenance the
+ * ledger explicitly refused to assert.
+ */
+function basisWord(basis: unknown): string {
+  if (basis === "provider-reported") return "provider-reported";
+  if (basis === "unavailable") return "unverified-basis";
+  return "estimated";
+}
+
+/**
+ * The basis line: what kind of number the cost is, and how much of the report
+ * it covers.
+ *
+ * A report with no operations at all gets neither. "unverified-basis 0 of 0
+ * operations priced" describes the basis of a number that does not exist — the
+ * summary's `unavailable` there means nothing was metered, not that something
+ * was metered unverifiably, and the two must not print the same words.
+ */
+function basisLine(data: Record<string, unknown>): string {
+  const requests = usageCountCell(data["requestCount"]);
+  if (requests === 0) return "basis  no metered model calls";
+  const priced = usageCountCell(data["pricedRequestCount"]);
+  return `basis  ${basisWord(data["costBasis"])}  ${priced} of ${requests} operations priced`;
+}
+
+/**
+ * `volli cost` — the scope, the money, the four token classes, and what the
+ * profile cannot answer.
+ *
+ * Key-value lines like `identify`, so an agent reads it with `grep` and a
+ * person reads it top to bottom. THE TOKEN LINE AND THE COST LINE ARE APART on
+ * purpose: cost is recorded per operation and never per class, so a reader who
+ * saw "78% cached" on the same line as a dollar figure could conclude that 78%
+ * of the money was cache — which is roughly backwards, cache reads billing at
+ * about a tenth of an uncached input token.
+ */
+function renderCostReport(data: Record<string, unknown>): string {
+  const since = data["since"];
+  const lines = [
+    `scope  ${terminalSafeInline(data["scope"])}`,
+    `since  ${typeof since === "number" ? terminalSafeInline(new Date(since).toISOString()) : "all time"}`,
+    `cost  ${usdCell(data)}`,
+    basisLine(data),
+    `tokens  ${usageCountCell(data["totalTokens"])}  input ${usageCountCell(data["inputTokens"])}  cache-read ${usageCountCell(data["cacheReadTokens"])}  cache-write ${usageCountCell(data["cacheWriteTokens"])}  output ${usageCountCell(data["outputTokens"])}`,
+    `cached  ${cachedShareCell(data)}`,
+    `sessions  ${usageCountCell(data["meteredSessionCount"])} metered`,
+  ];
+  // Only when it changes the reading. A complete report saying so spends a
+  // line to say nothing; a partial one that omitted it would let a floor read
+  // as a total.
+  if (data["coverage"] === "partial") {
+    const from = data["meteredFrom"];
+    lines.push(
+      `coverage  partial${
+        typeof from === "number"
+          ? ` — this profile has metered since ${terminalSafeInline(new Date(from).toISOString())}`
+          : ""
+      }`,
+    );
+  }
+  const groups = recordsAt(data, "groups") ?? [];
+  for (const group of groups) {
+    // `-` for the null key, which is a real group: spend that belongs to no
+    // Ticket. Dropping it would make the rows add up to less than the total.
+    const label = group["label"];
+    lines.push(
+      `  ${terminalSafeInline(label === null || label === undefined ? "-" : label)}  ${usdCell(group)}  ${usageCountCell(group["totalTokens"])} tokens  ${cachedShareCell(group)} cached  ${usageCountCell(group["requestCount"])} operations`,
+    );
   }
   return lines.join("\n");
 }
@@ -361,6 +849,8 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "prompt.baseline") return renderPromptBaseline(data);
   if (command === "worktree.status") return renderWorktreeStatus(data);
   if (command === "worktree.diff") return renderWorktreeDiff(data);
+  if (command === "worktree.sync") return renderWorktreeSync(data);
+  if (command === "conflicts") return renderConflicts(data);
   if (["ticket.create", "ticket.update", "ticket.move"].includes(command)) {
     return renderTicketResult(data);
   }
@@ -372,6 +862,13 @@ function renderStableLines(command: string, data: unknown): string | null {
   if (command === "ticket.comment" && isRecord(data["comment"])) {
     const ticket = data["comment"]["ticket"];
     return typeof ticket === "string" ? `${terminalSafeInline(ticket)}  comment added` : null;
+  }
+  // The receipt echoes the recorded verdict rather than saying "signal added":
+  // what was written is the whole content of the acknowledgement, and a signer
+  // reading it back is how a wrong `--kind` gets caught one line later.
+  if (command === "ticket.signal" && isRecord(data["signal"])) {
+    const signal = data["signal"];
+    return typeof signal["ticket"] === "string" ? ticketSignalLine(signal) : null;
   }
   if (command === "project.list") {
     const projects = recordsAt(data, "projects");
@@ -385,6 +882,7 @@ function renderStableLines(command: string, data: unknown): string | null {
     );
   }
   if (command === "model.list") return renderModelList(data);
+  if (command === "cost") return renderCostReport(data);
   if (command === "label.list") {
     const labels = recordsAt(data, "labels");
     return (
@@ -401,10 +899,34 @@ function renderStableLines(command: string, data: unknown): string | null {
     return (
       sessions
         ?.map((session) =>
-          [session["id"], session["kind"], session["status"], session["ticket"], session["title"]]
-            .filter((value) => value !== null && value !== undefined)
-            .map(terminalSafeInline)
-            .join("  "),
+          [
+            ...[
+              session["id"],
+              session["kind"],
+              // The liveness cell (VC-86): peek's own vocabulary — the state,
+              // with its waiting reason inline so "waiting" never hides the
+              // one thing the caller could act on.
+              typeof session["waitingOn"] === "string"
+                ? `${session["status"]} on ${session["waitingOn"]}`
+                : session["status"],
+              // Age of the newest durable fact — the signal a wedge hides in.
+              // Absent only on a legacy or malformed row, never rendered as "-".
+              typeof session["lastActivityAgeMs"] === "number"
+                ? `last ${ageText(session["lastActivityAgeMs"])}`
+                : null,
+              session["ticket"],
+            ]
+              .filter((value) => value !== null && value !== undefined)
+              .map(terminalSafeInline),
+            // Cost and tokens sit BEFORE the title and are never filtered out,
+            // because the title is free text that may contain spaces and has
+            // to stay the last cell for anything downstream to cut on. An
+            // unmetered Session prints `—  0`, which reads as unmeasured; a
+            // filtered-out cell would silently shift every column left.
+            usdCell(session),
+            terminalSafeInline(usageCountCell(session["tokens"])),
+            terminalSafeInline(session["title"]),
+          ].join("  "),
         )
         .join("\n") ?? null
     );
@@ -418,9 +940,15 @@ function renderStableLines(command: string, data: unknown): string | null {
     const output = typeof data["output"] === "string" ? data["output"] : "";
     return `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${output.length > 0 ? `\n${output}` : ""}`;
   }
+  // The dedicated event log reads the same rows `ticket show` does, at ten
+  // times the default count, so it takes the same formatter and the same
+  // bound rather than a second dialect of the same answer.
   if (command === "ticket.events") {
     const events = recordsAt(data, "events");
-    return events?.map((event) => JSON.stringify(event)).join("\n") ?? null;
+    if (events === null) return null;
+    const prose = ticketLogProse();
+    const rows = events.flatMap((event) => renderTicketEvent(event, prose));
+    return ticketLogLines("ticket events response", rows, prose).join("\n");
   }
   if (command === "identify") {
     const keys = [
@@ -580,15 +1108,67 @@ function renderCliTextSuccess(command: string, data: unknown): string {
 
 export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
   if (options.json) return `${terminalSafeJson(data)}\n`;
+  if (isAgentMutationPlan(data)) {
+    const writes =
+      data.durableWrites.length === 0
+        ? ["  - none"]
+        : data.durableWrites.map((write) => `  - ${write.summary}`);
+    const human =
+      data.humanVisibleEffects.length === 0
+        ? ["  - none"]
+        : data.humanVisibleEffects.map((effect) => `  - ${effect}`);
+    const nonEffects = data.nonEffects.map((effect) => `  - ${effect}`);
+    return terminalSafeText(
+      [
+        "Side-effect preview",
+        `Verb: ${data.verb}`,
+        `Target: ${data.target.label} (${data.target.kind})`,
+        "Durable writes:",
+        ...writes,
+        "Human-visible effects:",
+        ...human,
+        "Explicit non-effects:",
+        ...nonEffects,
+        data.caveat,
+        "",
+      ].join("\n"),
+    );
+  }
   return terminalSafeText(renderCliTextSuccess(command, data));
 }
 
-export function renderCliError(error: AgentError): string {
-  return `error[${error.code}] ${terminalSafeInline(error.message)}\n`;
+export interface RenderErrorOptions {
+  json?: boolean;
+}
+
+/** One-line plain refusal or stable structured JSON on stderr. */
+export function renderCliError(error: AgentError, options: RenderErrorOptions = {}): string {
+  // Accept a response from a pre-VC-91 app without turning a useful refusal
+  // into SOCKET_PROTOCOL. New producers always supply both structured fields.
+  const compatible = error as AgentError & { reason?: string; next?: string | null };
+  const reason = compatible.reason ?? compatible.message;
+  const next = Object.hasOwn(compatible, "next")
+    ? (compatible.next ?? null)
+    : ERROR_RECOVERY[compatible.code].next;
+  if (options.json === true) {
+    return `${terminalSafeJson({ error: { code: error.code, message: compatible.message, reason, next } })}\n`;
+  }
+  const recovery =
+    next === null
+      ? "Next: none is safe from this evidence; inspect current durable state before retrying."
+      : `Next: ${next}`;
+  return `error[${error.code}] ${terminalSafeInline(reason)} ${terminalSafeInline(recovery)}\n`;
 }
 
 export function exitCodeForError(code: AgentErrorCode): 1 | 2 | 3 {
   if (code === "APP_UNREACHABLE") return 3;
-  if (code === "USAGE" || code === "INVALID_REQUEST" || code === "UNSUPPORTED_COMMAND") return 2;
+  if (
+    code === "USAGE" ||
+    code === "INVALID_REQUEST" ||
+    code === "UNSUPPORTED_COMMAND" ||
+    code === "WRONG_DOOR"
+  ) {
+    return 2;
+  }
   return 1;
 }

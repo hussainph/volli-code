@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   createSessionHarnessState,
+  EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   getHarnessAdapter,
   type ChatSessionRecord,
   type HarnessAdapter,
@@ -23,6 +25,7 @@ import {
   sessionRailRowStampAt,
   sessionSourceLabel,
   ticketOutputStamps,
+  ticketSessionProvenance,
   type SessionRailRow,
   type TicketSessionRow,
   type TicketSessionRowsInput,
@@ -30,7 +33,12 @@ import {
 import { WORKING_WINDOW_MS, ticketScope, type SessionTab } from "../../stores/sessions";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
-  return { kind: "terminal", record: session };
+  return {
+    kind: "terminal",
+    record: session,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  };
 }
 
 /**
@@ -276,12 +284,9 @@ describe("sessionSourceLabel", () => {
     expect(sourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
   });
 
-  // A chat row has no PTY to describe, so it names its own thing — whether the
-  // structured attachment is still open — instead of borrowing terminal words.
-  it("names a chat row by its liveness, not a harness", () => {
-    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe(
-      "Chat · Live",
-    );
+  // A chat row has no PTY to describe, and attachment is not source metadata.
+  it("names a chat row without displaying its attachment state", () => {
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe("Chat");
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
   });
 });
@@ -440,7 +445,12 @@ describe("latestResumableSession", () => {
         endedAt: 20,
       }),
     );
-    const chat: SessionListingRow = { kind: "chat", record: chatRecord({ createdAt: 999 }) };
+    const chat: SessionListingRow = {
+      kind: "chat",
+      record: chatRecord({ createdAt: 999 }),
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+      provenance: PERSON_STARTED,
+    };
 
     expect(latestResumableSession([chat, older], getHarnessAdapter)).toEqual(older.record);
   });
@@ -468,20 +478,20 @@ describe("filterSessionHistory", () => {
 });
 
 describe("buildTicketChatSessionRows", () => {
-  it("names each row by its title, open only while its attachment is live", () => {
+  it("keeps attachment behavior under the non-visual isOpen name", () => {
     expect(
       buildTicketChatSessionRows([
-        chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
-        chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+        chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
+        chatRecord({ sessionId: "closed", title: "Draft the RFC", live: false }),
       ]),
     ).toEqual([
       {
-        record: chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
+        record: chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
         title: "Plan the migration",
         isOpen: true,
       },
       {
-        record: chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+        record: chatRecord({ sessionId: "closed", title: "Draft the RFC", live: false }),
         title: "Draft the RFC",
         isOpen: false,
       },
@@ -494,16 +504,14 @@ describe("buildTicketChatSessionRows", () => {
 });
 
 describe("filterChatSessionHistory", () => {
-  // [0] is live, [1] is ended — the source line each matches on differs.
   const chatRows = buildTicketChatSessionRows([
-    chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
-    chatRecord({ sessionId: "ended", title: "Review auth flow", live: false }),
+    chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
+    chatRecord({ sessionId: "closed", title: "Review auth flow", live: false }),
   ]);
 
   it("matches titles and source metadata case-insensitively", () => {
     expect(filterChatSessionHistory(chatRows, "AUTH")).toEqual([chatRows[1]]);
-    // "Chat · Live" is the live row's source line, and nothing else's.
-    expect(filterChatSessionHistory(chatRows, "live")).toEqual([chatRows[0]]);
+    expect(filterChatSessionHistory(chatRows, "live")).toEqual([]);
     expect(filterChatSessionHistory(chatRows, "chat")).toEqual(chatRows);
   });
 
@@ -543,7 +551,12 @@ describe("ticketOutputStamps", () => {
         lastOutputAt: { s1: 10, s3: 30, "another-ticket": 40 },
         rows: [
           terminalRow(record({ id: "s1" })),
-          { kind: "chat", record: chatRecord({ sessionId: "s2" }) },
+          {
+            kind: "chat",
+            record: chatRecord({ sessionId: "s2" }),
+            usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: PERSON_STARTED,
+          },
           terminalRow(record({ id: "s3" })),
         ],
       }),
@@ -562,6 +575,46 @@ describe("ticketOutputStamps", () => {
 
     expect(stamps).toEqual({});
     expect(Object.keys(stamps)).toEqual([]);
+  });
+});
+
+describe("ticketSessionProvenance", () => {
+  const run = { kind: "automation", automationName: "Nightly sweep" } as const;
+  const child = {
+    kind: "session",
+    parentSessionId: "session-parent",
+    parentTitle: "Orchestrator",
+  } as const;
+
+  it("keys both kinds by the id the rail's rows answer to", () => {
+    expect(
+      ticketSessionProvenance([
+        { ...terminalRow(record({ id: "s1" })), provenance: run },
+        {
+          kind: "chat",
+          record: chatRecord({ sessionId: "c1" }),
+          usage: EMPTY_SESSION_USAGE_SUMMARY,
+          provenance: child,
+        },
+      ]),
+    ).toEqual({ s1: run, c1: child });
+  });
+
+  // The resting case is stored as its own absence, which is what makes a ticket
+  // nobody automated cost this read nothing at all (VC-131).
+  it("gives a Session a person started no entry", () => {
+    const provenance = ticketSessionProvenance([
+      terminalRow(record({ id: "s1" })),
+      {
+        kind: "chat",
+        record: chatRecord({ sessionId: "c1" }),
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      },
+    ]);
+
+    expect(provenance).toEqual({});
+    expect(Object.keys(provenance)).toEqual([]);
   });
 });
 

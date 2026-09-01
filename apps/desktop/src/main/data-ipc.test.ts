@@ -4,6 +4,7 @@ import type {
   AppStateSetResult,
   BootstrapResult,
   DatabaseResult,
+  ProjectAuthorityPolicyResult,
   ProjectCreateResult,
   ProjectMutationResult,
   Result,
@@ -108,13 +109,15 @@ import { createDesktopSessionEngine } from "./session-control";
 import { insertSession } from "./session-control/test-support";
 import { openTestDb, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
+import { getProjectById } from "./db/projects-repo";
 import { resetOrphanSweepForTest } from "./orphan-sweep";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
-import { MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
+import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
+import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES, PERSON_STARTED } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
@@ -234,6 +237,80 @@ describe("volli:database", () => {
     expect(showSaveDialog).toHaveBeenCalledWith(
       expect.objectContaining({ filters: [{ name: "JSON", extensions: ["json"] }] }),
     );
+  });
+});
+
+/**
+ * The door the product was missing (VC-172). The handler is where a policy
+ * document is JUDGED — `resolveAuthorityPolicy` degrades a bad one on the attach
+ * path, and that bargain is only honest if something refuses it earlier, where a
+ * person is present to be told.
+ */
+describe("volli:project-authority-policy", () => {
+  it("records a departure and answers with the project carrying it", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcement: "enforce" },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The DEPARTURES ride back, not the resolved document — the pane needs to
+    // tell a chosen value from an inherited one.
+    expect(result.project.authorityPolicy).toEqual({ enforcement: "enforce" });
+  });
+
+  it("REFUSES an unknown field, naming it, rather than storing a document that governs nothing", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcment: "enforce" },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual(["Unknown field: enforcment."]);
+    // And nothing was written: a refused write leaves the project inheriting.
+    expect(getProjectById(ctx.db, id)?.authorityPolicy).toBeNull();
+  });
+
+  it("reports every reason at once, so one fix does not surface the next", () => {
+    const id = createProject();
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: { enforcement: "sideways", fallback: { sessionDenials: 0 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toHaveLength(2);
+  });
+
+  it("clears every departure on null", () => {
+    const id = createProject();
+    invoke("volli:project-authority-policy", { id, override: { enforcement: "off" } });
+
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id,
+      override: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.project.authorityPolicy).toBeNull();
+  });
+
+  it("refuses a project it does not know", () => {
+    const result = invoke<ProjectAuthorityPolicyResult>("volli:project-authority-policy", {
+      id: "missing",
+      override: {},
+    });
+
+    expect(result).toEqual({ ok: false, error: "Unknown project" });
   });
 });
 
@@ -939,6 +1016,55 @@ describe("archived-ticket guards — ticket-update/set-priority/set-labels/move"
   });
 });
 
+describe("volli:ticket-move — armed-column arrival", () => {
+  it("reports one committed renderer arrival to main, including its Option-drag choice", () => {
+    const arrivals: unknown[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { onDeliberateMove: (notice) => arrivals.push(notice) },
+    );
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "automation-2" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(arrivals).toEqual([
+      {
+        projectId,
+        ticketId: ticket.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+    ]);
+  });
+
+  it("does not report a same-column reorder as an arrival", () => {
+    const onDeliberateMove = vi.fn();
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { onDeliberateMove });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "backlog",
+      toIndex: 0,
+    });
+
+    expect(onDeliberateMove).not.toHaveBeenCalled();
+  });
+});
+
 describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
   /** Re-registers the data handlers with a stubbed interrupt seam returning `ids`. */
   function withInterrupt(ids: string[]) {
@@ -1215,11 +1341,82 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         lastActivityAt: 500,
         bornTicketless: false,
       },
+      // A Session that has run no model reads as unmeasured, not as free
+      // (VC-87). It rides on the ROW rather than inside the record, so both
+      // arms of the listing carry the same fact in the same place.
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
+      // And who started it (VC-131), in the same place for the same reason. A
+      // Session nobody automated is the resting case and says so.
+      provenance: PERSON_STARTED,
     });
     expect(
       projectSessions.ok &&
         projectSessions.sessions.find((row) => rowId(row) === "terminal-session"),
-    ).toMatchObject({ kind: "terminal" });
+    ).toMatchObject({ kind: "terminal", usage: EMPTY_SESSION_USAGE_SUMMARY });
+  });
+
+  it("projects live from this process's executor bindings, not durable attachment openness", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    const created = await sessionEngine.createSession({
+      commandId: "structured-create",
+      projectId,
+      ticketId: ticket.id,
+      title: "Reattachable Run",
+      provenance,
+    });
+    const start = await sessionEngine.submit({
+      commandId: "structured-start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "structured-opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 501,
+      provenance,
+      attachment: {
+        id: "attachment-1",
+        sessionId: created.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+
+    let openBindings: { attachmentId: string }[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, listOpenNativeBindings: () => openBindings },
+    );
+
+    const relaunched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      relaunched.ok && relaunched.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ adapterId: "pi", live: false, activity: "idle" });
+    expect(
+      (await sessionEngine.getSession({ sessionId: created.session.id }))?.liveExecutor,
+    ).toMatchObject({
+      id: "attachment-1",
+      status: "open",
+    });
+
+    openBindings = [{ attachmentId: "attachment-1" }];
+    const rebound = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      rebound.ok && rebound.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ live: true, activity: "idle" });
   });
 
   it("rejects invalid input", () => {
@@ -2258,5 +2455,87 @@ describe("attachments (VC-50)", () => {
       ok: false,
       error: "Attachments belong to a ticket or a session",
     });
+  });
+});
+
+/**
+ * The renderer door feeds the ticket wake bus (VC-85 slice C).
+ *
+ * A waiter cares that a ticket moved, not who moved it — a person dragging a
+ * card is as legitimate a wake as an agent signalling one. Without this door
+ * feeding the bus, an orchestrator parked on a ticket would sleep through
+ * every change a human made.
+ */
+describe("the ticket wake bus (VC-85)", () => {
+  const unsubscribes: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const off of unsubscribes.splice(0)) off();
+  });
+
+  function watch(): TicketWake[] {
+    const seen: TicketWake[] = [];
+    unsubscribes.push(subscribeTicketWake((wake) => seen.push(wake)));
+    return seen;
+  }
+
+  it("wakes on a create, a move, and a comment made from the app", () => {
+    const projectId = createProject();
+    const seen = watch();
+
+    const created = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      title: "Ship it",
+      status: "todo",
+      priority: "medium",
+      labels: [],
+    });
+    if (!created.ok) throw new Error(created.error);
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: created.ticket.id,
+      toStatus: "doing",
+      toIndex: 0,
+    });
+    invoke<TicketCommentResult>("volli:comment-create", {
+      ticketId: created.ticket.id,
+      body: "On it",
+    });
+
+    expect(seen.map((wake) => wake.event.payload.kind)).toEqual([
+      "created",
+      "status_changed",
+      "commented",
+    ]);
+    expect(seen.every((wake) => wake.projectId === projectId)).toBe(true);
+  });
+
+  it("stays silent for a same-column move, which writes no fact to wake on", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const seen = watch();
+
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: ticket.status,
+      toIndex: 0,
+    });
+
+    expect(seen).toEqual([]);
+  });
+
+  it("leaves the renderer's own fan-out exactly where it was", () => {
+    // The bus is additive (VC-85): `volli:data-changed` is what re-hydrates a
+    // window, and nothing here was rewired through the wake path.
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const seen = watch();
+    dataChangedSends.length = 0;
+
+    invoke<TicketResult>("volli:ticket-set-priority", { ticketId: ticket.id, priority: "high" });
+
+    expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["priority_changed"]);
+    expect(dataChangedSends).toEqual([]);
   });
 });

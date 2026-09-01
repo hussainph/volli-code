@@ -1,18 +1,29 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { bareHelpText, renderHelp } from "./help";
+import { bareHelpText, renderHelp, resolveHelp } from "./help";
 import { parseCliArgs } from "./parser";
 
 /**
  * The reference oracle: every byte `volli help` and the parser's teaching
  * errors can print, captured in one file.
  *
- * VC-161 re-seats the CLI reference onto the Verb Registry in `@volli/shared`,
- * and the one thing that must survive that move untouched is the text. So this
- * file was written and captured BEFORE the rewiring, against the hand-authored
- * `COMMAND_HELP` table, and the rewired reference has to reproduce it byte for
- * byte. The installed `volli` on PATH is not the oracle — it is version 0.1.0
- * and already predates this tree (VC-157 changed `identify` and `doctor`).
+ * VC-161 re-seated the CLI reference onto the Verb Registry in `@volli/shared`,
+ * and the one thing that had to survive that move untouched was the text. So
+ * this file was written and captured BEFORE the rewiring, against the
+ * hand-authored `COMMAND_HELP` table, and the rewired reference reproduced it
+ * byte for byte. The installed `volli` on PATH is not the oracle — it is
+ * version 0.1.0 and already predates this tree (VC-157 changed `identify` and
+ * `doctor`).
+ *
+ * **VC-163 is the first ticket that legitimately moved these bytes**, and the
+ * diff is the ticket's own acceptance rendered as text. Nothing in `help.ts`
+ * changed to produce it: two registry fields moved, and every line below
+ * followed, which is what "each surface is a projection of one table" was for.
+ * `ticket archive` left the executable list for a new App-only section;
+ * `session start` moved under the tool-only heading; both detail pages now
+ * name their real door and their derived tier; and typing either at a shell
+ * answers WRONG_DOOR with the surface that does hold it, instead of a usage
+ * error about options the caller was never going to get to use.
  *
  * The command list, group words and topics below are LITERAL on purpose. If
  * they were derived from whatever table currently backs help, a verb silently
@@ -21,7 +32,19 @@ import { parseCliArgs } from "./parser";
  * order itself, and a change to either has to be made here in the open.
  */
 
-/** The 27 listed commands, in the order the compact reference prints them. */
+/**
+ * The 31 listed commands, in the order the compact reference prints them.
+ *
+ * `ticket archive` and `session start` are still HERE after VC-163, and that is
+ * the point rather than an oversight: help must go on naming a verb the shell
+ * cannot run, or a wrong door becomes indistinguishable from no door. What
+ * changed is where each one prints and what its detail says — not whether help
+ * knows it exists.
+ *
+ * VC-185 added two: `conflicts` beside the other worktree reads, and `worktree
+ * sync` at the end of the writes. Both are new bytes in the oracle, which is
+ * the surface growing in the open rather than a projection quietly drifting.
+ */
 const REFERENCE_COMMANDS = [
   "identify",
   "board",
@@ -31,15 +54,21 @@ const REFERENCE_COMMANDS = [
   "ticket brief",
   "worktree status",
   "worktree diff",
+  "conflicts",
   "project list",
   "label list",
   "model list",
+  "cost",
   "ticket create",
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
+  "worktree sync",
   "session start",
+  "session stop",
+  "session send",
   "session list",
   "session peek",
   "session done",
@@ -60,13 +89,17 @@ const TAKES_ID: ReadonlySet<string> = new Set([
   "ticket update",
   "ticket move",
   "ticket comment",
+  "ticket signal",
   "ticket archive",
   "session start",
+  "session stop",
+  "session send",
   "session peek",
   "session link",
   "session harness",
   "worktree status",
   "worktree diff",
+  "worktree sync",
 ]);
 
 /** The command-group words that answer with a subcommand list. */
@@ -81,8 +114,15 @@ const GROUP_WORDS = [
   "prompt",
 ] as const;
 
-/** The four reference topics (not commands). */
-const TOPICS = ["exit-codes", "addressing", "json", "orchestration"] as const;
+/** The local reference topics (not commands). */
+const TOPICS = [
+  "concepts",
+  "changes",
+  "exit-codes",
+  "addressing",
+  "json",
+  "orchestration",
+] as const;
 
 /**
  * Paths that are deliberately NOT reference entries. `session harness` and
@@ -99,9 +139,22 @@ const OFF_REFERENCE: readonly (readonly string[])[] = [
 ];
 
 const RULE = "=".repeat(76);
+const REFERENCE_IDENTITY = {
+  cliVersion: "0.0.1",
+  releaseVersion: "0.1.0",
+  sourceRevision: "8e8a17c0+VC-91",
+  buildId: "reference-fixture",
+} as const;
 
 function section(title: string, body: string): string {
   return `${RULE}\n${title}\n${RULE}\n${body}`;
+}
+
+function helpOutcome(path: readonly string[]): string {
+  const resolved = resolveHelp(path, undefined, { identity: REFERENCE_IDENTITY });
+  return resolved.ok
+    ? resolved.text
+    : `${resolved.error.code} ${resolved.error.reason} Next: ${resolved.error.next ?? "null"}\n`;
 }
 
 /** How the parser answered — the message for a usage error, the shape for a parse. */
@@ -121,16 +174,16 @@ function parseOutcome(argv: readonly string[]): string {
 function referenceDocument(): string {
   const parts: string[] = [section("volli help", bareHelpText())];
   for (const name of REFERENCE_COMMANDS) {
-    parts.push(section(`volli help ${name}`, renderHelp(name.split(" "))));
+    parts.push(section(`volli help ${name}`, helpOutcome(name.split(" "))));
   }
   for (const word of GROUP_WORDS) {
-    parts.push(section(`volli help ${word}`, renderHelp([word])));
+    parts.push(section(`volli help ${word}`, helpOutcome([word])));
   }
   for (const topic of TOPICS) {
-    parts.push(section(`volli help ${topic}`, renderHelp([topic])));
+    parts.push(section(`volli help ${topic}`, helpOutcome([topic])));
   }
   for (const path of OFF_REFERENCE) {
-    parts.push(section(`volli help ${path.join(" ")}`, renderHelp(path)));
+    parts.push(section(`volli help ${path.join(" ")}`, helpOutcome(path)));
   }
   const probes: string[] = [section("volli frobnicate", parseOutcome(["frobnicate"]))];
   for (const name of [...REFERENCE_COMMANDS, "session harness"]) {

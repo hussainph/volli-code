@@ -1,4 +1,14 @@
-import { displayTicketId, type ChatSessionRecord, type Project, type Ticket } from "@volli/shared";
+import {
+  automationOwnership,
+  displayTicketId,
+  sessionProvenanceOf,
+  type Automation,
+  type AutomationOwnership,
+  type ChatSessionRecord,
+  type Project,
+  type SessionProvenance,
+  type Ticket,
+} from "@volli/shared";
 
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
 
@@ -22,6 +32,14 @@ export interface CommandPaletteSessionItem {
   scope: SessionScope;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
+  /**
+   * Who started this Session (VC-131). The palette is the app's one GLOBAL
+   * Session listing — every project's, in one list — so it is the surface where
+   * a Run's Session is most easily mistaken for one a person opened, and
+   * "everywhere a Session appears" includes it. Resolved here rather than at
+   * the row so the two kinds below cannot answer differently.
+   */
+  provenance: SessionProvenance;
 }
 
 export interface CommandPaletteItems {
@@ -41,6 +59,13 @@ export function buildCommandPaletteItems(
   selectedProjectId: string | null,
   chatSessions: readonly ChatSessionRecord[] = [],
   residentChatTitles: Readonly<Record<string, string>> = {},
+  /**
+   * Who started each Session, keyed by Session id and **sparse** — a miss is
+   * the resting case. Defaulted so a caller that has not read it yet marks
+   * nothing rather than guessing, which is the same failure direction every
+   * other surface takes.
+   */
+  provenance: Readonly<Record<string, SessionProvenance>> = {},
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -92,6 +117,7 @@ export function buildCommandPaletteItems(
             ? null
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
+        provenance: sessionProvenanceOf(provenance, tab.sessionId),
       });
     }
   }
@@ -118,6 +144,7 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      provenance: sessionProvenanceOf(provenance, record.sessionId),
     });
   }
 
@@ -128,4 +155,98 @@ export function buildCommandPaletteItems(
   );
 
   return { tickets, sessions };
+}
+
+/* ------------------------------------------------------------ automations */
+
+/** One "Run ⟨name⟩ on ⟨ticket⟩" row — run by hand from the palette (VC-126). */
+export interface CommandPaletteAutomationRunItem {
+  kind: "automation-run";
+  automationId: string;
+  name: string;
+  ownership: AutomationOwnership;
+  ticketId: string;
+  ticketDisplayId: string;
+}
+
+/**
+ * The Ticket a palette-run would target: the workspace's open Ticket,
+ * resolved against the live board so a stale remembered id offers nothing.
+ */
+export interface CommandPaletteRunContext {
+  ticketId: string;
+  displayId: string;
+}
+
+/**
+ * The run rows the palette offers — every Automation the selected project
+ * lists (its own plus the global shelf, in main's own order), each targeting
+ * the open Ticket. No open Ticket means no rows rather than rows that would
+ * have to invent a target: the palette is "run by name", and the richer
+ * choose-a-ticket surfaces are later slices (VC-127, VC-129).
+ */
+export function buildAutomationRunItems(
+  automations: readonly Automation[],
+  context: CommandPaletteRunContext | null,
+): CommandPaletteAutomationRunItem[] {
+  if (context === null) return [];
+  return automations.map((automation) => ({
+    kind: "automation-run",
+    automationId: automation.id,
+    name: automation.name,
+    ownership: automationOwnership(automation),
+    ticketId: context.ticketId,
+    ticketDisplayId: context.displayId,
+  }));
+}
+
+/* ---------------------------------------------------------------- editor */
+
+/**
+ * One editor command the palette offers — today exactly one, Go to Line
+ * (plan §4.1). Monaco has always had the action and a ⌃G binding; what it had
+ * no way of saying is that the command exists at all. This row is that saying.
+ */
+export interface CommandPaletteEditorItem {
+  kind: "editor-command";
+  id: "go-to-line";
+  title: string;
+  hint: string;
+}
+
+/**
+ * The editor rows, given whether an editor is actually on screen to answer
+ * them. Nothing open means no rows rather than a row that would open a line
+ * prompt over no document — the same stance `buildAutomationRunItems` takes
+ * about a run with no Ticket to run on.
+ */
+export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEditorItem[] {
+  if (!editorOpen) return [];
+  return [
+    {
+      kind: "editor-command",
+      id: "go-to-line",
+      title: "Go to Line…",
+      hint: "In the editor you were last in",
+    },
+  ];
+}
+
+/**
+ * The open Ticket as a run target, or null. Resolved against the project's
+ * live ticket list — `openTicketId` is remembered workspace state and may
+ * name a Ticket that has since been deleted or belongs to another project.
+ */
+export function paletteRunContext(
+  openTicketId: string | null,
+  selectedProject: Project | null,
+  tickets: readonly Ticket[],
+): CommandPaletteRunContext | null {
+  if (openTicketId === null || selectedProject === null) return null;
+  const ticket = tickets.find((candidate) => candidate.id === openTicketId);
+  if (ticket === undefined || ticket.projectId !== selectedProject.id) return null;
+  return {
+    ticketId: ticket.id,
+    displayId: displayTicketId(selectedProject.ticketPrefix, ticket.ticketNumber),
+  };
 }

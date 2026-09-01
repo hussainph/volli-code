@@ -170,6 +170,39 @@ export function listTicketsByProject(db: Database.Database, projectId: string): 
   return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
 }
 
+/** The identity fields a multi-ticket wait needs — no body, labels, or board fold. */
+export interface LiveTicketRef {
+  readonly id: string;
+  readonly ticketNumber: number;
+}
+
+/**
+ * Resolve several display-number candidates in one indexed project query.
+ *
+ * `ticket.await` can watch a fleet, and resolving every id through
+ * {@link listTicketsByProject} would reload the whole board and all labels once
+ * per target. The `(project_id, ticket_number)` UNIQUE index answers exactly
+ * this question; `json_each` keeps one prepared statement regardless of fleet
+ * size.
+ */
+export function listLiveTicketRefsByNumber(
+  db: Database.Database,
+  projectId: string,
+  ticketNumbers: readonly number[],
+): LiveTicketRef[] {
+  if (ticketNumbers.length === 0) return [];
+  const rows = prepared<[string, string], { id: string; ticket_number: number }>(
+    db,
+    `SELECT id, ticket_number
+       FROM tickets
+      WHERE project_id = ?
+        AND archived_at IS NULL
+        AND ticket_number IN (SELECT value FROM json_each(?))
+      ORDER BY ticket_number ASC`,
+  ).all(projectId, JSON.stringify(ticketNumbers));
+  return rows.map((row) => ({ id: row.id, ticketNumber: row.ticket_number }));
+}
+
 /**
  * Every LIVE ticket across every project, labels attached — used only to build
  * the boot bootstrap payload. Fetches labels for every project in a single

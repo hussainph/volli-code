@@ -23,14 +23,15 @@ import type {
 import type { UIMessage } from "ai";
 import { useStore, type StoreApi } from "zustand";
 
-import { getChatClient } from "@renderer/chat/registry";
 import {
+  getChatClient,
   isDeliverable,
   type ChatMessageDelivery,
+  type LiveTranscriptCompaction,
   type MessageDelivery,
-} from "@renderer/chat/client";
-import type { QueuedMessage } from "@renderer/chat/session-model";
-import type { LiveTranscriptCompaction, TranscriptCompaction } from "@renderer/chat/transcript";
+  type QueuedMessage,
+  type TranscriptCompaction,
+} from "@volli/session-presentation";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
 const NO_MESSAGES: readonly UIMessage[] = [];

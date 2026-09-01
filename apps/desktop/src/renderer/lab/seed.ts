@@ -13,7 +13,7 @@
  * the thing the lab is supposed to be measuring — and none of it is what a
  * design question is ever about.
  */
-import type { SessionListingRow } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, PERSON_STARTED, type SessionListingRow } from "@volli/shared";
 import type {
   AppStateSetResult,
   HarnessPendingResult,
@@ -54,8 +54,24 @@ let retentionTtlDays = 14;
  * structured-only Session disappear.
  */
 const sessionRows: SessionListingRow[] = [
-  ...sessions.map((record): SessionListingRow => ({ kind: "terminal", record })),
-  ...chatSessions.map((record): SessionListingRow => ({ kind: "chat", record })),
+  // Unmetered, not free: the lab has no ledger behind it, and an invented
+  // dollar figure in a fixture is how a screenshot comes to promise a number
+  // the app cannot produce.
+  ...sessions.map((record): SessionListingRow => ({
+    kind: "terminal",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  })),
+  ...chatSessions.map((record): SessionListingRow => ({
+    kind: "chat",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    // A terminal companion is always something a person opened, and the lab's
+    // chats are too. The Run-started marks are drawn against the sidebar
+    // scratch's own fixtures, where the bolt is the thing under the lamp.
+    provenance: PERSON_STARTED,
+  })),
 ];
 
 function retentionState(ticketId: string): TicketRetentionState {
@@ -65,7 +81,27 @@ function retentionState(ticketId: string): TicketRetentionState {
     prUrl: archiveReady ? "https://github.com/demo/voltaic/pull/482" : null,
     prState: archiveReady ? "merged" : null,
     hasConflicts: false,
-    failingChecks: [],
+    // A real rollup on the one ticket that has a PR, so an app-shell run shows
+    // the card's CI row (VC-182) rather than the shape that hides it. It is
+    // only reachable once `tkt-11` has a worktree — the repository card gates
+    // its retention read on one — so the row's own states are judged in the
+    // `pr-checks` scratch, which drives the component directly.
+    checks: archiveReady
+      ? [
+          {
+            name: "Check + Test",
+            workflow: "CI",
+            state: "passing",
+            url: "https://github.com/demo/voltaic/actions/runs/1",
+          },
+          {
+            name: "Desktop smoke (manual)",
+            workflow: "CI",
+            state: "skipped",
+            url: "https://github.com/demo/voltaic/actions/runs/2",
+          },
+        ]
+      : [],
     archiveReady,
     reason: archiveReady ? "pr-merged" : null,
     keep: false,

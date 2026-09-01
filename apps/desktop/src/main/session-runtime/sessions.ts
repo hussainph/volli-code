@@ -25,10 +25,25 @@ import type {
   ModelSelection,
   PromptResource,
   ReasoningLevel,
+  RuntimeSessionRole,
   SessionStartResult,
   SessionToolId,
   TicketEventActor,
 } from "@volli/shared";
+
+import type { SessionGrantPorts, TicketSessionDelegation } from "./delegation-policy";
+
+/**
+ * The Session Engine command id one start operation writes its `create` under.
+ *
+ * Exported because two callers need the same answer and neither owns it: `mint`
+ * writes the command, and the tool door hands the id to the delegation ledger
+ * as the durable evidence that a claimed fan-out slot really opened a Session.
+ * Spelling it twice is how those two quietly stop agreeing.
+ */
+export function sessionCreateCommandId(operationId: string): string {
+  return `${operationId}:create`;
+}
 
 /**
  * The one adapter id the structured product attaches under.
@@ -114,7 +129,26 @@ export interface SessionSkillPorts {
  * array.
  */
 export interface SessionToolSurfacePorts {
-  resolve(): readonly SessionToolId[];
+  /**
+   * The whole surface for one Role: `capability tools ∪ bundle(Role) ∪
+   * grants(session)` (VC-162).
+   *
+   * Takes the Role because the Role decides the base verb half — a Project
+   * Session carries the agent-control family and a Ticket Role carries none.
+   * The separate `grants` argument is the durable birth exception, which keeps
+   * availability-as-enforcement without turning it into a bundle edit. Before
+   * this argument existed every Session resolved the same list, and "Role
+   * determines the tool bundle" was true only in `CONTEXT.md`.
+   *
+   * {@link RuntimeSessionRole} and NOT {@link SessionDefaultModelRole}, though
+   * the two spell the same pair today. They answer different questions: one is
+   * which rung of the default-model ladder to read, the other is which Role's
+   * bundle to resolve, and borrowing the model policy's vocabulary for a tool
+   * decision is how the next Role gets added to one and not the other. This is
+   * the runtime's Role vocabulary — the same one `RuntimeToolBundle` and the
+   * first-message block are written in. VC-9 widens it here, in the open.
+   */
+  resolve(role: RuntimeSessionRole, grants: readonly string[]): readonly SessionToolId[];
   record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
@@ -149,6 +183,12 @@ export interface SessionStartInput {
    */
   actor?: TicketEventActor;
   modelOverride?: SessionModelOverride;
+  /**
+   * Trusted in-process ancestry from a Ticket caller's claimed `session.start`.
+   * The renderer's create schema cannot name it; only the bound tool door may
+   * pass this birth context through the shared facade.
+   */
+  delegation?: TicketSessionDelegation;
 }
 
 /**
@@ -161,6 +201,28 @@ export interface SessionStartInput {
 export interface SessionModelOverride {
   model?: { providerId: string; modelId: string };
   reasoningLevel?: ReasoningLevel;
+  /**
+   * What to do when Model Access cannot run this override right now.
+   *
+   * `"refuse"` (the default, and every human door) throws `MODEL_UNAVAILABLE`
+   * before anything durable exists. A person who just chose a model in a
+   * picker is standing there, and the honest answer is immediate: nothing was
+   * started, and nothing has to be cleaned up.
+   *
+   * `"record"` writes the selection as asked and lets the ATTACH refuse it.
+   * This is VC-112 for Automation Runs: "a pinned model that has since become
+   * unavailable does not silently fall back — let the Session fail through the
+   * existing error path rather than building a second failure surface." The
+   * Run therefore opens its Session, records the Runtime it was actually told
+   * to use, and the runtime's own
+   * `configuration_invalid` Attention (`pi-adapter.ts`) puts it in `error`,
+   * where VC-133's notification rule and the Session's own dot both find it.
+   *
+   * Neither arm falls back to another model; they differ only in WHERE the
+   * refusal is recorded. A door with nobody behind it needs the durable one,
+   * because a refusal returned to a timer is a refusal nobody reads.
+   */
+  whenUnavailable?: "refuse" | "record";
 }
 
 /** The durable identity a create-only call resolves — nothing about an executor. */
@@ -181,8 +243,13 @@ export interface Sessions {
    * and boots the Agent Runtime — follows as its own call off that critical
    * path. Same refusals as `start`: an unknown ticket or a missing default
    * model refuses before anything durable exists.
+   *
+   * The answer carries the model policy the mint durably recorded — the
+   * RESOLVED selection, which an Automation Run stores as its own record
+   * (VC-126) — widening {@link SessionCreateResult} structurally, so the
+   * renderer's create RPC (typed to the narrower shape) is untouched.
    */
-  create(input: SessionStartInput): Promise<SessionCreateResult>;
+  create(input: SessionStartInput): Promise<SessionCreateResult & { model: ModelSelection }>;
   /** Mint and attach in one call — the agent socket's door (VC-13). */
   start(input: SessionStartInput): Promise<SessionStartOutcome>;
   /**
@@ -212,18 +279,25 @@ export type SessionDefaultModelRole = "ticket" | "project";
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
   /**
-   * The configured default for one Role: the execution default for a Ticket
-   * Session, the orchestration default for a project chat (VC-53). Separate
-   * answers, asked at the one moment the Role is known — never a substitution,
-   * since a Role with no explicit choice of its own inherits the project
-   * default by stated policy rather than by silent fallback.
+   * The configured default for one Role, resolved through the inheritance
+   * chain the app documents (VC-112): the project's own runtime preference
+   * first (`projects.session_model`, NULL = inherit), then the app-wide
+   * per-purpose record. Separate answers, asked at the one moment the Role is
+   * known — never a substitution, since a rung with no explicit choice of its
+   * own inherits the next by stated policy rather than by silent fallback.
+   *
+   * `projectId` is `null` only where no project is known — the legacy
+   * model-backfill on `attach`, which holds a bare Session id — and reads as
+   * "global chain only". Every mint passes its project.
    */
-  readDefaultModel(role: SessionDefaultModelRole): ModelSelection | null;
+  readDefaultModel(role: SessionDefaultModelRole, projectId: string | null): ModelSelection | null;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
+  /** Durable per-Session grants, resolved and recorded at birth (VC-183). */
+  grants: SessionGrantPorts;
   /**
    * What Model Access can actually run, consulted only when an override
    * arrives: the configured default was validated when it was saved
@@ -252,13 +326,23 @@ export interface SessionsOptions {
  * against Model Access — availability and the model's reasoning levels, the
  * `assertDefaultModelAvailable` rule — and refused before any Session exists;
  * the plain default path stays exactly the policy `requireDefaultModel` was.
+ *
+ * {@link SessionModelOverride.whenUnavailable} is the one exception, and it
+ * changes only WHERE the refusal lands. `"record"` keeps the merge above and
+ * skips the inspection below, so the Session is minted carrying the selection
+ * it was told to carry and the attach refuses it with the Attention every
+ * other broken configuration raises. Note that the plain default path has
+ * always behaved this way — a stale configured default is never inspected
+ * here either — so this is the pin catching up with the inheritance it was
+ * supposed to be interchangeable with, not a new kind of leniency.
  */
 async function resolveModelSelection(
   options: SessionsOptions,
   override: SessionModelOverride | undefined,
   role: SessionDefaultModelRole,
+  projectId: string,
 ): Promise<ModelSelection> {
-  const base = options.readDefaultModel(role);
+  const base = options.readDefaultModel(role, projectId);
   if (
     override === undefined ||
     (override.model === undefined && override.reasoningLevel === undefined)
@@ -269,6 +353,13 @@ async function resolveModelSelection(
   if (model === undefined) {
     // A reasoning level alone cannot conjure a model to run at it.
     throw new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", DEFAULT_MODEL_REQUIRED);
+  }
+  // The level is merged the same way whichever arm follows: no explicit level
+  // falls back to the default's, then to Volli's central "medium" (the
+  // no-default + --model case). Only the validation below differs.
+  const reasoningLevel = override.reasoningLevel ?? base?.reasoningLevel ?? "medium";
+  if (override.whenUnavailable === "record") {
+    return { providerId: model.providerId, modelId: model.modelId, reasoningLevel };
   }
   if (options.inspectModelAccess === undefined) {
     throw new StructuredSessionsError(
@@ -288,10 +379,8 @@ async function resolveModelSelection(
         : `Model ${model.providerId}/${model.modelId} is not currently available.`,
     );
   }
-  // No explicit level falls back to the default's, then to Volli's central
-  // "medium" (the no-default + --model case); either way the chosen model has
-  // to actually run it, and the refusal names what it can run instead.
-  const reasoningLevel = override.reasoningLevel ?? base?.reasoningLevel ?? "medium";
+  // The chosen model has to actually run the level it was given, and the
+  // refusal names what it can run instead.
   if (!available.reasoningLevels.includes(reasoningLevel)) {
     throw new StructuredSessionsError(
       "MODEL_UNAVAILABLE",
@@ -316,11 +405,17 @@ export function createSessions(options: SessionsOptions): Sessions {
         "The requested Ticket was not found in this project.",
       );
     }
-    const model = await resolveModelSelection(
-      options,
-      input.modelOverride,
-      input.ticketId === null ? "project" : "ticket",
-    );
+    // One derivation of the Role for this mint, read by both the model policy
+    // and the tool surface. `ticketId !== null` IS the Role on start, and
+    // asking twice is how two answers start disagreeing.
+    //
+    // The two ports name their argument in different vocabularies on purpose
+    // (`SessionDefaultModelRole` is a ladder rung, `RuntimeSessionRole` is a
+    // Role), and this one literal satisfies both while they spell the same
+    // pair. The day they diverge, this is the line that has to split — which
+    // is the point of not having collapsed them.
+    const role: SessionDefaultModelRole = input.ticketId === null ? "project" : "ticket";
+    const model = await resolveModelSelection(options, input.modelOverride, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
     const explicit =
@@ -335,12 +430,20 @@ export function createSessions(options: SessionsOptions): Sessions {
       explicit.map((resource) => resource.name),
     );
     const resources = index === null ? explicit : [...explicit, index];
+    // Resolve grants before creation and freeze them before the surface they
+    // authorize. The resolver still owns vocabulary validation; this port owns
+    // the durable per-Session source and its scope/recursion data.
+    const grants = options.grants.resolveBirth({
+      role,
+      ticketId: input.ticketId,
+      ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
+    });
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
-    const toolSurface = options.toolSurface.resolve();
+    const toolSurface = options.toolSurface.resolve(role, grants.grants);
     const created = await options.runtime.command({
-      commandId: `${input.operationId}:create`,
+      commandId: sessionCreateCommandId(input.operationId),
       command: {
         kind: "session.create",
         projectId: input.projectId,
@@ -365,8 +468,11 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
     // follows separately — and the record has to exist before whichever
-    // attach eventually composes the system prompt from it.
+    // attach eventually composes the system prompt from it. The grant reaches
+    // the store first: a tool surface without its scope would be a capability
+    // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
+    options.grants.recordBirth(created.sessionId, grants);
     await options.toolSurface.record(created.sessionId, toolSurface);
     return { sessionId: created.sessionId, model };
   }
@@ -374,7 +480,7 @@ export function createSessions(options: SessionsOptions): Sessions {
   return {
     async create(input) {
       const created = await mint(input);
-      return { sessionId: created.sessionId };
+      return { sessionId: created.sessionId, model: created.model };
     },
 
     async start(input) {
@@ -399,7 +505,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         // `model.select` before the attachment, so what it resolved to is
         // visible in its history rather than assumed.
         const model = requireDefaultModel(
-          options.readDefaultModel("project"),
+          options.readDefaultModel("project", null),
           DEFAULT_MODEL_REQUIRED,
           input.sessionId,
         );

@@ -9,8 +9,14 @@
  * active tab.
  */
 
-/** The rail's pages, in tab order. `now` is the resting page. */
-export const TICKET_RAIL_MODES = ["now", "changes", "files"] as const;
+/**
+ * The rail's pages, in tab order. `now` is the resting page.
+ *
+ * `search` appends rather than sitting beside Files (VC-193): the order is a
+ * keyboard order as much as a visual one, and inserting a page in the middle
+ * would move every page after it under a reader's fingers for no reason.
+ */
+export const TICKET_RAIL_MODES = ["now", "changes", "files", "search"] as const;
 
 export type TicketRailMode = (typeof TICKET_RAIL_MODES)[number];
 
@@ -22,6 +28,7 @@ export const TICKET_RAIL_MODE_LABELS: Record<TicketRailMode, string> = {
   now: "Now",
   changes: "Diffs",
   files: "Files",
+  search: "Search",
 };
 
 /**

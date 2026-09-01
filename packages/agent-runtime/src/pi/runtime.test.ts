@@ -33,12 +33,16 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   sessionToolIds,
+  skillPromptResource,
+  SKILL_POLICY_DEFAULT,
+  UtilityCompletionError,
   type AuthoritySnapshot,
   type ObservabilityEvent,
   type CompactionObservation,
   type RuntimeAskUserRequest,
   type RuntimeObservation,
   type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -295,6 +299,8 @@ function fixture(overrides: Partial<SessionRuntimeSpec> = {}): Attachment {
   const authority: AuthoritySnapshot = {
     mode: "auto",
     location: "worktree",
+    enforcement: "enforce",
+    judgmentMode: "ask",
     tools: [],
     rulePackId: BUILTIN_RULE_PACK_ID,
     rulePackHash: BUILTIN_RULE_PACK_HASH,
@@ -353,6 +359,22 @@ function attentions(observations: RuntimeObservation[]): RuntimeObservation[] {
 
 function compactions(observations: RuntimeObservation[]): CompactionObservation[] {
   return observations.filter((observation) => observation.kind === "compaction");
+}
+
+/** A well-formed durable usage marker, so a malformed case names one broken field. */
+function meteredMarker(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: MODEL_ID,
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: 0.003,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
 }
 
 /**
@@ -1808,10 +1830,12 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "activity",
       "authority",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
       "attachment:closed",
@@ -2193,10 +2217,12 @@ describe("startSession", () => {
       "turn:started",
       "delta",
       "delta",
+      "usage",
       "message-settled",
       "activity",
       "activity",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2319,6 +2345,86 @@ describe("startSession", () => {
     }
   });
 
+  it("meters every model call in a turn, including the one that only called a tool", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("Reading the file.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+
+    const usage = observations.filter((observation) => observation.kind === "usage");
+    // Two provider calls, so two bills — even though the first reply carries a
+    // tool call and the transcript shows one exchange.
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({
+      kind: "usage",
+      turnId: expect.any(String),
+      usage: {
+        cause: "assistant",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    // Each is named by the sidecar entry it belongs to, so a reattach that
+    // replays the same history cannot double the Session's bill.
+    const entryIds = usage.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(new Set(entryIds).size).toBe(2);
+
+    const ref = handle.recovery;
+    const replay = await handle.reconcile(null);
+    const replayed = replay.observations.flatMap((observation) =>
+      observation.kind === "usage" ? [observation.entryId] : [],
+    );
+    expect(replayed).toEqual(entryIds);
+
+    await handle.close();
+    const sidecar = readFileSync(ref?.sessionFilePath as string, "utf8");
+    for (const entryId of entryIds) expect(sidecar).toContain(entryId);
+  });
+
+  it("meters a reply the provider billed before it failed", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("The model run failed.")])),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("Do the work.");
+    await handle.close();
+
+    // Nothing settled and nothing was said, but the prompt was already paid
+    // for. Reading spend off the transcript alone would lose this entirely.
+    expect(settledTexts(observations)).toEqual([]);
+    expect(
+      observations.flatMap((observation) =>
+        observation.kind === "usage" ? [observation.usage.costUsd] : [],
+      ),
+    ).toEqual([0.003]);
+  });
+
   it("keeps an actual Pi read turn inside the Ticket worktree", async () => {
     const { spec, observations, worktreePath, sessionDataDir } = fixture();
     const outsidePath = join(worktreePath, "..", "SECRET.txt");
@@ -2409,13 +2515,10 @@ describe("startSession", () => {
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
         scriptedStream(
-          ["first answer", "second answer"].map(
-            (answer): ScriptStep =>
-              (emit) => {
-                emit.text(answer);
-                emit.finish();
-              },
-          ),
+          ["first answer", "second answer"].map((answer): ScriptStep => (emit) => {
+            emit.text(answer);
+            emit.finish();
+          }),
         ),
       ),
     });
@@ -2522,6 +2625,7 @@ describe("startSession", () => {
     const firstReplay = await firstHandle.reconcile(null);
     expect(kinds([...firstReplay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -2644,7 +2748,7 @@ describe("startSession", () => {
     await firstDelivery;
     const recovery = firstHandle.recovery;
     const replay = await firstHandle.reconcile(null);
-    expect(kinds([...replay.observations])).toEqual(["turn:started", "turn:interrupted"]);
+    expect(kinds([...replay.observations])).toEqual(["turn:started", "usage", "turn:interrupted"]);
     const durableEntries = readFileSync(recovery!.sessionFilePath, "utf8")
       .trimEnd()
       .split("\n")
@@ -2724,11 +2828,12 @@ describe("startSession", () => {
 
     expect(kinds([...replay.observations])).toEqual([
       "turn:started",
+      "usage",
       "message-settled",
       "attention",
       "turn:interrupted",
     ]);
-    expect(replay.observations[2]).toMatchObject({
+    expect(replay.observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "partial-turn",
@@ -3080,6 +3185,24 @@ describe("startSession", () => {
         turnId: "turn-1",
         message: { role: "user", content: "accepted", timestamp: "now" },
       },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: Date.now() },
+        resources: null,
+      },
+      {
+        kind: "command-accepted",
+        commandId: "command-1",
+        operation: "message.submit",
+        delivery: "prompt",
+        turnId: "turn-1",
+        message: { role: "user", content: "accepted", timestamp: Date.now() },
+        resources: [{ name: "missing-text" }],
+      },
       // A reason no executor writes, and a token count nothing could have
       // counted — the durable ledger reads those as integers, so a marker
       // accepted here would recover into a Session that cannot be read.
@@ -3100,6 +3223,44 @@ describe("startSession", () => {
         tokensAfter: 1,
       },
       { kind: "compaction", state: "failed", reason: "threshold" },
+      // Usage shapes the durable ledger would refuse. A marker accepted here
+      // and rejected there is a Session that recovers and then cannot be read,
+      // which is the VC-155 failure re-laid one field at a time.
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: null },
+      { kind: "usage", entryId: 1, turnId: null, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: 7, usage: meteredMarker() },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ cause: "cron" }) },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ providerId: 1 }),
+      },
+      { kind: "usage", entryId: "entry-1", turnId: null, usage: meteredMarker({ modelId: 1 }) },
+      // Fractional tokens, which no provider reports and the codec reads as
+      // integers.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ inputTokens: 1.5 }),
+      },
+      // No NaN case here, and deliberately: `JSON.stringify` writes NaN as
+      // `null`, so a poisoned cost arrives back looking exactly like an honest
+      // absent one and is rightly accepted. The codec refuses NaN where it can
+      // still be seen — at the write, before the round trip.
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costUsd: "free" }),
+      },
+      {
+        kind: "usage",
+        entryId: "entry-1",
+        turnId: null,
+        usage: meteredMarker({ costBasis: "guessed" }),
+      },
     ];
 
     const secondRuntime = createPiAgentRuntime({
@@ -3609,6 +3770,7 @@ describe("startSession", () => {
       "attachment:started",
       "turn:started",
       "delta",
+      "usage",
       "turn:interrupted",
     ]);
 
@@ -4007,10 +4169,11 @@ describe("startSession", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "attention",
       "turn:interrupted",
     ]);
-    expect(observations[2]).toMatchObject({
+    expect(observations[3]).toMatchObject({
       kind: "attention",
       state: "raised",
       reason: "auth",
@@ -4215,10 +4378,15 @@ describe("auto-retrying a dropped transport", () => {
       delivery: "prompt",
     });
 
+    // Two bills for one turn: the dropped attempt was metered before the
+    // socket died, and the resumed one was metered when it succeeded. This is
+    // what makes a retry storm legible in a cost report rather than invisible.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "delta",
+      "usage",
       "message-settled",
       "turn:completed",
     ]);
@@ -4241,9 +4409,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.submitUserMessage("go");
 
     expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Eleven metered attempts for one turn that produced nothing. An owner
+    // asking why a quiet pass was expensive has to be able to see this.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      ...Array.from({ length: 11 }, () => "usage"),
       "attention",
       "turn:interrupted",
     ]);
@@ -4323,7 +4494,12 @@ describe("auto-retrying a dropped transport", () => {
     await handle.interrupt();
     await delivery;
 
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 
@@ -4348,6 +4524,7 @@ describe("auto-retrying a dropped transport", () => {
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
+      "usage",
       "turn:interrupted",
       "attachment:closed",
     ]);
@@ -4381,7 +4558,12 @@ describe("auto-retrying a dropped transport", () => {
     await delivery;
 
     expect(calls).toBe(1);
-    expect(kinds(observations)).toEqual(["attachment:started", "turn:started", "turn:interrupted"]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "turn:interrupted",
+    ]);
     await handle.close();
   });
 
@@ -4505,6 +4687,24 @@ describe("compacting a context that reached its reserve", () => {
     ]);
     const [compaction] = compactions(attachment.observations);
     expect(compaction?.state === "compacted" && compaction.tokensAfter).toBeLessThan(OVER_RESERVE);
+
+    // Summarising a Session costs a model call, and that call is spent on the
+    // Session's behalf. A cost report that omitted it would tell an owner the
+    // long pass was cheaper than the short one.
+    const compactionUsage = attachment.observations.flatMap((observation) =>
+      observation.kind === "usage" && observation.usage.cause === "compaction"
+        ? [observation.usage]
+        : [],
+    );
+    expect(compactionUsage).toEqual([
+      expect.objectContaining({
+        cause: "compaction",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: expect.any(Number),
+        costBasis: "catalog-estimate",
+      }),
+    ]);
     await handle.close();
   });
 
@@ -5786,10 +5986,105 @@ describe("compacting because somebody asked", () => {
  * adapter has done its work; a constant-level comparison would agree with
  * itself while a downstream recomposition changed what reached the wire.
  */
+/**
+ * The Role bundle as tools the model can actually call (VC-162).
+ *
+ * The tracer bullet's runtime half. What is proved here is the translation and
+ * the binding: the model is offered a provider-safe name, the host is handed
+ * the canonical dot-key, and a Session whose Role carries no verb is offered
+ * nothing to call.
+ */
+describe("the verb half of the Agent Tool Surface", () => {
+  it("offers the wire name and hands the host the dot-key", async () => {
+    const calls: RuntimeVerbCall[] = [];
+    const attachment = fixture({
+      tools: { tools: ["read"], verbs: ["session.start"] },
+      authority: undefined,
+      callVerb: async (request) => {
+        calls.push(request);
+        return { text: "Started Session ab12cd34 on VC-12." };
+      },
+    });
+    let answered: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            // The model calls what it was offered, which is the underscored
+            // spelling. It has never seen `session.start`.
+            emit.toolCall("session_start", { ticket: "VC-12", message: "Fix the flaky test" });
+            emit.finish();
+          },
+          (emit, context) => {
+            answered = context;
+            emit.text("Delegated.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("Delegate VC-12.");
+    await handle.close();
+
+    // Across the boundary it is the dot-key again, because that is the name
+    // authority, the durable record and every product surface spell. Nothing
+    // downstream of the provider has to un-mangle anything.
+    expect(calls).toEqual([
+      {
+        verb: "session.start",
+        input: { ticket: "VC-12", message: "Fix the flaky test" },
+        // Passed through, not regenerated: the host derives its durable
+        // operation id from this plus the caller it already knows, which is
+        // what makes a replayed call one act instead of two.
+        toolCallId: "tc-0",
+      },
+    ]);
+    expect(JSON.stringify(answered?.messages)).toContain("Started Session ab12cd34 on VC-12.");
+  });
+
+  it("offers a Session with no verbs nothing to call", async () => {
+    // Role-scoped availability, end to end: the array a Ticket Session is sent
+    // simply does not contain the tool, so there is no call for any injected
+    // instruction to make.
+    const offered = await offeredIn({
+      ...fixture({ tools: { tools: ["read"] } }).spec,
+      authority: undefined,
+    });
+    expect(offered).toEqual(["read"]);
+    expect(offered).not.toContain("session_start");
+  });
+
+  it("refuses to attach when the bundle names a verb the host cannot answer", async () => {
+    // A bundle promising a tool with no port behind it is not a smaller
+    // surface — it is a Session whose durable record says it holds something
+    // that was never offered. Failing here is what keeps the record and the
+    // array unable to disagree.
+    const attachment = fixture({ tools: { tools: ["read"] }, authority: undefined });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("never reached")])),
+    });
+    await expect(
+      runtime.startSession({
+        ...attachment.spec,
+        tools: { tools: ["read"], verbs: ["session.start"] },
+      }),
+    ).rejects.toThrow("no verb port is wired to answer it");
+  });
+});
+
 describe("the Cache Prefix a Session sends", () => {
   it("offers one tool array from turn 1 to turn N, and again after a reattach", async () => {
     const attachment = fixture({
-      tools: { tools: ["read", "edit"] },
+      // The verb half rides this assertion too (VC-162). A product tool is
+      // built from registry data rather than from a literal in this package,
+      // so its name, description and schema are exactly the bytes a real
+      // Session sends — and a registry edit that changed them mid-Session
+      // would invalidate the whole prefix just as surely as adding a tool.
+      tools: { tools: ["read", "edit"], verbs: ["session.start"] },
+      callVerb: async () => ({ text: "started" }),
       askUser: async () => ({ optionIds: ["one"], response: null }),
       webFetch: async () => ({
         requestedUrl: "https://example.com/guide",
@@ -5879,7 +6174,19 @@ describe("the Cache Prefix a Session sends", () => {
       // Same names, same order, same count — against the literal rather than
       // against the first call alone, so an array that silently emptied could
       // not pass by agreeing with itself.
-      expect(call.toolNames).toEqual(["read", "edit", "ask_user", "web_fetch", "web_search"]);
+      //
+      // `session_start` and not `session.start`: the dot is this verb's
+      // identity everywhere durable, and is exactly what no provider accepts
+      // on the wire. The canonical order puts the verb half last, so a verb
+      // added in a later product version cannot shift anything ahead of it.
+      expect(call.toolNames).toEqual([
+        "read",
+        "edit",
+        "ask_user",
+        "web_fetch",
+        "web_search",
+        "session_start",
+      ]);
       // And byte-identical past the names. A description reworded mid-Session
       // invalidates the prefix exactly as surely as a tool added to it, and
       // where a provider orders the tool array ahead of the system prompt it
@@ -5887,6 +6194,181 @@ describe("the Cache Prefix a Session sends", () => {
       expect(call.tools).toBe(calls[0]?.tools);
       expect(call.systemPrompt).toBe(calls[0]?.systemPrompt);
     }
+  });
+
+  it("carries an attached skill's instructions through a compaction (VC-181)", async () => {
+    // The lifecycle clause the ticket refuses to leave implicit: skill
+    // instructions must survive compaction or be deliberately restored, never
+    // silently lost. Attach-time selection rides `promptResources` into the
+    // SYSTEM PROMPT, and compaction replaces `agent.state.messages` only — it
+    // has no path to the prompt at all. So survival here is structural rather
+    // than a rule someone has to remember, and this pins it against the real
+    // compaction path rather than against the composer that builds the prompt.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture({
+      promptResources: [
+        skillPromptResource({
+          name: "house-style",
+          description: "How this repo writes things",
+          body: "volli-skill-marker: always spell the units out.",
+          authorPolicy: SKILL_POLICY_DEFAULT,
+          effectivePolicy: SKILL_POLICY_DEFAULT,
+          policyDiagnostic: null,
+          root: ".agents/skills/house-style",
+        }),
+      ],
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    const [firstTurn, , , afterCompaction] = calls;
+    // Delivered as a named resource with its root, so bundled relative files
+    // still resolve after the history around it is gone.
+    expect(firstTurn?.systemPrompt).toContain("volli-skill-marker");
+    expect(firstTurn?.systemPrompt).toContain("Skill directory: .agents/skills/house-style/");
+    // Still there on the far side, byte-identical — the history was summarized,
+    // the instructions were not.
+    expect(afterCompaction?.systemPrompt).toContain("volli-skill-marker");
+    expect(afterCompaction?.systemPrompt).toBe(firstTurn?.systemPrompt);
+    // And the turn that history WAS elided, so this is not passing by nothing
+    // having been compacted.
+    expect(afterCompaction?.messages).not.toContain("first answer");
+  });
+
+  it("restores the latest explicit activation after compaction and reattachment (VC-181)", async () => {
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const reference = {
+      name: "house-style",
+      description: "How this repo writes things",
+      authorPolicy: SKILL_POLICY_DEFAULT,
+      effectivePolicy: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
+      root: ".agents/skills/house-style",
+    } as const;
+    const oldResource = skillPromptResource({
+      ...reference,
+      body: "old-skill-marker: abbreviate the units.",
+    });
+    const latestResource = skillPromptResource({
+      ...reference,
+      body: "latest-skill-marker: always spell the units out.",
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settles("second answer")),
+          recording(calls, settlesHolding("third answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("fourth answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage(
+      "/house-style review this",
+      "queue",
+      "command-skill",
+      [],
+      [oldResource],
+    );
+    await handle.submitUserMessage(
+      "/house-style use the updated instructions",
+      "queue",
+      "command-skill-again",
+      [],
+      [latestResource],
+    );
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    const recovery = handle.recovery;
+    await handle.close();
+
+    // Message scope means a later invocation is delivered again, not silently
+    // session-deduplicated.
+    expect(calls[0]?.messages).toContain("old-skill-marker");
+    expect(calls[1]?.messages).toContain("latest-skill-marker");
+    const afterCompaction = calls[4];
+    expect(afterCompaction?.systemPrompt).not.toContain("latest-skill-marker");
+    expect(afterCompaction?.messages).toContain("latest-skill-marker");
+    expect(afterCompaction?.messages.match(/latest-skill-marker/g)).toHaveLength(1);
+    expect(afterCompaction?.messages).not.toContain("old-skill-marker");
+    expect(afterCompaction?.messages).toContain("restored verbatim after context compaction");
+    expect(afterCompaction?.messages).not.toContain("first answer");
+
+    const reattachedRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after restart"))])),
+    });
+    const reattached = await reattachedRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    expect(calls[5]?.messages).toContain("latest-skill-marker");
+    expect(calls[5]?.messages.match(/latest-skill-marker/g)).toHaveLength(1);
+    expect(calls[5]?.messages).not.toContain("old-skill-marker");
+    expect(calls[5]?.messages).toContain("restored verbatim after context compaction");
+  });
+
+  it("recognizes a retained resource inside an image message without duplicating it", async () => {
+    const attachment = fixture();
+    const resource = skillPromptResource({
+      name: "vision-style",
+      description: "How to review images",
+      body: "retained-image-skill-marker",
+      authorPolicy: SKILL_POLICY_DEFAULT,
+      effectivePolicy: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
+      root: ".agents/skills/vision-style",
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("image answer", 200_000)),
+          recording(calls, settles("## Goal\nkeep reviewing the image")),
+          recording(calls, settles("after compaction")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("first");
+    await handle.submitUserMessage(
+      "/vision-style inspect this",
+      "queue",
+      "command-image-skill",
+      [{ data: "aGVsbG8=", mimeType: "image/png" }],
+      [resource],
+    );
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    expect(calls[3]?.messages).toContain("retained-image-skill-marker");
+    expect(calls[3]?.messages.match(/retained-image-skill-marker/g)).toHaveLength(1);
+    expect(calls[3]?.messages).not.toContain("restored verbatim after context compaction");
   });
 
   it("compacts into a new base under the same prefix", async () => {
@@ -6096,7 +6578,24 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "The login button is broken",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toEqual({
+      text: "Fix the login flow",
+      // A title is real spend against a real Session, and it produces no
+      // transcript to carry the bill. If the runtime reported only the text,
+      // this would be the one kind of model call a Session could never account
+      // for.
+      usage: {
+        cause: "utility",
+        providerId: PROVIDER_ID,
+        modelId: MODEL_ID,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.003,
+        costBasis: "catalog-estimate",
+      },
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model.id).toBe(MODEL_ID);
     expect(calls[0]!.context.systemPrompt).toBe("Title this conversation.");
@@ -6208,6 +6707,76 @@ describe("completeUtility", () => {
     ).rejects.toThrow("returned no text");
   });
 
+  /**
+   * A provider bills for the prompt it accepted, not for whether Volli could
+   * use the answer. These two are the shapes that failure takes here — a reply
+   * that stopped short, and one that was all reasoning — and both are real
+   * charges the caller has to be able to record.
+   */
+  it("carries what a billed failure consumed out on the error", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ stopReason: "error", errorMessage: "Provider refused the call." }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toMatchObject({
+      cause: "utility",
+      inputTokens: 100,
+      costUsd: 0.003,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  it("carries the bill out when the answer was reasoning alone", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ thinking: "pondering" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect((failure as UtilityCompletionError).usage).toMatchObject({ inputTokens: 100 });
+  });
+
+  // Nothing was sent, so nothing was billed. Null, never an all-zero
+  // measurement: "no request was made" and "a request cost nothing" are
+  // different facts, and only one of them is true here.
+  it("reports no usage for a call that never reached a provider", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels({ text: "Fix the login flow" }),
+    });
+    const failure = await runtime
+      .completeUtility({
+        model: { providerId: PROVIDER_ID, modelId: "not-a-model", reasoningLevel: "off" },
+        systemPrompt: "Title this conversation.",
+        user: "hello",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(UtilityCompletionError);
+    expect((failure as UtilityCompletionError).usage).toBeNull();
+  });
+
   it("returns agent message tokens only, never the reasoning beside them", async () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
@@ -6224,6 +6793,6 @@ describe("completeUtility", () => {
         systemPrompt: "Title this conversation.",
         user: "hello",
       }),
-    ).resolves.toBe("Fix the login flow");
+    ).resolves.toMatchObject({ text: "Fix the login flow" });
   });
 });

@@ -5,8 +5,10 @@ import { cursorAdapter } from "./cursor";
 import { opencodeAdapter } from "./opencode";
 import { genericHarnessActions } from "./generic";
 import {
+  VOLLI_CHANGES,
   VOLLI_CLI_REFERENCE,
   VOLLI_COMMAND_DOC,
+  VOLLI_CONCEPTS,
   VOLLI_ORCHESTRATION,
   VOLLI_PLUGIN_DOC,
   VOLLI_SKILL,
@@ -41,23 +43,24 @@ export const harnessAdapters: readonly HarnessAdapter[] = [...adapters.values()]
 
 /**
  * The begin/end markers a fenced managed block wears, per comment syntax. One
- * table, consumed by the merge below and by the installer's body-extraction and
- * uninstall-excision regexes (`harness-install.ts`), so the three sites that
- * have to recognize the same block cannot drift apart.
+ * table, consumed by the merge below, by {@link fencedBody}'s end-marker scan,
+ * and — through {@link fencedBlockPattern} — by the installer's uninstall
+ * excision (`harness-install.ts`), so the sites that have to recognize the same
+ * block cannot drift apart.
  */
 const FENCE_MARKERS: Record<FenceComment, { begin(version: number): string; end: string }> = {
   html: { begin: (version) => `<!-- volli:begin v=${version} -->`, end: "<!-- volli:end -->" },
   hash: { begin: (version) => `# volli:begin v=${version}`, end: "# volli:end" },
 };
 
-const FENCE_PATTERNS: Record<FenceComment, { block: string; body: string }> = {
+const FENCE_PATTERNS: Record<FenceComment, { block: string; begin: string }> = {
   html: {
     block: "<!-- volli:begin v=\\d+ -->[\\s\\S]*?<!-- volli:end -->",
-    body: "<!-- volli:begin v=\\d+ -->\\r?\\n?([\\s\\S]*?)\\r?\\n?<!-- volli:end -->",
+    begin: "<!-- volli:begin v=\\d+ -->",
   },
   hash: {
     block: "# volli:begin v=\\d+[\\s\\S]*?# volli:end",
-    body: "# volli:begin v=\\d+ *\\r?\\n?([\\s\\S]*?)\\r?\\n?# volli:end",
+    begin: "# volli:begin v=\\d+ *",
   },
 };
 
@@ -66,14 +69,65 @@ export function fencedBlockPattern(comment: FenceComment = "html"): RegExp {
   return new RegExp(FENCE_PATTERNS[comment].block);
 }
 
+const CR = 0x0d;
+const LF = 0x0a;
+
+/** Index just past one optional `\r?\n` line ending at `index`. */
+function skipLineEnding(text: string, index: number): number {
+  let i = index;
+  if (text.charCodeAt(i) === CR) i += 1;
+  if (text.charCodeAt(i) === LF) i += 1;
+  return i;
+}
+
 /**
- * Matches one fenced block with the body in capture group 1, tolerating CRLF
- * and a missing newline adjacent to either marker — a strict `\n` requirement
- * makes the body null on Windows-edited or trailing-newline-stripped files,
- * which fails the hash guard open (null → "write" → silent overwrite).
+ * `text` without its trailing run of `\n`.
+ *
+ * By index, because `/\n+$/` is quadratic on a file that is blank lines
+ * followed by anything else (CodeQL js/polynomial-redos, alert 2): `\n+` runs
+ * to the end of the blank prefix, `$` fails on the first real character, and
+ * the whole walk repeats from the next newline — 23 seconds on 80k of them.
+ * An instructions file is local and the user's own, so that was a
+ * hang-your-own-app risk rather than a remote one.
  */
-export function fencedBodyPattern(comment: FenceComment = "html"): RegExp {
-  return new RegExp(FENCE_PATTERNS[comment].body);
+function withoutTrailingNewlines(text: string): string {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === LF) end -= 1;
+  return text.slice(0, end);
+}
+
+/** Index where one optional `\r?\n` line ending ending at `end` starts, never below `min`. */
+function lineEndingStart(text: string, end: number, min: number): number {
+  let i = end;
+  if (i > min && text.charCodeAt(i - 1) === LF) i -= 1;
+  if (i > min && text.charCodeAt(i - 1) === CR) i -= 1;
+  return i;
+}
+
+/**
+ * The body of the first fenced block in `content` — what sits between the two
+ * markers, minus one line ending adjacent to each — or null when `content`
+ * carries no complete block.
+ *
+ * Tolerates CRLF and a missing newline next to either marker: a strict `\n`
+ * requirement makes the body null on Windows-edited or
+ * trailing-newline-stripped files, which fails the hash guard open (null →
+ * "write" → silent overwrite of a user's edits).
+ *
+ * Index arithmetic rather than one `BEGIN\r?\n?(body)\r?\n?END` regex: there,
+ * an optional line ending and the lazy body can each claim the same newline,
+ * and that ambiguity backtracks quadratically over a newline-heavy file whose
+ * end marker is missing (CodeQL js/polynomial-redos). A managed file is local
+ * and the user's own, so that was a hang-your-own-app risk rather than a remote
+ * one — but scanning is linear and states the tolerance instead of implying it.
+ */
+export function fencedBody(content: string, comment: FenceComment = "html"): string | null {
+  const begin = new RegExp(FENCE_PATTERNS[comment].begin).exec(content);
+  if (begin === null) return null;
+  const bodyStart = skipLineEnding(content, begin.index + begin[0].length);
+  const end = content.indexOf(FENCE_MARKERS[comment].end, bodyStart);
+  if (end === -1) return null;
+  return content.slice(bodyStart, lineEndingStart(content, end, bodyStart));
 }
 
 export function mergeFencedSection(
@@ -85,7 +139,7 @@ export function mergeFencedSection(
   const markers = FENCE_MARKERS[comment];
   const block = `${markers.begin(version)}\n${managedBody}\n${markers.end}`;
   const managedPattern = fencedBlockPattern(comment);
-  const unmanaged = current.replace(/\n+$/, "");
+  const unmanaged = withoutTrailingNewlines(current);
   // Function-form replacement so `$$`, `$&`, `$1`, … inside the managed body are
   // inserted literally instead of being interpreted as replacement patterns.
   const content = managedPattern.test(current)
@@ -110,7 +164,7 @@ export function managedWriteDecision(input: {
 export const HOME_TOKEN = "{home}";
 
 /** The canonical skill files every plan opens with, before any per-harness surface. */
-export const CANONICAL_SKILL_FILES = 4;
+export const CANONICAL_SKILL_FILES = 6;
 
 function normalizedHome(home: string): string {
   return home.endsWith("/") ? home.slice(0, -1) : home;
@@ -195,6 +249,8 @@ export function buildHarnessInstallPlan(input: {
   return [
     { kind: "write", path: `${canonical}/SKILL.md`, content: VOLLI_SKILL, managed: true },
     { kind: "write", path: `${canonical}/cli.md`, content: VOLLI_CLI_REFERENCE, managed: true },
+    { kind: "write", path: `${canonical}/concepts.md`, content: VOLLI_CONCEPTS, managed: true },
+    { kind: "write", path: `${canonical}/changes.md`, content: VOLLI_CHANGES, managed: true },
     {
       kind: "write",
       path: `${canonical}/orchestration.md`,

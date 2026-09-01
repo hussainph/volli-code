@@ -1,7 +1,13 @@
 /**
  * `ticket_events` repo: the append-only log every ticket mutation writes to
- * in the same transaction as its row change. `actor` is always `'user'`
- * today; `'agent'`/`'automation'` arrive with the volli CLI.
+ * in the same transaction as its row change.
+ *
+ * `actor` stores one of two shapes: a bare token (`user`, `automation`,
+ * `unauthenticated`) for the kinds that carry no Session context, or JSON for
+ * the ones that do. {@link parseActor} is tolerant on read because history
+ * outlives the build that wrote it — but note the asymmetry it cannot avoid:
+ * an unreadable token degrades to `user`, so every kind that must NOT be read
+ * as the user has to be named in that branch explicitly.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -57,15 +63,21 @@ function parseActor(actor: string): {
   } catch {
     // Older rows may contain a plain actor token.
   }
-  return actor === "automation" || actor === "session"
+  // `unauthenticated` joins the bare-token set (VC-163). It must be listed here
+  // explicitly rather than fall through: the fallback below reads an
+  // unrecognised token as `user`, which for THIS token would restore the exact
+  // attribution the kind was added to replace.
+  return actor === "automation" || actor === "session" || actor === "unauthenticated"
     ? { actor, context: null }
     : { actor: "user", context: null };
 }
 
 function serializeActor(actor: TicketEventActor): string {
   if (actor.kind === "user") return "user";
-  // A context-less system automation stores as the bare token (like "user"), so
-  // parseActor's plain-token branch round-trips it back to "automation".
+  // Two bare tokens beside "user", both round-tripped by parseActor's
+  // plain-token branch: a context-less system automation, and an
+  // unauthenticated caller, which has no context to carry by construction.
+  if (actor.kind === "unauthenticated") return "unauthenticated";
   if (actor.kind === "automation" && !("sessionId" in actor)) return "automation";
   return JSON.stringify(actor);
 }
@@ -123,6 +135,167 @@ export function recordTicketEvent(
 }
 
 /**
+ * Record that a Session started on this Ticket, at most once per Session
+ * (VC-162).
+ *
+ * A Session starts exactly once, so this planner fact is about the Session
+ * rather than about the act of asking for one — and asking can now happen
+ * twice. A `session_start` tool call replayed by the provider re-enters the
+ * whole start, where every OTHER durable write is keyed on the caller's
+ * operation id and collapses: `session.create` and the kickoff `message.submit`
+ * both deduplicate on their command id in the Session Engine. A ticket event
+ * carries no such key, which would have left this the one write a replay
+ * duplicated — one Session, one kickoff, and two "started" lines in the
+ * Activity feed.
+ *
+ * So the fact itself is the key. Asking whether this exact Session already has
+ * a `session_started` row is a question the ledger can always answer, needs
+ * nothing threaded down from the caller, and is equally right for the two doors
+ * that never replay (the renderer's optimistic `create`, the socket's `start`)
+ * because for them it is simply never true.
+ *
+ * Atomic without a transaction: `better-sqlite3` is synchronous and main owns
+ * the only writer, so no other JavaScript can interleave between the read and
+ * the insert — there is no `await` between them to yield at.
+ *
+ * @returns whether this call is the one that wrote the row.
+ */
+export function recordSessionStartedOnce(
+  db: Database.Database,
+  input: { ticketId: string; sessionId: string; now: number; actor: TicketEventActor },
+): boolean {
+  // Keyed on kind and session id in SQL rather than folding the Ticket's whole
+  // history in memory: a Ticket accumulates events for as long as it is worked,
+  // and every Session start would have paid for all of them.
+  const existing = prepared<[string, string], { found: number }>(
+    db,
+    `SELECT 1 AS found FROM ticket_events
+      WHERE ticket_id = ?
+        AND kind = 'session_started'
+        AND json_extract(payload, '$.sessionId') = ?
+      LIMIT 1`,
+  ).get(input.ticketId, input.sessionId);
+  if (existing !== undefined) return false;
+  recordTicketEvent(
+    db,
+    input.ticketId,
+    { kind: "session_started", sessionId: input.sessionId },
+    input.now,
+    input.actor,
+  );
+  return true;
+}
+
+/** One durable Ticket Event together with the opaque cursor after it. */
+export interface SequencedTicketEvent {
+  readonly event: TicketEvent;
+  readonly cursor: string;
+}
+
+interface SequencedTicketEventRow extends TicketEventRow {
+  sequence: number;
+}
+
+/**
+ * Host-private cursor encoding. Callers copy this string; they never interpret
+ * it. Keeping the storage sequence behind a versioned prefix lets a cloud host
+ * use a different cursor while preserving the `ticket.await` contract.
+ */
+const TICKET_EVENT_CURSOR_PREFIX = "ticket-event-v1:";
+
+export function encodeTicketEventCursor(sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error(`Invalid Ticket Event sequence: ${String(sequence)}`);
+  }
+  return `${TICKET_EVENT_CURSOR_PREFIX}${sequence.toString(36)}`;
+}
+
+export function decodeTicketEventCursor(cursor: unknown): number | null {
+  if (typeof cursor !== "string" || !cursor.startsWith(TICKET_EVENT_CURSOR_PREFIX)) return null;
+  const encoded = cursor.slice(TICKET_EVENT_CURSOR_PREFIX.length);
+  if (!/^(?:0|[1-9a-z][0-9a-z]*)$/.test(encoded)) return null;
+  const sequence = Number.parseInt(encoded, 36);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+/** The database-wide high-water cursor at this instant. */
+export function currentTicketEventCursor(db: Database.Database): string {
+  // AUTOINCREMENT's own high-water mark, not MAX(rows): deleting the newest
+  // event must not make a cursor move backwards.
+  const row = prepared<[], { sequence: number }>(
+    db,
+    "SELECT seq AS sequence FROM sqlite_sequence WHERE name = 'ticket_event_sequence'",
+  ).get();
+  return encodeTicketEventCursor(row?.sequence ?? 0);
+}
+
+/**
+ * Where one ticket's durable event sequence currently ends.
+ *
+ * This numeric mark stays inside main. `ticket-wake.ts` takes it before a
+ * mutation so it can announce exactly what that transaction appended; the
+ * public wait contract receives only {@link encodeTicketEventCursor}'s opaque
+ * string.
+ */
+export function ticketEventCursor(db: Database.Database, ticketId: string): number {
+  const row = prepared<[string], { sequence: number | null }>(
+    db,
+    "SELECT MAX(sequence) AS sequence FROM ticket_event_sequence WHERE ticket_id = ?",
+  ).get(ticketId);
+  return row?.sequence ?? 0;
+}
+
+/** One ticket's events appended after a local mutation mark, in commit order. */
+export function listTicketEventsAfter(
+  db: Database.Database,
+  ticketId: string,
+  sequence: number,
+): SequencedTicketEvent[] {
+  const rows = prepared<[string, number], SequencedTicketEventRow>(
+    db,
+    `SELECT e.*, ordered.sequence AS sequence
+       FROM ticket_event_sequence ordered
+       JOIN ticket_events e ON e.id = ordered.event_id
+      WHERE ordered.ticket_id = ? AND ordered.sequence > ?
+      ORDER BY ordered.sequence ASC`,
+  ).all(ticketId, sequence);
+  return rows.map((row) => ({
+    event: mapTicketEvent(row),
+    cursor: encodeTicketEventCursor(row.sequence),
+  }));
+}
+
+/**
+ * The first matching durable event after an opaque cursor, across a watched
+ * set. One indexed query and `LIMIT 1`: a chained fleet wait never folds each
+ * Ticket's history in memory.
+ */
+export function firstMatchingTicketEventAfter(
+  db: Database.Database,
+  ticketIds: readonly string[],
+  eventKinds: readonly string[],
+  cursor: string,
+): SequencedTicketEvent | undefined {
+  if (ticketIds.length === 0 || eventKinds.length === 0) return undefined;
+  const sequence = decodeTicketEventCursor(cursor);
+  if (sequence === null) return undefined;
+  const row = prepared<[number, string, string], SequencedTicketEventRow>(
+    db,
+    `SELECT e.*, ordered.sequence AS sequence
+       FROM ticket_event_sequence ordered
+       JOIN ticket_events e ON e.id = ordered.event_id
+      WHERE ordered.sequence > ?
+        AND ordered.ticket_id IN (SELECT value FROM json_each(?))
+        AND ordered.kind IN (SELECT value FROM json_each(?))
+      ORDER BY ordered.sequence ASC
+      LIMIT 1`,
+  ).get(sequence, JSON.stringify(ticketIds), JSON.stringify(eventKinds));
+  return row === undefined
+    ? undefined
+    : { event: mapTicketEvent(row), cursor: encodeTicketEventCursor(row.sequence) };
+}
+
+/**
  * A ticket's full event history, chronological (`created_at` ascending,
  * insertion-order/`rowid` tiebreak for events sharing a timestamp) — backs
  * the Activity feed (`api.tickets.events`).
@@ -133,6 +306,23 @@ export function listTicketEvents(db: Database.Database, ticketId: string): Ticke
     "SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at ASC, rowid ASC",
   ).all(ticketId);
   return rows.map(mapTicketEvent);
+}
+
+/** A bounded chronological tail for CLI reads; zero performs no query. */
+export function listRecentTicketEvents(
+  db: Database.Database,
+  ticketId: string,
+  limit: number,
+): TicketEvent[] {
+  if (limit === 0) return [];
+  const rows = prepared<[string, number], TicketEventRow>(
+    db,
+    `SELECT * FROM ticket_events
+      WHERE ticket_id = ?
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ?`,
+  ).all(ticketId, limit);
+  return rows.toReversed().map(mapTicketEvent);
 }
 
 interface TicketStatusEntryRow {

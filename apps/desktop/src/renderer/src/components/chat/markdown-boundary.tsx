@@ -37,7 +37,7 @@ import {
   MessageResponse,
   type MessageResponseProps,
 } from "@renderer/components/ui/ai-elements/message";
-import { splitMarkdownSource } from "@renderer/chat/markdown-source";
+import { splitMarkdownSource } from "@volli/session-presentation";
 
 interface BoundaryProps {
   /**

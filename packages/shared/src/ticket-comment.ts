@@ -30,6 +30,21 @@ export interface TicketComment {
 /** The actor value for a human-authored comment/event. */
 export const USER_ACTOR = "user";
 
+/**
+ * The actor value for a comment written by a socket caller Volli could not
+ * identify (VC-163).
+ *
+ * Named here beside {@link USER_ACTOR} because this column is a bare `string`
+ * and every reader of it has to compare against a literal. Two independent
+ * spellings of one durable value is how a row ends up rendering as its own enum
+ * token in one place and as a person in another — and for THIS value, being
+ * mistaken for a person is the exact attribution VC-92 §6 ruled dead.
+ *
+ * Matches `TicketEventActor`'s `unauthenticated` kind, which is what the socket
+ * door stamps a granted anonymous write with.
+ */
+export const UNAUTHENTICATED_ACTOR = "unauthenticated";
+
 /** The actor-string prefix marking an {@link agentActor} value (`"agent:<harnessId>"`). */
 export const AGENT_ACTOR_PREFIX = "agent:";
 

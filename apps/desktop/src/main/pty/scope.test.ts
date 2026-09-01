@@ -79,6 +79,7 @@ async function seedTerminal(
         placement: "tab",
         exitCode: null,
       }),
+      authority: null,
     },
   });
   if (input.close) {

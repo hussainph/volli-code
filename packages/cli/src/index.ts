@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 
 import type { AgentRequest } from "@volli/shared";
 
-import { requestAgent } from "./client";
+import { agentRequestEnv, requestAgent } from "./client";
 import { runHook } from "./hook";
 import { observeEnvironment } from "./doctor";
 import { runCli } from "./run";
@@ -45,14 +45,7 @@ async function probe(path: string): Promise<void> {
     v: 1,
     cmd: "identify",
     args: {},
-    ctx: {
-      cwd: process.cwd(),
-      env: {
-        ...(env.VOLLI_SOCKET ? { socket: env.VOLLI_SOCKET } : {}),
-        ...(env.VOLLI_SESSION ? { session: env.VOLLI_SESSION } : {}),
-        ...(env.VOLLI_TICKET ? { ticket: env.VOLLI_TICKET } : {}),
-      },
-    },
+    ctx: { cwd: process.cwd(), env: agentRequestEnv(env) },
   };
   await requestAgent(path, request, { timeoutMs: 500 });
 }
@@ -184,6 +177,7 @@ async function main(): Promise<void> {
     observe: () => observeEnvironment(),
     request: (path, request) =>
       requestAgent(path, request, { timeoutMs: timeoutForCommand(request.cmd) }),
+    helpRequest: (path, request) => requestAgent(path, request, { timeoutMs: 500 }),
     launch: (timeoutMs) => {
       return launchApp(
         {

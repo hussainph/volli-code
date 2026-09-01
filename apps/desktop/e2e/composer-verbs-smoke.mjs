@@ -33,7 +33,6 @@
  * MANUALLY-RUN (needs a display and the built app); NOT wired into `vp test`.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import {
@@ -41,6 +40,7 @@ import {
   assertProfileIsolated,
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   launch,
   makeGitRepo,
   makeScratch,
@@ -59,7 +59,7 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("composer-ve
 const fakeHome = join(scratch, "home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-composer-verbs-evidence");
+const EVIDENCE_DIR = await evidenceDir("composer-verbs");
 
 async function captureFailureEvidence(page, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});

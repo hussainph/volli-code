@@ -23,6 +23,11 @@ export const AGENT_ERROR_CODES = [
   "USAGE",
   "INVALID_REQUEST",
   "UNSUPPORTED_COMMAND",
+  "WRONG_DOOR",
+  // The verb exists on this surface and this caller may not run it (VC-163).
+  // Distinct from WRONG_DOOR, which is about the SURFACE, and from every
+  // not-found code, which is about the subject: this one is about the caller.
+  "FORBIDDEN_ACTOR",
   "APP_UNREACHABLE",
   "DB_UNAVAILABLE",
   "PROJECT_REQUIRED",
@@ -57,6 +62,17 @@ export interface AgentRequestContext {
   cwd: string;
   env: {
     session?: string;
+    /**
+     * `VOLLI_SESSION_TOKEN` — the per-attachment secret that turns `session`
+     * from a claim into an authentication (VC-163).
+     *
+     * A separate field from `session` rather than a signed form of it, because
+     * the two answer different questions and the door needs both: `session`
+     * says which Session the caller means, and this says whether Volli issued
+     * that name to this caller. A caller supplying one without the other is
+     * the unauthenticated actor.
+     */
+    token?: string;
     ticket?: string;
     socket?: string;
   };
@@ -70,8 +86,14 @@ export interface AgentRequest {
 }
 
 export interface AgentError {
+  /** Stable automation vocabulary. */
   code: AgentErrorCode;
+  /** Backward-compatible human message; `reason` may add missing-evidence detail. */
   message: string;
+  /** What failed and why, without requiring an agent to parse `message`. */
+  reason: string;
+  /** One safe next action, or null when Volli lacks enough evidence to name one. */
+  next: string | null;
 }
 
 export type AgentResponse =
@@ -215,7 +237,21 @@ export function applyTicketBodyMutation(
   return { ok: true, body: `${current}${current.length === 0 ? "" : "\n\n"}${mutation.text}` };
 }
 
-function pathContains(root: string, candidate: string): boolean {
+/**
+ * Whether `candidate` is `root` itself or sits underneath it.
+ *
+ * Exported because the context ladder is not the only thing that has to answer
+ * "is this cwd inside that project": the socket's admission gate resolves a
+ * policy project the same way, from the same roots (VC-163). It was copied
+ * there first, and two copies of a containment rule are two chances to disagree
+ * about a trailing slash — in one case about which project's policy governs a
+ * write, which is not a difference anything should discover at runtime.
+ *
+ * Purely lexical: no `realpath`, no case folding, no symlink resolution. Every
+ * caller compares roots this process already recorded against a cwd the caller
+ * supplied, and neither side is normalized anywhere else either.
+ */
+export function pathContains(root: string, candidate: string): boolean {
   const normalized = root.endsWith("/") ? root.slice(0, -1) : root;
   return candidate === normalized || candidate.startsWith(`${normalized}/`);
 }

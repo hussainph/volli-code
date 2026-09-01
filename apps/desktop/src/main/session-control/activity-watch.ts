@@ -39,8 +39,9 @@
  * observer bolted onto the write path, and a fold that throws must not be able
  * to fail the command that triggered it.
  */
-import type { SessionEngine } from "@volli/session-engine";
-import type { SessionListingRow } from "@volli/shared";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
+import { PERSON_STARTED } from "@volli/shared";
+import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
 
@@ -56,6 +57,64 @@ const DEFAULT_COALESCE_MS = 60;
 export interface SessionActivityWatchPorts {
   /** Called once per Session whose listing row actually changed. */
   publish(notice: { projectId: string; ticketId: string | null; row: SessionListingRow }): void;
+  /**
+   * Who started a Session (VC-131), so a pushed row carries the same mark the
+   * fetch gave it. A push that dropped it would take the bolt off a Run's row
+   * the first time that Run did anything — the renderer upserts the whole row,
+   * so a missing field is an erasure rather than an omission.
+   *
+   * Optional for the same reason `onError` is: a test that only asks whether a
+   * write was noticed has no database to read provenance out of. Absent means
+   * every row reads as person-started, which is the quiet answer.
+   */
+  provenanceOf?: (session: { sessionId: string; ticketId: string | null }) => SessionProvenance;
+  /**
+   * The executor bindings this host process holds right now. Durable structured
+   * attachments survive relaunch so they can be lazily rehydrated, but they do
+   * not make a listing row live until one of these bindings exists again.
+   * Read once per flush so every row in a publication burst sees one snapshot.
+   */
+  listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
+  /**
+   * Every folded Session's projection, handed over BEFORE the row-difference
+   * gate below (VC-133).
+   *
+   * This watch is the process's one choke point on durable Session writes, so
+   * an observer that needs to notice a state CHANGE belongs here rather than
+   * holding its own subscription per Session. `automations/run-attention.ts` is
+   * the caller: it decides whether an unattended Run has just entered `waiting`
+   * or `error`.
+   *
+   * **Before the gate, and given the projection rather than the row**, for two
+   * independent reasons. The listing row cannot spell `error` at all —
+   * `ChatSessionRecord.activity` has no such arm, because a listing draws that
+   * state from transport facts the renderer holds — so a row-shaped observer
+   * could not see half the rule. And the gate asks whether a LISTING changed,
+   * which is a different question from whether this Session changed: a fold
+   * that leaves the row byte-identical must still be able to move the rule.
+   *
+   * Failures inside it are the observer's own to swallow; this watch calls it
+   * without a guard because {@link RunAttentionWatch.observe} is total.
+   */
+  observe?: (projection: SessionProjection) => void;
+  /**
+   * A Session this process just minted, announced from the create itself
+   * rather than from a fold (VC-133).
+   *
+   * The observer above measures CHANGES, and a change needs a baseline. Every
+   * other Session it meets was already alive when this process started, so its
+   * first fold can only teach a baseline; a Session created here is the one
+   * case where the baseline is known outright, because a Session that did not
+   * exist a moment ago needs nobody.
+   *
+   * It cannot be folded out of the create instead: `getSession` is async and
+   * this decoration sits on the optimistic-open path VC-16 exists to keep
+   * fast, and the coalescing timer may well merge the create with the very
+   * write that puts the Session in `error` — which is exactly the Automation
+   * Run whose pinned model went away. The id alone, synchronously, says all
+   * the observer needs.
+   */
+  observeBirth?: (sessionId: string) => void;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
   /** Diagnostics seam. Defaults to `console.warn`. */
@@ -92,6 +151,7 @@ export function watchSessionActivity(
   const coalesceMs = ports.coalesceMs ?? DEFAULT_COALESCE_MS;
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] session activity watch:", error));
+  const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
 
   const dirty = new Set<string>();
   /**
@@ -126,6 +186,9 @@ export function watchSessionActivity(
   async function flush(): Promise<void> {
     const ids = [...dirty];
     dirty.clear();
+    const liveAttachmentIds = new Set(
+      (ports.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId),
+    );
     for (const sessionId of ids) {
       try {
         const projection = await engine.getSession({ sessionId });
@@ -133,7 +196,18 @@ export function watchSessionActivity(
         // nothing can be said about it, and the listing that held it will drop
         // it on its own next read.
         if (projection === null) continue;
-        const row = sessionListingRow(projection);
+        // Before the row is built, and before the difference gate: see
+        // `SessionActivityWatchPorts.observe` for why neither may stand
+        // between a durable write and this rule.
+        ports.observe?.(projection);
+        const row = sessionListingRow(
+          projection,
+          provenanceOf({
+            sessionId: projection.session.id,
+            ticketId: projection.session.ticketId,
+          }),
+          liveAttachmentIds,
+        );
         const signature = JSON.stringify(row);
         if (published.get(sessionId) === signature) continue;
         published.set(sessionId, signature);
@@ -151,6 +225,8 @@ export function watchSessionActivity(
   const watched: SessionEngine = {
     async createSession(request) {
       const result = await engine.createSession(request);
+      // Before `mark`, so the baseline exists before any fold can read it.
+      ports.observeBirth?.(result.session.id);
       mark(result.session.id);
       return result;
     },
@@ -181,6 +257,7 @@ export function watchSessionActivity(
     listSessionStarts: (query) => engine.listSessionStarts(query),
     listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
     listEvents: (query) => engine.listEvents(query),
+    reportUsage: (query) => engine.reportUsage(query),
   };
 
   return {

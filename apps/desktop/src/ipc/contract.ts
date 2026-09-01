@@ -16,6 +16,15 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  Automation,
+  AutomationCommandReceipt,
+  AutomationRun,
+  AutomationRunRefusalCode,
+  AutomationRunTarget,
+  AutomationSkippedOccurrence,
+  AutomationTrigger,
+  ColumnArming,
+  ColumnAutomationOrder,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -41,7 +50,10 @@ import type {
   LegacyProject,
   ManifestError,
   ModelAccessSignInType,
+  DeliberateMoveChoice,
   ModelSelection,
+  PendingArmedRun,
+  PendingArmedRunFailure,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -57,6 +69,9 @@ import type {
   SessionListingRow,
   SessionRpcIpcRequest,
   SessionRpcIpcResponse,
+  SessionUsageGrouping,
+  SessionUsageReport,
+  SessionUsageScope,
   SkillReference,
   TerminalBusyResult,
   TerminalCommandResult,
@@ -106,6 +121,42 @@ export interface ProjectSkillModesInput {
 }
 
 /**
+ * One project's authority departures (VC-172, migration 025).
+ *
+ * The WHOLE override every time and `null` to state nothing, matching
+ * `ProjectSkillModesInput`: the Authority pane holds every control on screen at
+ * once, so a per-field channel would turn one visible state into N writes that
+ * can land out of order and half-fail.
+ *
+ * Typed `unknown` on the wire ON PURPOSE. This is the one project write whose
+ * payload is a nested document rather than a flat row, and the renderer is not
+ * the thing that gets to say it is well-formed — `validateAuthorityPolicyOverride`
+ * in main is. Declaring it as `AuthorityPolicyOverride` here would let a
+ * compile-time claim stand in for the runtime check on the surface whose entire
+ * job is to be the trustworthy door to policy.
+ */
+export interface ProjectAuthorityPolicyInput {
+  id: string;
+  /** An `AuthorityPolicyOverride`-shaped document, or `null` to inherit everything. */
+  override: unknown;
+}
+
+/**
+ * A policy write that was refused, with every reason.
+ *
+ * Distinct from `ProjectUpdateResult` because this is the one project write a
+ * person can get WRONG rather than merely unlucky: `error` carries the summary
+ * and `errors` the per-field detail, so any caller that can show per-field
+ * refusals may. Every reason at once — fixing one field to be told about the
+ * next is the interaction this avoids. (The Authority pane itself routes
+ * through `writeThrough`, which toasts the summary; its controls are all
+ * constrained, so it cannot produce the document `errors` describes.)
+ */
+export type ProjectAuthorityPolicyResult =
+  | { ok: true; project: Project }
+  | { ok: false; error: string; errors?: readonly string[] };
+
+/**
  * One project's defaults for new Sessions (VC-111, migration 023). Both fields
  * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
  * why these two travel together where the theme pair does not.
@@ -149,6 +200,8 @@ export interface TicketMoveInput {
   ticketId: string;
   toStatus: TicketStatus;
   toIndex: number;
+  /** The Option-drag target, when that gesture supplied this renderer move. */
+  choice?: DeliberateMoveChoice;
 }
 
 export interface TicketSetPriorityInput {
@@ -271,6 +324,21 @@ export interface SessionStartsInput {
 }
 
 /**
+ * What a usage read is asking about (VC-87).
+ *
+ * The scope is the ledger's own tagged union rather than three optional ids,
+ * so "every project" and "a project I have not named" cannot be spelled the
+ * same way across the wire. `sinceMs` is inclusive and `untilMs` exclusive, so
+ * adjacent windows tile without counting a boundary operation twice.
+ */
+export interface UsageReportInput {
+  scope: SessionUsageScope;
+  sinceMs?: number;
+  untilMs?: number;
+  groupBy?: SessionUsageGrouping;
+}
+
+/**
  * Whose venue to measure. The pair is the Session's own scope, not a path — a
  * renderer never names a directory main will run git in; main resolves it from
  * its own rows, by the rule the Session runtime binds a directory with.
@@ -351,9 +419,16 @@ export interface RetentionTtlSetInput {
 
 // ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
 
-/** The whole-project file index is always read from the project's MAIN checkout. */
+/**
+ * The scope pair the index is listed for — the same `{ projectId, ticketId }`
+ * shape read/reveal/watch already take (see {@link FilePathInput}), resolved
+ * through the same seam: with no `ticketId`, the project's MAIN checkout; with
+ * one, that ticket's live worktree, while `.volli/artifacts/**` still comes
+ * from Main (decision #6, the rule the index and a read cannot disagree on).
+ */
 export interface FileIndexInput {
   projectId: string;
+  ticketId?: string;
 }
 
 /**
@@ -366,6 +441,20 @@ export interface FilePathInput {
   projectId: string;
   ticketId?: string;
   relPath: string;
+}
+
+/**
+ * One find-across-files request (plan §4.7): the same `{ projectId, ticketId }`
+ * scope pair a read takes, plus the literal text to look for.
+ *
+ * `query` is a LITERAL, not a pattern — v1 is find-only and never interprets
+ * what was typed as a regex, so a search for `foo(bar)` finds `foo(bar)`. Main
+ * trims it and refuses an empty one rather than listing the whole checkout.
+ */
+export interface FileSearchInput {
+  projectId: string;
+  ticketId?: string;
+  query: string;
 }
 
 /** A known macOS app that can open a safely resolved Files target. */
@@ -416,6 +505,25 @@ export interface FileWriteInput extends FilePathInput {
   expectedMtime?: number;
 }
 
+/**
+ * `rename`'s destination — a second project-relative path, resolved through the
+ * SAME scope as `relPath` (plan §4.5). A destination that would resolve against
+ * a different root than the source (`.volli/**` always resolves to Main, the
+ * repo half follows the ticket's worktree) is refused rather than silently
+ * moving a file across checkouts.
+ */
+export interface FileRenameInput extends FilePathInput {
+  toRelPath: string;
+}
+
+/**
+ * What the create/rename/duplicate track resolves with: the project-relative
+ * path the entry now has (plan §4.5). Named rather than echoed back from the
+ * request because the caller does not always know it — `duplicate` derives a
+ * free name in main, and the renderer opens exactly what was created.
+ */
+export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
+
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
   projectId: string;
@@ -446,6 +554,21 @@ export interface VolliDataIpcContract {
   "volli:project-session-defaults": {
     args: [input: ProjectSessionDefaultsInput];
     result: ProjectUpdateResult;
+  };
+  /**
+   * Replaces this project's authority departures wholesale (VC-172).
+   *
+   * APP-ONLY, and that is the security property rather than an oversight. There
+   * is no agent verb behind this channel and there must not be: writing the
+   * policy that governs a Session is control tier, `verb-registry.ts` refuses a
+   * `cli` access mode on control-tier verbs outright, and the socket attributes
+   * its caller without authenticating one. The agent must not be able to author
+   * the policy that governs it — VC-44's non-negotiable. Reads may go on the
+   * socket; this does not.
+   */
+  "volli:project-authority-policy": {
+    args: [input: ProjectAuthorityPolicyInput];
+    result: ProjectAuthorityPolicyResult;
   };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
@@ -514,6 +637,15 @@ export interface VolliDataIpcContract {
    * `session-list` would fold every Session's whole history to answer it.
    */
   "volli:session-starts": { args: [input: SessionStartsInput]; result: SessionStartsResult };
+  /**
+   * What a scope consumed over a window, optionally broken down (VC-87).
+   *
+   * One indexed read over the usage projection plus one pass of arithmetic —
+   * no Session histories folded and no transcript artifacts opened. It carries
+   * only metadata: token counts, a cost, a basis and ids. No prompt, reply,
+   * path, credential or provider error prose crosses this channel.
+   */
+  "volli:usage-report": { args: [input: UsageReportInput]; result: UsageReportResult };
   /**
    * The venue a Session of this scope runs in, measured (VC-55): the checkout,
    * its branch, the four-state file partition, and the lines moved against the
@@ -610,12 +742,32 @@ export type DataIpcChannel = keyof VolliDataIpcContract;
  * surface — the file channels `src/main/volli-fs.ts` owns.
  */
 export interface VolliFileIpcContract {
-  /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+  /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
   "volli:file-index": { args: [input: FileIndexInput]; result: FileIndexResult };
   /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
   "volli:file-read": { args: [input: FilePathInput]; result: FileReadResult };
+  /**
+   * Find across files (plan §4.7), through the same `{ projectId, ticketId }`
+   * seam a read resolves through: literal text, gitignore-respecting, capped in
+   * both matches and time, with the cap that ended it reported.
+   */
+  "volli:search": { args: [input: FileSearchInput]; result: FileSearchResult };
   /** Writes utf8 text to an existing file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
   "volli:file-write": { args: [input: FileWriteInput]; result: FileWriteResult };
+  /**
+   * The sanctioned creation track (plan §4.5), through the same two-layer path
+   * safety and `{ projectId, ticketId }` worktree resolution every read uses.
+   * Creates an EMPTY file; refuses rather than overwriting whatever is there.
+   */
+  "volli:file-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Creates one directory (missing parents included); refuses an occupied name. */
+  "volli:dir-create": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Renames/moves a file or directory within one checkout; refuses to clobber an occupied destination. */
+  "volli:file-rename": { args: [input: FileRenameInput]; result: FileMutationResult };
+  /** Copies a file to the first free `… copy` name beside it, and resolves with that name. */
+  "volli:file-duplicate": { args: [input: FilePathInput]; result: FileMutationResult };
+  /** Moves a file or directory to the TRASH (`shell.trashItem`) — never an in-place `rm`. */
+  "volli:file-delete": { args: [input: FilePathInput]; result: Result };
   /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`. Resolves with its `@ref`-able relPath. */
   "volli:artifact-create": { args: [input: ArtifactCreateInput]; result: ArtifactCreateResult };
   /** Creates one `<name>.md` prompt template, refusing rather than clobbering (VC-111). */
@@ -1362,6 +1514,348 @@ export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
 export type BrowserTabStateEvent =
   | { tab: BrowserTabState; closedTabId?: never }
   | { tab?: never; closedTabId: string };
+// ---- automations (VC-112, tracer VC-126) -----------------------------------
+
+/** What a create carries. `projectId: null` is global Ownership. */
+export interface AutomationCreateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  /**
+   * Which columns offer this Automation (VC-128).
+   *
+   * Required, and carried as the union's explicit `{ kind: "none" }` rather
+   * than left off: docs/BOUNDARIES.md rule 3 keeps RPC payloads JSON-safe, and
+   * an optional field says "Nothing else" only on a transport that survives
+   * `undefined` — Electron's structured clone does, JSON does not, so the
+   * spelling that means the default has to be a value. The union already has a
+   * member for it, which is why `none` exists at all.
+   */
+  trigger: AutomationTrigger;
+  /** The pinned selection, whole, or `null` to inherit. */
+  runtime: ModelSelection | null;
+}
+
+/** An update rewrites the editable fields; Ownership is identity and never moves. */
+export interface AutomationUpdateInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  name: string;
+  instructions: string;
+  /** Rewritten whole like every other editable field, and present like it too. */
+  trigger: AutomationTrigger;
+  runtime: ModelSelection | null;
+}
+
+/**
+ * Arming one column, or disarming it with `automationId: null` (VC-128).
+ *
+ * A `commandId` like every write above it, and for the reason
+ * {@link AutomationSetEnabledInput} states: the PROJECTION this lands in is
+ * machine-local (the `automation_column_arming` table, which never travels with
+ * a project), while the INTENT is an ordinary durable command — arming decides
+ * whether work starts without a person, and docs/BOUNDARIES.md rule 5 governs
+ * exactly that. A retry repeats the same command and replays its receipt rather
+ * than arming twice.
+ */
+export interface AutomationArmInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  automationId: string | null;
+}
+
+/**
+ * Arranging one column's Offered list — which Automation reads as digit `1`
+ * when a card is dragged over it (VC-132).
+ *
+ * A `commandId` like every write above it, for the reason {@link AutomationArmInput}
+ * states: the PROJECTION is machine-local (`automation_column_order`, which
+ * never travels with a project), while the INTENT is an ordinary durable
+ * command — the rank decides which Automation a release aims at.
+ *
+ * The whole list travels, never a moved id and an index: a JSON transport
+ * carries an array perfectly well, and "the new order" is a value the caller
+ * already holds, while a pair of indices would be a second spelling of the same
+ * arrangement that main would have to re-derive against a list it cannot see.
+ * An EMPTY list is "never arranged", which is a value rather than an absent
+ * field (docs/BOUNDARIES.md rule 3).
+ */
+export interface AutomationSetColumnOrderInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  /** Automation ids, best rank first. Ids the column no longer offers are inert. */
+  rankedAutomationIds: string[];
+}
+
+export interface AutomationIdInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+}
+
+/**
+ * One Run request: which Ticket, what it runs, and what it runs it on.
+ *
+ * `target` is the union rather than a nullable `automationId` beside nullable
+ * Instructions, so an Unbound Run (VC-129) is a Run this shape can spell and a
+ * Run that is somehow both, or neither, is one it cannot. Both fields are
+ * REQUIRED and explicitly nullable where they can be absent — an optional
+ * property admits `undefined`, which the Electron transport carries and an HTTP
+ * one would mangle (docs/BOUNDARIES.md rule 3).
+ */
+export interface AutomationRunInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  /** The saved Automation to run, or an Unbound Run's own Instructions. */
+  target: AutomationRunTarget;
+  ticketId: string;
+  /**
+   * The Runtime THIS invocation runs on, or `null` to resolve the ordinary way
+   * — the Automation's own pin, then the project's preferences, then the global
+   * record (VC-112). A per-invocation override is never stored: the Run records
+   * the model it RESOLVED, which is the only durable evidence either way.
+   */
+  modelOverride: ModelSelection | null;
+}
+
+/**
+ * Running an Automation against a PROJECT rather than a Ticket (VC-130).
+ *
+ * Its own input and its own channel rather than a nullable `ticketId` on the
+ * one above: the two are different Targets with different Session Roles, and a
+ * nullable field on the wire would let a caller ask for a Project Session by
+ * FORGETTING something. docs/BOUNDARIES.md rule 3 wants the shape to say what
+ * it means, so the shape that means "the Project" names a project.
+ *
+ * The renderer reaches it from a Skipped occurrence's "Run now" — a schedule
+ * that did not fire, started by hand, at the Target it would have used.
+ */
+export interface AutomationRunForProjectInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  projectId: string;
+}
+
+/**
+ * Turning one Automation on or off ON THIS MACHINE (VC-127).
+ *
+ * Enablement is deliberately NOT a field on the {@link Automation} record.
+ * VC-112 puts the shareable half of an Automation in git as a Skill and keeps
+ * the record local; enablement is one step more local still — the same tier as
+ * a column's arming, which that ruling also declares per machine. So its
+ * PROJECTION lives in `app_state`, beside the global runtime-preferences record
+ * that ruling cites, and a project cannot carry it anywhere.
+ *
+ * The INTENT is an ordinary durable command all the same, hence the
+ * `commandId`: docs/BOUNDARIES.md rule 5 governs new domain surfaces, and a
+ * switch that decides whether an Automation fires is one. A retry repeats the
+ * same command and replays its receipt rather than flipping anything twice.
+ *
+ * It governs what starts an Automation BESIDES a person. Running by hand is
+ * universal (VC-112), so an Automation that is off is still runnable from
+ * every surface that lists it — it simply never fires on its own.
+ */
+export interface AutomationSetEnabledInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  enabled: boolean;
+}
+
+/**
+ * The ENABLED set, whole, rather than one automation's boolean.
+ *
+ * Whole, so a caller never reconstructs what it now believes from what it just
+ * asked for. Enabled rather than disabled, because VC-112 rules that a machine
+ * fires nothing until someone turns something on there: absent has to mean
+ * off, and a disabled-set shape cannot tell "never asked here" from "on".
+ */
+export type AutomationEnablementResult = Result<{ enabledAutomationIds: string[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetEnabledResult = Result<{
+  enabledAutomationIds: string[];
+  receipt: AutomationCommandReceipt;
+}>;
+
+export type AutomationsResult = Result<{ automations: Automation[] }>;
+export type AutomationResult = Result<{
+  automation: Automation;
+  receipt: AutomationCommandReceipt;
+}>;
+export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
+export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
+/** Every armed column in the project — the whole truth, so a caller reconstructs nothing. */
+export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationArmResult = Result<{
+  armings: ColumnArming[];
+  receipt: AutomationCommandReceipt;
+}>;
+
+/** Every arranged column in the project — whole, so a caller reconstructs nothing. */
+export type AutomationColumnOrdersResult = Result<{ orders: ColumnAutomationOrder[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetColumnOrderResult = Result<{
+  orders: ColumnAutomationOrder[];
+  receipt: AutomationCommandReceipt;
+}>;
+
+/**
+ * A run's answer: the durable Run (holding the fresh Session's id and the
+ * RESOLVED model), or a coded refusal the caller classifies without string
+ * matching. The Session boots detached — VC-16's optimistic open — so an ok
+ * here means "durable and addressable", never "attached and delivered".
+ */
+export type AutomationRunStartResult =
+  | { ok: true; run: AutomationRun; projectId: string; receipt: AutomationCommandReceipt }
+  // `code` is absent only when the shared guard/throw envelope produced the
+  // failure; every handler-authored refusal carries one.
+  | {
+      ok: false;
+      error: string;
+      code?: AutomationRunRefusalCode;
+      receipt?: AutomationCommandReceipt;
+    };
+
+/** Main's complete countdown and retained-failure projection. */
+export type PendingArmedRunsResult = Result<{
+  pending: PendingArmedRun[];
+  failures: PendingArmedRunFailure[];
+}>;
+
+/** Cancel identifies one exact arrival, never whichever later move shares its Ticket. */
+export interface PendingArmedRunCancelInput {
+  id: string;
+}
+
+export type PendingArmedRunCancelResult = Result<{ cancelled: boolean }>;
+
+/** Retry also names the exact move; main supplies its retained command id. */
+export interface PendingArmedRunRetryInput {
+  id: string;
+}
+
+export type PendingArmedRunRetryResult = Result<{ retrying: boolean }>;
+
+/** What main learned after removing an expired countdown from the pending projection. */
+export type PendingArmedRunSettledNotice =
+  | { kind: "attempted"; pending: PendingArmedRun; result: AutomationRunStartResult }
+  | { kind: "failed"; pending: PendingArmedRun; error: string }
+  | {
+      kind: "abandoned";
+      pending: PendingArmedRun;
+      reason: "gone" | "left-column" | "disarmed" | "switched-off";
+    };
+
+/**
+ * The Automations planning surface (VC-126): the record's CRUD plus the one
+ * Run door. Same stance as the rest of the planning data — typed channels,
+ * JSON-safe payloads (docs/BOUNDARIES.md rule 3: no Date, no Map, no
+ * undefined-bearing shapes), main-owned writes, `volli:data-changed` fan-out.
+ */
+export interface VolliAutomationIpcContract {
+  /** A project's own Automations plus every global one — the Offered universe for its surfaces. */
+  "volli:automation-list": { args: [input: ProjectIdInput]; result: AutomationsResult };
+  /** Creates one Automation. Main re-validates the draft and any Runtime pin before writing. */
+  "volli:automation-create": { args: [input: AutomationCreateInput]; result: AutomationResult };
+  /** Rewrites one Automation's editable fields, under the same validation as create. */
+  "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
+  /** A record delete — Runs retain their Automation id/name snapshot. */
+  "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
+  /**
+   * Runs one Automation — or one Unbound Run's own Instructions (VC-129) — by
+   * hand on a Ticket: one fresh chat Session, one Run row, either way.
+   */
+  "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
+  /** A Ticket's Runs, newest first. */
+  "volli:automation-runs-for-ticket": {
+    args: [input: TicketIdInput];
+    result: AutomationRunsResult;
+  };
+  /** One project's armed columns — machine-local, never listed with the record. */
+  "volli:automation-arming-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationArmingsResult;
+  };
+  /** Arms one column with one offered Automation, or disarms it. */
+  "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmResult };
+  /** One project's arranged columns — machine-local, like the arming beside it. */
+  "volli:automation-column-order-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationColumnOrdersResult;
+  };
+  /** Arranges one column's Offered list, and answers with the project's whole new set. */
+  "volli:automation-set-column-order": {
+    args: [input: AutomationSetColumnOrderInput];
+    result: AutomationSetColumnOrderResult;
+  };
+  /**
+   * Every Run in this project, newest first — the Automations page's Run
+   * history (VC-127). Scoped through each Run's own durable evidence (the
+   * Session it opened, which names the project) rather than through the
+   * Automation: a global Automation is listable everywhere, but a Run it
+   * produced happened in ONE project.
+   */
+  "volli:automation-runs-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationRunsResult;
+  };
+  /** Which Automations are switched on on this machine. */
+  "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
+  /** Switches one Automation on or off here, and answers with the whole new set. */
+  "volli:automation-set-enabled": {
+    args: [input: AutomationSetEnabledInput];
+    result: AutomationSetEnabledResult;
+  };
+  /** Main's whole durable pending-countdown projection, for a new renderer window. */
+  "volli:automation-pending-armed-runs": { args: []; result: PendingArmedRunsResult };
+  /** Cancels one exact pending arrival; idempotent when it already settled or was replaced. */
+  "volli:automation-cancel-pending-armed-run": {
+    args: [input: PendingArmedRunCancelInput];
+    result: PendingArmedRunCancelResult;
+  };
+  /** Retries one expired arrival with the Run command id main retained for it. */
+  "volli:automation-retry-pending-armed-run": {
+    args: [input: PendingArmedRunRetryInput];
+    result: PendingArmedRunRetryResult;
+  };
+  /**
+   * Every due time this project's schedules missed, newest first (VC-130).
+   *
+   * A read of its own beside `volli:automation-runs-for-project`, because a
+   * skip and a Run are different records with different actions — a Run opens
+   * its Session, a skip offers to start one. The page interleaves them by time;
+   * merging them on the wire would need a discriminant nothing else wants.
+   */
+  "volli:automation-skips-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationSkipsResult;
+  };
+  /**
+   * Runs an Automation against the PROJECT: one fresh Project Session, one Run
+   * row naming no Ticket. The schedule's own Target, reachable by hand so a
+   * Skipped occurrence is recoverable (VC-112).
+   */
+  "volli:automation-run-for-project": {
+    args: [input: AutomationRunForProjectInput];
+    result: AutomationRunStartResult;
+  };
+}
+
+export type AutomationIpcChannel = keyof VolliAutomationIpcContract;
 
 /**
  * Type-only entries for every remaining invoke channel — these live outside
@@ -1560,6 +2054,7 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
+    VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
     VolliUpdateIpcContract {}
@@ -1585,6 +2080,11 @@ export type VolliIpcEvent =
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   | "volli:data-changed"
+  // Main owns one durable armed-column countdown projection. Every window
+  // receives the same whole snapshot, and settlement is announced separately
+  // so renderer surfaces can react without owning the timer that decided it.
+  | "volli:pending-armed-runs-changed"
+  | "volli:pending-armed-run-settled"
   // Backward-move interrupt announcement (issue #78, CONCEPT #20): fired after
   // a ticket move out of the active columns actually Esc'd live agent sessions,
   // so every window can surface the automated de-escalation where the mover is
@@ -1729,6 +2229,23 @@ export interface DataChangedEvent {
 }
 
 /**
+ * A committed Deliberate move as main's armed-arrival coordinator receives it.
+ *
+ * Both move doors report through this one shape after persistence: renderer IPC
+ * may carry the Option-drag choice, while an explicit `volli ticket move`
+ * carries no choice. Same-column no-ops are never reported because they are not
+ * arrivals.
+ */
+export interface TicketMovedNotice {
+  projectId: string;
+  ticketId: string;
+  /** The column it left — the fact a post-commit re-read cannot recover. */
+  from: TicketStatus;
+  to: TicketStatus;
+  choice?: DeliberateMoveChoice;
+}
+
+/**
  * Main→renderer announcement that a backward move interrupted live agent
  * sessions (issue #78, CONCEPT #20). Fired only when `sessionIds` is
  * non-empty — an empty interrupt announces nothing, mirroring the event log.
@@ -1829,7 +2346,14 @@ export interface SessionStartedNotice {
   ticketId: string;
   /** The started ticket's display id, precomputed so the toast never joins. */
   ticketDisplayId: string;
-  /** Who started it, as the door derived it (`requestActor`) — never self-declared. */
+  /**
+   * Who started it, as the door that started it derived them — never
+   * self-declared.
+   *
+   * Two doors produce this since VC-163: the `session_start` tool, which binds
+   * its caller from the attachment the call arrived on, and the app, which is
+   * the person. The shell was a third until VC-163 closed it.
+   */
   actor: TicketEventActorKind;
   /** Display id of the ticket the starting session was itself working, when known. */
   actorTicket: string | null;
@@ -1996,16 +2520,22 @@ export type SessionRenameResult = Result;
 /** Session creation stamps in the requested window, ascending — every project's. */
 export type SessionStartsResult = Result<{ startedAt: number[] }>;
 
+/**
+ * One usage rollup (`usage-report`): a total, its optional breakdown, and the
+ * metered-Session count that keeps an honest gap visible.
+ */
+export type UsageReportResult = Result<{ report: SessionUsageReport }>;
+
 /** One venue reading (`venue-snapshot`); the error arm carries git's own message. */
 export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
 
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 
 /**
- * The whole-project file index the `@` picker ranks over — returned by
+ * The file index the `@` picker and quick-open rank over — returned by
  * `volli:file-index`. Built fresh on each picker open from `git ls-files`
- * (gitignore-respecting) plus a walk of `.volli/artifacts/`; `truncated` is set
- * when the ~20k entry cap was hit.
+ * (gitignore-respecting) in the scope's checkout, plus a walk of Main's
+ * `.volli/artifacts/`; `truncated` is set when the ~20k entry cap was hit.
  */
 export type FileIndexResult = Result<{ files: IndexedFile[]; truncated: boolean }>;
 
@@ -2049,8 +2579,8 @@ export interface PromptTemplateIndexInput {
  * Everything the composer's `/` picker can offer — returned by
  * `volli:prompt-templates`: the prompt templates, already merged (project over
  * global) and sorted, and the project's skills (`.agents/skills/<slug>/SKILL.md`),
- * shadowed names not yet removed — that is the renderer's `visibleSkills` call,
- * beside the ranking that consumes it.
+ * shadowed names not yet resolved — that is the renderer's
+ * `resolveSlashNamespace` call, beside the ranking that consumes it.
  *
  * A missing directory is an empty list, never an error: most projects have no
  * `.volli/commands/` or `.agents/skills/` and a picker that toasts about it on
@@ -2087,6 +2617,54 @@ export type FileReadResult = Result<{
 
 /** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
 export type FileWriteResult = Result<{ mtime: number }>;
+
+// ---- find across files (plan §4.7) ----------------------------------------
+
+/**
+ * One matched line, as the Search page draws it and opens it.
+ *
+ * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
+ * the file hands them straight to `revealLineInCenter`/`setPosition` without a
+ * translation step nobody would think to test. `preview` is the matched line,
+ * possibly windowed around the match (a minified bundle's single 400 KB line is
+ * not a preview), and `start`/`end` are the match's offsets INSIDE that
+ * preview — never into the original line, which the renderer never sees.
+ */
+export interface FileSearchMatch {
+  line: number;
+  column: number;
+  preview: string;
+  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
+  start: number;
+  end: number;
+}
+
+/** Every match in one file, in file order — the Search page's group. */
+export interface FileSearchFile {
+  relPath: string;
+  matches: readonly FileSearchMatch[];
+}
+
+/**
+ * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
+ * `truncated` flag, saying WHICH bound was hit rather than only that one was:
+ *
+ *  - `none`    — ripgrep ran to completion; this is everything there is.
+ *  - `matches` — the match cap was reached and the search was stopped there.
+ *  - `time`    — the time budget ran out; what is here is what had arrived.
+ */
+export type FileSearchLimit = "none" | "matches" | "time";
+
+/**
+ * A completed search — returned by `volli:search`. `matches` counts what is
+ * carried in `files` (not what exists on disk, which a capped search cannot
+ * know), and `limit` is why counting stopped.
+ */
+export type FileSearchResult = Result<{
+  files: readonly FileSearchFile[];
+  matches: number;
+  limit: FileSearchLimit;
+}>;
 
 /**
  * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
@@ -2327,13 +2905,36 @@ export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
 // imported above.
 
 /**
+ * One PR check, normalized off the two shapes GitHub's rollup mixes together
+ * (VC-182): a GitHub Actions `CheckRun` and a legacy `StatusContext`.
+ *
+ * FOUR states, not gh's nine conclusions crossed with its five status values.
+ * The reader's question is "can I merge this?", and the answer has exactly four
+ * shapes — it failed, it is still going, it passed, it did not run. Collapsing
+ * happens ONCE, in `ghPrStatus`, so every surface reads the same verdict rather
+ * than each re-deciding what `NEUTRAL` means.
+ */
+export type PrCheckState = "passing" | "failing" | "pending" | "skipped";
+
+/** One row of the PR's check rollup, as the rail draws it. */
+export interface PrCheck {
+  /** Display name — a job name ("Check + Test") or a status context ("ci/legacy"). */
+  name: string;
+  /** The Actions workflow the job belongs to; `null` for a legacy commit status. */
+  workflow: string | null;
+  state: PrCheckState;
+  /** The run's log page, or `null` when the provider published no link. */
+  url: string | null;
+}
+
+/**
  * The composed retention state for ONE ticket, returned by
  * `volli:retention-state`. Everything but `keep` is TRANSIENT (decision #42:
  * persist identity, compute state) — recomputed from the merge-watch's last
  * poll plus the live Done-TTL clock, never stored. `keep` is the durable pin
- * (migration 010). `hasConflicts`/`failingChecks` are surfacing-only (the
- * #44/#45 button-never-gate rule): they explain why a PR can't merge yet, they
- * do not block the wrap-up prompt.
+ * (migration 010). `hasConflicts`/`checks` are surfacing-only (the #44/#45
+ * button-never-gate rule): they explain why a PR can't merge yet, they do not
+ * block the wrap-up prompt.
  */
 export interface TicketRetentionState {
   ticketId: string;
@@ -2343,8 +2944,12 @@ export interface TicketRetentionState {
   prState: "open" | "merged" | "closed" | null;
   /** The PR's base branch conflicts with it (`mergeStateStatus` DIRTY). */
   hasConflicts: boolean;
-  /** Display names of the PR's failing/errored checks (may be empty). */
-  failingChecks: string[];
+  /**
+   * The PR's whole check rollup (VC-182), empty when the PR has no checks —
+   * which is also how a project with no GitHub Actions pipeline reads, and is
+   * what makes the rail's checks row self-detecting rather than a setting.
+   */
+  checks: PrCheck[];
   /** Whether the Archive & clean prompt should be offered right now. */
   archiveReady: boolean;
   /** The condition behind `archiveReady` (still set when suppressed by dismissal). */

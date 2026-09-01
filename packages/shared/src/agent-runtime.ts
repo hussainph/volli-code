@@ -26,6 +26,9 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
+// Type-only: `verb-registry.ts` reads this module's own vocabulary, so a value
+// import here would close a cycle. Nothing below needs one.
+import type { VerbToolKey } from "./verb-registry";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -36,6 +39,7 @@ import {
   type SessionInteractionOption,
   type SessionInteractionResolution,
 } from "./session-ledger";
+import type { SessionUsage } from "./session-usage";
 
 export type SessionRole = "project" | "ticket" | "subagent";
 
@@ -183,8 +187,36 @@ export type RuntimeSessionIdentity = TicketRuntimeIdentity | ProjectRuntimeIdent
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";
 
+/**
+ * The named half of a Session's Agent Tool Surface: what its Role handed it,
+ * as opposed to what a wired port gave it.
+ *
+ * Two fields rather than one widened list, and the reason is a sentence in the
+ * system prompt. `prompt.ts` renders {@link tools} as *"The available coding
+ * tools are: …"*, which is true of `read`/`edit`/`write`/`execute` and would
+ * become false the moment a product verb joined them. Widening the field would
+ * have made the prompt lie; adding a field beside it leaves those bytes exactly
+ * as they were (VC-162).
+ *
+ * They are also wired differently, which is the deeper reason they are not one
+ * list. A coding tool is answered by the execution environment the runtime
+ * holds; a verb tool is answered by a host port. Keeping them apart is what
+ * lets {@link SessionToolBinding} carry the right thing for each.
+ */
 export interface RuntimeToolBundle {
+  /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
+  /**
+   * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
+   * order. Absent means none — the Ticket Role's default bundle has no
+   * agent-control tool, while a durable birth grant may add one scoped verb.
+   *
+   * Membership comes from here; execution comes from
+   * {@link SessionRuntimeSpec.callVerb}. A bundle naming a verb with no port
+   * behind it fails where the surface is built, which is the cheapest place
+   * for it to fail.
+   */
+  verbs?: readonly VerbToolKey[];
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -398,7 +430,11 @@ export interface RuntimeAskUserRequest {
 export interface RuntimeWebDocument {
   /** The URL that was asked for, canonical as admission normalized it. */
   requestedUrl: string;
-  /** The URL the bytes came from. Equal to {@link requestedUrl} while no redirect is followed. */
+  /**
+   * The URL the bytes came from: the last hop of the redirect chain, or
+   * {@link requestedUrl} when the first request answered with the document.
+   * Every hop passed the same admission, address and pinning policy.
+   */
   finalUrl: string;
   /** Scheme, host and port of the final URL. */
   origin: string;
@@ -623,20 +659,23 @@ export interface SessionRuntimeSpec {
    * The policy every tool call is checked against — when the Session was given
    * one at all.
    *
-   * Optional, and absent throughout the product: Volli runs Pi ungated, and the
-   * desktop adapter supplies no Snapshot. Absence is not a Snapshot that allows
-   * everything. With no Snapshot the runtime installs no `beforeToolCall`, so
-   * the rule pack, the fallback thresholds and {@link ask} are structurally
-   * unreachable rather than merely permissive — which is why this is an absent
-   * field and not an `ungated` member on {@link AuthoritySnapshot}. A Snapshot
-   * that meant "do not consult me" would still have to carry a pack id, a pack
-   * hash and two thresholds describing rules nobody will ever run, and the one
-   * path that must not reach the gate would depend on every caller remembering
-   * to check.
+   * Optional, and the optionality carries meaning that a value could not.
+   * Absence is not a Snapshot that allows everything: with no Snapshot the
+   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
+   * thresholds and {@link ask} are structurally unreachable rather than merely
+   * permissive. A Snapshot that meant "do not consult me" would still have to
+   * carry a pack id, a pack hash and two thresholds describing rules nobody will
+   * ever run, and the one path that must not reach the gate would depend on
+   * every caller remembering to check.
    *
-   * The machinery is kept whole for
-   * `docs/plans/authority-two-axis-rearchitecture.md`, which changes the policy
-   * the mechanism carries rather than the mechanism.
+   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
+   * (VC-44), and fills it only when that policy says `enforce`. The two other
+   * postures both arrive here as absence, for different reasons: `off` builds no
+   * Snapshot at all, and `observe` builds one, records it on the attachment, and
+   * deliberately does not hand it over. So a Session whose policy is `observe`
+   * has a durable Snapshot and an unreachable gate at the same time — which is
+   * the state slice 7 wanted, and the reason this field is the seam rather than
+   * a flag inside the Snapshot.
    */
   authority?: AuthoritySnapshot;
   brief: RuntimeBrief;
@@ -768,14 +807,64 @@ export interface SessionRuntimeSpec {
    * and one with nowhere has none.
    */
   browser?: RuntimeBrowserPort;
+  /**
+   * Run one product verb the Session's frozen Agent Tool Surface names, in the
+   * host's own process (VC-162).
+   *
+   * The door that makes Role- and grant-scoped availability real. A verb reached this way
+   * never crosses the agent socket, so the caller is not *attributed* from an
+   * environment variable it could have been handed — it is the Session this
+   * spec belongs to, bound by the host at attach and not stated in the call.
+   * That is the whole difference between the two doors, and it is why a verb
+   * whose misuse cannot be tolerated from an arbitrary same-uid process can
+   * live here and not on the socket.
+   *
+   * Unlike {@link askUser} and {@link webFetch}, this port does NOT decide
+   * membership: the bundle does. A Session whose bundle names a verb and whose
+   * spec omits this port is a host that promised a tool it cannot answer, and
+   * {@link sessionToolBindings} throws rather than building a surface with a
+   * hole in it. The asymmetry is deliberate — a web boundary is a capability a
+   * profile may genuinely lack, while a host that can attach a Session can
+   * always run its own verbs.
+   *
+   * `input` has already been checked against the registry's schema for that
+   * verb. What it has NOT been checked for is meaning: whether the Ticket
+   * exists, whether the model is available, whether the caller's project holds
+   * it. Those are the host's, and their refusals come back as text the model
+   * can act on rather than as thrown errors — the line {@link webFetch} draws
+   * between a refusal and a host that could not answer at all.
+   */
+  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
+}
+
+/** One product verb call, as the runtime hands it to the host. */
+export interface RuntimeVerbCall {
+  /** The canonical dot-key, never the provider wire name. */
+  verb: VerbToolKey;
+  /** Schema-checked arguments; semantics are still the host's to judge. */
+  input: Readonly<Record<string, unknown>>;
+  /**
+   * The runtime's own id for this call.
+   *
+   * Carried so the host can derive a durable operation id from trusted caller
+   * identity plus this, rather than minting a fresh random one per execution.
+   * That is what makes a replayed tool call land as one durable act instead of
+   * two — the same reasoning the Session Engine's command dedup already runs on.
+   */
+  toolCallId: string;
+}
+
+/** What the model is told a verb did. Text, because that is all a model reads. */
+export interface RuntimeVerbResult {
+  text: string;
 }
 
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "callVerb"
 >;
 
 /**
@@ -802,7 +891,8 @@ export type SessionToolBinding =
   | { tool: "browser_snapshot"; port: RuntimeBrowserPort }
   | { tool: "browser_act"; port: RuntimeBrowserPort }
   | { tool: "browser_screenshot"; port: RuntimeBrowserPort }
-  | { tool: "browser_console"; port: RuntimeBrowserPort };
+  | { tool: "browser_console"; port: RuntimeBrowserPort }
+  | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
  * The Agent Tool Surface one spec describes, in the order it is offered.
@@ -846,9 +936,25 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       browser === undefined ? null : { tool: "browser_screenshot", port: browser },
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
   };
+  const verbs = spec.tools.verbs ?? [];
+  const callVerb = spec.callVerb;
+  if (verbs.length > 0 && callVerb === undefined) {
+    // Loudly, and at the boundary that builds the surface. A bundle naming a
+    // verb the host cannot run is not a smaller surface — it is a Session whose
+    // durable record says it holds a tool that was never offered, which is the
+    // exact disagreement `sessionToolIds` exists to make unrepresentable.
+    throw new Error(
+      `This Session's bundle names ${verbs.join(", ")}, but no verb port is wired to answer it.`,
+    );
+  }
   return [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
+    ...verbs.map((verb): SessionToolBinding => ({
+      tool: verb,
+      verb,
+      port: callVerb as NonNullable<typeof callVerb>,
+    })),
   ];
 }
 
@@ -898,6 +1004,7 @@ export type RuntimeObservation =
   | CompactionObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
+  | UsageObservation
   | RuntimeActivityObservation
   | AuthorityObservation
   | AttentionObservation
@@ -1052,6 +1159,32 @@ export interface SettledMessageObservation {
   recoveryCursor?: string;
 }
 
+/**
+ * One model operation was metered.
+ *
+ * Deliberately not folded into {@link SettledMessageObservation}, and the split
+ * is the point. A settled message is a message worth showing; a metered
+ * operation is money worth counting, and most agentic spend is the second
+ * without being the first — a reply that only called tools, a reply that failed
+ * after its prompt had been billed, a Context Compaction, a utility completion
+ * with no transcript at all. Usage carried on the settled arm could only ever
+ * report the fraction of a turn that happened to say something out loud.
+ *
+ * `entryId` is the executor's own durable identity for the operation, and it is
+ * what the durable fact is named after. A counter would re-mint a different id
+ * on every replay and give the ledger a second copy of a bill it already has.
+ */
+export interface UsageObservation {
+  kind: "usage";
+  /** The executor's durable entry identity for the operation that spent this. */
+  entryId: string;
+  /** Null for spend outside a turn: compaction, and utility work. */
+  turnId: string | null;
+  usage: SessionUsage;
+  occurredAt?: number;
+  recoveryCursor?: string;
+}
+
 /** JSON-safe, runtime-normalized tool input and output. */
 export type RuntimeActivityValue =
   | string
@@ -1199,6 +1332,12 @@ export interface RuntimeAttachmentHandle {
      * `volli-blob:` reference in the message parts.
      */
     images?: readonly RuntimeImageInput[],
+    /**
+     * Typed resources delivered beside this message. The runtime frames them
+     * after the user's text and retains their identity so compaction can
+     * restore exact instructions instead of trusting a generated summary.
+     */
+    resources?: readonly PromptResource[],
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
@@ -1261,9 +1400,56 @@ export interface AgentRuntime {
   }): Promise<ModelAccessSnapshot>;
   startSession(spec: SessionRuntimeSpec): Promise<RuntimeAttachmentHandle>;
   /**
-   * Run one utility completion and resolve its text. Throws when the model is
-   * not one this runtime holds or the call failed; a caller that cannot afford
-   * the throw (a title that keeps its heuristic) catches and logs.
+   * Run one utility completion and resolve its text and what it consumed.
+   * Throws when the model is not one this runtime holds or the call failed; a
+   * caller that cannot afford the throw (a title that keeps its heuristic)
+   * catches and logs.
+   *
+   * A failure that was nonetheless BILLED throws a
+   * {@link UtilityCompletionError} carrying its usage, so the caller can record
+   * the spend it owes even though it got nothing for it.
    */
-  completeUtility(input: UtilityCompletion): Promise<string>;
+  completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
+}
+
+/**
+ * What a utility completion produced, and what it cost.
+ *
+ * Usage rides back with the text rather than being dropped, because this is
+ * real spend on a real Session and it produces no transcript to carry it. A
+ * caller that keeps the answer and a caller that discards it owe the same
+ * bill: the provider charged for the call, not for the decision made after it.
+ *
+ * `usage` is null when the executor metered nothing — never a zero.
+ */
+export interface UtilityCompletionResult {
+  text: string;
+  usage: SessionUsage | null;
+}
+
+/**
+ * A utility completion that produced no usable answer, carrying what it cost
+ * anyway.
+ *
+ * THE FAILURE IS THE CASE THAT MOST NEEDS THIS. A provider bills for the prompt
+ * it accepted, not for the answer Volli could use: a reply that stopped on a
+ * length limit, a refusal, a model that returned nothing but a reasoning span.
+ * Every one of those is a real charge, and every one of them reaches the caller
+ * as a thrown error. A runtime that threw before reading `message.usage` would
+ * make failed background work the one kind of spend a Session could never
+ * account for — and the auto-titler retries, so the same Session can be billed
+ * repeatedly for calls that leave no trace at all.
+ *
+ * `usage` is null when the call failed BEFORE anything was metered (an unknown
+ * model, a transport that never connected). Null is "nothing was billed as far
+ * as we can tell", never "free".
+ */
+export class UtilityCompletionError extends Error {
+  readonly usage: SessionUsage | null;
+
+  constructor(message: string, usage: SessionUsage | null) {
+    super(message);
+    this.name = "UtilityCompletionError";
+    this.usage = usage;
+  }
 }

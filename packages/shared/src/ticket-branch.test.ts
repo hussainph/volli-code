@@ -24,6 +24,17 @@ describe("slugify", () => {
     expect(result.length).toBeLessThanOrEqual(48);
     expect(result.endsWith("-")).toBe(false);
   });
+
+  it("slugifies a title that is one long run of hyphens in milliseconds", () => {
+    // The flagged `/^-+|-+$/g` (CodeQL js/polynomial-redos) only ever saw a
+    // collapsed slug, so it was never slow in practice — which is exactly what
+    // could rot. This pins the promise the trim now makes on its own: cost
+    // follows the title's length, never the shape of what is in it.
+    const started = performance.now();
+    expect(slugify("-".repeat(100_000))).toBe("");
+    expect(slugify(`${"-".repeat(100_000)}tail`)).toBe("tail");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("ticketBranchName", () => {

@@ -9,12 +9,46 @@ VC-21.
 
 ## Status
 
-Both axes are off. Pi runs at its own defaults: ungated and uncontained.
+Containment is off. The gate is wired, pinned and durable, and refuses nothing
+by default.
 
-**The gate is off.** `SessionRuntimeSpec.authority` is optional and the desktop
-adapter supplies no Snapshot, so the Pi runtime installs no `beforeToolCall` at
-all and the rule pack, the fallback thresholds and the escalation port are never
-reached.
+**The gate is wired and observing.** Slice 7's minimal cut landed in VC-44:
+policy is a per-project `AuthorityPolicy` document in app-owned state (a
+`projects.authority_policy` column, migration 025), the desktop adapter builds an
+`AuthoritySnapshot` from it at every attach, and the Session Engine records that
+Snapshot onto `attachment.opened`. `rulePackId`/`rulePackHash` finally pin
+something: an `authority.denied` event carries an `attachmentId`, and the
+attachment carries the pack.
+
+**And a person can now change it.** VC-172 added the write half: Configure →
+Authority records a project's departures, validated at the door, and the next
+attachment resolves and pins them. A Session already running keeps the Snapshot
+it opened under — policy is pinned for the life of one attachment, so an edit
+reaches the next Session rather than one mid-turn. The write is app-only by
+construction: no agent verb projects it, because the agent must not author the
+policy that governs it.
+
+The posture is data, with three values. `off` builds no Snapshot, so
+`SessionRuntimeSpec.authority` is absent and the Pi runtime installs no
+`beforeToolCall` — the explicit bypass, and what every Session ran under before
+VC-44. `observe` builds the Snapshot, records it, and still hands the runtime
+nothing. `enforce` hands it over and the pack binds.
+
+**`observe` is the default, and the reason is the read rule.** Enforcing the nine
+rules today refuses two things the product itself asks for: the skills index
+tells a Session to activate a skill by reading its `SKILL.md`, and a
+personal-tier skill lives at `<home>/.agents/skills/<slug>/SKILL.md` — outside
+every workspace, so `path.outside-workspace` refuses it. A ticket brief's
+reference to the Main checkout reads the same way. The same bytes stay readable
+through `execute`, because no rule judges command operands, so enforcing would
+teach the model to reach for `cat` where `read` was refused. Slice 1 is what
+makes `enforce` the right default.
+
+One thing did change for `enforce`: `path.outside-workspace` and
+`command.git-escapes-workspace` moved into `OVERRIDABLE_AUTHORITY_RULES`. They
+were hard denials because Seatbelt refused them regardless and consent was moot;
+with no sandbox a person's "yes" would actually be carried out, and the skills
+case above is a read a reasonable person plainly wants.
 
 **Containment is off.** `executionEnvFactory` now defaults to Pi's own
 `NodeExecutionEnv`, so nothing wraps process execution in Seatbelt and nothing
@@ -228,12 +262,49 @@ else.
 
 ## What becomes durable
 
-Policy becomes data: a per-project rule pack and a settings surface, with
-defaults, so changing authority does not require shipping a build. The
-`AuthoritySnapshot` is persisted at attach, which finally gives `rulePackId` and
-`rulePackHash` something to pin — today they are written into a live spec that no
-reader ever compares, and `authority.denied` records a cause with no record of
-the pack that produced it.
+Policy becomes data: a per-project document with defaults, so changing authority
+does not require shipping a build. The `AuthoritySnapshot` is persisted at
+attach, which finally gives `rulePackId` and `rulePackHash` something to pin —
+they used to be written into a live spec that no reader ever compared, while
+`authority.denied` recorded a cause with no record of the pack that produced it.
+
+VC-44 landed the document, the store and the persisted Snapshot. One thing it
+deliberately did not do, and one it left owing.
+
+The **rule pack stays compiled**: what became data is the posture, the judge and
+the per-actor policy, not the rules, because rules-as-data needs a rule language
+before it needs a store.
+
+The **settings surface** was the thing owed, and VC-172 shipped it: Configure →
+Authority writes a project's departures through `volli:project-authority-policy`,
+and `updateProjectAuthorityPolicy` is the write `getProjectAuthorityPolicy` had
+been missing since migration 025. Two properties are load-bearing and are held
+by tests rather than by intent:
+
+- **Departures, never the resolved document.** The column, the `Project` field
+  the renderer edits, and the IPC payload all carry only what a project
+  disagreed with, so tightening a built-in default still reaches every project
+  that never disagreed. An override that states nothing is stored as `NULL`, so
+  "reverted the last departure" and "never spoke" are the same bytes.
+- **The agent cannot write it.** There is no `volli authority set`, and there
+  cannot be one: writing the policy that governs a Session is control tier, and
+  `verbTier` refuses a `cli` access mode on a control-tier verb outright. The
+  write is an app-only IPC channel with no verb behind it. Reads are a different
+  question — `volli authority defaults|effective` stays scoped as a
+  nice-to-have, and stays legitimate on the socket, because reading a policy is
+  not authoring one.
+
+Validation splits along the same seam. `resolveAuthorityPolicy` is total and
+degrades a bad document to the defaults, because it runs where a throw costs a
+Session its attachment; `validateAuthorityPolicyOverride` refuses at the write,
+where a person is present to be told. The difference that matters is an unknown
+key: the read path drops it silently, which is indistinguishable from a project
+that never spoke, so the write path is the only place a typo can be caught.
+
+Still not tamper-proof, and the plan should not pretend otherwise. A Session's
+`execute` still reaches `volli.db` through an ordinary shell command until slice
+2 lands `writableRoots`. What the surface buys is that policy has a door, and
+that the door is not one the agent can open.
 
 ## Slices
 
@@ -249,7 +320,13 @@ Each is independently shippable and independently valuable.
 5. **The injection probe** over tool output.
 6. **Network allowlist and the Tier 3 classifier, together.** Never separately:
    the moment egress opens, the argument for no classifier expires.
-7. **Policy as data**, and the persisted snapshot.
+7. **Policy as data**, and the persisted snapshot. *(Minimal cut landed in
+   VC-44: the policy document, the app-owned store, the Snapshot built at attach
+   and recorded on the attachment, and `observe` as the day-one posture. VC-172
+   added the write — Configure → Authority, an app-only IPC channel, and a
+   rejecting validator — so a project's departures are reachable through the
+   product. Still open: the CLI inspection READS, and the rule pack itself
+   becoming data.)*
 8. **The file-tool boundary** — one enforcement layer, TOCTOU seam closed.
 
 ## What this supersedes

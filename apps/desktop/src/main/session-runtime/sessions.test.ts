@@ -18,6 +18,7 @@ import {
   type SessionToolSurfacePorts,
   type SessionsOptions,
 } from "./sessions";
+import type { SessionGrantPorts } from "./delegation-policy";
 
 const MODEL: ModelSelection = {
   providerId: "openai-codex",
@@ -37,6 +38,11 @@ const CODING_AND_ASK: SessionToolSurfacePorts = {
   record: async () => undefined,
 };
 
+const NO_GRANTS: SessionGrantPorts = {
+  resolveBirth: () => ({ grants: [], delegation: null }),
+  recordBirth: () => undefined,
+};
+
 /**
  * One harness for both Roles: the module under test is the single start door,
  * so the fixtures stop being two parallel copies too.
@@ -53,6 +59,7 @@ function sessions(
       ticketBelongsToProject: () => true,
       skills: NO_SKILLS,
       toolSurface: CODING_AND_ASK,
+      grants: NO_GRANTS,
       runtime: {
         command: async (request) => {
           commands.push(request);
@@ -65,6 +72,34 @@ function sessions(
 }
 
 describe("Sessions", () => {
+  it("asks the default-model port with the Role AND the project — the chain's project rung (VC-126)", async () => {
+    const asked: Array<[string, string | null]> = [];
+    const { sessions: door } = sessions({
+      readDefaultModel: (role, projectId) => {
+        asked.push([role, projectId]);
+        return MODEL;
+      },
+    });
+
+    await door.create({
+      operationId: "operation-ticket",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+    });
+    await door.create({
+      operationId: "operation-project",
+      projectId: "project-2",
+      ticketId: null,
+      title: "Project chat",
+    });
+
+    expect(asked).toEqual([
+      ["ticket", "project-1"],
+      ["project", "project-2"],
+    ]);
+  });
+
   it("create mints a Ticket Session and a project Session through the one door — ticketId is the Role", async () => {
     const ticketsAsked: string[] = [];
     const { commands, sessions: door } = sessions({
@@ -88,9 +123,10 @@ describe("Sessions", () => {
     });
 
     // Both are durable and addressable NOW — the attach follows separately,
-    // off the caller's critical path (VC-16).
-    expect(ticketed).toEqual({ sessionId: "session-1" });
-    expect(ticketless).toEqual({ sessionId: "session-1" });
+    // off the caller's critical path (VC-16) — and each answer carries the
+    // model policy the mint recorded, which is what a Run stores (VC-126).
+    expect(ticketed).toEqual({ sessionId: "session-1", model: MODEL });
+    expect(ticketless).toEqual({ sessionId: "session-1", model: MODEL });
     // The Role travels as the nullable ticketId itself; nothing re-derives it.
     expect(commands).toMatchObject([
       {
@@ -188,6 +224,54 @@ describe("Sessions", () => {
     expect(JSON.stringify(started)).not.toMatch(/adapter|profile|pi|opencode/i);
   });
 
+  it("records birth grants before the frozen tool surface they authorize", async () => {
+    const order: string[] = [];
+    const delegation = {
+      parentSessionId: "parent-session",
+      depth: 1,
+      maxDepth: 2,
+      maxChildren: 3,
+      claimToolCallId: "tool-call-1",
+    } as const;
+    const { sessions: door } = sessions({
+      grants: {
+        resolveBirth: (input) => {
+          order.push(`resolve-grant:${input.role}`);
+          expect(input.delegation).toEqual(delegation);
+          return { grants: ["session.start"], delegation: input.delegation ?? null };
+        },
+        recordBirth: (_sessionId, birth) => {
+          order.push(`record-grant:${birth.grants.join(",")}`);
+        },
+      },
+      toolSurface: {
+        resolve: (_role, grants) => {
+          order.push(`resolve-surface:${grants?.join(",")}`);
+          return ["read", "session.start"];
+        },
+        record: () => {
+          order.push("record-surface");
+          return Promise.resolve();
+        },
+      },
+    });
+
+    await door.create({
+      operationId: "operation-delegated",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Delegated work",
+      delegation,
+    });
+
+    expect(order).toEqual([
+      "resolve-grant:ticket",
+      "resolve-surface:session.start",
+      "record-grant:session.start",
+      "record-surface",
+    ]);
+  });
+
   it("records the sanitized Agent Tool Surface before any attachment exists", async () => {
     const recorded: Array<{ sessionId: string; tools: readonly string[] }> = [];
     const { commands, sessions: door } = sessions({
@@ -213,6 +297,66 @@ describe("Sessions", () => {
       },
     ]);
     expect(commands.some((request) => request.command.kind === "adapter.attach")).toBe(false);
+  });
+
+  it("resolves the surface for the Role the mint is creating (VC-162)", async () => {
+    // Role determines the tool bundle, and `ticketId !== null` IS the Role on
+    // start. Before this argument existed every Session resolved the same list
+    // and Role-scoped availability was true only in CONTEXT.md.
+    const roles: string[] = [];
+    const door = () =>
+      sessions({
+        toolSurface: {
+          resolve: (role) => {
+            roles.push(role);
+            return ["read"];
+          },
+          record: async () => undefined,
+        },
+      }).sessions;
+
+    await door().create({
+      operationId: "operation-project",
+      projectId: "project-1",
+      ticketId: null,
+      title: "A project chat",
+    });
+    await door().create({
+      operationId: "operation-ticket",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "Ticket work",
+    });
+
+    expect(roles).toEqual(["project", "ticket"]);
+  });
+
+  it("never re-resolves the surface for a Session that already exists", async () => {
+    // The freeze, asserted where it is decided (VC-162). A grant recorded after
+    // a Session exists is inert for it at EVERY later attachment — not merely
+    // at the next one — because attaching does not consult the resolver at all.
+    // A later grant reaches the next Session created.
+    let resolves = 0;
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: () => {
+          resolves += 1;
+          return ["read"];
+        },
+        record: async () => undefined,
+      },
+    });
+
+    await door.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: null,
+      title: "Frozen at birth",
+    });
+    await door.attach({ operationId: "operation-2", sessionId: "session-1" });
+    await door.attach({ operationId: "operation-3", sessionId: "session-1" });
+
+    expect(resolves).toBe(1);
   });
 
   it("reattaches an existing Session with no Role question asked — one attach for both Roles", async () => {
@@ -491,6 +635,119 @@ describe("Sessions", () => {
         door.start({
           ...startInput("operation-no-seam"),
           modelOverride: { reasoningLevel: "high" },
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
+      expect(commands).toEqual([]);
+    });
+
+    /* ------------------------------- whenUnavailable: "record" (VC-133) --- */
+
+    it("records an unavailable pin rather than refusing it, when asked to", async () => {
+      // VC-112's Runtime clause, and the door an Automation Run comes through:
+      // "a pinned model that has since become unavailable does not silently
+      // fall back — let the Session fail through the existing error path." So
+      // the Session EXISTS, carrying the model it was told to carry, and the
+      // attach is what refuses it (`configuration_invalid`, which is `error`).
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const created = await overrideSessions(commands).create({
+        ...startInput("operation-retired-pin"),
+        modelOverride: {
+          model: { providerId: "acme", modelId: "retired" },
+          reasoningLevel: "medium",
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(created.model).toEqual({
+        providerId: "acme",
+        modelId: "retired",
+        reasoningLevel: "medium",
+      });
+      // Durably, in the Session's own history — so the failure a person opens
+      // names the model that caused it instead of an empty policy.
+      expect(commands.map((request) => request.command.kind)).toEqual([
+        "session.create",
+        "model.select",
+      ]);
+      expect(commands[1]).toMatchObject({
+        command: {
+          kind: "model.select",
+          selection: { providerId: "acme", modelId: "retired", reasoningLevel: "medium" },
+        },
+      });
+    });
+
+    it("records a level the model does not advertise rather than second-guessing it", async () => {
+      // Same clause, the other half of a pin: a model that still exists but has
+      // dropped the level this record pinned. One door, one answer — splitting
+      // it would put half the failures in a toast and half in the Session.
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const created = await overrideSessions(commands).create({
+        ...startInput("operation-retired-level"),
+        modelOverride: {
+          model: { providerId: "anthropic", modelId: "claude-opus" },
+          reasoningLevel: "xhigh",
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(created.model).toEqual({
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "xhigh",
+      });
+    });
+
+    it("never inspects Model Access at all for a recorded override", async () => {
+      // Not merely tolerant of an unavailable answer: it does not ask. That is
+      // what lets a Run start while the provider is unreachable, and what keeps
+      // this arm free of a second availability policy that could drift.
+      let inspections = 0;
+      const { sessions: door } = sessions({
+        inspectModelAccess: async () => {
+          inspections += 1;
+          return access;
+        },
+      });
+
+      await door.create({
+        ...startInput("operation-unasked"),
+        modelOverride: {
+          model: { providerId: "acme", modelId: "retired" },
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(inspections).toBe(0);
+    });
+
+    it("still refuses a recorded override that names no model at all", async () => {
+      // "Record it as asked" is not "invent one". A reasoning level with no
+      // model and no default is unanswerable, and it refuses before anything
+      // durable exists exactly as it always did.
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: () => null,
+        inspectModelAccess: async () => access,
+      });
+
+      await expect(
+        door.create({
+          ...startInput("operation-record-no-model"),
+          modelOverride: { reasoningLevel: "high", whenUnavailable: "record" },
+        }),
+      ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
+      expect(commands).toEqual([]);
+    });
+
+    it("keeps validation for every door that does not ask to record", async () => {
+      // The default, and it is the human doors: a person who just picked a
+      // model in a picker gets the immediate answer, with nothing started and
+      // nothing to clean up.
+      const commands: SessionRuntimeCommandRequest[] = [];
+      await expect(
+        overrideSessions(commands).create({
+          ...startInput("operation-still-refuses"),
+          modelOverride: { model: { providerId: "acme", modelId: "retired" } },
         }),
       ).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
       expect(commands).toEqual([]);

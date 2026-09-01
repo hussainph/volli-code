@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { RuntimeObservation, SessionEvent, SessionLedgerIds } from "@volli/shared";
+import type {
+  AuthoritySnapshot,
+  RuntimeObservation,
+  SessionEvent,
+  SessionLedgerIds,
+} from "@volli/shared";
+import { sessionPersonNeed } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -14,6 +20,7 @@ import {
   SessionRuntimeNotFoundError,
   type BindingHandle,
   type HarnessCommand,
+  type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -101,6 +108,8 @@ class FakeAdapter implements NativeHarnessAdapter {
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
   attachObservation: RuntimeObservation | null = null;
   releaseReasons: string[] = [];
+  /** The policy this fake binding reports running under (VC-44). */
+  authority: AuthoritySnapshot | null = null;
 
   async attach(
     spec: Parameters<NativeHarnessAdapter["attach"]>[0],
@@ -115,6 +124,7 @@ class FakeAdapter implements NativeHarnessAdapter {
     if (this.attachFailure) throw this.attachFailure;
     return {
       native: { id: "native-session-1", detail: { provider: "fake" } },
+      authority: this.authority,
       dispatch: async (command) => {
         this.dispatches += 1;
         this.commands.push(command);
@@ -182,7 +192,7 @@ function composition(
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
   } = {},
-): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
+): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
   const engine =
@@ -694,6 +704,94 @@ describe("SessionRuntime native adapter contract", () => {
     await expect(Promise.all([message, steering])).resolves.toHaveLength(2);
   });
 
+  it("records the binding's Authority Snapshot on the attachment, so a denial can name its pack", async () => {
+    // VC-44's third acceptance criterion, end to end. An `authority.denied`
+    // event carries an `attachmentId` and nothing else about the policy that
+    // refused; the pack it cites is resolved through the attachment recorded
+    // here, which is what makes a denial interpretable long after the pack has
+    // moved on — and comparable between two attachments of the same Session.
+    const adapter = new FakeAdapter();
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: "volli.builtin",
+      rulePackHash: "dca89a93",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+    adapter.authority = authority;
+    const { runtime } = composition({ adapter });
+
+    const sessionId = await createAndAttach(runtime);
+    const snapshot = await runtime.snapshot({ sessionId });
+    const opened = snapshot.frames.find(
+      ({ event }) => event.payload.kind === "attachment.opened",
+    )!.event;
+
+    expect(
+      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
+    ).toEqual(authority);
+  });
+
+  it("hands a rehydrated binding the Snapshot the attachment opened under", async () => {
+    // The other half of pinning, and the half a relaunch breaks if nobody
+    // carries it: `#rehydrateBinding` rebuilds an attachment from history, and
+    // the adapter would otherwise resolve whatever policy says NOW. One
+    // `attachmentId` would then run under one policy while the `attachment.opened`
+    // record cited another — and a denial resolves through that id, so the
+    // durable answer would be the wrong one.
+    const first = composition();
+    const authority: AuthoritySnapshot = {
+      mode: "auto",
+      location: "worktree",
+      enforcement: "enforce",
+      judgmentMode: "ask",
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+      rulePackId: "volli.builtin",
+      rulePackHash: "dca89a93",
+      classifierModel: null,
+      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
+    };
+    first.adapter.authority = authority;
+    const sessionId = await createAndAttach(first.runtime);
+    const attachmentId = (await first.runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await first.runtime.close();
+
+    // The project edits policy while nothing is running. A fresh attach would
+    // pick the new one up; this attachment must not.
+    first.adapter.authority = { ...authority, enforcement: "observe", judgmentMode: "auto" };
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "cold-authority-",
+    });
+    await recovered.runtime.reconcile({ sessionId, attachmentId });
+
+    const rehydrated = first.adapter.specs.at(-1)!;
+    expect(rehydrated.continuity).toBe("native_resume");
+    expect(rehydrated.pinnedAuthority).toEqual(authority);
+  });
+
+  it("records no Snapshot for a binding that runs no gate", async () => {
+    // An adapter that answers nothing — a terminal companion — and a project
+    // that turned the gate off both land here, because both mean the same thing
+    // about the attachment: nothing governed it.
+    const { runtime } = composition({ adapter: new FakeAdapter() });
+
+    const sessionId = await createAndAttach(runtime);
+    const snapshot = await runtime.snapshot({ sessionId });
+    const opened = snapshot.frames.find(
+      ({ event }) => event.payload.kind === "attachment.opened",
+    )!.event;
+
+    expect(
+      opened.payload.kind === "attachment.opened" && opened.payload.attachment.authority,
+    ).toBeNull();
+  });
+
   it("buffers startup observations until the attachment is durable", async () => {
     const adapter = new FakeAdapter();
     adapter.attachObservation = {
@@ -769,6 +867,46 @@ describe("SessionRuntime native adapter contract", () => {
       reason: "rm -rf resolves under a home directory",
     });
     expect(snapshot.projection.authorityDenials).toBe(1);
+  });
+
+  it("records what an operation consumed, and folds it into the Session's own total", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    const usage = {
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 0,
+      costUsd: 0.25,
+      costBasis: "catalog-estimate",
+    } as const;
+
+    await adapter.emit({ kind: "usage", entryId: "pi-entry-4", turnId: "turn-1", usage });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    const recorded = snapshot.frames.find(({ event }) => event.payload.kind === "usage.recorded");
+    expect(recorded?.event.attachmentId).toBe(attachmentId);
+    expect(recorded?.event.payload).toEqual({
+      kind: "usage.recorded",
+      attachmentId,
+      turnId: "turn-1",
+      // Stamped by the engine off the Session row, not reported by the
+      // executor: what a model call cost is the adapter's to observe, what it
+      // was spent ON is not. `createAndAttach` makes a ticketless Session.
+      attribution: { projectId: "project-1", ticketId: null },
+      usage,
+    });
+    expect(snapshot.projection.usage).toMatchObject({
+      requestCount: 1,
+      knownCostUsd: 0.25,
+      costCoverage: "complete",
+      costBasis: "catalog-estimate",
+      cachedInputShare: 0.8,
+    });
   });
 
   it("records both halves of a compaction as durable Session Events", async () => {
@@ -1162,6 +1300,62 @@ describe("SessionRuntime native adapter contract", () => {
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
   });
 
+  it("records a host-observed post-attach message failure as Session error Attention", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+    // Recovery can revisit one pending Automation intent repeatedly. Its stable
+    // message command id updates one Attention rather than stacking errors.
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+  });
+
+  it("records a message failure for a Session with no live executor under the host adapter identity", async () => {
+    // The crash-recovery arm: an Automation delivery sweep can report a refusal
+    // after the binding that refused it is already gone. The Attention then
+    // carries the host executor's own identity and no venue — the intent
+    // outlives the attachment, so the report must not require one.
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "detached-failure-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId: created.sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message could not be delivered: transport closed",
+    });
+
+    const { projection } = await runtime.projection({ sessionId: created.sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message could not be delivered: transport closed",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+  });
+
   it("retires an unrecoverable attach Attention once an attach succeeds", async () => {
     // The sibling of the configuration case above, and it used to be the one
     // that never ended: the clear path named `configuration_invalid` alone, so
@@ -1209,11 +1403,13 @@ describe("SessionRuntime native adapter contract", () => {
     // not there is the failure the reader gets per prompt instead of once, and
     // wearing the harness's name for a missing path rather than this one.
     const detail = "Couldn't prepare the worktree at /w/VC-12 — fatal: invalid reference";
+    let unpreparable = true;
     const { runtime, adapter } = composition({
       locations: {
         resolve: async () => ({ directory: "/w/VC-12", venue }),
         prepare: async () => {
-          throw new Error(detail);
+          if (unpreparable) throw new Error(detail);
+          return { directory: "/w/VC-12", venue };
         },
         reaffirm: stillThere,
       },
@@ -1238,10 +1434,68 @@ describe("SessionRuntime native adapter contract", () => {
       receipt: { status: "rejected", code: "location_unavailable", detail },
     });
     expect(adapter.attaches).toBe(0);
-    expect((await runtime.snapshot({ sessionId: session.sessionId })).projection).toMatchObject({
+    const { projection } = await runtime.snapshot({ sessionId: session.sessionId });
+    expect(projection).toMatchObject({
       liveExecutor: null,
       attachments: [{ status: "failed", failure: { code: "location_unavailable", detail } }],
     });
+
+    // VC-220. This used to end at the line above: `attachment.failed` in
+    // history, and no Attention at all. `sessionPersonNeed` reads Attentions,
+    // so the Session projected as plain `idle` — a Run that met this opened a
+    // Session it could never deliver Instructions to, and nothing anywhere
+    // said so. Where a Session runs is part of how it is configured, so an
+    // unpreparable directory is `configuration_invalid`, and the detail it
+    // carries is the sentence a person can act on.
+    expect(projection.attention.active).toMatchObject([
+      { attachmentId: null, kind: "configuration_invalid", detail },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+
+    // And it clears on the attach that disproves it, like every other
+    // attach-failure Attention — a repaired worktree leaves no scar.
+    unpreparable = false;
+    await runtime.command({
+      commandId: "prepared-attach",
+      sessionId: session.sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(
+      (await runtime.snapshot({ sessionId: session.sessionId })).projection.attention.active,
+    ).toHaveLength(0);
+  });
+
+  it("leaves a failure Attention when the adapter refuses without naming one", async () => {
+    // The other half of VC-220's silence. A `NativeAttachmentError` names the
+    // kind it wants a person to see; anything else the adapter throws named
+    // nothing, and "nothing" was read as "raise no Attention" — so an attach
+    // that failed left a Session indistinguishable from one nobody has typed
+    // into. An adapter that threw did not bind, and only a fresh attach can
+    // disprove that, which is what `adapter_unrecoverable` says.
+    const { runtime, adapter } = composition();
+    const session = await runtime.command({
+      commandId: "plain-throw-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+    adapter.attachFailure = new Error("native server refused the binding");
+
+    await expect(
+      runtime.command({
+        commandId: "plain-throw-attach",
+        sessionId: session.sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      }),
+    ).resolves.toMatchObject({ receipt: { status: "rejected", code: "attach_failed" } });
+
+    const { projection } = await runtime.snapshot({ sessionId: session.sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "native server refused the binding",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
   });
 
   it("binds and records the directory it prepared, not the one it resolved", async () => {
@@ -2425,6 +2679,7 @@ describe("SessionRuntime native adapter contract", () => {
         venue,
         continuity: "native_resume",
         native: null,
+        authority: null,
       },
     });
     await expect(
@@ -2662,6 +2917,7 @@ describe("SessionRuntime native adapter contract", () => {
         venue,
         continuity: "native_resume",
         native: { id: "corrupt", detail: { kind: "wrong" } as never },
+        authority: null,
       },
     });
     await expect(
@@ -2976,6 +3232,7 @@ describe("SessionRuntime native adapter contract", () => {
           id: "locator-native",
           detail: { kind: "volli.native-binding.v1", profileId: "native" },
         },
+        authority: null,
       },
     });
     await expect(
@@ -3034,6 +3291,7 @@ describe("SessionRuntime native adapter contract", () => {
           venue,
           continuity: "native_resume",
           native: { id: `envelope-native-${label}`, detail },
+          authority: null,
         },
       });
       await expect(
@@ -3628,9 +3886,8 @@ describe("SessionRuntime transient transcript overlay", () => {
       await closing.runtime.subscribe(
         {
           sessionId: closedSession,
-          afterSequence: (
-            await closing.runtime.snapshot({ sessionId: closedSession })
-          ).throughSequence,
+          afterSequence: (await closing.runtime.snapshot({ sessionId: closedSession }))
+            .throughSequence,
         },
         (emission) => {
           afterClose.push(emission);
@@ -3658,9 +3915,8 @@ describe("SessionRuntime transient transcript overlay", () => {
       await releasing.runtime.subscribe(
         {
           sessionId: releasedSession,
-          afterSequence: (
-            await releasing.runtime.snapshot({ sessionId: releasedSession })
-          ).throughSequence,
+          afterSequence: (await releasing.runtime.snapshot({ sessionId: releasedSession }))
+            .throughSequence,
         },
         (emission) => {
           afterRelease.push(emission);

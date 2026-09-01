@@ -8,6 +8,10 @@
  *   • paths          — REPO / APP_DIR / ELECTRON resolved once.
  *   • makeScratch()  — an isolated scratch dir + user-data dir + scratch DB path,
  *                      with `ownsScratch`/cleanup honouring VOLLI_SMOKE_DIR.
+ *   • evidenceDir()  — where a FAILING run leaves its screenshots and logs: the
+ *                      first CLI argument when a caller (CI) named one, and
+ *                      otherwise a fresh mkdtemp'd dir under os.tmpdir(),
+ *                      announced on stderr.
  *   • launch()       — launch the BUILT Electron app against a scratch
  *                      VOLLI_DB_PATH + isolated --user-data-dir + worktree home,
  *                      with extra env merged over process.env, while stripping
@@ -116,6 +120,45 @@ export async function makeScratch(prefix) {
       if (ownsScratch) await fs.rm(scratch, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Where a FAILING run leaves its evidence — screenshots, the main process's own
+ * stdout/stderr, the renderer console. Overridable by first argument, the same
+ * way every other capturing probe here takes one (`docs-shots.mjs`,
+ * `ticket-rail-shots.mjs`, `tab-strip-shots.mjs`); CI passes an explicit dir so
+ * the run can upload it as an artifact. Otherwise derived at runtime. A literal
+ * path is the one thing this must never be: pinned to the machine the probe was
+ * written on it cannot exist anywhere else, so the single artifact the failure
+ * path exists to produce lands nowhere useful — or the `mkdir` throws inside the
+ * very handler that was supposed to explain the failure, turning a legible
+ * finding into a stack trace about someone else's home directory.
+ *
+ * Deliberately NOT a smoke's own scratch tree: `cleanup()` removes that on the
+ * way out (it owns it unless VOLLI_SMOKE_DIR says otherwise), so evidence
+ * written there would be deleted seconds after capture, before anyone could read
+ * it. Deliberately not inside the repo either: this is failure debris rather
+ * than a checked-in artifact, and an untracked directory that appears only after
+ * a red run is one `git add -A` away from being committed.
+ *
+ * The derived name is mkdtemp'd rather than a fixed `volli-<slug>-evidence`:
+ * os.tmpdir() is world-writable, so a name another local user can predict is a
+ * name they can pre-create — as a symlink pointing wherever they like — before
+ * this run writes a byte into it (CodeQL js/insecure-temporary-file). mkdtemp
+ * chooses the suffix, refuses to reuse an existing directory, and creates it
+ * 0700. That also makes the path unguessable to the person reading a red run,
+ * which is why it is announced on stderr: evidence nobody can find is evidence
+ * that was not captured.
+ *
+ * @param {string} slug  Probe name, e.g. "pi-ask-user" — the directory prefix.
+ * @param {string} [override]  Explicit dir; defaults to the first CLI argument.
+ * @returns {Promise<string>}
+ */
+export async function evidenceDir(slug, override = process.argv[2]) {
+  if (override !== undefined) return override;
+  const dir = await fs.mkdtemp(join(os.tmpdir(), `volli-${slug}-evidence-`));
+  console.error(`  evidence dir: ${dir}`);
+  return dir;
 }
 
 // ---- launch ----------------------------------------------------------------
@@ -634,11 +677,23 @@ export async function makeGitRepo(parentDir, name = "project-") {
  * envelope-then-import path — used verbatim by board-smoke / global-artifacts —
  * is the established, deterministic way to get projects into a scratch profile.)
  *
+ * WAITS FOR THE IMPORT, rather than assuming it. This used to reload and then
+ * sleep a flat 1500ms, which is a bet on how fast the first-run import reaches
+ * SQLite — a bet that holds on a warm dev Mac and loses on a cold CI runner,
+ * where `volli board --project CL` came back PROJECT_NOT_FOUND because the row
+ * was not there yet. 44 probes call this, so the flat sleep was a single race
+ * sitting underneath most of the suite. The settle below is now a floor for
+ * renderer state, not the thing that makes the data exist.
+ *
  * @param {import("playwright-core").Page} page
  * @param {{id:string,name:string,path:string,prefix:string,colorIndex?:number}[]} projects
- * @param {{reloadWaitMs?:number}} [opts]
+ * @param {{reloadWaitMs?:number, importTimeoutMs?:number}} [opts]
  */
-export async function seedProjects(page, projects, { reloadWaitMs = 1500 } = {}) {
+export async function seedProjects(
+  page,
+  projects,
+  { reloadWaitMs = 1500, importTimeoutMs = 30_000 } = {},
+) {
   await page.evaluate((list) => {
     localStorage.setItem(
       "volli:projects",
@@ -660,6 +715,26 @@ export async function seedProjects(page, projects, { reloadWaitMs = 1500 } = {})
   }, projects);
   await page.reload();
   await page.waitForLoadState("domcontentloaded");
+
+  // The real gate: every seeded project is readable from the database. The
+  // bridge is not necessarily installed the instant the document parses, and
+  // `bootstrap()` can reject while the import is mid-flight — both are "not
+  // ready", not failures, so they retry rather than throw.
+  await waitUntil(
+    `seeded project(s) to reach the database: ${projects.map((p) => p.name).join(", ")}`,
+    async () => {
+      const names = await page
+        .evaluate(async () => {
+          if (!window.api?.data?.bootstrap) return null;
+          const boot = await window.api.data.bootstrap();
+          return boot.ok ? boot.data.projects.map((p) => p.name) : null;
+        })
+        .catch(() => null);
+      return names !== null && projects.every((p) => names.includes(p.name));
+    },
+    { timeout: importTimeoutMs, interval: 100 },
+  );
+
   await sleep(reloadWaitMs);
 }
 

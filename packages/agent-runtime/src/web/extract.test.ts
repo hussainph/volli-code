@@ -70,6 +70,55 @@ describe("extractReadableMarkdown", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("converts the whole body when the page's only text is chrome Readability discards", () => {
+    // Readability scores an article and finds none here, because everything on
+    // the page is the sort of thing it is built to throw away. But "no article"
+    // is not "no content": the words are still there, and returning them beats
+    // returning nothing.
+    const chrome =
+      `<!doctype html><html><head><title>Notice</title></head><body>` +
+      `<footer>This service was retired in March. Write to support instead.</footer>` +
+      `</body></html>`;
+
+    const result = extractReadableMarkdown(chrome, "https://example.com/notice");
+
+    expect(result.extracted).toBe(false);
+    expect(result.text).toContain("This service was retired in March");
+  });
+
+  it("falls back to what a client-rendered shell says about itself", () => {
+    // The shape a single-page application serves: an empty mounting point, and
+    // everything a reader wanted arriving later from scripts this never runs.
+    // The head is the only thing the server actually sent, and the page's own
+    // word for itself beats handing back nothing at all.
+    const shell =
+      `<!doctype html><html><head><title>Linear Docs</title>` +
+      `<meta name="description" content="How to use Linear, from issues to cycles.">` +
+      `</head><body><div id="root"></div><script>mount()</script></body></html>`;
+
+    const result = extractReadableMarkdown(shell, "https://linear.app/docs");
+
+    expect(result.extracted).toBe(false);
+    expect(result.text).toBe("# Linear Docs\n\nHow to use Linear, from issues to cycles.");
+  });
+
+  it("takes a shell's description from OpenGraph when there is no meta description", () => {
+    const shell =
+      `<!doctype html><html><head><title>GPT-4</title>` +
+      `<meta property="og:description" content="A large multimodal model.">` +
+      `</head><body><div id="root"></div></body></html>`;
+
+    const result = extractReadableMarkdown(shell, "https://openai.com/index/gpt-4/");
+
+    expect(result.text).toBe("# GPT-4\n\nA large multimodal model.");
+  });
+
+  it("returns the title alone when a shell describes itself no further", () => {
+    const shell = `<!doctype html><html><head><title>Only A Title</title></head><body><div id="root"></div></body></html>`;
+
+    expect(extractReadableMarkdown(shell, "https://example.com/shell").text).toBe("# Only A Title");
+  });
+
   it("makes the heading from the page's own h1 when there is no title", () => {
     const untitled = page().replace("<title>The Deployment Guide</title>", "");
 
@@ -159,9 +208,9 @@ describe("extractReadableMarkdown", () => {
 
   it("holds the bounds the threat model set, so widening one is a visible change", () => {
     expect(WEB_EXTRACT_LIMITS).toEqual({
-      htmlChars: 512 * 1024,
+      htmlChars: 2 * 1024 * 1024,
       maxDepth: 64,
-      maxElements: 3_000,
+      maxElements: 8_000,
     });
   });
 });
@@ -265,6 +314,169 @@ describe("the bounds on a document's shape", () => {
     },
   );
 
+  it("reads a list whose items are never closed as flat, not as nesting", () => {
+    // The shape that sent this ticket. HTML makes `</li>` optional and every
+    // minifier omits it, so a sidebar is served as one `<ul>` holding a run of
+    // unclosed `<li>`. Read as nesting, sixty-five links look like sixty-five
+    // levels: measured against the real electronjs.org page, that cut the
+    // document at 5.2% of its length and returned 1,165 characters of a
+    // possible 84,489. The links are siblings, and the depth bound must see
+    // them that way.
+    const items = Array.from(
+      { length: 400 },
+      (_, index) => `<li><a href="/section/${index}">section ${index}</a>`,
+    ).join("");
+    const sidebar =
+      `<!doctype html><html><head><title>Sidebar</title></head><body><nav><ul>${items}</ul></nav>` +
+      `<main><article><h1>Sidebar</h1><p>Run the migration before the deploy, and run it exactly once.</p></article></main></body></html>`;
+
+    const result = extractReadableMarkdown(sidebar, "https://docs.example.com/sidebar");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("reads a table that omits every optional end tag as the shallow table it is", () => {
+    // `<thead><tr><th>Version<th>Changes<tbody><tr><td>...` is valid HTML and is
+    // what nodejs.org serves. Counting each omitted end tag as another level
+    // cut that page at 31.2% of its length.
+    const rows = Array.from(
+      { length: 200 },
+      (_, index) => `<tr><td>v${index}.0.0<td>changed something in release ${index}`,
+    ).join("");
+    const table =
+      `<!doctype html><html><head><title>History</title></head><body><article>` +
+      `<h1>History</h1><table><thead><tr><th>Version<th>Changes<tbody>${rows}</table>` +
+      `</article></body></html>`;
+
+    const result = extractReadableMarkdown(table, "https://docs.example.com/history");
+
+    // The last row is the assertion: under the old scan the depth bound was
+    // reached partway down the table and everything after it was discarded.
+    expect(result.text).toContain("changed something in release 199");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("reads a run of unclosed paragraphs as siblings", () => {
+    // `</p>` is the most commonly omitted end tag there is.
+    const paragraphs = Array.from(
+      { length: 300 },
+      (_, index) => `<p>Paragraph number ${index}, with enough words in it to be ordinary prose.`,
+    ).join("");
+    const article = `<!doctype html><html><head><title>Prose</title></head><body><article><h1>Prose</h1>${paragraphs}<p>Run the migration before the deploy, and run it exactly once.</p></article></body></html>`;
+
+    const result = extractReadableMarkdown(article, "https://docs.example.com/prose");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("still cuts a document that is genuinely nested past the depth bound", () => {
+    // The counterweight to the three above: teaching the scan about optional
+    // end tags must not teach it to ignore real nesting. These `<div>`s are
+    // closed properly and go far past the bound.
+    const result = extractReadableMarkdown(nested(200), "https://docs.example.com/deep", {
+      ...WEB_EXTRACT_LIMITS,
+      maxDepth: 16,
+    });
+
+    expect(result.text).not.toContain("the buried paragraph");
+    expect(result.truncated).toBe(true);
+  });
+
+  it("does not let a stray end tag pop its way out of the document", () => {
+    // `</div>` with no `<div>` open is markup a browser discards. A scan that
+    // let it decrement anyway could be walked back to zero by a page that
+    // simply emitted end tags it never opened, and would then never notice the
+    // nesting that followed.
+    const strays = "</div></section></main>".repeat(200);
+    const markup = `<!doctype html><html><head><title>Stray</title></head><body>${strays}${"<div>".repeat(
+      200,
+    )}<p>the buried paragraph</p></body></html>`;
+
+    const result = extractReadableMarkdown(markup, "https://docs.example.com/stray", {
+      ...WEB_EXTRACT_LIMITS,
+      maxDepth: 16,
+    });
+
+    expect(result.text).not.toContain("the buried paragraph");
+    expect(result.truncated).toBe(true);
+  });
+
+  it("does not spend the element budget on diagrams it is going to discard", () => {
+    // sqlite.org draws its syntax as inline SVG: `lang_select.html` carries
+    // 7,668 `<path>` and 4,000 `<polygon>` elements, more than the whole budget,
+    // in front of the prose. Every one of them is deleted by the sanitiser the
+    // moment there is a tree, so counting them is spending the budget to
+    // measure something and then throw it away.
+    const diagram = `<svg viewBox="0 0 10 10">${'<path d="M0 0 L1 1"/><polygon points="0,0 1,1"/>'.repeat(
+      3000,
+    )}</svg>`;
+    const withDiagram =
+      `<!doctype html><html><head><title>SELECT</title></head><body><article><h1>SELECT</h1>` +
+      `${diagram}<p>Run the migration before the deploy, and run it exactly once.</p>` +
+      `</article></body></html>`;
+
+    const result = extractReadableMarkdown(withDiagram, "https://sqlite.org/lang_select.html");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+    expect(result.truncated).toBe(false);
+  });
+
+  it("steps over a nested diagram without resuming inside it", () => {
+    // SVG may contain SVG, so stopping at the first `</svg>` would put the scan
+    // back to work in the middle of a subtree that is still open.
+    const nestedSvg = `<svg><svg>${'<path d="M0 0"/>'.repeat(2000)}</svg>${'<circle r="1"/>'.repeat(
+      2000,
+    )}</svg>`;
+    const markup =
+      `<!doctype html><html><head><title>Nested</title></head><body><article><h1>Nested</h1>` +
+      `${nestedSvg}<p>Run the migration before the deploy, and run it exactly once.</p>` +
+      `</article></body></html>`;
+
+    const result = extractReadableMarkdown(markup, "https://example.com/nested");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+  });
+
+  it("reads a diagram that is never closed as running to the end of the document", () => {
+    // An unclosed `<svg>` has no end to skip to. The parser will reach the same
+    // conclusion — everything after it is inside it — so the scan stops there
+    // rather than guessing at a boundary the markup never drew.
+    const markup = `<!doctype html><html><head><title>Open</title></head><body><article><p>Run the migration before the deploy, and run it exactly once.</p><svg><path d="M0 0"/><p>swallowed by the diagram</p></article></body></html>`;
+
+    const result = extractReadableMarkdown(markup, "https://example.com/open");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+  });
+
+  it("does not mistake an element whose name merely starts with svg for a diagram", () => {
+    // `<svgfoo>` is a different element, and reading it as a nested `<svg>`
+    // would leave the skip waiting for a close tag that never comes — taking
+    // the rest of the page with it.
+    const markup =
+      `<!doctype html><html><head><title>Lookalike</title></head><body><article>` +
+      `<svg><svgfoo></svgfoo><path d="M0 0"/></svg>` +
+      `<p>Run the migration before the deploy, and run it exactly once.</p>` +
+      `</article></body></html>`;
+
+    const result = extractReadableMarkdown(markup, "https://example.com/lookalike");
+
+    expect(result.text).toContain("Run the migration before the deploy");
+  });
+
+  it("still bounds a page built from very many separate diagrams", () => {
+    // The skip counts each subtree as one element, so breadth is bounded
+    // exactly as it was: ten thousand empty diagrams are ten thousand elements.
+    const many = "<svg></svg>".repeat(10_000);
+    const markup = `<!doctype html><html><head><title>Many</title></head><body>${many}<p>the last paragraph</p></body></html>`;
+
+    const result = extractReadableMarkdown(markup, "https://example.com/many");
+
+    expect(result.text).not.toContain("the last paragraph");
+    expect(result.truncated).toBe(true);
+  });
+
   it("counts a run of void and self-closing tags as the flat document it is", () => {
     // 300 `<br>` and `<img/>` in a row are 300 elements at one level, not a
     // tree 300 deep; a scanner that counted them as nesting would cut an
@@ -345,6 +557,75 @@ describe("the bounds on a document's shape", () => {
     expect(() =>
       extractReadableMarkdown(openScript, "https://docs.example.com/open"),
     ).not.toThrow();
+  });
+});
+
+/**
+ * What the scan costs, as distinct from what it permits.
+ *
+ * Every other test in this file asks whether a bound admitted the right
+ * document. These ask what was spent deciding, which is a separate question
+ * with a separate failure: extraction is synchronous and `webPortsFor` builds
+ * the fetcher in Electron's main process, so a scan that takes a minute is a
+ * minute in which SQLite, the IPC bridge, the `volli` CLI socket and every
+ * terminal are frozen. No deadline in `safe-fetch.ts` can interrupt it, because
+ * there is no await for a timer to fire into.
+ */
+describe("what the scan spends deciding", () => {
+  it("counts raw-text elements against the element bound", () => {
+    // `script`, `style`, `textarea` and `title` used to be recognised before
+    // the counter ran, so they cost nothing and a page could serve any number
+    // of them. The bound is the only thing standing between the scan and a
+    // document built entirely out of the tags it declined to count.
+    const scripts = `<!doctype html><html><head><title>Scripts</title></head><body>${"<script>x</script>".repeat(
+      50,
+    )}<p>the last paragraph</p></body></html>`;
+
+    const result = extractReadableMarkdown(scripts, "https://docs.example.com/scripts", {
+      ...WEB_EXTRACT_LIMITS,
+      maxElements: 20,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.text).not.toContain("the last paragraph");
+  });
+
+  it("reads a document built entirely of raw-text elements without going quadratic", () => {
+    // The shape that measured 59 seconds: the scan folded the whole document to
+    // lower case once per raw-text element to search for its closing tag, so
+    // the cost was the document size times the element count. 2 MiB is exactly
+    // what `htmlChars` admits, and `<script></script>` is close to the shortest
+    // raw-text element that can be repeated to fill it.
+    //
+    // The threshold is loose on purpose. This measured 0.37s once the fold was
+    // hoisted out of the loop, against 59s before and roughly 16s if only the
+    // counting above were fixed — so anything under a few seconds is the
+    // linear scan, and a regression is not a near miss.
+    const unit = "<script></script>";
+    const html = `<html><body>${unit.repeat(Math.floor((2 * 1024 * 1024) / unit.length))}</body></html>`;
+
+    const started = Date.now();
+    extractReadableMarkdown(html, "https://docs.example.com/scripts");
+
+    expect(Date.now() - started).toBeLessThan(8_000);
+  });
+
+  it("reads a page whose text changes length when it is lower-cased", () => {
+    // Not a regression — a forward guard on the fold the fix introduced. What
+    // the scan returns is an offset into the *original* markup, so the folded
+    // copy has to line up with it character for character. `toLowerCase()` does
+    // not promise that: U+0130 lowercases to two code units, so a page carrying
+    // one would shift every offset after it. Folding only `[A-Z]` is what makes
+    // the two strings the same length by construction, and this is the page
+    // shape that would notice if that ever stopped being true.
+    const html = `<!doctype html><html><head><title>\u0130stanbul</title></head><body><main><h1>\u0130stanbul</h1><p>${"The guide to the city, and the road out of it. ".repeat(
+      12,
+    )}</p></main></body></html>`;
+
+    const result = extractReadableMarkdown(html, "https://docs.example.com/istanbul");
+
+    expect(result.text).toContain("the road out of it");
+    expect(result.truncated).toBe(false);
   });
 });
 

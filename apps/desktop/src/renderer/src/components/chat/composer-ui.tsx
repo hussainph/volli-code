@@ -72,13 +72,21 @@ import {
   type SkillReference,
 } from "@volli/shared";
 
-import { reclampEffort } from "@renderer/chat/composer-effort";
+import {
+  COMPOSER_STACK_SHELL,
+  composerIntent,
+  reclampEffort,
+  takeQueued,
+  unqueueLast,
+  type ComposerIntent,
+  type QueuedMessage,
+  type SessionContextUsage,
+  type TakenQueued,
+} from "@volli/session-presentation";
 import type { BlobLinkView } from "@volli/shared";
-import type { SessionContextUsage } from "@renderer/chat/context-usage";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
-import { COMPOSER_STACK_SHELL } from "@renderer/chat/composer-stack";
 import {
   activePickerRow,
   applyPickerRow,
@@ -90,14 +98,6 @@ import {
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
-import {
-  composerIntent,
-  takeQueued,
-  unqueueLast,
-  type ComposerIntent,
-  type QueuedMessage,
-  type TakenQueued,
-} from "@renderer/chat/session-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
@@ -717,7 +717,7 @@ export const SessionComposer = React.memo(function SessionComposer({
 /* ------------------------------------------------------------------ picker */
 
 /** The caret bindings the stack owns and the textarea below it consumes. */
-interface ComposerCaretBinding {
+export interface ComposerCaretBinding {
   ref: React.RefCallback<HTMLTextAreaElement>;
   /** Consumes the picker's keys. `true` means the composer must not act on it. */
   handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean;
@@ -735,6 +735,21 @@ const ComposerCaretContext = React.createContext<ComposerCaretBinding>({
 });
 
 /**
+ * The stack's caret binding, for a textarea that is not the chat's own.
+ *
+ * The Automation editor (VC-126) renders its Instructions box inside a
+ * {@link ComposerPickerStack} so `/` and `@` resolve identically to the chat
+ * composer — same picker, same insertion, same grammar — without inheriting
+ * the chat textarea's queue and steer semantics. Any consumer must wire all
+ * three members exactly as {@link ComposerTextarea} does: `ref`, then
+ * `handleKeyDown` first in its own keydown, then `trackCaret` on
+ * change/select/keyup.
+ */
+export function useComposerCaretBinding(): ComposerCaretBinding {
+  return React.useContext(ComposerCaretContext);
+}
+
+/**
  * The picker card, the composer under it, and the one piece of state they
  * share.
  *
@@ -745,7 +760,7 @@ const ComposerCaretContext = React.createContext<ComposerCaretBinding>({
  * hand back — so it lives here, in the one component that has both the list
  * that reacts to it and the input that produces it beneath it.
  */
-function ComposerPickerStack({
+export function ComposerPickerStack({
   children,
   ...input
 }: React.PropsWithChildren<{

@@ -23,7 +23,7 @@
  * layer that reaches for a Session field does not compile.
  */
 
-import { promptResourceBlock } from "@volli/shared";
+import { promptResourceBlock, verbEntry } from "@volli/shared";
 import type {
   PromptResource,
   RuntimeBrief,
@@ -138,12 +138,21 @@ const AUTHORITY_SOURCES: Record<RuntimeSessionRole, string> = {
  * main checkout — and the allowance is anchored to the task and the user:
  * file content never creates the need, which is what lets a Session refuse a
  * poisoned README without a hard rule. Writes and destructive commands stay
- * instructed against because this instruction is currently the only layer —
- * the authority gate is unwired and containment is off
+ * instructed against because this instruction is still effectively the only
+ * layer: containment is off, and the authority gate defaults to `observe`, which
+ * pins a Snapshot and refuses nothing
  * (docs/plans/authority-two-axis-rearchitecture.md). Loosening the write side
  * waits for that plan's slices 1–2, so instruction-loosening and enforcement
  * land as a pair. The credentials sentence previews slice 1's secrets
  * denylist, so instruction and future enforcement converge on one shape.
+ *
+ * The read sentence is also the sharpest reason `enforce` is not yet the
+ * default. It names the reference-only main checkout and sibling worktrees as
+ * legitimate reads, and `path.outside-workspace` refuses exactly those — so a
+ * project that turns enforcement on today has a system prompt and a rule pack
+ * that contradict each other. Slice 1 resolves it by giving both layers one read
+ * policy; until then the contradiction is confined to a posture nobody is on by
+ * default.
  *
  * Every line below the first is byte-identical to the prose that shipped: this
  * layer lost a path, not a norm.
@@ -299,6 +308,67 @@ const BRIEF_DELIMITER: Record<RuntimeSessionRole, string> = {
  */
 const ENVIRONMENT_DELIMITER = "WORKSPACE ENVIRONMENT";
 
+/** The delimiter the frozen Agent Tool Surface arrives in, beside the Brief. */
+const TOOL_SURFACE_DELIMITER = "SESSION TOOLS";
+
+/** What the Session calls its frozen surface where its named verbs are listed. */
+const TOOL_SURFACE_SUBJECT: Record<RuntimeSessionRole, string> = {
+  ticket: "This Ticket Session's frozen tool surface",
+  project: "This Project Session's frozen tool surface",
+};
+
+/**
+ * The product verbs this Session was handed, said once so it never has to find
+ * out by trying (VC-162).
+ *
+ * A Turn Reminder rather than prompt bytes, and the reason is the Cache Prefix
+ * rather than taste. Bundle membership is `bundle(Role) ∪ grants(session)`, so a
+ * grant makes it vary *per Session* — stating it in the system prompt would turn
+ * a `role-static` section into a `session-static` one and stop two Project
+ * Sessions that differ only by a grant from sharing a prefix. On the message
+ * side it is appended once and invalidates nothing ahead of it. It is also why
+ * the authority layer still names the coding tools and only those: that list is
+ * genuinely Role-static, and its sentence stays true.
+ *
+ * What this says is the half the tool array cannot. The array shows presence;
+ * this states the rule behind the absences — that membership was fixed at
+ * creation, that a verb missing from it is missing on purpose, and that no
+ * amount of trying will produce it. A Ticket Session gets the block precisely
+ * when it holds nothing, because "you have no agent-control tools" is the
+ * sentence that stops a Session from spending turns looking for them, and it is
+ * VC-92's earned property stated to the one party that can act on it.
+ *
+ * The two names are both printed on purpose. A Session already knows Volli's
+ * verbs as dot-names from the `volli` CLI, and the tool array can only ever
+ * show the provider-safe spelling; printing the pair is what keeps a model from
+ * concluding they are different capabilities.
+ */
+export function composeToolSurfaceBlock(
+  role: RuntimeSessionRole,
+  tools: RuntimeToolBundle,
+): string {
+  const verbs = tools.verbs ?? [];
+  const named = verbs.map((verb) => {
+    const wire = verbEntry(verb)?.tool?.name;
+    // A key with no projection cannot reach a tool array, so it cannot reach
+    // here either — `sessionToolBindings` would already have refused to build
+    // the surface. Printing the bare key is the honest fallback rather than a
+    // second throw on a path the first one owns.
+    return wire === undefined ? `  ${verb}` : `  ${verb} — call it as ${wire}`;
+  });
+  return [
+    `--- BEGIN ${TOOL_SURFACE_DELIMITER} ---`,
+    ...(named.length === 0
+      ? [`${TOOL_SURFACE_SUBJECT[role]} holds no Volli verbs as named tools.`]
+      : [`${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs as named tools:`, ...named]),
+    "Membership was fixed when this Session was created and does not change while",
+    "it runs. A Volli verb not named here is not in this Session's tool array: do",
+    "not probe for it, and do not reach for an equivalent another way. Where the",
+    "`volli` CLI still offers a verb, the shell remains its door.",
+    `--- END ${TOOL_SURFACE_DELIMITER} ---`,
+  ].join("\n");
+}
+
 /**
  * The Brief as its delimited block — the exact bytes the first delivered
  * message opens with, exposed on its own so the baseline breakdown measures
@@ -354,6 +424,7 @@ export function composeTurnReminderBlock(
 export interface FirstUserMessageSpec {
   identity: { role: RuntimeSessionRole };
   brief: RuntimeBrief;
+  tools: RuntimeToolBundle;
   workspaceEnvironment?: RuntimeWorkspaceEnvironment;
 }
 
@@ -369,6 +440,11 @@ export function composeFirstUserMessage(spec: FirstUserMessageSpec, userText: st
   const reminder = composeTurnReminderBlock(spec.workspaceEnvironment);
   return [
     composeBriefBlock(spec.identity.role, spec.brief),
+    "",
+    // What the Session is, then what it holds, then what its workspace needs.
+    // The bundle rides above the environment note because it is orientation and
+    // that one is an instruction — and below the Brief, which is the work.
+    composeToolSurfaceBlock(spec.identity.role, spec.tools),
     "",
     ...(reminder === null ? [] : [reminder, ""]),
     userText,

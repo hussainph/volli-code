@@ -332,7 +332,7 @@ describe("SessionRuntime durable boundary invariants", () => {
   });
 
   it("names the Session, attachment and directory of every open native binding", async () => {
-    const { runtime } = composition({ directory: () => "/w/VC-5" });
+    const { runtime, adapter } = composition({ directory: () => "/w/VC-5" });
     expect(runtime.openNativeBindings()).toEqual([]);
     const created = await create(runtime);
     await attach(runtime, created.sessionId);
@@ -341,10 +341,19 @@ describe("SessionRuntime durable boundary invariants", () => {
 
     // The attachment id travels with the listing so a host that has to end this
     // binding — a worktree being deleted — can route `adapter.release` without
-    // re-reading the projection to find it.
-    expect(runtime.openNativeBindings()).toEqual([
-      { sessionId: created.sessionId, directory: "/w/VC-5", attachmentId },
-    ]);
+    // re-reading the projection to find it. Its progress stamp is deliberately
+    // process-local: the watchdog must see streamed tokens without rewriting
+    // the durable activity clock.
+    const [binding] = runtime.openNativeBindings();
+    expect(binding).toMatchObject({
+      sessionId: created.sessionId,
+      directory: "/w/VC-5",
+      attachmentId,
+      lastProgressAt: expect.any(Number),
+    });
+    const initialProgressAt = binding!.lastProgressAt;
+    await adapter.emit({ kind: "delta", turnId: "turn-1", channel: "text", text: "still working" });
+    expect(runtime.openNativeBindings()[0]!.lastProgressAt).toBeGreaterThan(initialProgressAt);
 
     await runtime.command({
       commandId: "release-live-directory",
@@ -562,6 +571,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
 
@@ -747,6 +757,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: { locator: "native" },
           },
         },
+        authority: null,
       },
     });
     opened.adapter.reconcileReceipts = [
@@ -981,6 +992,7 @@ describe("SessionRuntime durable boundary invariants", () => {
           id: "missing-native",
           detail: { kind: "volli.native-binding.v1", profileId: "native", locator: null },
         },
+        authority: null,
       },
     });
     await expect(
@@ -1047,6 +1059,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
     const originalAttach = first.adapter.attach.bind(first.adapter);
@@ -1095,6 +1108,7 @@ describe("SessionRuntime durable boundary invariants", () => {
             locator: null,
           },
         },
+        authority: null,
       },
     });
 

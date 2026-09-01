@@ -73,16 +73,20 @@ import type {
 } from "@volli/session-engine";
 import { NativeAttachmentError } from "@volli/session-engine";
 import {
-  appendPromptResources,
   askChoice,
   askOffer,
   askInteractionId,
   askUserInteractionId,
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
   readSkillResources,
   sessionToolIds,
+  verbToolsOf,
   type AgentRuntime,
+  type AuthorityPolicy,
+  type AuthoritySnapshot,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ModelSelection,
@@ -95,6 +99,9 @@ import {
   type RuntimeBrowserPort,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
+  type RuntimeSessionIdentity,
+  type RuntimeVerbCall,
+  type RuntimeVerbResult,
   type RuntimeWorkspaceEnvironment,
   type SessionInteractionOption,
   type SessionInteractionResolution,
@@ -153,15 +160,54 @@ const PI_RUNTIME_IDENTITY: NativeRuntimeIdentity = {
 };
 
 /**
- * The coding tools this slice loads — with no gate and no sandbox, the only
- * bound. Exported for the `prompt.baseline` diagnostic, which must price the
- * authority layer over the same tool list a real attach names.
+ * The coding tools this slice loads. Exported for the `prompt.baseline`
+ * diagnostic, which must price the authority layer over the same tool list a
+ * real attach names.
  */
 export const PI_TOOLS = { tools: ["read", "edit", "write", "execute"] } as const;
 type PiCodingToolId = (typeof PI_TOOLS.tools)[number];
 
 function isPiCodingTool(tool: SessionToolId): tool is PiCodingToolId {
   return (PI_TOOLS.tools as readonly SessionToolId[]).includes(tool);
+}
+
+/**
+ * The Authority Snapshot for one attachment, or `null` when the gate is off.
+ *
+ * Handed the Session's FROZEN Agent Tool Surface rather than deriving one, and
+ * that is the whole point of taking `toolSurface`: it is durable data recorded
+ * once for the Session (VC-164), and `runtimeSpec` asserts the array Pi resolves
+ * against re-derives to exactly it. So the list history records and the list the
+ * model can call are the same list by construction. A hand-written list here
+ * would compile, would look right, and would under-report the surface by exactly
+ * the three tools that tripped VC-3 — and it would no longer be caught, because
+ * `tool.not-bundled` was deleted once the lists had one source. What is left of
+ * that failure is quieter and worse for being durable: a Snapshot recorded here
+ * is read back months later to interpret a denial, and a tool list that was
+ * never the Session's is a record that lies.
+ *
+ * `null` for `enforcement: "off"` — the Session then runs at Pi's own defaults
+ * with no Snapshot to pin, which is what every Session did before VC-44 and what
+ * Codex and Claude Code both ship as an explicit bypass. It is a decision a
+ * project makes, not a state the product falls into.
+ */
+function piAuthoritySnapshot(
+  policy: AuthorityPolicy,
+  location: WorkLocationKind,
+  toolSurface: readonly SessionToolId[],
+): AuthoritySnapshot | null {
+  if (policy.enforcement === "off") return null;
+  return {
+    mode: "auto",
+    location,
+    enforcement: policy.enforcement,
+    judgmentMode: policy.judgmentMode,
+    tools: [...toolSurface],
+    rulePackId: BUILTIN_RULE_PACK_ID,
+    rulePackHash: BUILTIN_RULE_PACK_HASH,
+    classifierModel: policy.classifierModel,
+    fallback: policy.fallback,
+  };
 }
 
 /** Everything about a Session that a directory cannot tell the runtime. */
@@ -192,11 +238,41 @@ interface PiRuntimeContextFields {
    * `location.ts`, and policy that assumed otherwise would treat a person's
    * uncommitted work as a disposable branch.
    *
-   * Resolved but unread while Pi runs ungated — it exists only to key policy,
-   * and no Authority Snapshot is built. Kept resolved because the resolver is
-   * the correct answer to a question the re-architecture still asks.
+   * Read onto every Authority Snapshot this adapter builds (VC-44), which is
+   * what a rule like `command.git-discards-work` keys off: `git reset --hard` in
+   * a disposable branch worktree and the same command in a person's Main
+   * checkout are not the same act.
    */
   location: WorkLocationKind;
+  /**
+   * The project's resolved authority policy — built-in defaults with this
+   * project's recorded departures applied (VC-44).
+   *
+   * Resolved by main, because only main can reach the store: it is a column on
+   * `projects` in the SQLite database under Electron's `userData`, and this
+   * module stays Electron-free so its tests run in plain Node. That split is
+   * also the security property. Policy is read from app-owned state and never
+   * from the tree the Session is editing, so a Session cannot write the file
+   * that governs it — the privilege-escalation loop Claude Code's classifier
+   * refuses repo-local `autoMode` settings to avoid.
+   *
+   * Read once per attachment, like the web ports and for the same reason: what a
+   * Session may do is pinned when it starts, so a Settings change never lands
+   * mid-turn.
+   */
+  authorityPolicy: AuthorityPolicy;
+  /**
+   * Refusals this Session accrued before this attachment existed, from
+   * `SessionProjection.authorityDenials` (VC-44).
+   *
+   * Carried because the Session half of {@link AuthorityFallback} is a fact
+   * about the Session and not about one attachment: a counter that restarted at
+   * zero on every attach would never reach a threshold of twenty, so the
+   * escalation it exists to trigger would simply never happen. It is live
+   * machine state rather than policy, which is why it rides beside the Snapshot
+   * instead of inside it — the Snapshot is pinned and this is re-read every time.
+   */
+  priorAuthorityDenials: number;
   /**
    * The skills this Session was explicitly started with, read from its own
    * durable `prompt-resources` record — never from disk at attach time, so a
@@ -281,6 +357,33 @@ export interface PiAdapterOptions {
     projectId: string;
     ticketId: string | null;
   }) => RuntimeBrowserPort;
+  /**
+   * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
+   * own process (VC-162).
+   *
+   * Unlike {@link resolveWebPorts}, this decides no membership. The Session's
+   * frozen record decides that, and this supplies the one closure every verb in
+   * it is answered through — which is why it is a single port rather than one
+   * per verb: main holds every verb's handler already, keyed by the registry's
+   * own binding id.
+   *
+   * Absent means a build with no verb handlers wired, which is every test that
+   * does not exercise one. A Session whose record names a verb then fails to
+   * attach rather than being handed a smaller array — the same rule the web
+   * ports follow, and for the same reason: an attachment that quietly sends a
+   * different tool array has thrown away the Session's Cache Prefix and lied
+   * about its own durable record.
+   *
+   * The caller is not a parameter. Main binds the calling Session's identity
+   * from the attachment this port belongs to, which is the whole difference
+   * between this door and the socket — there, a caller states who it is through
+   * an environment variable anything running as the user could set.
+   */
+  callVerb?: (
+    session: RuntimeSessionIdentity,
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+  ) => Promise<RuntimeVerbResult>;
   /**
    * The compaction policy every Session is run under — the global automatic
    * switch. Read per compaction rather than per attach: a Session outlives
@@ -477,6 +580,7 @@ function piNativeAdapter(
           projectId: context.projectId,
           ticketId: context.ticketId,
         }),
+        callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
         // worktree ticket's isolated checkout has its own `node_modules`
@@ -559,6 +663,7 @@ interface PiBindingOptions {
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
   browser: RuntimeBrowserPort | undefined;
+  callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
   workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -572,6 +677,7 @@ class PiBinding implements BindingHandle {
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #browser: RuntimeBrowserPort | undefined;
+  readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
   readonly #abort = new AbortController();
@@ -593,6 +699,8 @@ class PiBinding implements BindingHandle {
    */
   #releasing = false;
   #released = false;
+  /** Pinned at construction; see {@link PiBinding.authority}. */
+  readonly #authority: AuthoritySnapshot | null;
 
   constructor(options: PiBindingOptions) {
     this.#spec = options.spec;
@@ -602,8 +710,30 @@ class PiBinding implements BindingHandle {
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
+    this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
+    // Last, because every field it reads must already be set.
+    //
+    // A rehydrated attachment REPLAYS the Snapshot it opened under; only a fresh
+    // one resolves current policy (VC-44). Pinning is a claim about the
+    // attachment's whole life, not about one process, so an attachment that
+    // outlives a relaunch and a policy edit must keep answering with the pack it
+    // was judged against — otherwise `authority.denied`, which resolves through
+    // `attachmentId`, would cite a pack that never saw the call.
+    //
+    // Tested for PRESENCE, not for truthiness: a rehydrated attachment that
+    // opened under `off` pins `null`, and `??` would read that as "nobody said"
+    // and resolve today's policy — handing a Snapshot to the one attachment that
+    // is entitled to run without one.
+    this.#authority =
+      "pinnedAuthority" in options.spec
+        ? (options.spec.pinnedAuthority ?? null)
+        : piAuthoritySnapshot(
+            options.context.authorityPolicy,
+            options.context.location,
+            options.context.toolSurface,
+          );
   }
 
   /**
@@ -623,6 +753,17 @@ class PiBinding implements BindingHandle {
 
   get native(): SessionNativeReference {
     return this.#native;
+  }
+
+  /**
+   * The policy this attachment runs under, for the Session Engine to record.
+   *
+   * Computed once in the constructor rather than per read, because a Snapshot is
+   * pinned for the life of an attachment by its own definition — two reads that
+   * could differ would make "pinned" a claim rather than a property.
+   */
+  get authority(): AuthoritySnapshot | null {
+    return this.#authority;
   }
 
   runtimeSpec(): SessionRuntimeSpec {
@@ -656,22 +797,52 @@ class PiBinding implements BindingHandle {
         "This Session's frozen Agent Tool Surface includes the Browser, but this build wired no Browser host. Retry the attachment on a build that carries one.",
       );
     }
+    // The verb half of the frozen record, read back rather than re-derived from
+    // Role and grants (VC-162). Re-deriving would be the recomposition the
+    // record exists to prevent: a Session attaching months later would resolve
+    // today's bundle and send a tool array its own history does not describe.
+    const verbs = verbToolsOf(context.toolSurface);
+    const callVerb = this.#callVerb;
+    if (verbs.length > 0 && callVerb === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes Volli verbs, but this launch wired no handler for them. Relaunch the app and retry the attachment.",
+      );
+    }
+    const sessionIdentity: RuntimeSessionIdentity =
+      context.role === "ticket"
+        ? { ...identity, role: "ticket", ticketId: context.ticketId }
+        : { ...identity, role: "project", ticketId: null };
     const runtimeSpec: SessionRuntimeSpec = {
-      identity:
-        context.role === "ticket"
-          ? { ...identity, role: "ticket", ticketId: context.ticketId }
-          : { ...identity, role: "project", ticketId: null },
+      identity: sessionIdentity,
       // The directory the Session Engine PREPARED: for a worktree ticket the
       // isolated checkout — never the main one — and for a ticketless Session
       // the project root, which is the only place it was ever going to run.
       workspacePath: this.#spec.directory,
       venue: "local",
       model: this.#context.model,
-      // No `authority`: Volli runs Pi ungated, so the runtime installs no gate
-      // and the rule pack never runs. The Snapshot is omitted rather than
-      // neutered — see docs/plans/authority-two-axis-rearchitecture.md, which
-      // replaces the policy this adapter used to pin and keeps the mechanism,
-      // including the `ask` port still wired below.
+      // The Snapshot reaches the runtime only when it is meant to bind, which
+      // is what makes `enforcement` real rather than advisory (VC-44). Pi
+      // installs `beforeToolCall` on this field's PRESENCE, so:
+      //
+      //   off      → no Snapshot at all      → absent → no gate
+      //   observe  → Snapshot, recorded only → absent → no gate
+      //   enforce  → Snapshot, handed over   → present → gate installs
+      //
+      // `observe` is deliberately absent here rather than present-and-permissive.
+      // A gate that installs and allows everything would still normalize every
+      // call — resolving paths, lexing shells — and could still refuse one it
+      // could not read (`call.unreadable` fails closed by design). That is a real
+      // behaviour change bought for a record nothing writes yet. The Snapshot is
+      // still pinned and still durable, through `authority` above, which is what
+      // this slice owes. VC-28 v0 adds the recording gate that gives `observe`
+      // its second half.
+      //
+      // Spread rather than assigned for `promptResources`' reason: the field must
+      // be ABSENT, not set to undefined.
+      ...(this.#authority?.enforcement === "enforce" ? { authority: this.#authority } : {}),
+      // Read on every attach, never pinned: it is the count of refusals history
+      // already holds, and the Session's own threshold is measured against it.
+      priorAuthorityDenials: this.#context.priorAuthorityDenials,
       brief: { text: this.#context.brief },
       // Spread, not assigned, for the same reason `promptResources` is: an
       // unmeasured workspace must reach the prompt as an ABSENT field rather
@@ -685,7 +856,13 @@ class PiBinding implements BindingHandle {
       // with no resources is a spec with no resources field — same shape the
       // runtime's own tests pin.
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
-      tools: { tools: context.toolSurface.filter(isPiCodingTool) },
+      tools: {
+        tools: context.toolSurface.filter(isPiCodingTool),
+        // Omitted rather than empty for the reason `promptResources` is: a
+        // Ticket Session holds no verbs, and "no verb field" is the shape the
+        // runtime's own tests pin for that.
+        ...(verbs.length === 0 ? {} : { verbs }),
+      },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
@@ -694,6 +871,16 @@ class PiBinding implements BindingHandle {
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
       ...(wantsBrowser && this.#browser !== undefined ? { browser: this.#browser } : {}),
+      // Caller identity is closed over here and never travels in the call. The
+      // model names a verb and its arguments; WHO is asking is this
+      // attachment's own identity, which is exactly what the socket door
+      // cannot know about its callers.
+      ...(verbs.length === 0
+        ? {}
+        : {
+            callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
+              callVerb!(sessionIdentity, request, signal),
+          }),
     };
     // `sessionToolIds` is the same derivation `createSessionTools` consumes.
     // Comparing the full ordered list here prevents corrupted/non-canonical
@@ -921,6 +1108,7 @@ class PiBinding implements BindingHandle {
     // is durable: chosen through `model.select`, and applied at attach from
     // the Session's own projected selection.
     const text = messageText(command.message);
+    const resources = readSkillResources(command.message.parts);
     // Attachments are prepared BEFORE the empty-text check, because they can
     // make an otherwise-empty message a real one: dragging in a screenshot and
     // pressing return without typing is an ordinary way to ask "what is this?"
@@ -932,7 +1120,7 @@ class PiBinding implements BindingHandle {
     } catch (error) {
       return this.#rejected(command.commandId, "PI_ATTACHMENT_FAILED", errorMessage(error));
     }
-    if (text.trim().length === 0 && attachments.note.length === 0) {
+    if (text.trim().length === 0 && attachments.note.length === 0 && resources.length === 0) {
       return this.#rejected(
         command.commandId,
         "PI_EMPTY_MESSAGE",
@@ -952,6 +1140,7 @@ class PiBinding implements BindingHandle {
         command.delivery,
         command.commandId,
         attachments.images,
+        resources,
       );
       return outcome.kind === "delivered"
         ? this.#accepted(command.commandId)
@@ -1238,16 +1427,10 @@ class PiBinding implements BindingHandle {
 }
 
 /**
- * Pi takes one string; a `UIMessage` may carry several text parts — and,
- * since VC-49, skill resource parts. This is where the two halves of such a
- * message become the delivered prompt: the user's text first and verbatim
- * (its `/skill` reference intact, mid-sentence included), then each skill
- * body as its own delimited RESOURCE block, adjacent to the text and never
- * spliced into it.
+ * Pi takes one text string plus typed resources; a `UIMessage` may carry
+ * several text parts. Resource extraction stays separate so the runtime can
+ * frame them for delivery while retaining their identity across compaction.
  */
 function messageText(message: UIMessage): string {
-  const text = message.parts
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n\n");
-  return appendPromptResources(text, readSkillResources(message.parts));
+  return message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
 }

@@ -6,7 +6,9 @@ import {
   type HarnessAdapterLookup,
   type SessionActivityState,
   type SessionHarnessState,
+  type SessionListingIdentity,
   type SessionListingRow,
+  type SessionProvenance,
   type SessionRecord,
 } from "@volli/shared";
 
@@ -51,14 +53,15 @@ export interface TicketSessionRow {
  * launch that later ran an agent still reads as "Shell" — `launchKind` is a
  * fact about the pane's origin and no announce changes it.
  *
- * A chat row has none of that — no PTY, no launch — so it names the adapter
- * it attached instead and, the one thing worth saying about it, whether that
- * attachment is still open. That `Live` reaches a reader's eye only on a
- * ticketless sidebar row now: where there is a ticket, its status says where
- * the Session lives more usefully than `Live` ever did.
+ * A chat row has none of that — no PTY and no launch — so its source is simply
+ * `Chat`. Whether its executor is attached remains a functional grouping fact,
+ * not source metadata to display.
  */
-export function sessionSourceLabel(row: SessionListingRow): string {
-  if (row.kind === "chat") return row.record.live ? "Chat · Live" : "Chat";
+// Takes the identity half, not a whole row: naming a Session's source has
+// nothing to do with what it spent, and demanding a usage summary would make
+// every caller holding a bare record invent one.
+export function sessionSourceLabel(row: SessionListingIdentity): string {
+  if (row.kind === "chat") return "Chat";
   const record = row.record;
   const source =
     record.launchKind === "agent"
@@ -119,6 +122,28 @@ export function ticketOutputStamps(input: {
     if (at !== undefined) stamps[row.record.id] = at;
   }
   return stamps;
+}
+
+/**
+ * Who started each of a ticket's Sessions, keyed by Session id (VC-131).
+ *
+ * The rail splits its listing rows into two record arrays and builds its own
+ * view rows from those, so the row wrapper — which is where provenance rides,
+ * beside `usage`, because it is a fact about the Session rather than about the
+ * attachment — is gone by the time a row is drawn. This is the one read that
+ * keeps it, in the same sparse shape the sidebar's store uses: a miss is the
+ * resting case, so a ticket nobody automated contributes an empty object and
+ * the rail gains no weight from this feature at all.
+ */
+export function ticketSessionProvenance(
+  rows: readonly SessionListingRow[],
+): Readonly<Record<string, SessionProvenance>> {
+  const provenance: Record<string, SessionProvenance> = {};
+  for (const row of rows) {
+    if (row.provenance.kind === "user") continue;
+    provenance[row.kind === "terminal" ? row.record.id : row.record.sessionId] = row.provenance;
+  }
+  return provenance;
 }
 
 /** What an open pane knows about itself, indexed by {@link livePanesById}. */
@@ -270,7 +295,10 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
  * exists so a test can say what this process knows instead of inheriting it
  * from a module singleton.
  */
-export function canResumeSession(row: SessionListingRow, lookup: HarnessAdapterLookup): boolean {
+export function canResumeSession(
+  row: SessionListingIdentity,
+  lookup: HarnessAdapterLookup,
+): boolean {
   if (row.kind === "chat") return false;
   const record = row.record;
   return (
@@ -321,10 +349,10 @@ export function filterSessionHistory(
 /**
  * A ticket-rail row for a chat Session. There is no PTY behind it, so there is
  * nothing to resume — opening the Session is already everything a resume would
- * buy. `isOpen` mirrors `groupSessionRows`'s current/history split off whether
- * the Session's structured attachment is still live; the finer state the record
- * carries (`activity`, `lastActivityAt`) is what the rail's row trails with, so
- * a chat and a terminal report themselves in one vocabulary.
+ * buy. `isOpen` preserves `groupSessionRows`'s current/history behavior from
+ * whether the Session's structured attachment is open; the finer state the
+ * record carries (`activity`, `lastActivityAt`) is what the rail's row trails
+ * with, so a chat and a terminal report themselves in one vocabulary.
  */
 export interface TicketChatSessionRow {
   record: ChatSessionRecord;
@@ -355,9 +383,9 @@ export function filterChatSessionHistory(
 
 /**
  * One rendered row of the rail: a terminal row (rename, resume, activate) or a
- * chat row (rename, activate, and title and liveness — a chat Session is
- * durable, so even a closed one opens onto its own history, which is why it
- * offers no resume). Discriminated the same way `SessionListingRow` is, one
+ * chat row (rename, activate, title, and current/history placement — a chat
+ * Session is durable, so even a closed one opens onto its own history, which is
+ * why it offers no resume). Discriminated the same way `SessionListingRow` is, one
  * layer up the view model.
  */
 export type SessionRailRow =

@@ -27,9 +27,15 @@
  * is stale, not wrong, and the surface it would speak to is gone.
  */
 import * as React from "react";
-import { errorMessage, type PromptTemplate, type SkillReference } from "@volli/shared";
+import {
+  errorMessage,
+  type PromptTemplate,
+  type SkillModes,
+  type SkillReference,
+} from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
+import { useProjectsStore } from "@renderer/stores/projects";
 
 /** The two tiers, always committed together. */
 interface PromptLists {
@@ -51,7 +57,35 @@ export interface PromptSupply extends PromptLists {
 
 const NO_LISTS: PromptLists = { templates: [], skills: [] };
 
+interface PromptListsState {
+  /** The project + skill policy these lists were read under. */
+  readonly key: string | null;
+  readonly lists: PromptLists;
+}
+
+const NO_STATE: PromptListsState = { key: null, lists: NO_LISTS };
+
 type SupplyRead = { ok: true; lists: PromptLists } | { ok: false; error: string };
+
+/**
+ * The part of a Project row that changes the composer's ruled skill supply.
+ *
+ * Stable by value rather than object identity: `adoptProject` replaces a row
+ * after every settings write, but changing its base branch must not re-read
+ * every skill body. A real mode change must. Sorting keeps two equivalent maps
+ * equivalent even when their writes inserted slugs in a different order.
+ */
+export function promptSupplyKey(
+  projectId: string | null,
+  modes: SkillModes | undefined,
+): string | null {
+  if (projectId === null) return null;
+  const rules = Object.entries(modes ?? {})
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([slug, mode]) => `${slug}:${mode}`)
+    .join("\n");
+  return `${projectId}\n${rules}`;
+}
 
 async function readSupply(projectId: string): Promise<SupplyRead> {
   try {
@@ -64,16 +98,33 @@ async function readSupply(projectId: string): Promise<SupplyRead> {
 }
 
 export function usePromptTemplates(projectId: string | null): PromptSupply {
-  const [lists, setLists] = React.useState<PromptLists>(NO_LISTS);
-  // One counter for both readers. A project change and a `/reload` are the
-  // same race against each other as against themselves: whichever read was
+  // `volli:prompt-templates` applies this Project's skill modes in main. The
+  // Project store is therefore part of the read's identity, not merely a
+  // Settings concern. Before this subscription, changing `wait-what` from Off
+  // to Manual updated SQLite and the Settings row while every already-mounted
+  // composer kept its old list forever; `/wait-what` then went out as plain
+  // prose and the Agent reasonably asked what it was (VC-174).
+  const skillModes = useProjectsStore((store) =>
+    projectId === null
+      ? undefined
+      : store.projects.find((project) => project.id === projectId)?.skillModes,
+  );
+  const key = promptSupplyKey(projectId, skillModes);
+  const [state, setState] = React.useState<PromptListsState>(NO_STATE);
+  // Do not expose a previous project's rows, or rows ruled by the previous
+  // skill policy, during the render before the re-read effect runs. This makes
+  // Off immediate and prevents a newly Manual skill from looking resolvable
+  // until its body has actually arrived.
+  const lists = state.key === key ? state.lists : NO_LISTS;
+  // One counter for both readers. A project/policy change and a `/reload` are
+  // the same race against each other as against themselves: whichever read was
   // asked for last is the only one whose answer may land, so a reload in
   // flight when the project changes cannot overwrite the new project's rows.
   const readRef = React.useRef(0);
 
   React.useEffect(() => {
     const read = (readRef.current += 1);
-    setLists(NO_LISTS);
+    setState({ key, lists: NO_LISTS });
     // No project selected is not a project that failed to load: some mounts
     // (Home with nothing selected) legitimately have no id.
     if (projectId === null) return;
@@ -84,9 +135,9 @@ export function usePromptTemplates(projectId: string | null): PromptSupply {
         toastError(`Couldn't load commands: ${result.error}`);
         return;
       }
-      setLists(result.lists);
+      setState({ key, lists: result.lists });
     })();
-  }, [projectId]);
+  }, [key, projectId]);
 
   const reload = React.useCallback(async () => {
     // `/reload` is refused before it is pressed when there is no project
@@ -99,9 +150,9 @@ export function usePromptTemplates(projectId: string | null): PromptSupply {
       toastError(`Couldn't load commands: ${result.error}`);
       return false;
     }
-    setLists(result.lists);
+    setState({ key, lists: result.lists });
     return true;
-  }, [projectId]);
+  }, [key, projectId]);
 
   return React.useMemo(() => ({ ...lists, reload }), [lists, reload]);
 }

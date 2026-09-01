@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src"],
+  "compilerOptions": {
+    // Neutrality is enforced here, not by convention (CONTEXT.md: the Session
+    // Presentation Contract "does not require Electron or React"). The base
+    // config sets no "lib", so TypeScript's default would put the whole DOM in
+    // scope; pinning ESNext + node types means `window`, `document`, and JSX
+    // are typecheck FAILURES in this package. React and Electron are likewise
+    // absent from package.json, so pnpm isolation refuses the value imports.
+    "lib": ["ESNext"],
+    "types": ["node"]
+  }
+}

@@ -36,6 +36,8 @@
  */
 import type { PromptResource } from "./agent-runtime";
 import { isComposerVerbName } from "./composer-verb";
+import { resolveSlashNamespace, slashTargets } from "./slash-namespace";
+import { isSlashNameCharacter } from "./slash-name";
 import { skillPromptResource, type SkillReference } from "./skill";
 
 /**
@@ -62,9 +64,6 @@ export interface PromptTemplate {
 /** Longest description a body's first line may supply before it is elided. */
 const DERIVED_DESCRIPTION_LIMIT = 60;
 
-/** The `/name` character class — what a command name may contain. */
-const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
-
 /**
  * The names Volli will CREATE a template file for — a strict subset of the
  * names it can read and invoke.
@@ -72,7 +71,7 @@ const COMMAND_NAME_CHAR = /[A-Za-z0-9_:-]/;
  * Two rules meet here, and the narrower one wins:
  *
  *  - **It has to be invokable whole.** {@link findCommandInvocations} reads a
- *    name up to the first character outside {@link COMMAND_NAME_CHAR}, so a
+ *    name up to the first character rejected by {@link isSlashNameCharacter}, so a
  *    file called `ship it.md` is reachable only as `/ship` — a command whose
  *    own name cannot summon it.
  *  - **It has to be a safe flat filename**, because the basename IS the
@@ -248,7 +247,7 @@ export function findCommandInvocations(text: string): readonly CommandInvocation
     // The slash must sit at a word boundary: a slash inside a word is prose.
     if (i > 0 && !/\s/.test(text.charAt(i - 1))) continue;
     let nameEnd = i + 1;
-    while (nameEnd < text.length && COMMAND_NAME_CHAR.test(text.charAt(nameEnd))) nameEnd += 1;
+    while (nameEnd < text.length && isSlashNameCharacter(text.charAt(nameEnd))) nameEnd += 1;
     // A bare slash names nothing, and a name must END at a boundary too.
     if (nameEnd === i + 1) continue;
     if (nameEnd < text.length && !/\s/.test(text.charAt(nameEnd))) continue;
@@ -302,9 +301,9 @@ export interface ExpandedInvocation {
  * person had pasted the whole SKILL.md themselves. The skill still consumes
  * its line — the words after it are its arguments, left in place where the
  * model reads them beside the reference — so a template `/name` later on that
- * line stays an argument, exactly as before. Templates win a shared name
- * outright, which is the rule `visibleSkills` keeps the picker honest
- * against.
+ * line stays an argument, exactly as before. Templates win a shared bare name
+ * outright; the skill that lost it is not gone, but answers to `skill:<name>`
+ * (`resolveSlashNamespace`), and that qualified name resolves here too.
  *
  * An unknown command is deliberately NOT an error: the harness is perfectly
  * able to read a sentence that mentions a slash, and swallowing it would lose
@@ -323,30 +322,37 @@ export function expandCommandInvocation(
   let result = "";
   let cursor = 0;
   const resources = new Map<string, PromptResource>();
+  // The same resolution the picker offers, computed from the same two lists
+  // rather than trusted from the caller. This function is the submit-time
+  // authority: a caller that passed pre-filtered arrays would be a caller that
+  // could disagree with the picker about which `/compact` is which, and the
+  // whole point of one namespace is that the offer and the press cannot.
+  const targets = slashTargets(resolveSlashNamespace({ templates, skills }));
   for (const invocation of findCommandInvocations(text)) {
     // Consumed already: this candidate sits inside a known command's arguments.
     if (invocation.start < cursor) continue;
     // A reserved name expands to nothing, so a `commands/compact.md` a user
-    // happens to have cannot quietly turn the verb into a message. Checked
-    // here rather than by pre-filtering the arrays, because this function is
-    // the submit-time authority and a caller that forgot to filter would be a
-    // caller that disagreed with the picker.
+    // happens to have cannot quietly turn the verb into a message. That file is
+    // no longer lost, though — it answers to `/command:compact`, which IS in
+    // the map below.
     if (isComposerVerbName(invocation.name)) continue;
-    const template = templates.find((candidate) => candidate.name === invocation.name);
-    const skill =
-      template === undefined
-        ? skills.find((candidate) => candidate.name === invocation.name)
-        : undefined;
-    if (template === undefined && skill === undefined) continue;
+    const target = targets.get(invocation.name);
+    if (target === undefined) continue;
     result += text.slice(cursor, invocation.start);
-    if (template !== undefined) {
-      result += formatPromptTemplateInvocation(template, parseCommandArgs(invocation.argsString));
+    if (target.kind === "command") {
+      result += formatPromptTemplateInvocation(
+        target.template,
+        parseCommandArgs(invocation.argsString),
+      );
     } else {
-      // The guard above leaves exactly one of the two defined on this path.
       // The reference and its line stay verbatim; only the resource is new.
       result += text.slice(invocation.start, invocation.end);
-      if (!resources.has(skill!.name)) {
-        resources.set(skill!.name, skillPromptResource(skill!));
+      // Deduplicate repeated use of THIS resolved row, not merely its bare
+      // skill name. Merged production input has one row per slug, while the
+      // public resolver also remains correct for duplicated/unmerged input:
+      // `/review` and `/skill:review` may then name two distinct resources.
+      if (!resources.has(invocation.name)) {
+        resources.set(invocation.name, skillPromptResource(target.skill));
       }
     }
     cursor = invocation.end;

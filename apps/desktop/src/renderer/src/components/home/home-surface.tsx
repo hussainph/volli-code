@@ -52,7 +52,7 @@
  */
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorMessage, type FileWorkspaceTab } from "@volli/shared";
+import { arrangeTabs, EMPTY_TAB_ORDER, errorMessage, type FileWorkspaceTab } from "@volli/shared";
 import { BROWSER_START_URL } from "../../../../browser-start-page";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
@@ -459,6 +459,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     <>
       {stripVisible && selectedId !== null ? (
         <HomeTabs
+          projectId={selectedId}
           terminalTabs={terminalTabs}
           chatIds={openChatIds}
           fileTabs={fileTabs}
@@ -585,6 +586,7 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
  * neither moved.
  */
 function HomeTabs({
+  projectId,
   terminalTabs,
   chatIds,
   fileTabs,
@@ -604,6 +606,8 @@ function HomeTabs({
   railTogglable,
   onToggleRail,
 }: {
+  /** Home's file tabs are Main-checkout files of THIS project (Copy Path). */
+  projectId: string;
   terminalTabs: readonly SessionTab[];
   chatIds: readonly string[];
   fileTabs: readonly FileWorkspaceTab[];
@@ -635,19 +639,25 @@ function HomeTabs({
   const chatStatuses = useChatSessionsStore(
     useShallow((state) => chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]))),
   );
+  // How this project's strip is ARRANGED (VC-189), and the action a drop
+  // writes it with. Subscribed here rather than in `HomeSurface`: that
+  // component hosts every live terminal in the app and re-renders for nothing
+  // it does not have to.
+  const tabOrder = useWorkspaceStore(
+    (state) => state.byProject[projectId]?.homeTabOrder ?? EMPTY_TAB_ORDER,
+  );
+  const moveHomeTab = useWorkspaceStore((state) => state.moveHomeTab);
   const fileLabels = fileTabLabels(fileTabs.map((tab) => tab.relPath));
-  const tabs: HomeTabDescriptor[] = [
+  const composed: HomeTabDescriptor[] = [
     HOME_BOARD_TAB,
     ...terminalTabs.map((tab): HomeTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab })),
-    ...chatIds.map(
-      (sessionId, index): HomeTabDescriptor => ({
-        kind: "chat",
-        id: chatTabId(sessionId),
-        sessionId,
-        title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-        status: chatStatuses[index] ?? "idle",
-      }),
-    ),
+    ...chatIds.map((sessionId, index): HomeTabDescriptor => ({
+      kind: "chat",
+      id: chatTabId(sessionId),
+      sessionId,
+      title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index] ?? "idle",
+    })),
     ...fileTabs.map((tab, index): HomeTabDescriptor => {
       const label = fileLabels[index] ?? { name: tab.relPath, hint: null };
       return {
@@ -660,21 +670,25 @@ function HomeTabs({
         dirty: dirtyFilePaths.has(tab.relPath),
       };
     }),
-    ...browserTabs.map(
-      (tab): HomeTabDescriptor => ({
-        kind: "browser",
-        id: browserTabId(tab.tabId),
-        tabId: tab.tabId,
-        title: browserTabDisplayTitle(tab),
-        loading: tab.loading,
-      }),
-    ),
+    ...browserTabs.map((tab): HomeTabDescriptor => ({
+      kind: "browser",
+      id: browserTabId(tab.tabId),
+      tabId: tab.tabId,
+      title: browserTabDisplayTitle(tab),
+      loading: tab.loading,
+    })),
   ];
+  // Compose by kind exactly as before, THEN arrange: the overlay is the only
+  // thing that crosses kind groups, and the permanent Board tab (index 0) is
+  // outside its reach.
+  const tabs = arrangeTabs(composed, tabOrder, 1);
 
   return (
     <HomeTabStrip
+      projectId={projectId}
       tabs={tabs}
       activeTabId={activeTabId}
+      onReorder={(movedId, ids) => moveHomeTab(projectId, movedId, ids)}
       creating={creating}
       onSelect={onSelect}
       onClose={onClose}

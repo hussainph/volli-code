@@ -5,6 +5,12 @@
  * right rail. The drawing and the focus mechanics are `ui/tab-strip.tsx`'s (the
  * folder variant, shared with the Project Files workbench).
  *
+ * The composed order is Body → files → diffs → sessions → chats; whether the
+ * person has since ARRANGED it by dragging (VC-189) is decided by the caller's
+ * `tabOrder` overlay, so this strip still just draws the list it is handed. All
+ * it owns of that feature is the sortable itself — and the Body tab's absence
+ * from it.
+ *
  * Data-driven by design: `TicketTabDescriptor` is the one shape a tab needs, so
  * ticket-detail.tsx appends one `"file"`-kind descriptor per open `@file` ref,
  * one `"diff"`-kind descriptor per open Change Set diff, one `"session"`-kind
@@ -24,9 +30,13 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
+import { sessionProvenanceHoverLine } from "@volli/shared";
 
+import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
+import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   runOnLivePanes,
   terminalTabDot,
@@ -42,6 +52,8 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
 import { useSessionsStore } from "@renderer/stores/sessions";
 
@@ -134,6 +146,33 @@ export interface TicketTabDescriptor {
   dirty?: boolean;
 }
 
+/**
+ * The Session a tab is OF, or `null` for the four kinds that are not a Session
+ * (VC-131).
+ *
+ * A terminal tab's id is the Session id itself; a chat tab's is prefixed
+ * (`ticket-chat-tab.ts` owns both spellings). Written here rather than assumed
+ * at each call site because a tab strip is the Session's header — `chat-plane`
+ * draws no header of its own precisely because this tab is one — so getting
+ * this wrong silently costs the header its mark.
+ */
+function tabSessionId(tab: TicketTabDescriptor): string | null {
+  if (tab.kind === "session") return tab.id;
+  return tab.kind === "chat" ? parseChatTabId(tab.id) : null;
+}
+
+/**
+ * A tab's tooltip with the Session's provenance line under it, or the tooltip
+ * unchanged when there is nothing to add (VC-131).
+ *
+ * Exported because Home's strip is the same header one scope up and must not
+ * spell this differently — a Session that gained a line by moving between two
+ * strips would be two features wearing one name.
+ */
+export function tabTitleWithProvenance(title: string, provenanceLine: string | null): string {
+  return provenanceLine === null ? title : `${title}\n${provenanceLine}`;
+}
+
 interface TicketTabStripProps {
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
@@ -156,6 +195,13 @@ interface TicketTabStripProps {
    * Doc/file/diff tabs, which never raise it.
    */
   onRenameSessionTab(tabId: string, title: string): void;
+  /**
+   * A tab was dragged to a new place (VC-189): the tab that moved, and the
+   * strip's movable tab ids in the order the drop left them. The Body tab is
+   * never among them — it does not drag and nothing lands before it. Optional:
+   * a strip without it mounts no drag machinery.
+   */
+  onReorderTabs?(movedId: string, ids: readonly string[]): void;
   /** Boots a terminal session tab — the same path as the rail's Terminal control. */
   onNewSession(): void;
   /** Mints a chat Session and opens its tab. */
@@ -179,6 +225,7 @@ function TicketTab({
   tab,
   active,
   tabStop,
+  dragId,
   editing,
   onSelect,
   onClose,
@@ -193,6 +240,8 @@ function TicketTab({
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
   tabStop: boolean;
+  /** This tab's id for the strip's sortable, or undefined for the Body tab. */
+  dragId?: string;
   editing: boolean;
   onSelect(): void;
   onClose(): void;
@@ -215,6 +264,12 @@ function TicketTab({
   // A terminal tab's own PTY facts. Called for every kind (hooks are not
   // conditional) and null for the four that have no PTY.
   const terminal = useTerminalTabState(tab.kind === "session" ? tab.id : null);
+  // And who started it. Unconditional for the same reason, and the resting
+  // answer — one frozen shared constant — for every tab that is not a Session
+  // and every Session no Automation started.
+  const sessionId = tabSessionId(tab);
+  const provenance = useSessionProvenance(projectId, sessionId);
+  const provenanceLine = sessionProvenanceHoverLine(provenance);
   const parked = terminal !== null && terminal.parked && !terminal.exited;
   const exited = terminal?.exited === true;
   const showParkControls = (terminal?.livePaneIds.length ?? 0) > 0;
@@ -243,6 +298,7 @@ function TicketTab({
       label={tab.label}
       active={active}
       tabStop={tabStop}
+      dragId={dragId}
       closable={closable}
       dirty={tab.dirty === true}
       // The one line a hover can add to what the tab already says. Silent for
@@ -252,15 +308,23 @@ function TicketTab({
       // surface where that dot stands with nothing beside it to say what it
       // means, and "a Session is asking you something" is not a colour anyone
       // should have to have learnt.
-      title={
+      //
+      // A Session a Run or another Session started appends its provenance line
+      // here, on the node that was going to exist anyway. The tab's accessible
+      // NAME stays the label alone — a name that grew a clause would be read
+      // out on every arrow through the strip — so this rides as the tab's
+      // description instead, which is what a `title` beside an explicit
+      // `aria-label` computes to.
+      title={tabTitleWithProvenance(
         exited
           ? `Exited (${terminal?.exitCode ?? "?"})`
           : parked
-            ? "Parked to save memory. Click to wake."
+            ? "Terminal is parked to save memory. Select to wake it."
             : tab.status === "waiting"
               ? `${tab.label}\nWaiting for you`
-              : tab.label
-      }
+              : tab.label,
+        provenanceLine,
+      )}
       // Preview File tabs are italic (same convention as Project Files); an
       // exited terminal is struck through, the same as on the other strip.
       labelClassName={cn(preview && "italic", exited && "line-through")}
@@ -283,7 +347,15 @@ function TicketTab({
         ) : null
       }
       badge={
-        tab.badge === "worktree" ? (
+        // The bolt takes the badge slot — between the liveness dot and the
+        // label, which is the same order the sidebar's rows put it in, so a
+        // Session keeps its mark in the same place on the strip that names it
+        // as in the rail that lists it. Only one kind of tab can occupy this
+        // slot at a time: a File tab has no Session and a Session tab has no
+        // worktree badge.
+        sessionId !== null ? (
+          <SessionProvenanceMark provenance={provenance} rowTitle={tab.label} />
+        ) : tab.badge === "worktree" ? (
           // A quiet dot marking a file resolved from the ticket's worktree copy
           // rather than the main checkout (decision #6).
           <span
@@ -303,8 +375,9 @@ function TicketTab({
   );
 
   // Session and chat tabs rename; File tabs hold the external-app/Finder
-  // submenu whether pinned or previewed; preview tabs additionally get Keep
-  // Open. Doc and Diff tabs still have nothing to offer.
+  // submenu, the two Copy Path items and Word Wrap whether pinned or previewed;
+  // preview tabs additionally get Keep Open. Doc and Diff tabs still have
+  // nothing to offer.
   if (!renamable && fileTarget === null && !(preview && onPin !== undefined)) return inner;
 
   return (
@@ -314,6 +387,12 @@ function TicketTab({
         {fileTarget !== null ? (
           <>
             <ExternalAppContextMenu target={fileTarget} />
+            <ContextMenuSeparator />
+            <CopyPathContextMenuItems target={fileTarget} />
+            <ContextMenuSeparator />
+            {/* The file tab has no band to hang this on, and this slice adds
+                none — the menu is the sanctioned other door. */}
+            <WordWrapContextMenuItem />
             {preview ? <ContextMenuSeparator /> : null}
           </>
         ) : null}
@@ -394,6 +473,7 @@ export function TicketTabStrip({
   onCloseTab,
   onPinFileTab,
   onRenameSessionTab,
+  onReorderTabs,
   onNewSession,
   onNewChat,
   onNewBrowser,
@@ -405,10 +485,16 @@ export function TicketTabStrip({
     tabs.length,
     tabs.findIndex((tab) => tab.id === activeTabId),
   );
+  // Every tab but the permanent Body tab may be dragged; the strip holds this
+  // list's identity steady for dnd-kit itself.
+  const movableIds = tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id);
 
   return (
     <TabStrip
       label="Ticket tabs"
+      reorder={
+        onReorderTabs === undefined ? undefined : { ids: movableIds, onReorder: onReorderTabs }
+      }
       actions={
         <>
           <div className="flex items-center gap-1">
@@ -463,6 +549,10 @@ export function TicketTabStrip({
           tab={tab}
           active={tab.id === activeTabId}
           tabStop={index === stop}
+          // The Body tab is the permanent first tab: no id here means no
+          // sortable registration, which is half of "index 0 is not a drop
+          // target" (the other half is its absence from `movableIds`).
+          dragId={tab.kind === "body" ? undefined : tab.id}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
           onClose={() => onCloseTab(tab)}

@@ -9,10 +9,25 @@
  * reaped proves it.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 
 const bundlePath = fileURLToPath(new URL("../dist/volli.cjs", import.meta.url));
+
+/**
+ * The promotion marker is the REPOSITORY root version, which vite.config.ts
+ * bakes in as `__VOLLI_RELEASE_VERSION__` — deliberately not this package's own
+ * 0.0.1. It is read here rather than written as a literal because it moves on
+ * every release: a hardcoded copy makes a green suite depend on someone
+ * remembering to edit this line, and it went stale exactly that way once, at
+ * 0.1.0, while the app shipped 0.1.1 and 0.1.2.
+ */
+const releaseVersion = (
+  JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
 
 /** A payload budget's worth of slack — generous, so a slow machine cannot fail this. */
 const EXIT_DEADLINE_MS = 5_000;
@@ -82,12 +97,30 @@ function runHookProcess(mode: "idle" | "flood"): Promise<HookRun> {
   });
 }
 
-describe("volli hook — stdin", () => {
+describe("volli built entrypoint", () => {
   beforeAll(() => {
     const built = spawnSync(fileURLToPath(new URL("../node_modules/.bin/vp", import.meta.url)), [
       "pack",
     ]);
     expect(built.status, `vp pack failed: ${built.stderr?.toString() ?? ""}`).toBe(0);
+  });
+
+  it("embeds source and per-build identity separately from promoted versions", () => {
+    const env = { ...process.env };
+    delete env["VOLLI_SOCKET"];
+    delete env["VOLLI_SESSION"];
+    delete env["VOLLI_TICKET"];
+    const run = spawnSync(process.execPath, [bundlePath, "help", "changes"], {
+      env,
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain("CLI package: @volli/cli 0.0.1");
+    expect(run.stdout).toContain(`Release promotion marker: ${releaseVersion}`);
+    expect(run.stdout).toMatch(/Source revision: [0-9a-f]{12}(?:\+dirty)?/);
+    expect(run.stdout).toMatch(/Build id: [0-9a-f]{12}(?:\+dirty)?@/);
+    expect(run.stdout).not.toContain("source mode");
+    expect(run.stdout).not.toContain("unbundled-source");
   });
 
   // The read budget used to bound the promise and not the process: the `data`

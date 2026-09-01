@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
   type CreateSessionHarnessStateInput,
@@ -1163,6 +1165,8 @@ const RECORD: SessionListingRow = {
     lastActivityAt: 0,
     bornTicketless: false,
   },
+  usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
 };
 
 describe("announceHarness / subscribeSessionHarness", () => {
@@ -1255,7 +1259,14 @@ describe("announceHarness / subscribeSessionHarness", () => {
     useSessionsStore.getState().addSession(P, "s1", agentLaunch("claude-code"));
     useTicketSessionRecordsStore.setState({
       byTicket: {
-        t1: [{ kind: "terminal", record: { ...RECORD.record, activeHarnessId: "claude-code" } }],
+        t1: [
+          {
+            kind: "terminal",
+            record: { ...RECORD.record, activeHarnessId: "claude-code" },
+            usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: PERSON_STARTED,
+          },
+        ],
       },
     });
     const before = useTicketSessionRecordsStore.getState().byTicket["t1"];

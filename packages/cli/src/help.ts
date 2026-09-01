@@ -1,6 +1,27 @@
-import { AGENT_ERROR_CODES, cliVerbName, REFERENCE_VERBS, referenceVerbsFrom } from "@volli/shared";
-import type { VerbEntry, VerbOption } from "@volli/shared";
+import {
+  AGENT_CAPABILITY_BASELINE,
+  AGENT_CAPABILITY_CHANGES,
+  AGENT_CONCEPT_SECTIONS,
+  AGENT_ERROR_CODES,
+  cliVerbName,
+  DISCOVERABLE_VERBS,
+  ERROR_RECOVERY,
+  HELP_TOPIC_NAMES,
+  makeAgentError,
+  referenceVerbsFrom,
+  verbTier,
+} from "@volli/shared";
+import type {
+  AgentBuildIdentity,
+  AgentError,
+  AgentHelpRuntime,
+  HelpTopicName,
+  VerbEntry,
+  VerbToolField,
+  VerbOption,
+} from "@volli/shared";
 
+import { CLI_BUILD_IDENTITY } from "./build-identity";
 import { exitCodeForError } from "./render";
 
 const EXIT_CLASS_LABEL = {
@@ -9,24 +30,35 @@ const EXIT_CLASS_LABEL = {
   3: "3 app unreachable (retryable)",
 } as const;
 
-/** The four `volli help <topic>` reference topics (not commands). */
-const TOPICS = ["exit-codes", "addressing", "json", "orchestration"] as const;
-type Topic = (typeof TOPICS)[number];
+const STATIC_RUNTIME: AgentHelpRuntime = {
+  appVersion: null,
+  surface: null,
+  surfaceUnknownReason: null,
+};
 
-function isTopic(value: string): value is Topic {
-  return (TOPICS as readonly string[]).includes(value);
+export interface HelpRenderOptions {
+  identity?: AgentBuildIdentity;
+  runtime?: AgentHelpRuntime;
 }
 
-/**
- * The fixed error-code vocabulary (decision 6), rendered from
- * {@link AGENT_ERROR_CODES} so `volli help exit-codes` can never drift from the
- * codes agent-commands.ts actually emits.
- */
+export type HelpResolution = { ok: true; text: string } | { ok: false; error: AgentError };
+
+function isTopic(value: string): value is HelpTopicName {
+  return (HELP_TOPIC_NAMES as readonly string[]).includes(value);
+}
+
+/** The stable error vocabulary plus its canonical reason and recovery contract. */
 function exitCodesText(): string {
   const width = Math.max(...AGENT_ERROR_CODES.map((code) => code.length));
-  const rows = AGENT_ERROR_CODES.map(
-    (code) => `  ${code.padEnd(width)}  ${EXIT_CLASS_LABEL[exitCodeForError(code)]}`,
-  );
+  const rows = AGENT_ERROR_CODES.flatMap((code) => {
+    const guidance = ERROR_RECOVERY[code];
+    const next = guidance.next ?? "No safe retry is known; inspect current durable state first.";
+    return [
+      `  ${code.padEnd(width)}  ${EXIT_CLASS_LABEL[exitCodeForError(code)]}`,
+      `    Why: ${guidance.why}`,
+      `    Next: ${next}`,
+    ];
+  });
   return (
     "Exit codes: 0 ok; 1 failure; 2 usage; 3 app unreachable (retryable).\n\n" +
     "Error codes:\n" +
@@ -34,13 +66,69 @@ function exitCodesText(): string {
   );
 }
 
-function topicText(topic: Topic): string {
-  if (topic === "exit-codes") return exitCodesText();
-  if (topic === "json") return "Pass --json to any command for stable structured JSON output.\n";
-  if (topic === "addressing") {
-    return "Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error.\n";
+function conceptsText(): string {
+  const lines = ["Volli operating model"];
+  for (const section of AGENT_CONCEPT_SECTIONS) {
+    lines.push("", section.heading);
+    for (const paragraph of section.paragraphs) lines.push(paragraph);
+    for (const bullet of section.bullets ?? []) lines.push(`- ${bullet}`);
   }
-  return "Read before writing; work your own board unless instructed; do not chain-spawn agents.\n";
+  return `${lines.join("\n")}\n`;
+}
+
+function capabilityLines(label: string, values: readonly string[]): string[] {
+  return [
+    label,
+    ...(values.length === 0 ? ["- None in this record."] : values.map((v) => `- ${v}`)),
+  ];
+}
+
+function changesText(identity: AgentBuildIdentity, runtime: AgentHelpRuntime): string {
+  const lines = [
+    "Volli Agent CLI capability changes",
+    "",
+    "Bundle identity",
+    `  CLI package: @volli/cli ${identity.cliVersion}`,
+    `  Release promotion marker: ${identity.releaseVersion}`,
+    `  Source revision: ${identity.sourceRevision}`,
+    `  Build id: ${identity.buildId}`,
+    `  Running app: ${runtime.appVersion ?? "not reached (static help remains available)"}`,
+    `  Capability baseline: ${AGENT_CAPABILITY_BASELINE}`,
+  ];
+  for (const change of AGENT_CAPABILITY_CHANGES) {
+    lines.push("", `${change.build} (after ${change.baseline})`);
+    lines.push(...capabilityLines("Added", change.added));
+    lines.push(...capabilityLines("Changed", change.changed));
+    lines.push(...capabilityLines("Fixed", change.fixed));
+    lines.push(...capabilityLines("Removed", change.removed));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
+  if (topic === "concepts") return conceptsText();
+  if (topic === "changes") {
+    return changesText(options.identity ?? CLI_BUILD_IDENTITY, options.runtime ?? STATIC_RUNTIME);
+  }
+  if (topic === "exit-codes") return exitCodesText();
+  if (topic === "json") {
+    return "Pass --json to any command for stable structured JSON output. Failures keep a stable code and add reason plus next; next is null when Volli cannot name a safe action. Dry-run plans use one versioned object shape on CLI and tool doors.\n";
+  }
+  if (topic === "addressing") {
+    return "Context ladder: explicit --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd. Volli never guesses; ambiguity is an error. VOLLI_SESSION attributes the current socket caller in this build; it does not authenticate that process.\n";
+  }
+  return [
+    "Read before writing; work your own board unless instructed; do not drive another Session's terminal or chain-spawn work.",
+    "Signals carry state and comments carry prose: ticket signal --kind <stage> --verdict pass|fail|blocked is the machine-readable verdict, ticket comment is the argument for it. Never spell a verdict as a first line of prose.",
+    "A signal never moves the board. A deliberate ticket move is what changes a column, and it stays a separate act.",
+    "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
+    "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
+    "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
+    "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
+    "Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
+    "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
+    "",
+  ].join("\n");
 }
 
 /** The value shape shown after an option name (`<text>`, `low|medium|high`); flags carry none. */
@@ -61,11 +149,7 @@ function groupAlternation(entry: VerbEntry, group: string): string {
     .join("|");
 }
 
-/**
- * The full bracketed option sequence for the compact reference: aliases hidden,
- * required options unbracketed, repeatable options suffixed `...`, and mutually
- * exclusive `group` members collapsed into one `[a|b]` slot.
- */
+/** Full usage for compact reference rows. */
 function fullOptionsUsage(entry: VerbEntry): string {
   const seenGroups = new Set<string>();
   const parts: string[] = [];
@@ -86,11 +170,7 @@ function fullOptionsUsage(entry: VerbEntry): string {
   return parts.join(" ");
 }
 
-/**
- * The compact usage tail for command detail: required options spelled out, a
- * single `[options]` standing in for the optional ones (each fully described in
- * the Options table below, so the detail view never repeats itself).
- */
+/** Required options plus one optional-options marker for command detail. */
 function compactOptionsUsage(entry: VerbEntry): string {
   const seenGroups = new Set<string>();
   const required: string[] = [];
@@ -114,11 +194,6 @@ function compactOptionsUsage(entry: VerbEntry): string {
   return [...required, ...(hasOptional ? ["[options]"] : [])].join(" ");
 }
 
-/**
- * A command's usage line. The compact reference lines drop the `volli ` prefix
- * and spell out every option; command detail keeps `volli ` but folds optional
- * options into `[options]`.
- */
 function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
   const id =
     entry.positionalId === undefined ? "" : entry.positionalId === "optional" ? " [<id>]" : " <id>";
@@ -128,55 +203,178 @@ function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
   return `${prefix}${cliVerbName(entry.key)}${id}${opts.length > 0 ? ` ${opts}` : ""}${extra}`;
 }
 
-/**
- * The complete compact reference (`volli help` / bare `volli`), grouped and
- * footered.
- *
- * Like every function here it takes the verbs it renders as an argument,
- * defaulting to the registry's own CLI-reference projection. That is what makes
- * this a projection rather than a second table: a synthetic entry can be pushed
- * through the renderer in a test without touching the real surface, and nothing
- * here can decide for itself which verbs exist.
- */
-export function bareHelpText(entries: readonly VerbEntry[] = REFERENCE_VERBS): string {
-  const referenceEntries = referenceVerbsFrom(entries);
+function doorLabel(entry: VerbEntry): string {
+  const cli = entry.accessModes.includes("cli");
+  const tool = entry.accessModes.includes("tool");
+  if (cli && tool) return "Agent CLI and Agent Tool Surface";
+  if (cli) return "Agent CLI";
+  if (tool) return "Agent Tool Surface (named tool; not shell-executable)";
+  // `hostApi` needs no door word yet: `verbTier` refuses a hostApi-only entry
+  // until the External Agent Surface defines its governance, so command detail
+  // cannot render one. The surface that lifts that refusal names its own door.
+  return "app only (no agent door)";
+}
+
+function runtimeSurfaceLines(runtime: AgentHelpRuntime): string[] {
+  if (runtime.surface !== null) {
+    return [
+      `Resolved Session Role: ${runtime.surface.role}`,
+      `Frozen Agent Tool Surface: ${runtime.surface.tools.length === 0 ? "(empty)" : runtime.surface.tools.join(", ")}`,
+    ];
+  }
+  if (runtime.surfaceUnknownReason !== null) {
+    return [
+      `Session Role and frozen Agent Tool Surface: unknown (${runtime.surfaceUnknownReason})`,
+    ];
+  }
+  return ["Session Role availability: not claimed outside a resolved Session."];
+}
+
+function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string | null {
+  if (!entry.accessModes.includes("tool") || entry.accessModes.includes("cli")) return null;
+  if (runtime.surface !== null) {
+    return runtime.surface.tools.includes(entry.key)
+      ? `Tool availability: carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`
+      : `Tool availability: not carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`;
+  }
+  return runtime.surfaceUnknownReason === null
+    ? "Tool availability: not claimed outside a resolved Session."
+    : `Tool availability: unknown (${runtime.surfaceUnknownReason}).`;
+}
+
+/** The complete compact shell reference plus honest discovery of non-shell doors. */
+export function bareHelpText(
+  entries: readonly VerbEntry[] = DISCOVERABLE_VERBS,
+  options: HelpRenderOptions = {},
+): string {
+  const discoverable = entries.filter((entry) => entry.listed);
+  const shellEntries = referenceVerbsFrom(discoverable);
   const order = ["Read", "Write", "Session", "App"] as const;
   const sections = order.map((group) => {
-    const lines = referenceEntries
+    const lines = shellEntries
       .filter((entry) => entry.group === group)
       .map((entry) => `  ${usageLine(entry, "reference")}`);
-    return `${group}\n${lines.join("\n")}`;
+    return `${group}\n${lines.length === 0 ? "  (none)" : lines.join("\n")}`;
   });
+  const tools = discoverable.filter(
+    (entry) => entry.accessModes.includes("tool") && !entry.accessModes.includes("cli"),
+  );
+  const appOnly = discoverable.filter((entry) => entry.accessModes.length === 0);
+  const toolLines =
+    tools.length === 0
+      ? ["  (no registry-projected tool-only verbs in this build)"]
+      : tools.map((entry) => `  ${cliVerbName(entry.key)}  ${entry.summary}`);
+  const appLines = appOnly.map((entry) => `  ${cliVerbName(entry.key)}  ${entry.summary}`);
+  const runtime = options.runtime ?? STATIC_RUNTIME;
   return (
     "volli — self-documenting planning CLI for coding agents.\n\n" +
     `${sections.join("\n\n")}\n\n` +
+    `Agent Tool Surface\n${toolLines.join("\n")}\n` +
+    `${appLines.length === 0 ? "" : `\nApp-only verbs\n${appLines.join("\n")}\n`}` +
+    `${runtimeSurfaceLines(runtime).join("\n")}\n\n` +
     "Context: --project flag, then VOLLI_SESSION/VOLLI_TICKET, then a registered cwd.\n" +
-    "Add --json to any command for structured output.\n" +
+    "Add --json to any command for structured output. Add --dry-run to a documented write to preview it.\n" +
     "Ids: display ticket ids (VC-12); short session ids from session list.\n" +
-    "volli help <command> for detail. Topics: exit-codes, addressing, json, orchestration.\n"
+    `volli help <command> for detail. Topics: ${HELP_TOPIC_NAMES.join(", ")}.\n`
   );
 }
 
-/** Detail for one command: usage, every option, example, notes. */
-function commandDetail(entry: VerbEntry): string {
-  const visible = entry.options.filter((option) => option.hidden !== true);
+/**
+ * How a tool-only verb's input reads on a help page: the model's own field
+ * names, from {@link VerbToolProjection}, never the argv table.
+ *
+ * The two tables are separate in the registry precisely so this page can pick
+ * the right one — "a model shown `-m` will write `-m`". Nested object fields
+ * are flattened with a dotted path rather than indented, because the point here
+ * is to name what the tool takes, not to reproduce a schema.
+ */
+function toolInputLines(fields: readonly VerbToolField[], prefix = ""): string[] {
+  return fields.flatMap((field) => {
+    const name = `${prefix}${field.name}`;
+    const required = field.required === true ? "" : " (optional)";
+    if (field.type === "object") {
+      return [
+        `  ${name}${required}  ${field.description}`,
+        ...toolInputLines(field.fields, `${name}.`),
+      ];
+    }
+    const values = field.type === "enum" ? ` (valid: ${field.values.join(", ")})` : "";
+    return [`  ${name}${required}  ${field.description}${values}`];
+  });
+}
+
+/**
+ * Detail for one verb: door, tier, then whichever surface actually runs it.
+ *
+ * The shell half — usage line, argv options, a copyable example — is printed
+ * ONLY for a verb carrying a `cli` access mode (VC-163). This is the
+ * discoverability doctrine's hard edge: help must name a verb it cannot run, so
+ * a wrong door can be told from no door, but it must not describe that verb in
+ * a syntax that will be refused. An agent handed `Usage: volli session start`
+ * and `Example: volli session start VC-12 -m "…"` types exactly that, gets a
+ * refusal, and learns that Volli's own help lies — which is worse than the
+ * refusal it was trying to teach around.
+ *
+ * What replaces it depends on the door that does hold the verb: a tool-only
+ * verb gets its callable wire name and its real input fields, and an app-only
+ * verb gets one sentence saying the app is the whole surface. The effects
+ * contract prints for all three, because it is the reason the page is read.
+ *
+ * Notes print for all three too. They carry semantics the option table cannot
+ * express — "attended-only, never headless", "at most one body mutation per
+ * call" — and none of that stops being true because the shell is the wrong
+ * door. The registry keeps them argv-free for exactly that reason; suppressing
+ * them here instead would have cost a tool-only verb its behavioural teaching
+ * to avoid naming a flag the data no longer names.
+ */
+function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
+  const onCli = entry.accessModes.includes("cli");
+  const visible = onCli ? entry.options.filter((option) => option.hidden !== true) : [];
   const width = Math.max(0, ...visible.map((option) => optionToken(option).length));
+  const tier = verbTier(entry);
   const lines = [
     `${cliVerbName(entry.key)} — ${entry.summary}`,
     "",
-    `Usage: ${usageLine(entry, "detail")}`,
+    `Door: ${doorLabel(entry)}`,
+    `Verb tier: ${tier ?? "none"}`,
   ];
-  if (visible.length > 0) {
-    lines.push("", "Options:");
-    for (const option of visible) {
-      const suffix = option.values !== undefined ? ` (${option.values})` : "";
-      lines.push(`  ${optionToken(option).padEnd(width)}  ${option.help}${suffix}`);
+  const availability = toolAvailability(entry, runtime);
+  if (availability !== null) lines.push(availability);
+  if (onCli) {
+    lines.push("", `Usage: ${usageLine(entry, "detail")}`);
+    if (visible.length > 0) {
+      lines.push("", "Options:");
+      for (const option of visible) {
+        const suffix = option.values !== undefined ? ` (${option.values})` : "";
+        lines.push(`  ${optionToken(option).padEnd(width)}  ${option.help}${suffix}`);
+      }
     }
+  } else if (entry.tool !== undefined) {
+    lines.push("", `Tool: ${entry.tool.name}`);
+    if (entry.tool.input.length > 0) {
+      lines.push("", "Input:");
+      lines.push(...toolInputLines(entry.tool.input));
+    }
+  } else {
+    // Generic, and deliberately so: it says what is true of ANY verb on no
+    // agent surface, so the next one added needs no new sentence here.
+    lines.push(
+      "",
+      "The app is the only door. Neither the Agent CLI nor the Agent Tool Surface runs this verb.",
+    );
   }
-  // A verb with no example is one nobody should ever type — `hook` is the
-  // standing case — and such a verb is unlisted, so this line is missing only
-  // for an entry that was never meant to reach a reader.
-  if (entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
+  if (entry.effects !== undefined) {
+    lines.push("", entry.effects.when ? `Effects (${entry.effects.when}):` : "Effects:");
+    if (entry.effects.durableWrites.length === 0) lines.push("- Durable writes: none.");
+    for (const write of entry.effects.durableWrites) {
+      lines.push(`- Durable write: ${write.summary}`);
+    }
+    for (const effect of entry.effects.humanVisible) lines.push(`- Human sees: ${effect}`);
+    for (const nonEffect of entry.effects.nonEffects) lines.push(`- Does not: ${nonEffect}`);
+  }
+  // The example stays gated: it is a literal shell invocation by construction,
+  // so there is no door-neutral form of it to print.
+  if (onCli && entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
   if (entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
     for (const note of entry.notes) lines.push(`- ${note}`);
@@ -184,7 +382,6 @@ function commandDetail(entry: VerbEntry): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** The command-group words (`ticket`, `session`, …) that have subcommands. */
 function groupWords(entries: readonly VerbEntry[]): Set<string> {
   const words = new Set<string>();
   for (const entry of entries) {
@@ -194,14 +391,18 @@ function groupWords(entries: readonly VerbEntry[]): Set<string> {
   return words;
 }
 
-/** `volli help ticket` → the one-line summaries of every `ticket <sub>` command. */
 function groupDetail(word: string, entries: readonly VerbEntry[]): string {
   const subcommands = entries
-    .map((entry) => ({ name: cliVerbName(entry.key), summary: entry.summary }))
+    .map((entry) => ({
+      name: cliVerbName(entry.key),
+      summary: entry.summary,
+      door: doorLabel(entry),
+    }))
     .filter((subcommand) => subcommand.name.startsWith(`${word} `));
   const width = Math.max(...subcommands.map((subcommand) => subcommand.name.length));
   const lines = subcommands.map(
-    (subcommand) => `  ${subcommand.name.padEnd(width)}  ${subcommand.summary}`,
+    (subcommand) =>
+      `  ${subcommand.name.padEnd(width)}  ${subcommand.summary} [${subcommand.door}]`,
   );
   return (
     `${word} subcommands:\n` +
@@ -210,7 +411,6 @@ function groupDetail(word: string, entries: readonly VerbEntry[]): string {
   );
 }
 
-/** The longest command whose name words are a prefix of `path`, or null. */
 function matchCommand(path: readonly string[], entries: readonly VerbEntry[]): VerbEntry | null {
   let best: VerbEntry | null = null;
   let bestLength = 0;
@@ -225,28 +425,47 @@ function matchCommand(path: readonly string[], entries: readonly VerbEntry[]): V
   return best;
 }
 
-/**
- * Resolves a `help` path into reference text: empty → the compact reference;
- * a command prefix → that command's detail; a group word → its subcommand list;
- * a single topic → the topic; anything else → the compact reference.
- *
- * Only the verbs it is given can be reached — an entry the registry keeps off
- * the CLI reference (the involuntary `hook` and `session harness`) has no path
- * that renders its detail, because it is not in this list at all.
- */
+/** Only reachable with a non-empty path: `resolveHelp` answers `[]` with bare help. */
+function unknownHelpError(path: readonly string[], entries: readonly VerbEntry[]): AgentError {
+  const commands = entries.map((entry) => cliVerbName(entry.key)).join(", ");
+  const topics = HELP_TOPIC_NAMES.join(", ");
+  return makeAgentError(
+    "USAGE",
+    `Unknown help path ${JSON.stringify(path.join(" "))} (commands: ${commands}; topics: ${topics}).`,
+    "Run `volli help`, then ask for one listed command or topic.",
+  );
+}
+
+/** Resolves help without silently treating an unknown path as bare help. */
+export function resolveHelp(
+  rawPath: readonly string[],
+  entries: readonly VerbEntry[] = DISCOVERABLE_VERBS,
+  options: HelpRenderOptions = {},
+): HelpResolution {
+  const discoverable = entries.filter((entry) => entry.listed);
+  const path = rawPath.flatMap((part) => part.split(/\s+/)).filter((part) => part.length > 0);
+  if (path.length === 0) return { ok: true, text: bareHelpText(discoverable, options) };
+  const command = matchCommand(path, discoverable);
+  if (command !== null) {
+    return { ok: true, text: commandDetail(command, options.runtime ?? STATIC_RUNTIME) };
+  }
+  const first = path[0]!;
+  if (groupWords(discoverable).has(first)) {
+    return { ok: true, text: groupDetail(first, discoverable) };
+  }
+  if (path.length === 1 && isTopic(first)) {
+    return { ok: true, text: topicText(first, options) };
+  }
+  return { ok: false, error: unknownHelpError(path, discoverable) };
+}
+
+/** Convenience for known paths used by source projections and tests. */
 export function renderHelp(
   rawPath: readonly string[],
-  entries: readonly VerbEntry[] = REFERENCE_VERBS,
+  entries: readonly VerbEntry[] = DISCOVERABLE_VERBS,
+  options: HelpRenderOptions = {},
 ): string {
-  const referenceEntries = referenceVerbsFrom(entries);
-  // A quoted multi-word argument (`volli help "ticket create"`) must resolve
-  // the same as separate words, so split every element on whitespace first.
-  const path = rawPath.flatMap((part) => part.split(/\s+/)).filter((part) => part.length > 0);
-  if (path.length === 0) return bareHelpText(referenceEntries);
-  const command = matchCommand(path, referenceEntries);
-  if (command !== null) return commandDetail(command);
-  const first = path[0]!;
-  if (groupWords(referenceEntries).has(first)) return groupDetail(first, referenceEntries);
-  if (path.length === 1 && isTopic(first)) return topicText(first);
-  return bareHelpText(referenceEntries);
+  const resolved = resolveHelp(rawPath, entries, options);
+  if (!resolved.ok) throw new Error(resolved.error.reason);
+  return resolved.text;
 }

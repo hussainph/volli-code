@@ -9,6 +9,7 @@ import type {
   SessionStreamFrame,
   SessionStreamOverlay,
 } from "@volli/session-engine";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -64,6 +65,7 @@ function attachmentWithRecovery(): SessionAttachmentProjection {
     venue: { id: "local", kind: "local" },
     continuity: "fresh",
     native: recoveryNative(),
+    authority: null,
     status: "open",
     openedAt: 10,
     closedAt: null,
@@ -180,6 +182,7 @@ function attachmentFrames(): readonly SessionStreamFrame[] {
     venue: attachment.venue,
     continuity: attachment.continuity,
     native: attachment.native,
+    authority: attachment.authority,
   };
   return [
     frameWithPayload(5, { kind: "attachment.opened", attachment: eventAttachment }),
@@ -223,9 +226,11 @@ function snapshot(): SessionRuntimeSnapshot {
       attention: { active: [], primary: null },
       interactions: { active: [], resolved: [] },
       signal: null,
+      stopped: null,
       modelSelection: null,
       turnActive: false,
       authorityDenials: 0,
+      usage: EMPTY_SESSION_USAGE_SUMMARY,
       lastActivityAt: 10,
       bornTicketless: true,
     },

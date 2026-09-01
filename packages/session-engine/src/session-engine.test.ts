@@ -16,6 +16,7 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionObservation,
+  SessionUsage,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 
@@ -59,6 +60,7 @@ function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
     venue: localVenue,
     continuity: "fresh",
     native: { id: "native-1", detail: { native: true } },
+    authority: null,
   };
 }
 
@@ -786,6 +788,39 @@ describe("SessionEngine creation and explicit commands", () => {
     });
     await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
       signal: { signal: "blocked", reason: "Needs input" },
+    });
+  });
+
+  // VC-86: the stop intent completes in-engine like a signal — one durable
+  // command, one stopped event carrying its actor, one internal receipt.
+  it("records a stop with its actor as an immutable fact with an internal receipt", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+
+    const stopped = await plane.submit({
+      commandId: "command-stop",
+      sessionId: session.id,
+      intent: {
+        kind: "session.stop",
+        reason: "Wedged for 3h",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      },
+      provenance: userProvenance,
+    });
+
+    expect(stopped).toMatchObject({
+      commandEvent: { payload: { kind: "command.recorded" } },
+      receipt: {
+        status: "completed",
+        result: { kind: "session.stopped", sessionId: session.id },
+      },
+      receiptEvent: { payload: { kind: "command.receipt.recorded" } },
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      stopped: {
+        reason: "Wedged for 3h",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      },
     });
   });
 
@@ -2973,5 +3008,222 @@ describe("InMemorySessionLedger", () => {
         "already exists",
       );
     });
+  });
+});
+
+function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+describe("reportUsage", () => {
+  /** A Session in a named project/ticket, with one metered operation on it. */
+  async function spend(
+    plane: ReturnType<typeof createSessionEngine>,
+    options: {
+      commandId: string;
+      projectId: string;
+      ticketId: string | null;
+      occurredAt: number;
+      usage: SessionUsage;
+    },
+  ): Promise<string> {
+    const created = await plane.createSession({
+      commandId: options.commandId,
+      projectId: options.projectId,
+      ticketId: options.ticketId,
+      title: options.commandId,
+      provenance: userProvenance,
+    });
+    await plane.observe({
+      id: `usage-${options.commandId}`,
+      kind: "usage.recorded",
+      sessionId: created.session.id,
+      occurredAt: options.occurredAt,
+      provenance: adapterProvenance,
+      attachmentId: null,
+      turnId: null,
+      usage: options.usage,
+    });
+    return created.session.id;
+  }
+
+  it("answers every scope from the same facts", async () => {
+    const { plane } = composition();
+    const here = await spend(plane, {
+      commandId: "here",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      occurredAt: 1_000,
+      usage: metered({ costUsd: 1 }),
+    });
+    await spend(plane, {
+      commandId: "sibling",
+      projectId: "project-1",
+      ticketId: null,
+      occurredAt: 2_000,
+      usage: metered({ costUsd: 2 }),
+    });
+    await spend(plane, {
+      commandId: "elsewhere",
+      projectId: "project-2",
+      ticketId: "ticket-9",
+      occurredAt: 3_000,
+      usage: metered({ costUsd: 4 }),
+    });
+
+    await expect(plane.reportUsage({ scope: { kind: "all" } })).resolves.toMatchObject({
+      total: { knownCostUsd: 7 },
+      meteredSessionCount: 3,
+    });
+    await expect(
+      plane.reportUsage({ scope: { kind: "project", projectId: "project-1" } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 3 } });
+    await expect(
+      plane.reportUsage({ scope: { kind: "ticket", ticketId: "ticket-1" } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 1 } });
+    await expect(
+      plane.reportUsage({ scope: { kind: "session", sessionId: here } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 1 } });
+  });
+
+  it("bounds a report by a half-open window, so adjacent windows tile", async () => {
+    const { plane } = composition();
+    await spend(plane, {
+      commandId: "early",
+      projectId: "project-1",
+      ticketId: null,
+      occurredAt: 1_000,
+      usage: metered({ costUsd: 1 }),
+    });
+    await spend(plane, {
+      commandId: "late",
+      projectId: "project-1",
+      ticketId: null,
+      occurredAt: 2_000,
+      usage: metered({ costUsd: 2 }),
+    });
+
+    await expect(
+      plane.reportUsage({ scope: { kind: "all" }, until: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 1, requestCount: 1 } });
+    await expect(
+      plane.reportUsage({ scope: { kind: "all" }, since: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 2, requestCount: 1 } });
+  });
+
+  it("breaks a report down without changing what it totals", async () => {
+    const { plane } = composition();
+    await spend(plane, {
+      commandId: "opus",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      occurredAt: 1_000,
+      usage: metered({ costUsd: 8 }),
+    });
+    await spend(plane, {
+      commandId: "codex",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      occurredAt: 2_000,
+      usage: metered({ providerId: "openai", modelId: "gpt-5", costUsd: 2 }),
+    });
+
+    const report = await plane.reportUsage({ scope: { kind: "all" }, groupBy: "model" });
+    expect(report.groups.map((group) => group.key)).toEqual([
+      "anthropic/claude-opus-4-1",
+      "openai/gpt-5",
+    ]);
+    expect(report.total.knownCostUsd).toBe(10);
+  });
+
+  it("says nothing was measured rather than nothing was spent", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("create-silent"));
+
+    await expect(plane.reportUsage({ scope: { kind: "all" } })).resolves.toMatchObject({
+      total: { knownCostUsd: null, costCoverage: "unavailable" },
+      meteredSessionCount: 0,
+    });
+  });
+});
+
+describe("the in-memory ledger's usage port", () => {
+  // Every adapter must honour the whole port. This one derives usage on each
+  // read, so it has no stored projection to discard — but a rebuild must still
+  // be callable and must still leave the same answers, or the port would be a
+  // promise only SQLite keeps.
+  it("answers a rebuild without losing what it can already derive", async () => {
+    const { ledger, plane } = composition();
+    const created = await plane.createSession(createRequest("create-rebuild"));
+    await plane.observe({
+      id: "usage-rebuild",
+      kind: "usage.recorded",
+      sessionId: created.session.id,
+      occurredAt: 1_000,
+      provenance: adapterProvenance,
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: 0.5,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    const before = await plane.reportUsage({ scope: { kind: "all" } });
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+    await expect(plane.reportUsage({ scope: { kind: "all" } })).resolves.toEqual(before);
+  });
+
+  // A usage event whose Session the ledger no longer has cannot be attributed
+  // to a project or a ticket, so it is dropped rather than reported under an
+  // invented scope.
+  it("drops a metered operation whose Session is gone", async () => {
+    const ledger = createInMemorySessionLedger();
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("create-orphan"));
+    await plane.observe({
+      id: "usage-orphan",
+      kind: "usage.recorded",
+      sessionId: created.session.id,
+      occurredAt: 1_000,
+      provenance: adapterProvenance,
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: 0.5,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    await expect(
+      plane.reportUsage({ scope: { kind: "session", sessionId: "session-that-never-existed" } }),
+    ).resolves.toMatchObject({ total: { requestCount: 0 }, meteredSessionCount: 0 });
   });
 });

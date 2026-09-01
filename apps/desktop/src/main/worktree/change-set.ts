@@ -18,7 +18,8 @@
  * was writing files.
  */
 import { createHash } from "node:crypto";
-import { isAbsolute, normalize, sep } from "node:path";
+import { constants, promises as fs } from "node:fs";
+import { isAbsolute, join, normalize, sep } from "node:path";
 
 import {
   CHANGE_SET_FILE_CAP,
@@ -81,6 +82,23 @@ interface ParsedNumstat {
   binary: boolean;
 }
 
+interface UntrackedFileStat {
+  insertions: number | null;
+  deletions: 0 | null;
+  binary: boolean;
+}
+
+/** Injectable seam for counting an untracked path without changing git's index. */
+export type ReadUntrackedFileStat = (
+  worktreePath: string,
+  path: string,
+) => Promise<UntrackedFileStat | null>;
+
+/** Git's built-in binary sniff examines this many leading bytes. */
+const GIT_BINARY_SNIFF_BYTES = 8_000;
+/** Keep file reads bounded; a stray untracked dependency tree can contain thousands of files. */
+const UNTRACKED_STAT_CONCURRENCY = 16;
+
 /**
  * Builds a {@link ChangeSetSnapshot} for the worktree. Failures surface real
  * git stderr (never a silent empty snapshot). Missing base fails fast.
@@ -88,6 +106,7 @@ interface ParsedNumstat {
 export async function changeSetSnapshot(
   git: RunGitAsync,
   input: ChangeSetInput,
+  readUntrackedFileStat: ReadUntrackedFileStat = readUntrackedStat,
 ): Promise<WorktreeResult<ChangeSetSnapshot>> {
   if (!input.baseBranch) {
     return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
@@ -120,7 +139,19 @@ export async function changeSetSnapshot(
     // are the honest unmerged signal — upgrade/add those as conflicted.
     const withConflicts = applyUnmerged(tracked, parseUnmergedPaths(statusOut));
     const presentPaths = new Set(withConflicts.map((f) => f.path));
-    const untracked = parseUntracked(statusOut).filter((f) => !presentPaths.has(f.path));
+    const rawUntracked = parseUntracked(statusOut).filter((f) => !presentPaths.has(f.path));
+    // `git diff` deliberately omits untracked paths. Count the text files
+    // ourselves so a brand-new file contributes its real +lines in the rail,
+    // without staging it (even with intent-to-add) or otherwise touching the
+    // user's index. Only rows that can cross IPC are read: the cap exists to
+    // keep an accidental untracked dependency tree from becoming unbounded
+    // work on every filesystem-watch refresh.
+    const visibleUntrackedCount = Math.max(0, CHANGE_SET_FILE_CAP - withConflicts.length);
+    const visibleUntracked = rawUntracked.slice(0, visibleUntrackedCount);
+    const untracked = [
+      ...(await applyUntrackedStats(visibleUntracked, input.worktreePath, readUntrackedFileStat)),
+      ...rawUntracked.slice(visibleUntrackedCount),
+    ];
     const composed = [...withConflicts, ...untracked];
     // Totals are counted over the whole Change Set, then the list is cut — the
     // summary stays honest about a worktree whose file list we refuse to ship.
@@ -147,6 +178,48 @@ export async function changeSetSnapshot(
       truncated,
       totalCount,
     });
+  } catch (caught) {
+    return err(stderrOf(caught));
+  }
+}
+
+/**
+ * The complete, uncapped path set in a worktree's current Change Set.
+ *
+ * The collision radar needs every path, not the UI snapshot's capped file
+ * rows: an overlap hidden after the Details rail's cap would be exactly the
+ * merge-time surprise the radar exists to prevent. Like {@link changeSetSnapshot},
+ * this compares the complete working tree (committed + staged + unstaged) to
+ * the resolved base and appends untracked and unmerged paths from porcelain.
+ */
+export async function changeSetPaths(
+  git: RunGitAsync,
+  input: ChangeSetInput,
+): Promise<WorktreeResult<string[]>> {
+  if (!input.baseBranch) {
+    return err("No base branch is known for this worktree, so its Change Set cannot be computed.");
+  }
+  try {
+    const baseRevision = await resolveChangeSetBaseRevision(
+      git,
+      input.worktreePath,
+      input.baseBranch,
+    );
+    if (!baseRevision) {
+      return err(
+        "No base branch is known for this worktree, so its Change Set cannot be computed.",
+      );
+    }
+    const [nameStatusOut, statusOut] = await Promise.all([
+      git(["diff", "--name-status", "-z", "-M", baseRevision], input.worktreePath),
+      git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath),
+    ]);
+    const paths = new Set([
+      ...parseNameStatus(nameStatusOut).map((entry) => entry.path),
+      ...parseUntracked(statusOut).map((entry) => entry.path),
+      ...parseUnmergedPaths(statusOut),
+    ]);
+    return ok([...paths].toSorted((left, right) => left.localeCompare(right)));
   } catch (caught) {
     return err(stderrOf(caught));
   }
@@ -341,6 +414,110 @@ function parseUntracked(out: string): ChangeSetFile[] {
     });
   }
   return files;
+}
+
+/**
+ * Adds line stats to untracked rows with a small worker pool. A path can vanish
+ * between `git status` and this read; that one row keeps unknown counts rather
+ * than failing the complete Change Set refresh.
+ */
+async function applyUntrackedStats(
+  files: readonly ChangeSetFile[],
+  worktreePath: string,
+  readStat: ReadUntrackedFileStat,
+): Promise<ChangeSetFile[]> {
+  const hydrated = [...files];
+  let nextIndex = 0;
+  const workerCount = Math.min(UNTRACKED_STAT_CONCURRENCY, hydrated.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < hydrated.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const file = hydrated[index]!;
+        let stat: UntrackedFileStat | null = null;
+        try {
+          stat = await readStat(worktreePath, file.path);
+        } catch {
+          // Injected readers obey the same per-file failure semantics as the
+          // default reader: one racing path must not blank the whole rail.
+        }
+        if (stat !== null) hydrated[index] = { ...file, ...stat };
+      }
+    }),
+  );
+  return hydrated;
+}
+
+/**
+ * Counts a new file as a diff against an empty blob, matching numstat's line
+ * semantics: LF bytes plus one final line when the file has no trailing LF.
+ *
+ * Files are streamed instead of loaded whole. `O_NOFOLLOW` prevents a symlink
+ * race from turning a repository-relative status path into a read elsewhere on
+ * disk; a symlink itself is counted from its link text, which is the blob git
+ * would add. Binary detection uses git's own leading 8,000-byte NUL heuristic.
+ */
+async function readUntrackedStat(
+  worktreePath: string,
+  path: string,
+): Promise<UntrackedFileStat | null> {
+  if (!isSafeRepoRelativePath(path)) return null;
+  const absolutePath = join(worktreePath, path);
+  try {
+    const entry = await fs.lstat(absolutePath);
+    if (entry.isSymbolicLink()) {
+      return textStat(Buffer.from(await fs.readlink(absolutePath)));
+    }
+    if (!entry.isFile()) return null;
+
+    const handle = await fs.open(absolutePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let bytes = 0;
+      let lineFeeds = 0;
+      let lastByte: number | null = null;
+      while (true) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        for (let index = 0; index < bytesRead; index += 1) {
+          const byte = buffer[index]!;
+          if (bytes + index < GIT_BINARY_SNIFF_BYTES && byte === 0) {
+            return { insertions: null, deletions: null, binary: true };
+          }
+          if (byte === 0x0a) lineFeeds += 1;
+          lastByte = byte;
+        }
+        bytes += bytesRead;
+      }
+      return {
+        insertions: lineFeeds + (bytes > 0 && lastByte !== 0x0a ? 1 : 0),
+        deletions: 0,
+        binary: false,
+      };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** In-memory counterpart used for a symlink's own blob text. */
+function textStat(content: Buffer): UntrackedFileStat {
+  const sniffLength = Math.min(content.length, GIT_BINARY_SNIFF_BYTES);
+  if (content.subarray(0, sniffLength).includes(0)) {
+    return { insertions: null, deletions: null, binary: true };
+  }
+  let lineFeeds = 0;
+  for (const byte of content) {
+    if (byte === 0x0a) lineFeeds += 1;
+  }
+  return {
+    insertions: lineFeeds + (content.length > 0 && content[content.length - 1] !== 0x0a ? 1 : 0),
+    deletions: 0,
+    binary: false,
+  };
 }
 
 /**

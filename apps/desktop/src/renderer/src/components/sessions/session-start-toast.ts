@@ -19,12 +19,25 @@ export interface SessionStartToastModel {
  * The actor phrase is door-derived provenance, worded exactly as the event log
  * attributes it: the human is "You", a driving session is named by its own
  * ticket when main could resolve one, and automation is automation.
+ *
+ * Exhaustive over the actor kinds rather than defaulting to "You" (VC-163).
+ * `unauthenticated` cannot reach this toast today — the two remaining
+ * `session.start` doors produce a Session or the person at the keyboard — but
+ * the type permits it, and a default branch would have announced a caller Volli
+ * could not identify as the person reading the toast. That is the whole of what
+ * VC-92 §6 ruled dead, and it costs one branch to keep it dead here too.
  */
 function actorPhrase(notice: SessionStartedNotice): string {
-  if (notice.actor === "session") {
-    return notice.actorTicket === null ? "An agent session" : `${notice.actorTicket}'s session`;
+  switch (notice.actor) {
+    case "session":
+      return notice.actorTicket === null ? "An agent session" : `${notice.actorTicket}'s session`;
+    case "automation":
+      return "Automation";
+    case "unauthenticated":
+      return "An unauthenticated caller";
+    case "user":
+      return "You";
   }
-  return notice.actor === "automation" ? "Automation" : "You";
 }
 
 /** Shapes one `volli:session-started` push into its toast. */

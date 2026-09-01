@@ -425,9 +425,71 @@ describe("pollRetention — checks & conflicts surfacing", () => {
 
     const state = getRetentionState(deps, store, "t1")!;
     expect(state.hasConflicts).toBe(true);
-    expect(state.failingChecks).toEqual(["lint"]);
+    expect(state.checks).toEqual([{ name: "lint", workflow: null, state: "failing", url: null }]);
     expect(state.prState).toBe("open");
     expect(state.archiveReady).toBe(false);
+  });
+
+  it("carries the whole rollup through to the composed state, not only its failures (VC-182)", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    const { deps } = makeDeps(() =>
+      prView({
+        statusCheckRollup: [
+          {
+            __typename: "CheckRun",
+            name: "Check + Test",
+            workflowName: "CI",
+            status: "COMPLETED",
+            conclusion: "SUCCESS",
+            detailsUrl: "https://github.com/o/r/actions/runs/1",
+          },
+          { __typename: "CheckRun", name: "e2e", status: "IN_PROGRESS", conclusion: null },
+        ],
+      }),
+    );
+    const store = createRetentionStore();
+    await pollRetention(deps, store);
+
+    expect(getRetentionState(deps, store, "t1")!.checks).toEqual([
+      {
+        name: "Check + Test",
+        workflow: "CI",
+        state: "passing",
+        url: "https://github.com/o/r/actions/runs/1",
+      },
+      { name: "e2e", workflow: null, state: "pending", url: null },
+    ]);
+  });
+
+  it("reports a change when a check's state moves but its name and the count do not", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    let conclusion: string | null = null;
+    const { deps } = makeDeps(() =>
+      prView({
+        statusCheckRollup: [
+          {
+            __typename: "CheckRun",
+            name: "build",
+            status: conclusion === null ? "IN_PROGRESS" : "COMPLETED",
+            conclusion,
+          },
+        ],
+      }),
+    );
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+    // Same rollup again: nothing moved, so nothing is broadcast.
+    expect((await pollRetention(deps, store)).changed).toBe(false);
+
+    // The suite goes green. The name is identical and the length is identical
+    // — only the state moved, which is precisely the transition the rail
+    // exists to show, so it MUST reach the broadcast.
+    conclusion = "SUCCESS";
+    expect((await pollRetention(deps, store)).changed).toBe(true);
+    expect(getRetentionState(deps, store, "t1")!.checks[0]?.state).toBe("passing");
   });
 });
 

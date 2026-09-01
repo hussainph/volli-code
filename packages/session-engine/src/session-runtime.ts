@@ -201,7 +201,23 @@ interface FailAttachInput {
   code: string;
   detail: string;
   attachmentId?: string;
-  attentionKind?: AttachFailureAttentionKind;
+  /**
+   * REQUIRED, since VC-220: an attach that failed always leaves the Session
+   * saying so.
+   *
+   * It was optional, and the two failures that named nothing — a location that
+   * could not be prepared, and an adapter that threw something other than a
+   * {@link NativeAttachmentError} — wrote `attachment.failed` into history and
+   * raised no Attention at all. `sessionPersonNeed` reads Attentions, so such a
+   * Session projected as plain `idle`: indistinguishable from a chat nobody has
+   * typed into. An Automation Run that met one opened its Session, could not
+   * deliver its Instructions, and left no error state for VC-133's notification
+   * rule to fire on — the empty Session VC-220 was reported for.
+   *
+   * Non-optional so the compiler asks the question at every new failure site:
+   * what does a person see when the attach fails this way?
+   */
+  attentionKind: AttachFailureAttentionKind;
 }
 type ResolveInteractionCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "interaction.resolve" }>;
@@ -313,6 +329,20 @@ export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot
   transcript: readonly SessionTranscriptArtifact[];
 }
 
+/**
+ * A host-observed message delivery failure that the adapter command path could
+ * not express as Session state on its own.
+ *
+ * The command id is the durable message intent's identity. Re-reporting the
+ * same failed intent therefore updates one Attention instead of accumulating a
+ * fresh error on every recovery sweep.
+ */
+export interface SessionMessageDeliveryFailure {
+  sessionId: string;
+  commandId: string;
+  detail: string;
+}
+
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
@@ -339,10 +369,27 @@ export interface OpenNativeBinding {
    * exact replay this listing exists to let callers avoid.
    */
   attachmentId: string;
+  /**
+   * Epoch milliseconds of the newest live token or tool-progress observation.
+   *
+   * Process-local by design: durable Session events intentionally do not carry
+   * streamed tokens, and a watchdog must not treat its own bookkeeping as
+   * runtime progress.
+   */
+  lastProgressAt: number;
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /**
+   * Make a message refusal that happened after attach durable and visible.
+   *
+   * This is deliberately a host-only report rather than a client command. A
+   * product workflow such as an Automation Run decides that an unobserved
+   * delivery refusal is fatal; an ordinary chat client still receives and
+   * handles its own command receipt without being allowed to mint Attentions.
+   */
+  reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void>;
   /**
    * Every native binding this process currently holds open.
    *
@@ -386,6 +433,8 @@ interface BindingRecord {
   attachment: SessionAttachment;
   venue: SessionExecutionVenue;
   cursor: SessionNativeDetail | null;
+  /** Latest token/tool observation this live binding received, never a durable fact. */
+  lastProgressAt: number;
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -573,11 +622,54 @@ class DefaultSessionRuntime implements SessionRuntime {
   constructor(private readonly ports: SessionRuntimePorts) {}
 
   openNativeBindings(): readonly OpenNativeBinding[] {
-    return [...this.#bindings.values()].map(({ spec }) => ({
+    return [...this.#bindings.values()].map(({ spec, lastProgressAt }) => ({
       sessionId: spec.sessionId,
       directory: spec.directory,
       attachmentId: spec.attachmentId,
+      lastProgressAt,
     }));
+  }
+
+  async reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void> {
+    this.#assertOpen();
+    const projection = await this.#requireSession(input.sessionId);
+    this.#assertOpen();
+    const attachment = projection.liveExecutor;
+    const adapter =
+      attachment === null ? this.ports.executor : this.#adapterIdentityFor(attachment.adapterId);
+    const attentionId = messageDeliveryFailureAttentionId(
+      input.sessionId,
+      adapter.id,
+      input.commandId,
+    );
+    const existing = projection.attention.active.find(({ id }) => id === attentionId);
+    if (
+      existing?.kind === "adapter_unrecoverable" &&
+      existing.attachmentId === null &&
+      existing.detail === input.detail
+    ) {
+      return;
+    }
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(adapter, attachment?.venue ?? null),
+      kind: "attention.raised",
+      attention: {
+        id: attentionId,
+        // The delivery intent outlives the binding that happened to refuse it.
+        // Keep the failure on the Session so an attachment closing in the same
+        // instant cannot erase (or reject) the only account of the empty Run.
+        // A later successful fresh attach retires this kind through the same
+        // path as VC-220's attach failures.
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([attention]);
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -819,6 +911,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         location,
         code: "location_unavailable",
         detail: errorMessage(error),
+        // Where a Session runs is part of how it is configured, and a worktree
+        // that cannot be prepared is that configuration failing — the same
+        // Attention an unavailable pinned model raises, and cleared by the same
+        // successful attach once the directory can be made.
+        attentionKind: "configuration_invalid",
       });
     }
 
@@ -848,7 +945,11 @@ class DefaultSessionRuntime implements SessionRuntime {
         code: nativeFailure?.code ?? "attach_failed",
         detail: errorMessage(error),
         attachmentId,
-        attentionKind: nativeFailure?.attentionKind,
+        // An adapter that threw without naming a kind still failed to bind, and
+        // nothing but a fresh attach can disprove it. `adapter_unrecoverable`
+        // is what that is, and reading it as "no Attention" was how a broken
+        // attach came to look like a quiet one.
+        attentionKind: nativeFailure?.attentionKind ?? "adapter_unrecoverable",
       });
     }
 
@@ -865,6 +966,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         // the fallback this attach exists to refuse (#38), because
         // `#rehydrateBinding` trusts the persisted directory over a fresh read.
         native: wrapNativeBinding(site.directory, adapter.runtime, handle.native),
+        // The policy this attachment opened under, read off the handle exactly
+        // as `native` is and written down once, here (VC-44). This is the only
+        // place an Authority Snapshot becomes durable, which is what lets a
+        // later `authority.denied` — which carries this `attachmentId` — name
+        // the rule pack that produced it. An adapter that does not answer runs
+        // no policy, and records none.
+        authority: handle.authority ?? null,
       };
       const opened = await this.ports.engine.observe({
         id: this.#id("event"),
@@ -898,6 +1006,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         attachment,
         venue: location.venue,
         cursor: null,
+        lastProgressAt: this.ports.clock.now(),
         reconcileInFlight: null,
         translator,
         sink,
@@ -1014,34 +1123,32 @@ class DefaultSessionRuntime implements SessionRuntime {
         venue: input.location.venue,
         continuity: input.request.command.continuity,
         native: null,
+        // An attach that failed ran nothing, so it was governed by nothing. The
+        // Snapshot is not merely unknown here — there was no attachment for one
+        // to be pinned to, and writing the policy that *would* have applied
+        // would put a claim in history that no call was ever judged against.
+        authority: null,
       },
       failure: { code: input.code, detail: input.detail, diagnostic: null },
     });
-    const attention =
-      input.attentionKind === undefined
-        ? null
-        : await this.ports.engine.observe({
-            id: this.#id("event"),
-            sessionId: input.request.sessionId,
-            occurredAt: this.ports.clock.now(),
-            provenance: adapterProvenance(input.adapter, input.location.venue),
-            kind: "attention.raised",
-            attention: {
-              id: freshAttachAttentionId(
-                input.request.sessionId,
-                input.adapter.id,
-                input.attentionKind,
-              ),
-              // The attachment attempt is already a closed fact. This Attention
-              // belongs to the Session until a fresh attach succeeds, rather
-              // than pretending a failed binding can receive recovery work.
-              attachmentId: null,
-              kind: input.attentionKind,
-              detail: input.detail,
-              diagnostic: null,
-            },
-          });
-    await this.#publish(attention === null ? [failed] : [failed, attention]);
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.request.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(input.adapter, input.location.venue),
+      kind: "attention.raised",
+      attention: {
+        id: freshAttachAttentionId(input.request.sessionId, input.adapter.id, input.attentionKind),
+        // The attachment attempt is already a closed fact. This Attention
+        // belongs to the Session until a fresh attach succeeds, rather
+        // than pretending a failed binding can receive recovery work.
+        attachmentId: null,
+        kind: input.attentionKind,
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([failed, attention]);
     const receipt = await this.#recordDelivery(
       input.request.sessionId,
       null,
@@ -1847,6 +1954,14 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#assertOpen();
   }
 
+  /** Update only the live binding that produced a real runtime observation. */
+  #recordBindingProgress(spec: Pick<NativeAttachmentSpec, "sessionId" | "attachmentId">): void {
+    const binding = this.#bindings.get(spec.attachmentId);
+    /* v8 ignore next -- only this attachment-keyed sink calls here, and it is discarded before its binding leaves this private map. */
+    if (binding?.spec.sessionId !== spec.sessionId) return;
+    binding.lastProgressAt = this.ports.clock.now();
+  }
+
   /**
    * One attachment's observation pipeline, and the translator it runs on.
    *
@@ -1865,7 +1980,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       now: () => this.ports.clock.now(),
     });
     const sink: BufferedObservationSink = new BufferedObservationSink(translator, (fact) =>
-      this.#recordFact(adapter, spec, venue, fact, sink),
+      this.#recordFact(adapter, spec, venue, fact, sink, "live"),
     );
     return { translator, sink };
   }
@@ -1877,7 +1992,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     observation: TranslatedObservation,
     /** The pipeline this fact came through, re-read for the one write that can outlast it. */
     sink: BufferedObservationSink,
+    source: "live" | "replay" = "live",
   ): Promise<void> {
+    // Replayed facts may be hours old. Only live tokens/tool observations reset
+    // the watchdog's process-local clock; durable recovery is not progress.
+    if (source === "live") this.#recordBindingProgress(spec);
     // A transient fact, and every durable step below is skipped on purpose: no
     // artifact write, no ledger event, and no observation-id dedupe — at ~31
     // emissions a second a delta carries no durable identity worth deduping.
@@ -1984,6 +2103,14 @@ class DefaultSessionRuntime implements SessionRuntime {
           tool: observation.tool,
           cause: observation.cause,
           reason: observation.reason,
+        });
+        break;
+      case "usage.recorded":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          turnId: observation.turnId,
+          usage: observation.usage,
         });
         break;
       case "interaction.opened":
@@ -2248,6 +2375,14 @@ class DefaultSessionRuntime implements SessionRuntime {
       // provider id fails honestly in the adapter; it must never create fresh.
       continuity: "native_resume",
       native: binding.native,
+      // The Snapshot this attachment opened under, replayed rather than
+      // re-resolved (VC-44). `#openAttachment` reads the handle's Snapshot and
+      // writes it onto `attachment.opened`; this is the same fact travelling the
+      // other way, so an attachment rebuilt after a relaunch is governed by the
+      // policy history says governed it. Without this the durable record and the
+      // live gate drift apart the first time anyone edits policy, and the record
+      // is the half that would be wrong.
+      pinnedAuthority: attachment.authority,
     };
     const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;
@@ -2264,6 +2399,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachment,
       venue: attachment.venue,
       cursor: null,
+      lastProgressAt: this.ports.clock.now(),
       reconcileInFlight: null,
       translator,
       sink,
@@ -2296,7 +2432,14 @@ class DefaultSessionRuntime implements SessionRuntime {
   ): Promise<void> {
     for (const observation of reconciliation.observations) {
       for (const fact of binding.translator.replay(observation)) {
-        await this.#recordFact(binding.adapter, binding.spec, binding.venue, fact, binding.sink);
+        await this.#recordFact(
+          binding.adapter,
+          binding.spec,
+          binding.venue,
+          fact,
+          binding.sink,
+          "replay",
+        );
       }
     }
     const projection = await this.#requireSession(binding.spec.sessionId);
@@ -2834,7 +2977,7 @@ function userProvenance(venue: SessionExecutionVenue | null): SessionEventProven
 
 function adapterProvenance(
   adapter: AdapterIdentity,
-  venue: SessionExecutionVenue,
+  venue: SessionExecutionVenue | null,
 ): SessionEventProvenance {
   return {
     source: {
@@ -2945,6 +3088,15 @@ function freshAttachAttentionId(
   return ["attach", sessionId, adapterId, FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT, kind]
     .map(encodeURIComponent)
     .join(":");
+}
+
+/** One durable failure marker per first-message command, across every replay. */
+function messageDeliveryFailureAttentionId(
+  sessionId: string,
+  adapterId: string,
+  commandId: string,
+): string {
+  return ["message-delivery", sessionId, adapterId, commandId].map(encodeURIComponent).join(":");
 }
 
 function nativeObservationId(

@@ -4,7 +4,10 @@
  */
 
 import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
-import type { SessionToolId } from "./authority";
+import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
+import type { SessionUsage, SessionUsageSummary } from "./session-usage";
+import type { SessionUsageEntry } from "./session-usage-report";
 
 export interface Session {
   id: string;
@@ -290,6 +293,25 @@ export interface SessionAttachment {
   venue: SessionExecutionVenue;
   continuity: SessionAttachmentContinuity;
   native: SessionNativeReference | null;
+  /**
+   * The policy this attachment ran under, recorded when it opened (VC-44).
+   *
+   * On the attachment rather than on the Session, because that is the unit the
+   * Snapshot is pinned to: policy is frozen for the life of one attachment and
+   * re-resolved at the next, so a Session that reattached after a Settings edit
+   * has genuinely run under two policies and history has to be able to say so.
+   * `authority.denied` already carries `attachmentId`, so a refusal read back
+   * long after the pack changed resolves through this field to the exact
+   * `rulePackId` and `rulePackHash` that produced it — which is the whole of what
+   * pinning was for, and what it could not do while nothing persisted the
+   * Snapshot.
+   *
+   * `null` is a real and permanent answer, not a migration gap. A Session whose
+   * project sets `enforcement: "off"` is handed no Snapshot at all, and every
+   * attachment written before VC-44 has none either; both mean "this ran at the
+   * runtime's own defaults", which is the same fact.
+   */
+  authority: AuthoritySnapshot | null;
 }
 
 /** A local machine, cloud sandbox, or other execution venue. */
@@ -403,6 +425,22 @@ export type SessionInput =
   | { kind: "prompt-resources"; resources: readonly PromptResource[] }
   | { kind: "tool-surface"; tools: readonly SessionToolId[] };
 
+/**
+ * Who ended a Session's work (VC-86): a supervising Session (the control-tier
+ * `session.stop` tool), the person, or the runtime host's own watchdog. The
+ * complete answer to "who can stop a Session", written once — a fourth kind is
+ * a design decision, not a default.
+ *
+ * Deliberately NOT {@link SessionEventProvenance}: provenance says which door a
+ * write arrived through, and its `source.kind` vocabulary is frozen by the
+ * codec. This is the semantic actor of the stop itself, carried in the payload
+ * the way a Ticket event carries its actor.
+ */
+export type SessionStopActor =
+  | { kind: "session"; sessionId: string }
+  | { kind: "user" }
+  | { kind: "watchdog" };
+
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
@@ -412,6 +450,14 @@ export type SessionEventPayload =
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
+  /**
+   * A supervisor, the person, or the watchdog ended this Session's work
+   * (VC-86). A NEW kind rather than a third `session.signaled` value, so a
+   * build that predates it drops the event it does not know instead of
+   * failing the whole Session over a value inside a kind it thought it knew.
+   * The Session stays openable — stop ends work, never identity.
+   */
+  | { kind: "session.stopped"; reason: string | null; by: SessionStopActor }
   | { kind: "attachment.opened"; attachment: SessionAttachment }
   | {
       kind: "attachment.native_referenced";
@@ -517,6 +563,31 @@ export type SessionEventPayload =
       attachmentId: string | null;
       name: string;
       native: SessionNativeDetail | null;
+    }
+  /**
+   * One model operation, and what the provider said it consumed.
+   *
+   * A fact of its own rather than metadata on the message it produced, because
+   * most spend has no message: a tool-use-only reply, a reply that failed after
+   * the tokens were already billed, a Context Compaction, and the auto-title
+   * utility call all cost money and none of them settles a transcript row. A
+   * Session whose usage lived on its messages could only ever report the part
+   * of its bill that happened to say something.
+   *
+   * Immutable like every other fact here, and never re-priced: `costUsd` is
+   * what the operation cost when it ran, not what today's catalogue would
+   * charge for the same tokens. The rollups a reader wants — by Ticket, by
+   * model, by window — are a projection over these, never a mutable running
+   * total this event updates.
+   */
+  | {
+      kind: "usage.recorded";
+      attachmentId: string | null;
+      /** Null for spend outside a turn: compaction, and utility work. */
+      turnId: string | null;
+      /** What the spend was ON, frozen here — see {@link SessionUsageAttribution}. */
+      attribution: SessionUsageAttribution;
+      usage: SessionUsage;
     };
 
 /** A failed attachment preserves adapter and venue metadata without pretending it ever opened. */
@@ -553,6 +624,28 @@ interface SessionObservationBase {
 }
 
 /**
+ * What a metered operation was spent ON, frozen into the fact that records it.
+ *
+ * NOT re-derived from `sessions` at read time, and this is the whole reason it
+ * is here rather than joined. `sessions.ticket_id` is ON DELETE SET NULL, so a
+ * report that joined live would move a deleted Ticket's entire bill into
+ * unticketed Project spend the moment the Ticket went — and, worse, the usage
+ * projection is declared REBUILDABLE, so a rebuild after that delete would
+ * silently produce a different answer from the one the live append path had
+ * already written. A read model may be discarded and derived again only if
+ * every fact it needs is in the immutable history it derives from; attribution
+ * is one of those facts, so it lives in the event.
+ *
+ * The Session id is deliberately absent: that is the event envelope's, and a
+ * second copy here would give a reader two places to disagree.
+ */
+export interface SessionUsageAttribution {
+  projectId: string;
+  /** Null is Project spend — a Session that was born without a Ticket. */
+  ticketId: string | null;
+}
+
+/**
  * The payload kinds external evidence can prove — the durable union minus the
  * control plane's own facts (creation, commands, receipts, signals, model
  * policy), which only the Session Engine writes.
@@ -576,17 +669,46 @@ type ObservedSessionEventKind =
   | "interaction.resolved"
   | "interaction.cancelled"
   | "authority.denied"
-  | "adapter.observed";
+  | "adapter.observed"
+  | "usage.recorded";
+
+/**
+ * Fields an observer never supplies because only the Session Engine can know
+ * them, subtracted from the observed twin of a payload arm.
+ *
+ * `usage.recorded.attribution` is the only one. An executor reports what a
+ * model call consumed; it does not know, and must not have an opinion about,
+ * which Ticket the Session it is attached to is working on — the Session row
+ * inside the appending transaction is the single authority for that, exactly as
+ * a receipt's stamp is. Observers pass it in and the engine stamps it, which is
+ * why this is subtracted here rather than made optional on the payload: absent
+ * attribution must be impossible in durable history, not merely unusual.
+ */
+type EngineStampedFields = "attribution";
+
+/**
+ * `Omit` over each arm of a union rather than over the union itself.
+ *
+ * The built-in collapses a discriminated union to its common keys, which would
+ * quietly turn {@link SessionObservation} into one shapeless object with a wide
+ * `kind` — every arm's own fields gone, and no error anywhere to say so.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /**
  * Observed arms are the payload arms themselves under an observation envelope,
  * derived rather than restated so a payload field added to the durable union
- * cannot silently miss its observation twin. `command.receipt` stays
- * hand-written: it is the one arm that is not a payload — it carries an
- * *unstamped* receipt, and only the Session Engine may stamp one.
+ * cannot silently miss its observation twin, minus {@link EngineStampedFields}.
+ * `command.receipt` stays hand-written: it is the one arm that is not a payload
+ * — it carries an *unstamped* receipt, and only the Session Engine may stamp
+ * one.
  */
 export type SessionObservation =
-  | (SessionObservationBase & Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>)
+  | (SessionObservationBase &
+      DistributiveOmit<
+        Extract<SessionEventPayload, { kind: ObservedSessionEventKind }>,
+        EngineStampedFields
+      >)
   | (SessionObservationBase & { kind: "command.receipt"; receipt: UnstampedCommandReceipt });
 
 /**
@@ -600,8 +722,16 @@ export type SessionObservation =
  * persisted payload's bytes are compared by exact match on replay. Each arm
  * names exactly what the durable payload declares, and the derived union
  * makes a missing or misspelled field a compile error here.
+ *
+ * `attribution` is the one field no observation carries. It is read off the
+ * Session row inside the transaction that appends the event and passed in here
+ * — see {@link SessionUsageAttribution} for why it has to end up in the fact
+ * rather than being joined back later.
  */
-export function observationPayload(observation: SessionObservation): SessionEventPayload {
+export function observationPayload(
+  observation: SessionObservation,
+  attribution: SessionUsageAttribution,
+): SessionEventPayload {
   switch (observation.kind) {
     case "attachment.opened":
       return { kind: observation.kind, attachment: observation.attachment };
@@ -701,6 +831,14 @@ export function observationPayload(observation: SessionObservation): SessionEven
         name: observation.name,
         native: observation.native,
       };
+    case "usage.recorded":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId ?? null,
+        turnId: observation.turnId,
+        attribution,
+        usage: observation.usage,
+      };
   }
 }
 
@@ -709,6 +847,8 @@ export type SessionCommandIntent =
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
+  /** End this Session's work, recording who did it (VC-86). Completes in-engine like a signal. */
+  | { kind: "session.stop"; reason: string | null; by: SessionStopActor }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
@@ -771,6 +911,7 @@ export type CommandReceiptResult =
   | { kind: "session.archived"; sessionId: string }
   | { kind: "session.retitled"; sessionId: string }
   | { kind: "session.signaled"; sessionId: string }
+  | { kind: "session.stopped"; sessionId: string }
   | { kind: "model.selected"; sessionId: string }
   | { kind: "executor.start.requested"; sessionId: string }
   | { kind: "executor.stop.requested"; sessionId: string }
@@ -875,6 +1016,35 @@ export interface ListLatestTicketSignalsQuery {
   projectId: string;
 }
 
+/**
+ * What a usage read is asking about.
+ *
+ * A tagged scope rather than several optional ids, so "every project" and "a
+ * project I have not named yet" cannot be spelled the same way. A caller
+ * holding `{ kind: "ticket" }` has said what it means; a caller holding three
+ * undefined ids has said nothing, and every reader would have to guess the
+ * same combination rules independently.
+ */
+export type SessionUsageScope =
+  | { kind: "all" }
+  | { kind: "project"; projectId: string }
+  | { kind: "ticket"; ticketId: string }
+  | { kind: "session"; sessionId: string };
+
+/**
+ * One bounded read over the usage projection.
+ *
+ * The window is half-open — `since` inclusive, `until` exclusive — so adjacent
+ * windows tile without counting a boundary operation twice.
+ */
+export interface ListSessionUsageQuery {
+  scope: SessionUsageScope;
+  /** Inclusive lower bound on when the operation happened, epoch milliseconds. */
+  since?: number;
+  /** Exclusive upper bound, epoch milliseconds. */
+  until?: number;
+}
+
 export interface ListSessionEventsQuery {
   sessionId: string;
   afterSequence?: number;
@@ -916,6 +1086,14 @@ export interface SessionProjection {
   interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
   signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
+  /**
+   * The stop currently in force, or null — set by `session.stopped`, cleared
+   * only by a fresh attachment. State rather than history: a listing says
+   * "stopped" while this is set, and the event row keeps the who-and-why
+   * forever regardless (VC-86). A turn already admitted to the attachment
+   * being stopped cannot erase the fact before release catches it.
+   */
+  stopped: { at: number; reason: string | null; by: SessionStopActor } | null;
   /** Latest accepted product model policy, durable across attachment and relaunch. */
   modelSelection: ModelSelection | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
@@ -932,6 +1110,16 @@ export interface SessionProjection {
    * the runtime that sees both answers can know a run was broken.
    */
   authorityDenials: number;
+  /**
+   * What this Session has consumed, over every model operation it recorded.
+   *
+   * Folded here rather than queried, so the live Session read stays one pass
+   * over history a caller was already making. The cross-Session rollups — by
+   * Ticket, by model, by window — are a different question with a different
+   * shape, and belong to an indexed projection rather than to a fold of one
+   * Session's log.
+   */
+  usage: SessionUsageSummary;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
   lastActivityAt: number;
   /**
@@ -964,9 +1152,11 @@ export function projectSession(
   let status: SessionProjection["status"] = "open";
   let title = session.title;
   let signal: SessionProjection["signal"] = null;
+  let stopped: SessionProjection["stopped"] = null;
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
   let authorityDenials = 0;
+  const usage: SessionUsage[] = [];
   let lastActivityAt = session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
   // event (a degenerate/partial event list) still has an honest answer;
@@ -986,11 +1176,17 @@ export function projectSession(
     // is a lie about what is happening in it. Nothing is lost by skipping
     // them — a `message.submit` command is followed immediately by the
     // `turn.started` it caused, which does count.
+    //
+    // `usage.recorded` is skipped for a second reason: it is written by a
+    // backfill as well as by a live turn, and a repair that re-dated every
+    // historical Session would rewrite the user's sense of what they were
+    // last working on. The turn that spent the tokens already counted.
     if (
       event.payload.kind !== "command.recorded" &&
       event.payload.kind !== "command.receipt.recorded" &&
       event.payload.kind !== "session.input.recorded" &&
-      event.payload.kind !== "session.retitled"
+      event.payload.kind !== "session.retitled" &&
+      event.payload.kind !== "usage.recorded"
     ) {
       lastActivityAt = event.occurredAt;
     }
@@ -1020,6 +1216,13 @@ export function projectSession(
           occurredAt: event.occurredAt,
         };
         break;
+      case "session.stopped":
+        stopped = {
+          at: event.occurredAt,
+          reason: event.payload.reason,
+          by: event.payload.by,
+        };
+        break;
       case "attachment.native_referenced": {
         const existing = attachments.get(event.payload.attachmentId);
         if (existing) {
@@ -1037,6 +1240,9 @@ export function projectSession(
           outcome: null,
           failure: null,
         });
+        // Work resuming ends a stop: the record stays in history, the state
+        // does not (VC-86).
+        stopped = null;
         if (event.commandId) pendingExecutorStarts.delete(event.commandId);
         break;
       }
@@ -1113,6 +1319,9 @@ export function projectSession(
       // running any more.
       case "turn.started":
         turnActive = true;
+        // A turn can have been admitted before a supervisor recorded its stop.
+        // Only a fresh attachment is an explicit resumption, so this turn must
+        // not erase the stop while the supervisor is still releasing it.
         break;
       case "turn.completed":
       case "turn.interrupted":
@@ -1145,6 +1354,12 @@ export function projectSession(
       case "transcript.referenced":
       case "adapter.observed":
         break;
+      // Collected rather than summed in place: `summarizeSessionUsage` owns
+      // what a mixed basis and a partial coverage mean, and a second addition
+      // written here would be a second opinion about the same money.
+      case "usage.recorded":
+        usage.push(event.payload.usage);
+        break;
       /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
       default: {
         const unhandled: never = event.payload;
@@ -1172,9 +1387,11 @@ export function projectSession(
     },
     interactions: { active: [...interactions.values()], resolved: resolvedInteractions },
     signal,
+    stopped,
     modelSelection,
     turnActive,
     authorityDenials,
+    usage: usage.length === 0 ? EMPTY_SESSION_USAGE_SUMMARY : summarizeSessionUsage(usage),
     lastActivityAt,
     bornTicketless,
   };
@@ -1251,6 +1468,38 @@ export interface SessionLedgerTransaction {
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,
   ): readonly import("./ticket-events").LatestSessionSignal[];
+  /**
+   * Metered operations in scope, newest first, from the usage projection.
+   *
+   * Rows, not a total. Selecting them cheaply is what the projection's indexes
+   * are for; adding them up is `reportSessionUsage`'s job, and an adapter that
+   * returned a pre-summed answer would be a second opinion about what a
+   * partial total means.
+   *
+   * An order, not a total order: a report sums the whole set, so an adapter
+   * need not settle ties within a millisecond. A caller that ever needs paging
+   * needs a documented total order first.
+   */
+  listUsage(query: ListSessionUsageQuery): readonly SessionUsageEntry[];
+  /**
+   * Epoch milliseconds from which this store's usage index is complete; `0`
+   * when it always was.
+   *
+   * A durable store that predates metering holds Sessions whose spend was never
+   * recorded as a fact, and no read of the projection can tell that past from
+   * an idle one. The floor is the store's own answer to “how far back can I be
+   * asked”, and every report carries it so no total is printed without it.
+   */
+  usageMeteredFrom(): number;
+  /**
+   * Discard the usage projection and derive it again from `usage.recorded`.
+   *
+   * The projection is a read model over immutable facts, so this must always
+   * be available and must always produce the same answer. It is what makes a
+   * schema change, a repaired backfill or a suspected drift a rebuild rather
+   * than a migration nobody can verify.
+   */
+  rebuildUsageProjection(): void;
   insertSession(session: Session): void;
   getEvent(eventId: string): SessionEvent | null;
   appendEvent(event: SessionEvent): void;

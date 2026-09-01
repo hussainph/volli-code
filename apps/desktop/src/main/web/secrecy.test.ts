@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { BootstrapResult, VolliIpcChannel } from "../../ipc/contract";
 import type { BindingHandle, NativeAttachmentSpec, ObservationSink } from "@volli/session-engine";
 import { sessionRootThreadId } from "@volli/session-engine";
+import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import type {
   AgentRuntime,
   RuntimeAttachmentHandle,
@@ -93,6 +94,8 @@ const context: PiRuntimeContext = {
   role: "project",
   ticketId: null,
   location: "main-checkout",
+  authorityPolicy: DEFAULT_AUTHORITY_POLICY,
+  priorAuthorityDenials: 0,
   projectId: "project-1",
   rootThreadId: sessionRootThreadId("session-1"),
   brief: "Find out how people test Electron main.",

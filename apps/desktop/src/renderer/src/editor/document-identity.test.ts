@@ -174,6 +174,18 @@ describe("detectDocumentLanguage", () => {
     ["models/train.py", "python"],
     ["typings/train.pyi", "python"],
     ["scripts/launch.PYW", "python"],
+    // The Ruby surface of a Rails-shaped repo: templates, the DSL family, and
+    // the two canonical extensionless names — while Bundler's generated
+    // lockfile keeps its own non-Ruby format.
+    ["app/views/orders/show.html.erb", "erb"],
+    ["sections/product.liquid", "liquid"],
+    ["lib/tasks/db.rake", "ruby"],
+    ["sorbet/rbi/gems/rails.rbi", "ruby"],
+    ["config.ru", "ruby"],
+    ["volli.gemspec", "ruby"],
+    ["Gemfile", "ruby"],
+    ["Rakefile", "ruby"],
+    ["Gemfile.lock", "plaintext"],
   ])("selects %s as %s", (relPath, expected) => {
     expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
   });

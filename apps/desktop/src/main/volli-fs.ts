@@ -3,7 +3,10 @@
  * (docs/plans/global-artifacts.md): the whole-project file index (git
  * ls-files, gitignore-respecting, `.volli/artifacts/` force-included),
  * worktree-aware read/write/reveal and external-app launch of any repo file,
- * the single project-scoped `.volli/artifacts/` create flow, and a per-open-tab
+ * the single project-scoped `.volli/artifacts/` create flow, the navigators'
+ * create/rename/duplicate/delete track (VC-191, plan §4.5), find across files
+ * (VC-193, plan §4.7 — the ripgrep run itself lives in `file-search.ts`; what
+ * is here is the scope it runs under), and a per-open-tab
  * debounced file watch —
  * plus, for the Project Files workspace (issue #106), a per-expanded-directory
  * watch that refreshes one listing at a time rather than mirroring the repo.
@@ -17,7 +20,13 @@
  * inside the resolved root ({@link assertWithinRoot}) — guarding a symlink
  * swapped in for a directory (or the target file itself).
  */
-import { existsSync, promises as fsp, statSync, watch as fsWatch } from "node:fs";
+import {
+  constants as fsConstants,
+  existsSync,
+  promises as fsp,
+  statSync,
+  watch as fsWatch,
+} from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -34,15 +43,18 @@ import {
   isArtifactRelPath,
   isSafeRelPath,
   isValidNewArtifactName,
+  isVolliRelPath,
   projectArtifactsDir,
   projectCommandsDir,
   projectSkillsDir,
+  resolveFileRoot,
   VOLLI_ARTIFACTS_REL_DIR,
   VOLLI_GITIGNORE_CONTENT,
   volliDir,
   withMarkdownExtension,
 } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
+import { searchFiles } from "./file-search";
 import { systemExternalAppGateway } from "./external-apps";
 import type { ExternalAppGateway } from "./external-apps";
 import type { FileKind, FileSource, IndexedFile } from "@volli/shared";
@@ -59,8 +71,12 @@ import type {
   FileIndexInput,
   FileIndexResult,
   FileIpcChannel,
+  FileMutationResult,
   FilePathInput,
   FileReadResult,
+  FileRenameInput,
+  FileSearchInput,
+  FileSearchResult,
   FileWriteInput,
   FileWriteResult,
   PromptTemplateCreateInput,
@@ -174,26 +190,9 @@ export async function ensureProjectArtifactsDir(projectPath: string): Promise<vo
 
 // ---- resolution + path safety ------------------------------------------------
 
-/** Whether a project-relative path is (or is under) `.volli/` — always resolved against the MAIN checkout. */
-function isVolliRelPath(relPath: string): boolean {
-  return relPath === ".volli" || relPath.startsWith(".volli/");
-}
-
-/**
- * The resolved root + source for a relPath (decision #6): `.volli/**` always
- * resolves to the MAIN checkout; any other path resolves to the ticket's live
- * worktree when one is given, else the main checkout.
- */
-function resolveRootFor(
-  projectPath: string,
-  worktreeRoot: string | null,
-  relPath: string,
-): { root: string; source: FileSource } {
-  if (worktreeRoot !== null && !isVolliRelPath(relPath)) {
-    return { root: worktreeRoot, source: "worktree" };
-  }
-  return { root: projectPath, source: "main" };
-}
+// The resolved root + source for a relPath (decision #6) is `resolveFileRoot`
+// in `@volli/shared`: the renderer's Copy Path has to name the same file this
+// module would open, so the rule is stated once and tested once.
 
 /**
  * SEAM (global-artifacts decision #6): a ticket's live worktree root, or `null`
@@ -212,6 +211,21 @@ async function worktreeRootFromRow(row: TicketRow): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether an already-canonical path is the root or sits underneath it — the
+ * containment rule itself, stated ONCE.
+ *
+ * Both path-safety seams end in this comparison ({@link assertWithinRoot} for a
+ * path that exists, {@link resolveNewPath} for one that does not yet), and it is
+ * the line that decides whether a write can leave the checkout. Two copies of it
+ * are two chances to drift, so there is one — the `sep` matters (`/repo-evil`
+ * must not pass for `/repo`) and that is exactly the kind of detail a second
+ * copy loses.
+ */
+function isWithinRoot(rootReal: string, real: string): boolean {
+  return real === rootReal || real.startsWith(rootReal + sep);
 }
 
 /**
@@ -251,7 +265,7 @@ async function assertWithinRoot(
       return { ok: false, error: "File was not found" };
     }
   }
-  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+  if (!isWithinRoot(rootReal, real)) {
     return { ok: false, error: "Resolved path escapes the project root" };
   }
   return { ok: true };
@@ -305,7 +319,7 @@ async function resolveSafePath(
   relPath: string,
   options: { allowRoot?: boolean } = {},
 ): Promise<{ ok: true; value: ResolvedFile } | { ok: false; error: string }> {
-  const { root, source } = resolveRootFor(projectPath, worktreeRoot, relPath);
+  const { root, source } = resolveFileRoot({ projectPath, worktreePath: worktreeRoot, relPath });
   // The one caller that names a ROOT is the ticket-repository external-app
   // action. It never receives a renderer-supplied absolute path: `root` came
   // from resolveFileScope's project/ticket lookup, and realpath canonicalizes
@@ -327,6 +341,84 @@ async function resolveSafePath(
   const check = await assertWithinRoot(root, filePath);
   if (!check.ok) return check;
   return { ok: true, value: { root, source, filePath } };
+}
+
+/** A resolved path that may not exist yet, and the one fact the caller has to branch on. */
+interface ResolvedNewFile extends ResolvedFile {
+  /** Whether anything is at `filePath` already — the create track's refusal. */
+  exists: boolean;
+}
+
+/**
+ * The creation track's resolution seam (VC-191): the same two layers as
+ * {@link resolveSafePath}, for a path whose PARENT may not exist either.
+ *
+ * {@link assertWithinRoot} cannot answer for one of those — it verifies a
+ * missing target through `realpath` of its parent directory, which for
+ * `src/new/thing.ts` is itself missing, so a legitimate create would come back
+ * "File was not found". So containment is established the other way round:
+ * start at the REALPATH'd root and walk down one segment at a time. Every
+ * segment past the first missing one is new, and a path built by joining onto
+ * an already-contained real directory cannot escape it — which is the property
+ * that makes creating the missing parents safe.
+ *
+ * The two symlink rules are the READ path's, restated for a walk rather than
+ * inherited by accident: an intermediate link is followed and then required to
+ * land inside the root (a repo may legitimately symlink a directory to another
+ * directory of its own, and a read through one already works), while a link at
+ * the TARGET is refused outright — the swapped-in-file case, where following it
+ * would write through to wherever it points.
+ */
+async function resolveNewPath(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<{ ok: true; value: ResolvedNewFile } | { ok: false; error: string }> {
+  const { root, source } = resolveFileRoot({ projectPath, worktreePath: worktreeRoot, relPath });
+  if (!isSafeRelPath(relPath)) return { ok: false, error: "Invalid file path" };
+  let rootReal: string;
+  try {
+    rootReal = await fsp.realpath(root);
+  } catch {
+    return {
+      ok: false,
+      error:
+        source === "worktree" ? "Worktree folder was not found" : "Project folder was not found",
+    };
+  }
+  const segments = relPath.split("/");
+  let current = rootReal;
+  let exists = true;
+  for (const [index, segment] of segments.entries()) {
+    const next = join(current, segment);
+    let entry: import("node:fs").Stats;
+    try {
+      entry = await fsp.lstat(next);
+    } catch {
+      // Nothing here yet. Everything below is new; the walk is done.
+      exists = false;
+      current = segments.slice(index).reduce((path, rest) => join(path, rest), current);
+      break;
+    }
+    const last = index === segments.length - 1;
+    if (entry.isSymbolicLink()) {
+      if (last) return { ok: false, error: "Path is a symlink" };
+      let real: string;
+      try {
+        real = await fsp.realpath(next);
+      } catch {
+        return { ok: false, error: "File was not found" };
+      }
+      if (!isWithinRoot(rootReal, real)) {
+        return { ok: false, error: "Resolved path escapes the project root" };
+      }
+      current = real;
+      continue;
+    }
+    if (!last && !entry.isDirectory()) return { ok: false, error: "Not a directory" };
+    current = next;
+  }
+  return { ok: true, value: { root: rootReal, source, filePath: current, exists } };
 }
 
 // ---- file index --------------------------------------------------------------
@@ -381,21 +473,37 @@ async function walkFiles(
   return results;
 }
 
+/** What {@link buildFileIndex} may be told beyond the project's main checkout. */
+export interface BuildFileIndexOptions {
+  /**
+   * SEAM (decision #6, the same one {@link resolveSafePath} applies per path):
+   * the ticket worktree the REPO half of the index is listed from, or `null`
+   * for the main checkout. Artifacts are walked from `projectPath` either way,
+   * because `.volli/**` always resolves to Main — so the index and a read of
+   * one of its rows can never disagree about which file a relPath names.
+   */
+  worktreeRoot?: string | null;
+  /** Entry ceiling; artifacts are pushed first so they survive truncation. */
+  indexCap?: number;
+}
+
 /**
- * The whole-project file index the `@` picker ranks over (decision #3): the
- * git file list (gitignore-respecting; fallback to a bounded walk when git
- * isn't usable) plus a force-included walk of `.volli/artifacts/`
- * (`artifact: true`). Capped at ~20k entries — artifacts come first so they
- * survive truncation.
+ * The scoped file index the `@` picker and quick-open rank over (decision #3):
+ * the git file list of the scope's checkout (gitignore-respecting; fallback to
+ * a bounded walk when git isn't usable) plus a force-included walk of Main's
+ * `.volli/artifacts/` (`artifact: true`). Capped at ~20k entries — artifacts
+ * come first so they survive truncation.
  */
 export async function buildFileIndex(
   projectPath: string,
-  indexCap: number = INDEX_CAP,
+  options: BuildFileIndexOptions = {},
 ): Promise<{ files: IndexedFile[]; truncated: boolean }> {
-  const gitFiles = await gitListFiles(projectPath);
+  const indexCap = options.indexCap ?? INDEX_CAP;
+  // The repo half follows the scope; the artifact half never does.
+  const repoRoot = options.worktreeRoot ?? projectPath;
+  const gitFiles = await gitListFiles(repoRoot);
   const repoRelPaths =
-    gitFiles ??
-    (await walkFiles(projectPath, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
+    gitFiles ?? (await walkFiles(repoRoot, { skipDirNames: FALLBACK_SKIP_DIRS, limit: indexCap }));
   const artifactRelPaths = await walkFiles(projectArtifactsDir(projectPath), {
     relPrefix: VOLLI_ARTIFACTS_REL_DIR,
     limit: indexCap,
@@ -590,11 +698,22 @@ async function assertTextWritable(
  * on-disk binary, anything past {@link TEXT_CAP_BYTES} in either direction —
  * see {@link assertTextWritable}.
  *
- * NEW-FILE POLICY: a write to a path with nothing on disk is refused. Project
- * Files edits files that already exist; creation/rename/delete are a separate,
- * reference-aware track. The single exception is `.volli/**`, which this app
- * owns and self-heals below — an agent's `git clean -xdf` wipes it, and the
- * open artifact tab's buffered edits must not be stranded.
+ * NEW-FILE POLICY: a write to a path with nothing on disk is still refused, and
+ * that is now a statement about WHICH DOOR creates a file rather than about
+ * whether the app may. The sanctioned creation track is the create/rename/
+ * duplicate/delete block below (VC-191, plan §4.5): it names the new path
+ * explicitly, refuses to overwrite, and deletes to the Trash — none of which a
+ * save can do, because a save cannot tell "this file is new" apart from "the
+ * file this buffer came from was deleted or renamed underneath it". Letting the
+ * write path conjure that file back is how a stale tab silently resurrects a
+ * path the user (or an agent's `git mv`) removed. So the refusal stands, and
+ * the two exceptions to it are:
+ *
+ *  - `.volli/**`, which this app owns and self-heals below — an agent's
+ *    `git clean -xdf` wipes it, and the open artifact tab's buffered edits must
+ *    not be stranded.
+ *  - a file the creation track just made, which exists by the time the first
+ *    save reaches it.
  */
 export async function writeFile(
   projectPath: string,
@@ -697,6 +816,265 @@ export async function createArtifact(
     if (errnoCode(error) === "EEXIST") {
       return { ok: false, error: `An artifact named "${name}" already exists` };
     }
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+// ---- the sanctioned creation track (VC-191, plan §4.5) -----------------------
+//
+// Five verbs the write path deliberately does not have: create a file, create a
+// directory, rename, duplicate, delete. Each resolves through the SAME seams a
+// read does — `resolveFileScope`'s `{ projectId, ticketId }` worktree pair at
+// the IPC edge, and the two path-safety layers here — and each refuses rather
+// than destroying: create and rename never overwrite, and delete goes to the
+// Trash. Exported as plain functions (the module's convention) so the refusal
+// paths are testable against real temp dirs without an Electron window.
+
+/** The extension a duplicate has to keep, INCLUDING the dot, or `""` for a name with none. */
+function trailingExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  // `dot <= 0` keeps a dotfile whole: `.gitignore` duplicates as
+  // `.gitignore copy`, never as ` copy.gitignore`.
+  return dot <= 0 ? "" : name.slice(dot);
+}
+
+/**
+ * What the Nth duplicate of `name` is called — Finder's grammar, because this
+ * is Finder's gesture: `plan.md` → `plan copy.md`, then `plan copy 2.md`. The
+ * suffix goes before the extension so the copy is still the same KIND of file,
+ * which is what decides its editor, its syntax highlighting and whether the
+ * navigator will even offer to open it.
+ */
+export function duplicateEntryName(name: string, attempt: number): string {
+  const extension = trailingExtension(name);
+  const base = name.slice(0, name.length - extension.length);
+  return attempt <= 1 ? `${base} copy${extension}` : `${base} copy ${attempt}${extension}`;
+}
+
+/** How many `… copy N` names duplicate tries before it gives up rather than spinning. */
+const DUPLICATE_NAME_ATTEMPTS = 100;
+
+/**
+ * Creates an EMPTY file at `relPath`, making any missing parent directories.
+ *
+ * The `wx` (`O_EXCL`) flag is the real no-clobber guard, exactly as in
+ * {@link createArtifact}: it closes the window between "nothing was there" and
+ * "we wrote", which under a live agent is not a theoretical race, and it refuses
+ * to follow a symlink parked at the target name. Empty rather than templated —
+ * the artifact create flow seeds a `# Heading` because it knows the file is a
+ * Markdown document; a repository file is whatever the person is about to type.
+ */
+export async function createFile(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveNewPath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath, exists } = resolved.value;
+  if (exists) return { ok: false, error: `"${basename(relPath)}" already exists` };
+  try {
+    await fsp.mkdir(dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, "", { encoding: "utf8", flag: "wx" });
+    return { ok: true, relPath };
+  } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return { ok: false, error: `"${basename(relPath)}" already exists` };
+    }
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/**
+ * Creates one directory at `relPath` (missing parents included).
+ *
+ * The final `mkdir` is deliberately NOT recursive: `recursive: true` treats an
+ * existing directory as success, which would make "New Folder…" silently answer
+ * ok for a name that is already taken — the one thing this verb must refuse.
+ */
+export async function createDirectory(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveNewPath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath, exists } = resolved.value;
+  if (exists) return { ok: false, error: `"${basename(relPath)}" already exists` };
+  try {
+    await fsp.mkdir(dirname(filePath), { recursive: true });
+    await fsp.mkdir(filePath);
+    return { ok: true, relPath };
+  } catch (error) {
+    if (errnoCode(error) === "EEXIST") {
+      return { ok: false, error: `"${basename(relPath)}" already exists` };
+    }
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/** Whether two paths name the same on-disk object. `false` if either is gone. */
+async function isSameEntry(left: string, right: string): Promise<boolean> {
+  const [a, b] = await Promise.all([statOrNull(left), statOrNull(right)]);
+  return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
+ * Whether the "occupied" destination is the SOURCE ITSELF under a different
+ * spelling of its own name — `readme.md` → `README.md`.
+ *
+ * macOS's default volume is case-insensitive but case-PRESERVING, so `lstat`
+ * answers for `README.md` when only `readme.md` is on disk, and the occupied
+ * check below would refuse a case change with `"README.md" already exists` — a
+ * sentence about the very file being renamed. Changing a name's case is an
+ * ordinary gesture (Finder does it, `git mv` does it) and nothing is overwritten
+ * by it, so refusing it is a false positive rather than the safety posture.
+ *
+ * Admitted only on all three counts together, because each rules out a
+ * different impostor:
+ *  - basenames that differ ONLY by case — this is what keeps a HARDLINK out.
+ *    Two distinct names sharing an inode are two directory entries, and
+ *    `rename(2)` is specified to no-op on them, which we must not report as a
+ *    completed rename.
+ *  - the same parent DIRECTORY, compared by identity rather than by string:
+ *    the source path is spelled from `root` and the destination from its
+ *    realpath, so a project living under a symlink spells one directory two
+ *    ways.
+ *  - the same on-disk entry. This is the one that proves the VOLUME folded the
+ *    case; on a case-sensitive filesystem two real files answer here with two
+ *    inodes and the refusal correctly stands.
+ */
+async function isCaseOnlyRename(from: string, to: string): Promise<boolean> {
+  const name = basename(from);
+  const target = basename(to);
+  if (name === target || name.toLowerCase() !== target.toLowerCase()) return false;
+  if (!(await isSameEntry(dirname(from), dirname(to)))) return false;
+  return await isSameEntry(from, to);
+}
+
+/**
+ * Renames (or moves, within one checkout) a file or directory.
+ *
+ * THREE REFUSALS, and each is a different way this could destroy something:
+ * a destination that is already occupied is never overwritten (`rename(2)`
+ * would silently replace it); a destination that resolves against a DIFFERENT
+ * root than the source is refused, because `.volli/**` always resolves to Main
+ * while the repo half follows the ticket's worktree — so `src/a.ts` →
+ * `.volli/artifacts/a.ts` inside a ticket would move a file between checkouts
+ * under the word "rename"; and a destination whose parent folder does not exist
+ * is named as such instead of creating it, because rename is not the create
+ * verb and a typo'd path should not scatter directories.
+ *
+ * The occupied check has exactly one exception, and it is not a loophole in it:
+ * a destination that IS the source under another casing ({@link
+ * isCaseOnlyRename}) overwrites nothing, because there is only one file there.
+ *
+ * The occupied-destination check is a `lstat` a moment before the `rename(2)`,
+ * so an agent creating that exact path in between would still be clobbered.
+ * There is no portable no-replace rename to close it with (`renameat2`'s
+ * `RENAME_NOREPLACE` is Linux-only, `renamex_np` is macOS-only and unexposed by
+ * Node), so it is stated rather than implied — the same honesty the write
+ * path's mtime guard practices about the same width of window.
+ */
+export async function renameEntry(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+  toRelPath: string,
+): Promise<FileMutationResult> {
+  const source = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!source.ok) return source;
+  const destination = await resolveNewPath(projectPath, worktreeRoot, toRelPath);
+  if (!destination.ok) return destination;
+  if (destination.value.source !== source.value.source) {
+    return { ok: false, error: "A rename cannot move a file between checkouts" };
+  }
+  if (
+    destination.value.exists &&
+    !(await isCaseOnlyRename(source.value.filePath, destination.value.filePath))
+  ) {
+    return { ok: false, error: `"${basename(toRelPath)}" already exists` };
+  }
+  try {
+    if ((await statOrNull(source.value.filePath)) === null) {
+      return { ok: false, error: "File was not found" };
+    }
+    const parent = await statOrNull(dirname(destination.value.filePath));
+    if (parent === null || !parent.isDirectory()) {
+      return { ok: false, error: "Destination folder was not found" };
+    }
+    await fsp.rename(source.value.filePath, destination.value.filePath);
+    return { ok: true, relPath: toRelPath };
+  } catch (error) {
+    return { ok: false, error: fsFaultText(error) };
+  }
+}
+
+/**
+ * Copies a file to the first free `… copy` name beside it, resolving with the
+ * name it actually took.
+ *
+ * FILES ONLY in v1, and refused out loud for a directory rather than quietly
+ * doing nothing: a recursive copy of an arbitrary repository folder is a
+ * different risk class (a `node_modules`, a `target`, an unbounded amount of
+ * time and disk) and nobody has asked for it.
+ *
+ * `COPYFILE_EXCL` is what makes the search for a free name correct rather than
+ * a check-then-write race: an occupied candidate — including one that is a
+ * symlink, and one an agent created a millisecond ago — comes back EEXIST and
+ * the loop moves on. Every candidate is a bare name joined onto the source's
+ * own already-contained directory, so containment is inherited and needs no
+ * second walk.
+ */
+export async function duplicateFile(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<FileMutationResult> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
+  const stat = await statOrNull(filePath);
+  if (stat === null) return { ok: false, error: "File was not found" };
+  if (!stat.isFile()) return { ok: false, error: "Only files can be duplicated" };
+
+  const parentDir = dirname(filePath);
+  const parentRel = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+  for (let attempt = 1; attempt <= DUPLICATE_NAME_ATTEMPTS; attempt += 1) {
+    const name = duplicateEntryName(basename(relPath), attempt);
+    try {
+      await fsp.copyFile(filePath, join(parentDir, name), fsConstants.COPYFILE_EXCL);
+      return { ok: true, relPath: parentRel === "" ? name : `${parentRel}/${name}` };
+    } catch (error) {
+      if (errnoCode(error) === "EEXIST") continue;
+      return { ok: false, error: fsFaultText(error) };
+    }
+  }
+  return { ok: false, error: "Every copy name beside this file is taken" };
+}
+
+/**
+ * Moves a file or directory to the TRASH — `shell.trashItem`, never `rm`.
+ *
+ * That is the whole reason this verb can exist at all. Deletion from a
+ * navigator is one click next to Rename, the agent in the next pane may have
+ * written the file thirty seconds ago, and an in-place unlink of a file that is
+ * not committed anywhere is unrecoverable. The Trash makes the worst case a
+ * trip to Finder instead of lost work, and it costs nothing.
+ */
+export async function trashEntry(
+  projectPath: string,
+  worktreeRoot: string | null,
+  relPath: string,
+): Promise<Result> {
+  const resolved = await resolveSafePath(projectPath, worktreeRoot, relPath);
+  if (!resolved.ok) return resolved;
+  const { filePath } = resolved.value;
+  if ((await statOrNull(filePath)) === null) return { ok: false, error: "File was not found" };
+  try {
+    await shell.trashItem(filePath);
+    return { ok: true };
+  } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
 }
@@ -1135,6 +1513,21 @@ interface FileScope {
 }
 
 /**
+ * The one directory a scoped search walks: the ticket's live worktree, else the
+ * project's main checkout.
+ *
+ * The read path picks its root PER PATH ({@link resolveFileRoot}, so `.volli/**`
+ * stays on Main whatever the scope). A search has no path to pick with, and
+ * `.volli` is self-gitignored and therefore not searched at all — so the rule
+ * collapses to the checkout the scope named, and a ticket whose worktree row
+ * has gone stale degrades to Main for exactly the reason a read of one of its
+ * files does.
+ */
+function searchRoot(scope: FileScope): string {
+  return scope.worktreeRoot ?? scope.projectPath;
+}
+
+/**
  * The main-repo path plus the ticket's worktree root (the seam) for a file
  * request. `ticketId` is optional; when given it's checked against `projectId`
  * (defense-in-depth — a mismatched pair is rejected, not trusted).
@@ -1282,10 +1675,17 @@ export function registerFileIpcHandlers(
   const externalApps = options.externalApps ?? systemExternalAppGateway;
 
   const handlers: IpcHandlerTable<FileIpcChannel> = {
+    // Scope follows the surface that asked (VC-190): Home hands no ticketId and
+    // gets Main; a Ticket workspace hands its own and gets that worktree —
+    // through `resolveFileScope`, the same seam `volli:file-read` resolves
+    // through, so quick-open can never offer a row the read then answers from
+    // the other checkout.
     "volli:file-index": async (input: FileIndexInput): Promise<FileIndexResult> => {
-      const project = resolveProjectPath(db, input.projectId);
-      if (!project.ok) return project;
-      const { files, truncated } = await buildFileIndex(project.projectPath);
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const { files, truncated } = await buildFileIndex(scope.value.projectPath, {
+        worktreeRoot: scope.value.worktreeRoot,
+      });
       return { ok: true, files, truncated };
     },
 
@@ -1293,6 +1693,20 @@ export function registerFileIpcHandlers(
       const scope = await resolveFileScope(db, input.projectId, input.ticketId);
       if (!scope.ok) return scope;
       return await readFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    // Find across files (plan §4.7), scoped by the SAME seam as the read above
+    // — so the checkout that answered the search is the checkout the click on a
+    // result reads from. `searchRoot` is the one difference: a search has no
+    // relPath to route on, so `.volli/**`'s always-Main rule has nothing to
+    // apply to, and a ticket searches its worktree whole (falling back to Main
+    // when that worktree is gone, exactly as a read does).
+    "volli:search": async (input: FileSearchInput): Promise<FileSearchResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      const run = await searchFiles({ root: searchRoot(scope.value), query: input.query });
+      if (!run.ok) return run;
+      return { ok: true, ...run.value };
     },
 
     "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({
@@ -1337,6 +1751,50 @@ export function registerFileIpcHandlers(
         input.content,
         input.expectedMtime,
       );
+    },
+
+    // The creation track (VC-191). Every one of the five resolves through
+    // `resolveFileScope` — the same seam `volli:file-read` uses — so a Ticket
+    // workspace creates, renames and trashes inside ITS worktree while Home
+    // acts on the main checkout, and neither can act on a path the other's
+    // navigator was showing.
+    "volli:file-create": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await createFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    "volli:dir-create": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await createDirectory(
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
+        input.relPath,
+      );
+    },
+
+    "volli:file-rename": async (input: FileRenameInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await renameEntry(
+        scope.value.projectPath,
+        scope.value.worktreeRoot,
+        input.relPath,
+        input.toRelPath,
+      );
+    },
+
+    "volli:file-duplicate": async (input: FilePathInput): Promise<FileMutationResult> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await duplicateFile(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
+    },
+
+    "volli:file-delete": async (input: FilePathInput): Promise<Result> => {
+      const scope = await resolveFileScope(db, input.projectId, input.ticketId);
+      if (!scope.ok) return scope;
+      return await trashEntry(scope.value.projectPath, scope.value.worktreeRoot, input.relPath);
     },
 
     "volli:artifact-create": async (input: ArtifactCreateInput): Promise<ArtifactCreateResult> => {
@@ -1457,6 +1915,11 @@ export function registerFileIpcHandlers(
       ]);
       if (!loaded.ok) return loaded;
       if (!skills.ok) return skills;
+      // A Settings write may land while the two directories are being read.
+      // Resolve only against the row current after that wait, so no response
+      // can expose the policy snapshot that merely supplied the stable path.
+      const currentProject = getProjectById(db, input.projectId);
+      if (!currentProject) return { ok: false, error: "Unknown project" };
       // The picker offers what this project actually has. A `manual` skill IS
       // still offered here — withholding it from the model's index is the
       // whole point of that mode, and it stays typable by name; only `off`
@@ -1469,7 +1932,7 @@ export function registerFileIpcHandlers(
         skills:
           input.ruled === false
             ? [...skills.skills]
-            : [...applySkillModes(skills.skills, project.skillModes ?? {})],
+            : [...applySkillModes(skills.skills, currentProject.skillModes ?? {})],
       };
     },
   };

@@ -17,18 +17,26 @@ import { errorMessage, isDefaultModelRequired, type ModelSelection } from "@voll
 import { create } from "zustand";
 
 import {
-  browserChatTransport,
-  isWorking,
-  settledLifecycle,
-  type ChatSessionLifecycle,
+  applyProjection,
+  dequeueSlice,
+  disposeChatClient,
+  enqueueSlice,
+  foldStreamBatch,
+  getOrCreateChatClient,
+  markAttaching,
+  markDelivered,
+  rejectedReceipt,
+  retitleSlice,
+  seedSlice,
+  settleSlice,
   type ChatSessionSlice,
   type ChatSessionTransport,
   type ChatSessionWrites,
-} from "@renderer/chat/client";
-import { disposeChatClient, getOrCreateChatClient } from "@renderer/chat/registry";
-import { enqueueMessage, removeQueued, type QueuedMessage } from "@renderer/chat/session-model";
-import { appendFrames, EMPTY_TRANSCRIPT } from "@renderer/chat/transcript";
-import { rejectedReceipt } from "@renderer/chat/wire";
+  type QueuedMessage,
+} from "@volli/session-presentation";
+
+import { renameChatSession } from "@renderer/chat/rename";
+import { browserChatTransport } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -173,6 +181,14 @@ export function createChatSessionsStore(
       getOrCreateChatClient(sessionId, {
         ...transport(),
         store: api,
+        // The two desktop-owned effects the core names but never imports
+        // (VC-169): an event failure surfaces as an error toast, and the
+        // auto-title write goes through the shared rename path — which owns
+        // the optimistic labels, the rollback, and its own failure toast.
+        notify: toastError,
+        renameSession: (target, title, refineFrom) => {
+          void renameChatSession(target, title, refineFrom);
+        },
       });
 
     return {
@@ -269,91 +285,43 @@ export function createChatSessionsStore(
         });
       },
 
+      // The per-slice rules behind each write — the fold-and-settle, the
+      // turn-epoch guard, the settle handback, the identity-preserving no-ops
+      // — live in the package's session-slice transitions, one write-model
+      // for every store that satisfies ChatSessionWrites (VC-169). What stays
+      // here is the zustand shell and the desktop policy around it.
       applyStream(sessionId, frames, overlays, progress = [], clearLiveCompaction = false) {
-        update(sessionId, (slice) => {
-          const transcript = appendFrames(
-            slice.transcript,
-            frames,
-            overlays,
-            progress,
-            clearLiveCompaction,
-          );
-          // `appendFrames` returns what it was handed when a batch had nothing
-          // for it, and a fresh slice here would repaint the chat for nothing.
-          if (transcript === slice.transcript) return slice;
-          const next = { ...slice, transcript };
-          return { ...next, lifecycle: settledLifecycle(slice, next) };
-        });
+        update(sessionId, (slice) =>
+          foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
+        );
       },
 
       setProjection(sessionId, projection) {
-        update(sessionId, (slice) => {
-          const next = { ...slice, projection };
-          return { ...next, lifecycle: settledLifecycle(slice, next) };
-        });
+        update(sessionId, (slice) => applyProjection(slice, projection));
       },
 
       attaching(sessionId) {
-        update(sessionId, (slice) => ({ ...slice, lifecycle: "starting", sessionError: null }));
+        update(sessionId, markAttaching);
       },
 
       delivered(sessionId, turnEpoch) {
-        update(sessionId, (slice) => ({
-          ...slice,
-          // An unchanged epoch means the stream has said nothing about turns
-          // since the message left, so the optimistic "a turn is running" is
-          // the only reading there is. A moved one means it has spoken — and it
-          // outranks a reply that, with Pi, arrives after the turn it started
-          // has already ended.
-          lifecycle:
-            slice.transcript.turnEpoch === turnEpoch || isWorking(slice) ? "working" : "ready",
-          sessionError: null,
-        }));
+        update(sessionId, (slice) => markDelivered(slice, turnEpoch));
       },
 
       settle(sessionId, error) {
-        update(sessionId, (slice) =>
-          error === null
-            ? // Clearing hands the Session back to its stream. What replaces a
-              // failure is what the frames already say, not a guess — and while
-              // `error` stood, nothing was deriving lifecycle at all.
-              {
-                ...slice,
-                lifecycle: isWorking(slice) ? "working" : "ready",
-                sessionError: null,
-              }
-            : { ...slice, lifecycle: "error", sessionError: error },
-        );
+        update(sessionId, (slice) => settleSlice(slice, error));
       },
 
       enqueue(sessionId, message) {
-        update(sessionId, (slice) => {
-          const queue = enqueueMessage(slice.queue, message);
-          // Blank text never reaches the queue, and an unchanged queue must not
-          // hand the client a store change to re-run its release rule against.
-          return queue.length === slice.queue.length ? slice : { ...slice, queue };
-        });
+        update(sessionId, (slice) => enqueueSlice(slice, message));
       },
 
       dequeue(sessionId, id) {
-        update(sessionId, (slice) => {
-          const queue = removeQueued(slice.queue, id);
-          return queue.length === slice.queue.length ? slice : { ...slice, queue };
-        });
+        update(sessionId, (slice) => dequeueSlice(slice, id));
       },
 
       retitle(sessionId, title) {
-        update(sessionId, (slice) =>
-          slice.projection === null
-            ? slice
-            : {
-                ...slice,
-                projection: {
-                  ...slice.projection,
-                  session: { ...slice.projection.session, title },
-                },
-              },
-        );
+        update(sessionId, (slice) => retitleSlice(slice, title));
       },
 
       setStarting(ownerId, starting) {
@@ -527,13 +495,3 @@ export function createChatSessionsStore(
 }
 
 export const useChatSessionsStore = createChatSessionsStore();
-
-function seedSlice(lifecycle: ChatSessionLifecycle): ChatSessionSlice {
-  return {
-    projection: null,
-    transcript: EMPTY_TRANSCRIPT,
-    lifecycle,
-    sessionError: null,
-    queue: [],
-  };
-}

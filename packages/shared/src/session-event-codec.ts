@@ -37,14 +37,17 @@
 
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
-import { SESSION_TOOL_IDS } from "./authority";
-import type { SessionToolId } from "./authority";
+import { isSessionToolId } from "./agent-tool-surface";
+import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
 import {
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
 } from "./session-ledger";
+import { COST_BASES, SESSION_USAGE_CAUSES } from "./session-usage";
+import type { SessionUsage } from "./session-usage";
 import type {
   CommandReceipt,
   CommandReceiptResult,
@@ -67,6 +70,8 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionStopActor,
+  SessionUsageAttribution,
   TranscriptReference,
 } from "./session-ledger";
 
@@ -186,6 +191,16 @@ const codecs = {
       kind: "session.signaled",
       signal: enumValue(record.signal, ["done", "blocked"], `${context}.signal`),
       reason: readNullableString(record.reason, `${context}.reason`),
+    }),
+    scrub: (payload) => payload,
+  },
+  // The stop fact (VC-86). Reason and actor are Volli's own vocabulary and
+  // cross whole, exactly as the signal's reason does.
+  "session.stopped": {
+    decode: (record, context) => ({
+      kind: "session.stopped",
+      reason: readNullableString(record.reason, `${context}.reason`),
+      by: decodeSessionStopActor(record.by, `${context}.by`),
     }),
     scrub: (payload) => payload,
   },
@@ -396,6 +411,24 @@ const codecs = {
     }),
     scrub: (payload) => ({ ...payload, native: null }),
   },
+  // Every measured field is read as nullable, and a null is preserved rather
+  // than defaulted: absent is what an executor that reported nothing actually
+  // said, and a decoder that healed it to `0` would invent a free request.
+  // `cause` and `costBasis` are checked against Volli's own vocabulary because
+  // both ARE Volli's vocabulary — unlike an authority rule id, neither is a
+  // pack's word this build might have retired.
+  "usage.recorded": {
+    decode: (record, context) => ({
+      kind: "usage.recorded",
+      attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
+      turnId: readNullableString(record.turnId, `${context}.turnId`),
+      attribution: decodeUsageAttribution(record.attribution, `${context}.attribution`),
+      usage: decodeSessionUsage(record.usage, `${context}.usage`),
+    }),
+    // Usage is metadata about a request, never any part of its content: no
+    // prompt, no reply, no path, no account identity. It crosses whole.
+    scrub: (payload) => payload,
+  },
 } satisfies { [Kind in SessionEventKind]: SessionEventKindCodec<Kind> };
 
 /**
@@ -424,7 +457,20 @@ export interface RendererSessionNativeReference {
 }
 
 /** An attachment without executor routing identity or its recovery locator. */
-export type RendererSessionAttachment = Omit<SessionAttachment, "adapterId" | "native">;
+/**
+ * `authority` is scrubbed with the two host-only fields rather than projected.
+ *
+ * Not because a Snapshot is a secret — it is policy, and a person is entitled to
+ * read the policy their Session runs under. It is withheld because no surface
+ * renders it yet, and the renderer's attachment shape is a contract: putting a
+ * field there before something displays it invites a client to depend on a shape
+ * that has never been designed. VC-44 makes the Snapshot durable; showing it is
+ * a later, deliberate act.
+ */
+export type RendererSessionAttachment = Omit<
+  SessionAttachment,
+  "adapterId" | "native" | "authority"
+>;
 
 export type RendererSessionAttachmentFailure = Omit<SessionAttachmentFailure, "diagnostic"> & {
   diagnostic: null;
@@ -507,7 +553,12 @@ export function scrubSessionEventProvenance(
 }
 
 export function scrubSessionAttachment(attachment: SessionAttachment): RendererSessionAttachment {
-  const { adapterId: _adapterId, native: _native, ...presentation } = attachment;
+  const {
+    adapterId: _adapterId,
+    native: _native,
+    authority: _authority,
+    ...presentation
+  } = attachment;
   return presentation;
 }
 
@@ -790,6 +841,12 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         signal: enumValue(row.signal, ["done", "blocked"], `${context}.signal`),
         reason: readNullableString(row.reason, `${context}.reason`),
       };
+    case "session.stop":
+      return {
+        kind,
+        reason: readNullableString(row.reason, `${context}.reason`),
+        by: decodeSessionStopActor(row.by, `${context}.by`),
+      };
     case "model.select":
       return {
         kind,
@@ -949,6 +1006,19 @@ function assertCommandShape(value: SessionCommand, context: string): void {
   }
 }
 
+/**
+ * Who stopped a Session (VC-86). The union is closed and each arm's shape is
+ * validated, so a payload claiming an actor kind this build does not know
+ * fails the way any malformed known-kind field does — loudly.
+ */
+function decodeSessionStopActor(value: unknown, context: string): SessionStopActor {
+  const row = asRecord(value, context);
+  const kind = enumValue(row.kind, ["session", "user", "watchdog"], `${context}.kind`);
+  return kind === "session"
+    ? { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) }
+    : { kind };
+}
+
 function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
   const row = asRecord(value, context);
   const kind = enumValue(
@@ -958,6 +1028,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "session.archived",
       "session.retitled",
       "session.signaled",
+      "session.stopped",
       "model.selected",
       "executor.start.requested",
       "executor.stop.requested",
@@ -989,9 +1060,32 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
   });
 }
 
+/**
+ * A frozen Agent Tool Surface, read back.
+ *
+ * Guarded by {@link isSessionToolId} rather than one closed list, because the
+ * vocabulary now has two halves that live in different modules: the capability
+ * tools, and the Verb Registry keys this build can project as tools (VC-162).
+ * A name from either half decodes; anything else is a record this build cannot
+ * honestly rebind, and refusing it beats handing back a tool array quietly
+ * missing an entry.
+ *
+ * Refusing is EXPENSIVE, and deliberately stated so rather than softened. This
+ * throws a plain `Error`, and only {@link UnknownSessionEventKindError} is
+ * droppable at a ledger — so a record naming a name this build cannot bind
+ * fails every later read of that Session, not just its next attachment. That is
+ * the same bargain the closed list struck before VC-162, but the stakes moved:
+ * the capability half is a hand-edited list that does not shrink, while the
+ * verb half is derived from registry `accessModes`. Removing a `tool` access
+ * mode, or renaming a verb key, therefore makes every Session that recorded it
+ * unreadable — which is a migration to write, not a refactor to do quietly.
+ */
 function decodeSessionToolIds(value: unknown, context: string): readonly SessionToolId[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((tool, index) => enumValue(tool, SESSION_TOOL_IDS, `${context}[${index}]`));
+  return value.map((tool, index) => {
+    if (!isSessionToolId(tool)) throw new Error(`${context}[${index}] has an unsupported value`);
+    return tool;
+  });
 }
 
 function decodeModelSelection(value: unknown, context: string): ModelSelection {
@@ -1016,11 +1110,78 @@ function decodeAttachment(value: unknown, context: string): SessionAttachment {
     },
     continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
     native: row.native === null ? null : decodeNative(row.native, `${context}.native`),
+    // Absent reads as null, and must: every attachment written before VC-44 has
+    // no `authority` key at all, and history that refused to decode without one
+    // would make those Sessions unopenable rather than merely quiet about the
+    // policy they ran under.
+    authority:
+      row.authority === undefined || row.authority === null
+        ? null
+        : decodeAuthoritySnapshot(row.authority, `${context}.authority`),
   };
   if (!attachment.id || !attachment.sessionId || !attachment.adapterId || !attachment.venue.id) {
     throw new Error(`${context} is not a valid Session attachment`);
   }
   return attachment;
+}
+
+/**
+ * One durably recorded Authority Snapshot, read back.
+ *
+ * The tool list and the rule pack strings are read as written rather than
+ * validated against today's vocabulary, for the reason `authority.denied`'s
+ * `cause` is a bare string: history outlives the pack and the tool surface that
+ * produced it, and a decoder that rejected a retired tool name or an unknown
+ * pack id would make an old Session unreadable in exactly the case the record
+ * exists to serve — reading a denial back long after the pack changed.
+ *
+ * The enums are the exception and are validated, because each names a branch
+ * this codebase still switches on; a value outside them is not a record from an
+ * older vocabulary but a corrupt one.
+ */
+function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnapshot {
+  const row = asRecord(value, context);
+  const fallback = asRecord(row.fallback, `${context}.fallback`);
+  return {
+    mode: enumValue(row.mode, ["auto"] as const, `${context}.mode`),
+    location: enumValue(
+      row.location,
+      ["worktree", "main-checkout"] as const,
+      `${context}.location`,
+    ),
+    enforcement: enumValue(
+      row.enforcement,
+      ["observe", "enforce"] as const,
+      `${context}.enforcement`,
+    ),
+    judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
+    tools: readToolIds(row.tools, `${context}.tools`),
+    rulePackId: readString(row.rulePackId, `${context}.rulePackId`),
+    rulePackHash: readString(row.rulePackHash, `${context}.rulePackHash`),
+    classifierModel: readNullableString(row.classifierModel, `${context}.classifierModel`),
+    fallback: {
+      consecutiveDenials: readInteger(
+        fallback.consecutiveDenials,
+        `${context}.fallback.consecutiveDenials`,
+      ),
+      sessionDenials: readInteger(fallback.sessionDenials, `${context}.fallback.sessionDenials`),
+    },
+  };
+}
+
+/**
+ * The recorded Agent Tool Surface, read as written.
+ *
+ * Not checked against {@link SessionToolId}, deliberately. A Snapshot naming a
+ * tool this build no longer offers is the normal shape of old history, and the
+ * record is most valuable precisely then — it is how a reader learns that the
+ * Session which made a call held a tool that has since been retired.
+ */
+function readToolIds(value: unknown, context: string): AuthoritySnapshot["tools"] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) =>
+    readString(item, `${context}[${index}]`),
+  ) as AuthoritySnapshot["tools"];
 }
 
 function decodeNative(value: unknown, context: string): SessionNativeReference {
@@ -1175,6 +1336,40 @@ function decodeInteractionResolution(
 
 /* ----------------------------------------------------------------- readers */
 
+/**
+ * What the spend was on, read back.
+ *
+ * Required, with no absent-reads-as-null grace — the opposite stance from
+ * `attachment.authority` a few functions up, and deliberately so. There, absent
+ * is a real historical answer: every attachment written before VC-44 ran at the
+ * runtime's defaults, and that is a fact the record can state. Here, absent
+ * would mean the fact never recorded what it was spent on, which no build has
+ * ever been able to write. Accepting it would let a rebuild quietly file real
+ * spend as unattributed rather than say the history is corrupt.
+ */
+function decodeUsageAttribution(value: unknown, context: string): SessionUsageAttribution {
+  const row = asRecord(value, context);
+  return {
+    projectId: readString(row.projectId, `${context}.projectId`),
+    ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
+  };
+}
+
+function decodeSessionUsage(value: unknown, context: string): SessionUsage {
+  const row = asRecord(value, context);
+  return {
+    cause: enumValue(row.cause, SESSION_USAGE_CAUSES, `${context}.cause`),
+    providerId: readString(row.providerId, `${context}.providerId`),
+    modelId: readString(row.modelId, `${context}.modelId`),
+    inputTokens: readNullableInteger(row.inputTokens, `${context}.inputTokens`),
+    outputTokens: readNullableInteger(row.outputTokens, `${context}.outputTokens`),
+    cacheReadTokens: readNullableInteger(row.cacheReadTokens, `${context}.cacheReadTokens`),
+    cacheWriteTokens: readNullableInteger(row.cacheWriteTokens, `${context}.cacheWriteTokens`),
+    costUsd: readNullableFiniteNumber(row.costUsd, `${context}.costUsd`),
+    costBasis: enumValue(row.costBasis, COST_BASES, `${context}.costBasis`),
+  };
+}
+
 function decodeNativeDetail(value: unknown, context: string): SessionNativeDetail | null {
   assertJsonValue(value, context);
   return value as SessionNativeDetail;
@@ -1232,6 +1427,20 @@ function readInteger(value: unknown, context: string): number {
 
 function readNullableInteger(value: unknown, context: string): number | null {
   return value === null ? null : readInteger(value, context);
+}
+
+/**
+ * A money amount, which is the one durable number here that is not whole.
+ * NaN and the infinities are refused rather than carried: JSON writes NaN as
+ * `null`, so a poisoned cost would come back looking exactly like an honest
+ * absent one, and every total it entered afterwards would be NaN.
+ */
+function readNullableFiniteNumber(value: unknown, context: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${context} must be a finite number`);
+  }
+  return value;
 }
 
 function enumValue<const T extends readonly string[]>(

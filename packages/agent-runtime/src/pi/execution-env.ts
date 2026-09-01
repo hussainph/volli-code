@@ -9,7 +9,7 @@ import {
   type ExecutionEnv,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
-import { VOLLI_SESSION_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
+import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@volli/shared";
 
 /**
  * The Volli identity a Session's commands run under: the durable Session id,
@@ -23,6 +23,17 @@ export interface PiSessionEnvIdentity {
   sessionId: string;
   /** e.g. `VC-51`; `null` for a ticketless project Session. */
   ticketDisplayId: string | null;
+  /**
+   * This attachment's `VOLLI_SESSION_TOKEN` — what turns the id beside it from
+   * a claim into an authentication at the socket door (VC-163).
+   *
+   * Host-minted like the id, and absent when the host minted none: that
+   * Session's shell can then read the board and change nothing, which is the
+   * fail-closed direction. Never read off `process.env`, for the reason the two
+   * fields beside it are not: main's own environment holds no token, and one
+   * that somehow reached it would authenticate the wrong Session.
+   */
+  sessionToken?: string;
 }
 
 export interface PiExecutionEnvOptions {
@@ -37,7 +48,7 @@ export interface PiExecutionEnvOptions {
    * set in the environment a child is handed.
    *
    * A deliberate exception to this module's rule that the environment carries
-   * "nothing that says who is running it": these two names are exactly who is
+   * "nothing that says who is running it": these names are exactly who is
    * running it, minted by the host for this one Session rather than carried
    * over from the host's own environment. They are what the bundled `volli`
    * CLI resolves `session done` / `session blocked` against, and what makes a
@@ -45,6 +56,13 @@ export interface PiExecutionEnvOptions {
    * contract a Volli-spawned PTY gets from `agentSessionEnv` (VC-51).
    */
   identity?: PiSessionEnvIdentity;
+  /**
+   * Runs exactly once when the attachment cleans this environment up. Main
+   * uses it to revoke the per-attachment Session token exported above; keeping
+   * cleanup on the environment ties credential lifetime to the same owner that
+   * closes every child process.
+   */
+  onCleanup?: () => void | Promise<void>;
 }
 
 /**
@@ -151,6 +169,9 @@ function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<s
   if (identity === undefined) return {};
   return {
     [VOLLI_SESSION_ENV]: identity.sessionId,
+    ...(identity.sessionToken === undefined
+      ? {}
+      : { [VOLLI_SESSION_TOKEN_ENV]: identity.sessionToken }),
     ...(identity.ticketDisplayId === null ? {} : { [VOLLI_TICKET_ENV]: identity.ticketDisplayId }),
   };
 }
@@ -158,15 +179,19 @@ function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<s
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identityVariables: Record<string, string>;
+  readonly #onCleanup: (() => void | Promise<void>) | undefined;
+  #cleaned = false;
 
   constructor(options: {
     cwd: string;
     pathPrefixes?: readonly string[];
     identity?: PiSessionEnvIdentity;
+    onCleanup?: () => void | Promise<void>;
   }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identityVariables = identityVariables(options.identity);
+    this.#onCleanup = options.onCleanup;
   }
 
   /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
@@ -184,6 +209,16 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
       },
       inheritEnv: false,
     });
+  }
+
+  override async cleanup(): Promise<void> {
+    if (this.#cleaned) return;
+    this.#cleaned = true;
+    try {
+      await super.cleanup();
+    } finally {
+      await this.#onCleanup?.();
+    }
   }
 }
 
@@ -240,5 +275,6 @@ export async function piExecutionEnv(
     cwd: workspacePath,
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
+    onCleanup: options?.onCleanup,
   });
 }

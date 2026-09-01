@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  SESSION_ATTENTION_KINDS,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
+} from "@volli/shared";
 import type {
   ChatWaitingReason,
   SessionAttachmentProjection,
@@ -31,8 +35,10 @@ function projectionWith(
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
     bornTicketless: true,
     ...overrides,
@@ -77,6 +83,7 @@ function structuredAttachment(
     venue: { id: "local", kind: "local" },
     continuity: "fresh",
     native: null,
+    authority: null,
     status: "open",
     openedAt: 1,
     closedAt: null,
@@ -116,6 +123,30 @@ describe("chatSessionRecord", () => {
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
+    });
+  });
+
+  it("keeps a durable open attachment reattachable but not live after relaunch", () => {
+    const attachment = structuredAttachment({ adapterId: "pi" });
+    const relaunched = projectionWith([attachment], {
+      // The ledger still projects the attachment as open so Pi can lazily
+      // rehydrate it. This is durable history, not a process-local binding.
+      liveExecutor: attachment,
+      turnActive: true,
+    });
+
+    expect(chatSessionRecord(relaunched, false)).toMatchObject({
+      adapterId: "pi",
+      live: false,
+      activity: "idle",
+    });
+    expect(relaunched.liveExecutor).toEqual(attachment);
+
+    // Once this process really binds the executor, the same durable projection
+    // is live again; a turn still in progress reads as work.
+    expect(chatSessionRecord(relaunched, true)).toMatchObject({
+      live: true,
+      activity: "working",
     });
   });
 
@@ -188,6 +219,30 @@ describe("chatSessionRecord activity", () => {
     expect(chatSessionRecord(projectionWith([], { turnActive: true }))).toMatchObject({
       activity: "idle",
     });
+  });
+
+  // VC-86. A stop is the one state a released attachment cannot imply —
+  // without it, deliberately-ended and merely-quiet both read "idle", and the
+  // orchestrator is back to git archaeology.
+  it("reads a Session under a stop as stopped, over every other state", () => {
+    const stop = {
+      stopped: { at: 9, reason: "Wedged", by: { kind: "session" as const, sessionId: "boss" } },
+    };
+    expect(chatSessionRecord(projectionWith([], stop))).toMatchObject({
+      activity: "stopped",
+      waitingOn: null,
+    });
+    // Stop outranks a stale waiting question: nothing a person answers can
+    // reach a Session whose work was ended.
+    expect(chatSessionRecord(projectionWith([], { ...stop, ...openInteraction() }))).toMatchObject({
+      activity: "stopped",
+      waitingOn: null,
+    });
+    // And a stale open turn: the stop fact is newer truth than the turn flag
+    // a failed release may have left behind.
+    expect(
+      chatSessionRecord(projectionWith([structuredAttachment()], { ...stop, turnActive: true })),
+    ).toMatchObject({ activity: "stopped" });
   });
 
   it("reads an unanswered Interaction as waiting on a question", () => {

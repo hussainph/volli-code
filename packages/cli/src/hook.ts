@@ -26,6 +26,8 @@
 import { HOOK_TIMEOUT_MS } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
+import { agentRequestEnv } from "./client";
+
 /**
  * The timeout every hook binding is written with, read off the one place that
  * writes it rather than copied. A copied number would drift the moment the
@@ -211,7 +213,16 @@ export async function runHook(rest: readonly string[], deps: HookDependencies): 
           firedAt,
           ...(harnessSessionId === null ? {} : { harnessSessionId }),
         },
-        ctx: { cwd: currentDirectory(deps), env: { socket: socketPath, session } },
+        ctx: {
+          cwd: currentDirectory(deps),
+          // `hook` is coordination tier (VC-92 §3), so it authenticates like any
+          // other write. A hook process is a descendant of the Session's own
+          // attachment and inherits the token Volli exported there — and a hook
+          // that somehow does not is refused at the door and discarded in
+          // silence, exactly as every other hook failure is. The socket path and
+          // Session id are stated because both were resolved above.
+          env: agentRequestEnv(deps.env, { socket: socketPath, session }),
+        },
       },
       { timeoutMs: requestMs },
     );

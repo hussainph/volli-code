@@ -46,6 +46,49 @@ export function isPromptResource(value: unknown): value is PromptResource {
 }
 
 /**
+ * Recover resource blocks from already-persisted message text.
+ *
+ * New deliveries retain their typed resources separately; this reader is the
+ * migration path for messages written before that identity existed. It accepts
+ * only the exact lines {@link promptResourceBlock} emits and skips an
+ * unterminated tail rather than manufacturing partial instructions.
+ */
+export function readPromptResourceBlocks(text: string): readonly PromptResource[] {
+  const beginPrefix = "--- BEGIN RESOURCE: ";
+  const lineSuffix = " ---";
+  const resources: PromptResource[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const begin = text.indexOf(beginPrefix, cursor);
+    if (begin === -1) break;
+    if (begin > 0 && text[begin - 1] !== "\n") {
+      cursor = begin + beginPrefix.length;
+      continue;
+    }
+    const beginLineEnd = text.indexOf("\n", begin);
+    if (beginLineEnd === -1) break;
+    const beginLine = text.slice(begin, beginLineEnd);
+    if (!beginLine.endsWith(lineSuffix)) {
+      cursor = beginLineEnd + 1;
+      continue;
+    }
+    const name = beginLine.slice(beginPrefix.length, -lineSuffix.length);
+    if (name.length === 0) {
+      cursor = beginLineEnd + 1;
+      continue;
+    }
+    const endLine = `\n--- END RESOURCE: ${name} ---`;
+    const end = text.indexOf(endLine, beginLineEnd);
+    if (end === -1) break;
+    resources.push({ name, text: text.slice(beginLineEnd + 1, end) });
+    cursor = end + endLine.length;
+  }
+
+  return resources;
+}
+
+/**
  * The delivered form of a message that carries resources: the user's text
  * first and verbatim, then each resource as its own delimited block, each
  * boundary a blank line. This is the ONLY way a message-scoped resource may

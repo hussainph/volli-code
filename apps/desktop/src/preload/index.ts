@@ -29,6 +29,7 @@ import type {
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   OverlayEdits,
+  PendingArmedRun,
   ProjectThemeOverride,
   // Imported for `typeof` only — see the Session RPC door below. `import type`
   // of a const is legal and fully erased, which is exactly why these three can
@@ -60,6 +61,32 @@ import type {
   BrowserTabResult,
   BrowserTabSetBoundsInput,
   BrowserTabStateEvent,
+  AutomationArmInput,
+  AutomationArmingsResult,
+  AutomationArmResult,
+  AutomationColumnOrdersResult,
+  AutomationSetColumnOrderInput,
+  AutomationSetColumnOrderResult,
+  AutomationCreateInput,
+  AutomationDeleteResult,
+  AutomationEnablementResult,
+  AutomationIdInput,
+  AutomationResult,
+  AutomationRunForProjectInput,
+  AutomationRunInput,
+  AutomationRunsResult,
+  AutomationRunStartResult,
+  AutomationsResult,
+  AutomationSetEnabledInput,
+  AutomationSetEnabledResult,
+  AutomationSkipsResult,
+  AutomationUpdateInput,
+  PendingArmedRunCancelInput,
+  PendingArmedRunCancelResult,
+  PendingArmedRunRetryInput,
+  PendingArmedRunRetryResult,
+  PendingArmedRunsResult,
+  PendingArmedRunSettledNotice,
   CliDoctorInput,
   CliDoctorResult,
   CliRepairResult,
@@ -85,8 +112,12 @@ import type {
   FileChangedEvent,
   FileIndexInput,
   FileIndexResult,
+  FileMutationResult,
   FilePathInput,
   FileReadResult,
+  FileRenameInput,
+  FileSearchInput,
+  FileSearchResult,
   FileWriteInput,
   FileWriteResult,
   FirstPaintHint,
@@ -108,6 +139,8 @@ import type {
   ProjectCreateResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectAuthorityPolicyInput,
+  ProjectAuthorityPolicyResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -133,6 +166,8 @@ import type {
   SessionsResult,
   SessionStartedNotice,
   SessionStartsResult,
+  UsageReportInput,
+  UsageReportResult,
   TerminalOverlayWriteResult,
   ThemeSetProjectResult,
   ThemeStateInput,
@@ -392,6 +427,14 @@ const api = {
     /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
+    /**
+     * Replaces this project's authority departures — the Configure Authority
+     * pane (VC-172). Reachable from the app and from nowhere else: no agent verb
+     * projects this, because the agent must not author the policy governing it.
+     */
+    setAuthorityPolicy: (
+      input: ProjectAuthorityPolicyInput,
+    ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -495,6 +538,17 @@ const api = {
      */
     starts: (sinceMs: number): Promise<SessionStartsResult> =>
       invoke("volli:session-starts", { sinceMs }),
+    /**
+     * What a scope consumed over a window, optionally broken down (VC-87).
+     *
+     * A pull, with no subscription beside it. Usage changes when a turn
+     * settles, which the renderer already learns about through the Session
+     * stream — so the rails re-ask on that signal rather than polling, and a
+     * second push channel carrying the same news would be a second clock to
+     * keep in step.
+     */
+    usageReport: (input: UsageReportInput): Promise<UsageReportResult> =>
+      invoke("volli:usage-report", input),
     /**
      * Subscribes to backward-move interrupt announcements (issue #78, CONCEPT
      * #20): fired only when a ticket move out of the active columns actually
@@ -702,6 +756,113 @@ const api = {
       invoke("volli:label-set-color", input),
   },
   /**
+   * Automations (VC-112, tracer VC-126): the saved record's CRUD and the one
+   * Run door. Running opens one fresh chat Session detached (VC-16's
+   * optimistic open) — the ok result is a durable Run naming that Session,
+   * which the caller adopts and shows.
+   */
+  automations: {
+    /** A project's own Automations plus every global one. */
+    list: (input: ProjectIdInput): Promise<AutomationsResult> =>
+      invoke("volli:automation-list", input),
+    /** Creates one Automation; main re-validates the draft and any Runtime pin. */
+    create: (input: AutomationCreateInput): Promise<AutomationResult> =>
+      invoke("volli:automation-create", input),
+    /** Rewrites one Automation's editable fields under the same validation. */
+    update: (input: AutomationUpdateInput): Promise<AutomationResult> =>
+      invoke("volli:automation-update", input),
+    /** A record delete — Runs keep their history. */
+    delete: (input: AutomationIdInput): Promise<AutomationDeleteResult> =>
+      invoke("volli:automation-delete", input),
+    /** Runs an Automation by hand on a Ticket. */
+    run: (input: AutomationRunInput): Promise<AutomationRunStartResult> =>
+      invoke("volli:automation-run", input),
+    /** A Ticket's Runs, newest first. */
+    runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-ticket", input),
+    /**
+     * One project's armed columns (VC-128). Machine-local and deliberately a
+     * separate read from the record's list: arming never travels with a project,
+     * so it is never a field on an Automation that could be carried along.
+     */
+    armings: (input: ProjectIdInput): Promise<AutomationArmingsResult> =>
+      invoke("volli:automation-arming-list", input),
+    /**
+     * Arms one column with one offered Automation, or disarms it with
+     * `automationId: null` (VC-128). A durable command like every other write
+     * here — only the projection it lands in is machine-local.
+     */
+    arm: (input: AutomationArmInput): Promise<AutomationArmResult> =>
+      invoke("volli:automation-arm", input),
+    /**
+     * One project's arranged columns (VC-132): which Offered Automation reads
+     * as digit `1` when a card is dragged over each column. Machine-local and a
+     * separate read for the arming's reason — the rank never travels with a
+     * project, because the digit it prints is pinned by an arming that does not
+     * either.
+     */
+    columnOrders: (input: ProjectIdInput): Promise<AutomationColumnOrdersResult> =>
+      invoke("volli:automation-column-order-list", input),
+    /** Arranges one column's Offered list; answers with the project's whole new set. */
+    setColumnOrder: (
+      input: AutomationSetColumnOrderInput,
+    ): Promise<AutomationSetColumnOrderResult> =>
+      invoke("volli:automation-set-column-order", input),
+    /** Every Run on this project's Tickets, newest first — the page's history. */
+    runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-project", input),
+    /**
+     * Every due time this project's schedules missed (VC-130). Read beside the
+     * Runs rather than merged into them: a skip is a different record with a
+     * different action — it offers to start the Run that did not happen.
+     */
+    skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-project", input),
+    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
+      invoke("volli:automation-run-for-project", input),
+    /** Which Automations are switched on on this machine (VC-127). */
+    enablement: (): Promise<AutomationEnablementResult> => invoke("volli:automation-enablement"),
+    /** Switches one on or off here; answers with the whole new enabled set. */
+    setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationSetEnabledResult> =>
+      invoke("volli:automation-set-enabled", input),
+    /** Main's whole durable armed-column countdown projection. */
+    pendingArmedRuns: (): Promise<PendingArmedRunsResult> =>
+      invoke("volli:automation-pending-armed-runs"),
+    /** Cancels one exact arrival; a stale id is an idempotent no-op. */
+    cancelPendingArmedRun: (
+      input: PendingArmedRunCancelInput,
+    ): Promise<PendingArmedRunCancelResult> =>
+      invoke("volli:automation-cancel-pending-armed-run", input),
+    /** Retries one expired arrival; main reuses the command id retained for that exact move. */
+    retryPendingArmedRun: (input: PendingArmedRunRetryInput): Promise<PendingArmedRunRetryResult> =>
+      invoke("volli:automation-retry-pending-armed-run", input),
+    /** Every window receives the same whole pending snapshot from main. */
+    onPendingArmedRunsChanged: (callback: (pending: PendingArmedRun[]) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, pending: PendingArmedRun[]) =>
+        callback(pending);
+      ipcRenderer.on("volli:pending-armed-runs-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-runs-changed" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
+    /** Main settled one countdown by attempting or abandoning its Run. */
+    onPendingArmedRunSettled: (
+      callback: (notice: PendingArmedRunSettledNotice) => void,
+    ): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, notice: PendingArmedRunSettledNotice) =>
+        callback(notice);
+      ipcRenderer.on("volli:pending-armed-run-settled" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-run-settled" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
+  },
+  /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
    * manifest on disk declares a command line Volli will execute and stays inert
    * until a human confirms it; these two calls are the question and the answer.
@@ -740,12 +901,37 @@ const api = {
     repair: (): Promise<CliRepairResult> => invoke("volli:cli-repair"),
   },
   files: {
-    /** The whole-project file index the `@` picker ranks over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
+    /** The scoped file index the `@` picker and quick-open rank over: Main, or a ticket's worktree when `ticketId` is given. Fetched fresh per picker open. */
     index: (input: FileIndexInput): Promise<FileIndexResult> => invoke("volli:file-index", input),
     /** Reads any repo/artifact file worktree-awarely: text (capped), image (data URI), or binary stub. */
     read: (input: FilePathInput): Promise<FileReadResult> => invoke("volli:file-read", input),
+    /**
+     * Finds literal text across the scope's checkout (VC-193): gitignore
+     * respected, `node_modules` never walked, capped in both matches and time
+     * with the cap that ended it named in `limit`.
+     */
+    search: (input: FileSearchInput): Promise<FileSearchResult> => invoke("volli:search", input),
     /** Writes utf8 text to an EXISTING file (images/binary/oversize refused), `expectedMtime` conflict-guarded. Resolves with the fresh mtime. */
     write: (input: FileWriteInput): Promise<FileWriteResult> => invoke("volli:file-write", input),
+    /**
+     * The navigators' creation track (VC-191). Same scoped `{ projectId,
+     * ticketId }` resolution as `read`/`write`, so a Ticket workspace acts on
+     * its own worktree and Home on the main checkout.
+     */
+    /** Creates an EMPTY file (missing parent folders included); refuses an occupied path. */
+    create: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:file-create", input),
+    /** Creates one directory; refuses an occupied name rather than reporting success for it. */
+    createDirectory: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:dir-create", input),
+    /** Renames/moves within one checkout; refuses to clobber. Resolves with the new relPath. */
+    rename: (input: FileRenameInput): Promise<FileMutationResult> =>
+      invoke("volli:file-rename", input),
+    /** Copies a file to the first free `… copy` name beside it; resolves with that name. */
+    duplicate: (input: FilePathInput): Promise<FileMutationResult> =>
+      invoke("volli:file-duplicate", input),
+    /** Moves a file or folder to the Trash — never an in-place delete. */
+    delete: (input: FilePathInput): Promise<Result> => invoke("volli:file-delete", input),
     /** Creates a new, minimally-templated `.md` in `.volli/artifacts/`; `name` is forced to `.md`. Resolves with its `@ref`-able relPath. */
     createArtifact: (input: ArtifactCreateInput): Promise<ArtifactCreateResult> =>
       invoke("volli:artifact-create", input),

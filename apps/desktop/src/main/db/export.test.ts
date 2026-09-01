@@ -1,11 +1,13 @@
-import { USER_ACTOR } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { createAutomation, recordAutomationRun, setColumnArming } from "./automations-repo";
 import { createComment } from "./comments-repo";
 import { recordTicketEvent } from "./events-repo";
 import {
   buildExportDocument,
   defaultExportFilename,
   EXPORT_FORMAT,
+  REBUILDABLE_PROJECTIONS,
   serializeExportDocument,
 } from "./export";
 import { addTicketLabel, getOrCreateLabel } from "./labels-repo";
@@ -18,6 +20,7 @@ import {
 } from "./projects-repo";
 import { createDesktopSessionEngine } from "../session-control";
 import { insertSession } from "../session-control/test-support";
+import { createTicketSessionDelegationStore } from "../session-runtime/delegation-store";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { archiveTicket, insertTicket } from "./tickets-repo";
@@ -81,8 +84,15 @@ describe("buildExportDocument — empty db", () => {
     expect(document.sessionEvents).toEqual([]);
     expect(document.sessionCommands).toEqual([]);
     expect(document.sessionCommandReceipts).toEqual([]);
+    expect(document.sessionDelegations).toEqual([]);
+    expect(document.sessionVerbGrants).toEqual([]);
+    expect(document.sessionDelegationClaims).toEqual([]);
     expect(document.ticketComments).toEqual([]);
     expect(document.appState).toEqual([]);
+    expect(document.automations).toEqual([]);
+    expect(document.automationRuns).toEqual([]);
+    expect(document.automationSessionMintIntents).toEqual([]);
+    expect(document.automationColumnArmings).toEqual([]);
   });
 
   it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", async () => {
@@ -190,6 +200,47 @@ describe("buildExportDocument — populated db", () => {
       .prepare("INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)")
       .run("ui:zoom", '{"level":0}', 50);
 
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      70,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: automation.id,
+        ticketId: liveTicket.id,
+        sessionId: session.id,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      71,
+    );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      72,
+    );
+    ctx.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run(
+        "automation-run-command",
+        JSON.stringify({ kind: "automation.run", plan: { sessionOperationId: "session-mint" } }),
+        73,
+      );
+    ctx.db
+      .prepare(
+        `INSERT INTO automation_session_mint_intents
+           (session_create_command_id, automation_command_id, recorded_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run("session-mint:create", "automation-run-command", 73);
+
     const document = await buildExportDocument(ctx.db, {
       appVersion: "9.9.9",
       now: 1_700_000_000_000,
@@ -214,6 +265,9 @@ describe("buildExportDocument — populated db", () => {
         skillModes: null,
         sessionHarness: null,
         sessionModel: null,
+        // No recorded departure, so this project inherits every authority
+        // default (migration 025).
+        authorityPolicy: null,
         colorIndex: project.colorIndex,
         sortOrder: project.sortOrder,
         // Bumped by the three theme writes above.
@@ -366,6 +420,56 @@ describe("buildExportDocument — populated db", () => {
 
     // app_state — value kept as its raw stored JSON string, unparsed
     expect(document.appState).toEqual([{ key: "ui:zoom", value: '{"level":0}', updatedAt: 50 }]);
+
+    // automations — the runtime pin rides as its STORED JSON string, and the
+    // run carries the RESOLVED model as flat fields beside its references.
+    expect(document.automations).toEqual([
+      {
+        id: automation.id,
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review go",
+        triggerSpec: null,
+        runtime: JSON.stringify({
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          reasoningLevel: "high",
+        }),
+        rowVersion: 1,
+        createdAt: 70,
+        updatedAt: 70,
+      },
+    ]);
+    expect(document.automationRuns).toMatchObject([
+      {
+        automationId: automation.id,
+        automationName: "Review",
+        ticketId: liveTicket.id,
+        sessionId: session.id,
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+        createdAt: 71,
+      },
+    ]);
+    expect(document.automationSessionMintIntents).toEqual([
+      {
+        sessionCreateCommandId: "session-mint:create",
+        automationCommandId: "automation-run-command",
+        recordedAt: 73,
+      },
+    ]);
+    // Column arming rides along even though it never travels with a PROJECT:
+    // this document is one machine's backup of its own database, and leaving
+    // the rows out would silently lose state somebody set by hand.
+    expect(document.automationColumnArmings).toEqual([
+      {
+        projectId: project.id,
+        status: "doing",
+        automationId: automation.id,
+        armedAt: 72,
+      },
+    ]);
   });
 
   it("falls back to the raw project id as displayId prefix for a ticket with no matching project row", async () => {
@@ -472,6 +576,7 @@ describe("buildExportDocument — populated db", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: null,
+        authority: null,
       },
       failure: { code: "spawn_failed", detail: "shell missing", diagnostic: null },
     });
@@ -524,6 +629,142 @@ describe("buildExportDocument — populated db", () => {
     expect(document.sessionCommands.find(({ id }) => id === "message-command")?.route).toEqual({
       adapterId: "terminal",
       attachmentId: `test-terminal:${session.id}`,
+    });
+  });
+
+  it("exports durable Ticket Session grants, ancestry, and their fan-out claim", async () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "delegation-project" });
+    const ticket = testTicket(project.id, { id: "delegation-ticket" });
+    const root = testSession(project.id, ticket.id, { id: "delegation-root" });
+    const child = testSession(project.id, ticket.id, { id: "delegation-child" });
+    insertProject(ctx.db, project);
+    insertTicket(ctx.db, ticket);
+    insertSession(ctx.db, root);
+    const store = createTicketSessionDelegationStore(ctx.db);
+    store.recordBirth(root.id, store.resolveBirth({ role: "ticket", ticketId: ticket.id }));
+    const claim = store.claimStart({
+      parentSessionId: root.id,
+      ticketId: ticket.id,
+      toolCallId: "tool-call-1",
+      createCommandId: `${root.id}:tool-call-1:create`,
+    });
+    if (!claim.ok) throw new Error("Expected the root Session to claim one child");
+    insertSession(ctx.db, child);
+    store.recordBirth(
+      child.id,
+      store.resolveBirth({ role: "ticket", ticketId: ticket.id, delegation: claim.delegation }),
+    );
+
+    const document = buildExportDocument(ctx.db, { appVersion: "1.2.3", now: 0 });
+
+    expect(document).toMatchObject({
+      sessionDelegations: [
+        { sessionId: child.id, ticketId: ticket.id, parentSessionId: root.id, depth: 1 },
+        { sessionId: root.id, ticketId: ticket.id, parentSessionId: null, depth: 0 },
+      ],
+      sessionVerbGrants: [
+        {
+          sessionId: root.id,
+          verb: "session.start",
+          scope: "own-ticket",
+          maxDepth: 1,
+          maxChildren: 3,
+        },
+      ],
+      sessionDelegationClaims: [
+        {
+          parentSessionId: root.id,
+          toolCallId: "tool-call-1",
+          ticketId: ticket.id,
+          createCommandId: `${root.id}:tool-call-1:create`,
+          childSessionId: child.id,
+        },
+      ],
+    });
+  });
+
+  /**
+   * The exclusion has to be a declaration rather than an oversight, and this is
+   * what makes it one: every name in the list is held against the live schema,
+   * so an exemption cannot outlive the table it exempts, and a projection
+   * silently renamed by a migration fails here rather than in a user's rescue
+   * document.
+   */
+  it("declares each omitted projection against a table that really exists", async () => {
+    ctx = openTestDb();
+    const tables = (
+      ctx.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    ).map(({ name }) => name);
+
+    expect(REBUILDABLE_PROJECTIONS).toEqual(["session_usage", "session_usage_coverage"]);
+    for (const projection of REBUILDABLE_PROJECTIONS) {
+      expect(tables, `${projection} is declared rebuildable but is not in the schema`).toContain(
+        projection,
+      );
+    }
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+    expect(document).not.toHaveProperty("sessionUsage");
+    expect(document).not.toHaveProperty("sessionUsageCoverage");
+  });
+
+  /**
+   * The projection is excluded because it is DERIVED, and this is the claim
+   * that makes the exclusion honest: the events the export does carry are
+   * enough to put every row back, attribution included.
+   */
+  it("carries the events a dropped usage projection can be rebuilt from", async () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "proj-1" });
+    insertProject(ctx.db, project);
+    insertTicket(ctx.db, testTicket(project.id, { id: "ticket-1", usesWorktree: false }));
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1 });
+    const created = await sessionEngine.createSession({
+      commandId: "usage-session",
+      projectId: project.id,
+      ticketId: "ticket-1",
+      title: "Metered",
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    await sessionEngine.observe({
+      id: "usage-1",
+      kind: "usage.recorded",
+      sessionId: created.session.id,
+      occurredAt: 2,
+      provenance: {
+        source: { kind: "system", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+      attachmentId: null,
+      turnId: null,
+      usage: {
+        cause: "assistant",
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 0,
+        costUsd: 0.25,
+        costBasis: "catalog-estimate",
+      },
+    });
+
+    const document = await buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 });
+
+    expect(document).not.toHaveProperty("sessionUsage");
+    const usageEvent = document.sessionEvents.find((event) => event.id === "usage-1");
+    expect(usageEvent?.payload).toMatchObject({
+      kind: "usage.recorded",
+      // Attribution rides in the fact, which is exactly why the derived table
+      // does not need to be carried beside it.
+      attribution: { projectId: project.id, ticketId: "ticket-1" },
+      usage: { costUsd: 0.25, cacheReadTokens: 400 },
     });
   });
 

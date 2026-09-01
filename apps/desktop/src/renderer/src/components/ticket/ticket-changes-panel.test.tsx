@@ -2,7 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { ChangeSetFile } from "@volli/shared";
 
-import { TicketChangesList, toChangeListRow, type ChangeListRow } from "./ticket-changes-panel";
+import {
+  TicketChangesList,
+  toChangeListRow,
+  WorktreeStateStrip,
+  type ChangeListRow,
+} from "./ticket-changes-panel";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { sortChangeSetFiles } from "./ticket-changes-model";
 import { EMPTY_CHANGE_RECENCY_STATE } from "./ticket-change-recency";
@@ -31,6 +36,30 @@ function render(rows: readonly ChangeListRow[], props: { hiddenCount?: number } 
 function listRows(files: readonly ChangeSetFile[]): ChangeListRow[] {
   return sortChangeSetFiles(files).map((f) => toChangeListRow(f, EMPTY_CHANGE_RECENCY_STATE));
 }
+
+describe("WorktreeStateStrip", () => {
+  it("renders working, local, and remote state as one compact summary", () => {
+    const html = renderToStaticMarkup(
+      <WorktreeStateStrip
+        status={{
+          uncommitted: true,
+          sequencerActive: false,
+          aheadOfBase: 3,
+          behindBase: 0,
+          unpushed: 1,
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-testid="ticket-changes-git-state"');
+    expect(html).toContain("Working");
+    expect(html).toContain("Changes");
+    expect(html).toContain("Local");
+    expect(html).toContain("3 commits");
+    expect(html).toContain("Remote");
+    expect(html).toContain("1 to push");
+  });
+});
 
 describe("TicketChangesList", () => {
   it("renders a compact flat list with filename leading and parent muted", () => {

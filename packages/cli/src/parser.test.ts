@@ -4,11 +4,11 @@ import {
   cliVerbName,
   COLUMN_VOCABULARY,
   HARNESS_VOCABULARY,
-  REASONING_LEVELS,
   REFERENCE_VERBS,
   VERB_REGISTRY,
   verbEntry,
 } from "@volli/shared";
+import type { VerbEntry } from "@volli/shared";
 
 import { CLI_MECHANICS, parseCliArgs, PRIORITY_VOCABULARY } from "./parser";
 
@@ -155,7 +155,84 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("routes comments, archive, lifecycle signals, and notifications", () => {
+  it("types zero-count and compact comments polling on ticket show", () => {
+    // VC-85: `0` suppresses a history query. The named projection also carries
+    // a marker so main can omit the static ticket body from every poll.
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--events", "0"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", events: 0 }, json: false },
+    });
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments", "0"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", comments: 0 }, json: false },
+    });
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only"])).toEqual({
+      ok: true,
+      invocation: {
+        command: "ticket.show",
+        args: { id: "VC-12", commentsOnly: true, events: 0 },
+        json: false,
+      },
+    });
+    // An explicit event count asks for the ordinary full-ticket projection.
+    expect(parseCliArgs(["ticket", "show", "VC-12", "--comments-only", "--events", "3"])).toEqual({
+      ok: true,
+      invocation: { command: "ticket.show", args: { id: "VC-12", events: 3 }, json: false },
+    });
+  });
+
+  it("types a verdict, and refuses a word outside either vocabulary", () => {
+    expect(
+      parseCliArgs([
+        "ticket",
+        "signal",
+        "VC-12",
+        "--kind",
+        "review",
+        "--verdict",
+        "pass",
+        "--detail",
+        "Two nits, fixed",
+      ]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "ticket.signal",
+        args: { id: "VC-12", kind: "review", verdict: "pass", detail: "Two nits, fixed" },
+        json: false,
+      },
+    });
+    // Detail is optional; the two halves of the verdict are not.
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "budget", "--verdict", "blocked"]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "ticket.signal",
+        args: { id: "VC-12", kind: "budget", verdict: "blocked" },
+        json: false,
+      },
+    });
+    // A fixed vocabulary is only cheap to live with if being wrong teaches you
+    // the right words — and this process holds the same list main checks.
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "vibes", "--verdict", "pass"]),
+    ).toEqual({
+      ok: false,
+      code: "USAGE",
+      message:
+        'Unknown signal kind "vibes" (valid: validate, implement, review, merge, human-gate, budget)',
+    });
+    expect(
+      parseCliArgs(["ticket", "signal", "VC-12", "--kind", "review", "--verdict", "probably"]),
+    ).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: 'Unknown verdict "probably" (valid: pass, fail, blocked)',
+    });
+  });
+
+  it("routes comments, lifecycle signals, and notifications", () => {
     expect(parseCliArgs(["ticket", "comment", "VC-12", "-m", "Ready for review"])).toEqual({
       ok: true,
       invocation: {
@@ -163,10 +240,6 @@ describe("parseCliArgs", () => {
         args: { id: "VC-12", message: "Ready for review" },
         json: false,
       },
-    });
-    expect(parseCliArgs(["ticket", "archive", "VC-12", "--json"])).toEqual({
-      ok: true,
-      invocation: { command: "ticket.archive", args: { id: "VC-12" }, json: true },
     });
     expect(parseCliArgs(["session", "blocked", "--reason", "Needs permission"])).toEqual({
       ok: true,
@@ -194,85 +267,48 @@ describe("parseCliArgs", () => {
     });
   });
 
-  it("parses session start with kickoff, model, and reasoning overrides", () => {
-    expect(parseCliArgs(["session", "start", "VC-4"])).toEqual({
-      ok: true,
-      invocation: { command: "session.start", args: { id: "VC-4" }, json: false },
-    });
-    expect(
-      parseCliArgs([
-        "session",
-        "start",
-        "VC-4",
-        "-m",
-        "Focus on the failing tests",
-        "--title",
-        "Validate VC-4",
-        "--model",
-        "openai-codex/gpt-5.2-sol",
-        "--reasoning",
-        "high",
-        "--json",
-      ]),
-    ).toEqual({
-      ok: true,
-      invocation: {
-        command: "session.start",
-        args: {
-          id: "VC-4",
-          message: "Focus on the failing tests",
-          title: "Validate VC-4",
-          model: { providerId: "openai-codex", modelId: "gpt-5.2-sol" },
-          reasoning: "high",
-        },
-        json: true,
-      },
-    });
-    // --message stays the hidden alias every other message flag has.
-    expect(parseCliArgs(["session", "start", "VC-4", "--message", "go"])).toMatchObject({
-      ok: true,
-      invocation: { args: { id: "VC-4", message: "go" } },
-    });
-    expect(parseCliArgs(["session", "start", "VC-4", "--title", "Validate VC-4"])).toMatchObject({
-      ok: true,
-      invocation: { args: { id: "VC-4", title: "Validate VC-4" } },
-    });
+  // VC-163 took both verbs off the Agent CLI, so neither parses any more. What
+  // replaces the parse is the refusal, and the refusal is the point: an agent
+  // that typed one of these must learn WHICH surface holds the verb. A bare
+  // UNSUPPORTED_COMMAND would read as "no such verb" and send it hunting for a
+  // workaround — killing a PID, writing a verdict comment by hand — which is
+  // the failure mode VC-92 §7 named and this ticket had to avoid.
+  it("refuses session start with the door that does hold it", () => {
+    const result = parseCliArgs(["session", "start", "VC-4"]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
+    expect(result.verb).toBe("session.start");
+    expect(result.message).toBe(
+      "volli session start exists on the Agent Tool Surface as session.start; the Agent CLI does not execute it.",
+    );
   });
 
-  it("splits --model on the FIRST slash so a model id may itself contain one", () => {
-    expect(
-      parseCliArgs(["session", "start", "VC-4", "--model", "gateway/vendor/model-x"]),
-    ).toMatchObject({
-      ok: true,
-      invocation: { args: { model: { providerId: "gateway", modelId: "vendor/model-x" } } },
-    });
+  it("refuses ticket archive by naming the app as the only surface", () => {
+    const result = parseCliArgs(["ticket", "archive", "VC-12"]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
+    expect(result.verb).toBe("ticket.archive");
+    // No bundle carries it, so there is no Role to redirect to and the message
+    // must not imply one. It names the app, which is the whole remaining door.
+    expect(result.message).toBe(
+      "volli ticket archive exists in the app only; no agent surface executes it.",
+    );
   });
 
-  it.each(["gpt-5", "/gpt-5", "openai/", "/"])(
-    "rejects the malformed --model %j and teaches the shape",
-    (raw) => {
-      expect(parseCliArgs(["session", "start", "VC-4", "--model", raw])).toEqual({
-        ok: false,
-        code: "USAGE",
-        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
-      });
-    },
-  );
-
-  it("rejects an unknown --reasoning level and enumerates the vocabulary", () => {
-    expect(parseCliArgs(["session", "start", "VC-4", "--reasoning", "ultra"])).toEqual({
-      ok: false,
-      code: "USAGE",
-      message: `Unknown reasoning level "ultra" (valid: ${REASONING_LEVELS.join(", ")})`,
-    });
-  });
-
-  it("requires the ticket id positional for session start", () => {
-    expect(parseCliArgs(["session", "start"])).toEqual({
-      ok: false,
-      code: "USAGE",
-      message: "session start requires <id>",
-    });
+  // A wrong door is refused at the NAME, before any argument is looked at.
+  // Otherwise `--model gpt-5` would be answered with a usage error about the
+  // model shape — a confident, irrelevant refusal about a verb this surface
+  // was never going to run.
+  it.each([
+    [["session", "start"]],
+    [["session", "start", "VC-4", "--model", "gpt-5"]],
+    [["session", "start", "VC-4", "--reasoning", "ultra"]],
+    [["ticket", "archive"]],
+    [["ticket", "archive", "VC-1", "--bad"]],
+  ])("refuses %j at the name, never at its arguments", (argv) => {
+    const result = parseCliArgs(argv as string[]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
   });
 
   it("requires the harness session id positional for session link", () => {
@@ -344,9 +380,14 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "model.list", args: {}, json: false },
     });
-    expect(parseCliArgs(["model", "list", "--all", "--json"])).toEqual({
+    expect(parseCliArgs(["model", "list", "--json"])).toEqual({
       ok: true,
-      invocation: { command: "model.list", args: { all: true }, json: true },
+      invocation: { command: "model.list", args: {}, json: true },
+    });
+    expect(parseCliArgs(["model", "list", "--all"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "Unknown option --all — see volli help model list",
     });
     expect(parseCliArgs(["session", "list", "--project", "VC", "--ticket", "VC-12"])).toEqual({
       ok: true,
@@ -424,13 +465,23 @@ describe("parseCliArgs", () => {
   it.each([
     [["board", "--project"], "--project requires a value"],
     [["app", "launch", "--timeout", "0"], "--timeout requires a positive integer"],
-    [["ticket", "archive"], "ticket archive requires <id>"],
     [["ticket", "show"], "ticket show requires <id>"],
     [["ticket", "show", "VC-1", "--events"], "--events requires a value"],
-    [["ticket", "show", "VC-1", "--events", "0"], "--events requires a positive integer"],
+    // 0 is accepted (VC-85); what a count still refuses is a negative or a
+    // fraction, either of which would slice from the wrong end or not at all.
+    [["ticket", "show", "VC-1", "--events", "-1"], "--events requires a whole number, 0 or more"],
+    [
+      ["ticket", "show", "VC-1", "--comments", "1.5"],
+      "--comments requires a whole number, 0 or more",
+    ],
     [["ticket", "move"], "ticket move requires <id>"],
     [["ticket", "move", "VC-1"], "ticket move requires --to"],
     [["ticket", "comment"], "ticket comment requires <id>"],
+    // Half a verdict is not a weaker verdict, it is not one: a stage with no
+    // outcome and an outcome with no stage each say nothing (VC-85).
+    [["ticket", "signal"], "ticket signal requires <id>"],
+    [["ticket", "signal", "VC-1", "--verdict", "pass"], "ticket signal requires --kind"],
+    [["ticket", "signal", "VC-1", "--kind", "review"], "ticket signal requires --verdict"],
     [["ticket", "comment", "VC-1"], "ticket comment requires exactly one of -m or --file"],
     [["ticket", "comment", "VC-1", "-m"], "-m requires a value"],
     [
@@ -535,8 +586,6 @@ describe("parseCliArgs", () => {
   it.each([
     [["identify", "--bad"], "identify", "--project"],
     [["board", "--bad", "x"], "board", "--project"],
-    // ticket archive has no options, so no "(options: …)" list is appended.
-    [["ticket", "archive", "VC-1", "--bad"], "ticket archive", "--bad"],
     [["ticket", "show", "VC-1", "--bad", "1"], "ticket show", "--events"],
     [["ticket", "move", "VC-1", "--to", "doing", "--bad"], "ticket move", "--to"],
     [["ticket", "comment", "VC-1", "--bad", "x"], "ticket comment", "-m"],
@@ -557,13 +606,116 @@ describe("parseCliArgs", () => {
     },
   );
 
-  it("lists the whole command vocabulary when no command matches", () => {
+  it("answers an empty argv as a no-door refusal rather than crashing", () => {
+    const result = parseCliArgs([]);
+    if (result.ok) throw new Error("expected a no-door refusal");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message).toContain('No Volli verb matches "(empty)"');
+  });
+
+  it("distinguishes an undeclared no-door name and lists valid verbs plus topics", () => {
     const result = parseCliArgs(["frobnicate"]);
-    if (result.ok) throw new Error("expected a usage error");
-    expect(result.code).toBe("USAGE");
-    expect(result.message.startsWith("Expected a Volli command (commands:")).toBe(true);
+    if (result.ok) throw new Error("expected a no-door refusal");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message).toContain('No Volli verb matches "frobnicate"');
+    expect(result.message).toContain("topics: concepts, changes");
     for (const name of PUBLISHED_COMMANDS) {
       expect(result.message).toContain(name);
+    }
+  });
+
+  it("distinguishes a declared tool-only wrong door without inventing Role policy", () => {
+    const toolOnly: VerbEntry = {
+      key: "session.stop",
+      accessModes: ["tool"],
+      actor: "role",
+      handler: { site: "main", id: "session.stop" },
+      listed: true,
+      referenceOrder: 1,
+      group: "Session",
+      summary: "Stop a Session.",
+      options: [],
+    };
+    expect(parseCliArgs(["session", "stop", "abcd"], [toolOnly])).toEqual({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "session.stop",
+      message:
+        "volli session stop exists on the Agent Tool Surface as session.stop; the Agent CLI does not execute it.",
+    });
+
+    // The other declared non-shell doors redirect the same way: an app-only
+    // verb names the app, and any future non-CLI access mode names itself.
+    const appOnly: VerbEntry = {
+      ...toolOnly,
+      key: "ticket.discard",
+      accessModes: [],
+      handler: { site: "main", id: "ticket.discard" },
+    };
+    expect(parseCliArgs(["ticket", "discard", "VC-1"], [appOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "ticket.discard",
+      message: "volli ticket discard exists in the app only; no agent surface executes it.",
+    });
+    const hostApiOnly: VerbEntry = {
+      ...toolOnly,
+      key: "review.fetch",
+      accessModes: ["hostApi"],
+      handler: { site: "main", id: "review.fetch" },
+    };
+    expect(parseCliArgs(["review", "fetch"], [hostApiOnly])).toMatchObject({
+      ok: false,
+      code: "WRONG_DOOR",
+      verb: "review.fetch",
+      message: "volli review fetch exists on hostApi, not on the Agent CLI.",
+    });
+  });
+
+  it("parses the ratified side-effect preview matrix into one dryRun argument", () => {
+    const calls = [
+      ["ticket", "create", "--title", "T", "--dry-run"],
+      ["ticket", "update", "VC-1", "--dry-run"],
+      ["ticket", "move", "VC-1", "--to", "doing", "--dry-run"],
+      ["ticket", "comment", "VC-1", "-m", "note", "--dry-run"],
+      ["ticket", "signal", "VC-1", "--kind", "implement", "--verdict", "pass", "--dry-run"],
+      ["worktree", "sync", "VC-1", "--dry-run"],
+      ["session", "done", "--dry-run"],
+      ["session", "blocked", "--dry-run"],
+      ["session", "link", "native-id", "--dry-run"],
+      ["notify", "-m", "hello", "--dry-run"],
+      ["doctor", "--fix", "--dry-run"],
+    ];
+    for (const argv of calls) {
+      expect(parseCliArgs(argv)).toMatchObject({
+        ok: true,
+        invocation: { args: { dryRun: true } },
+      });
+    }
+  });
+
+  it("requires a repair intent for a doctor preview", () => {
+    expect(parseCliArgs(["doctor", "--dry-run"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "doctor --dry-run requires --fix",
+    });
+  });
+
+  // Reading the body a real call would send is a read. Refusing it would make a
+  // preview validate different input than the operation it previews, which is
+  // the one thing the preview contract cannot afford; the non-effect it owes is
+  // that nothing is WRITTEN.
+  it("previews a file-sourced body instead of refusing to read it", () => {
+    for (const argv of [
+      ["ticket", "create", "--title", "T", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "update", "VC-1", "--body-file", "/tmp/body", "--dry-run"],
+      ["ticket", "comment", "VC-1", "--file", "/tmp/note", "--dry-run"],
+    ]) {
+      expect(parseCliArgs(argv)).toMatchObject({
+        ok: true,
+        invocation: { args: { dryRun: true } },
+      });
     }
   });
 
@@ -751,7 +903,7 @@ describe("registry ↔ argv mechanics", () => {
     for (const name of PUBLISHED_COMMANDS) {
       const result = parseCliArgs(name.split(" "));
       const message = result.ok ? "" : result.message;
-      expect(message.startsWith("Expected a Volli command"), name).toBe(false);
+      expect(message.startsWith("No Volli verb matches"), name).toBe(false);
     }
   });
 
@@ -759,8 +911,9 @@ describe("registry ↔ argv mechanics", () => {
   // the parser, and must stay unroutable here however it is typed.
   it("leaves the parser-bypassing verb unroutable", () => {
     const result = parseCliArgs(["hook", "SessionStart"]);
-    if (result.ok) throw new Error("expected a usage error");
-    expect(result.message.startsWith("Expected a Volli command")).toBe(true);
+    if (result.ok) throw new Error("expected a no-door error");
+    expect(result.code).toBe("UNSUPPORTED_COMMAND");
+    expect(result.message.startsWith("No Volli verb matches")).toBe(true);
   });
 
   // Mechanics for a verb that is on no agent surface would be a route to
@@ -771,13 +924,78 @@ describe("registry ↔ argv mechanics", () => {
     }
   });
 
-  // Which verbs the walker cannot serve, named rather than inferred: `hook`
-  // takes two bare positionals and never walks the parser, `help` takes a
-  // command path or a topic word instead of an option table.
-  it("leaves exactly the two verbs the walker cannot serve without mechanics", () => {
+  // `hook` bypasses the walker, `help` has its own command-path grammar,
+  // ticket.archive is app-only, ticket.await is the blocking control-tier tool
+  // a CLI must never execute, automation.run is the orchestrator's
+  // control-tier tool (VC-134), and the agent-control family — start, stop,
+  // send — is tool-only (VC-163, VC-86). A shell door for any of them would be
+  // the socket door VC-92 §6 refuses.
+  it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
     const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
       (entry) => entry.key,
     );
-    expect(missing).toEqual(["hook", "help"]);
+    expect(missing).toEqual([
+      "ticket.archive",
+      "session.start",
+      "hook",
+      "help",
+      "ticket.await",
+      "automation.run",
+      "session.stop",
+      "session.send",
+    ]);
+  });
+});
+
+/**
+ * `volli cost` argv (VC-87). The two value options both refuse rather than
+ * guess: a `--since` read as `0` and a `--group-by` read as "no grouping" would
+ * each answer a question nobody asked, with output that looks entirely normal.
+ */
+describe("cost", () => {
+  it("keeps --since as the shape it was written in, not as an instant", () => {
+    // Resolved here, it would be pinned to THIS process's clock; main holds the
+    // clock the rest of the answer is measured against.
+    expect(parseCliArgs(["cost", "--since", "7d"])).toMatchObject({
+      ok: true,
+      invocation: { args: { since: { kind: "duration", ms: 604_800_000 } } },
+    });
+    expect(parseCliArgs(["cost", "--since", "90m"])).toMatchObject({
+      ok: true,
+      invocation: { args: { since: { kind: "duration", ms: 5_400_000 } } },
+    });
+    expect(parseCliArgs(["cost", "--since", "2026-01-14T09:22:11Z"])).toMatchObject({
+      ok: true,
+      invocation: {
+        args: { since: { kind: "instant", epochMs: Date.parse("2026-01-14T09:22:11Z") } },
+      },
+    });
+  });
+
+  it("refuses a --since nobody could have meant", () => {
+    const result = parseCliArgs(["cost", "--since", "last tuesday"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.code).toBe("USAGE");
+    expect(result.message).toContain("RFC 3339");
+  });
+
+  it("teaches the grouping vocabulary rather than ignoring an unknown one", () => {
+    expect(parseCliArgs(["cost", "--group-by", "model"])).toMatchObject({
+      ok: true,
+      invocation: { args: { groupBy: "model" } },
+    });
+    const result = parseCliArgs(["cost", "--group-by", "provider"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.message).toContain("ticket, session, model, day");
+  });
+
+  it("refuses two scopes rather than letting one silently win", () => {
+    const result = parseCliArgs(["cost", "--ticket", "VC-1", "--all-projects"]);
+    if (result.ok) throw new Error("expected a usage error");
+    expect(result.message).toContain("one of --ticket, --session or --all-projects");
+    // --project is the ladder's own word and rides alongside a narrower scope.
+    expect(parseCliArgs(["cost", "--ticket", "VC-1", "--project", "VC"])).toMatchObject({
+      ok: true,
+    });
   });
 });

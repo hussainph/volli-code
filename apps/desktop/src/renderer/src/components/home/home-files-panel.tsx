@@ -3,13 +3,17 @@ import { errorMessage, type DirEntry, type Project } from "@volli/shared";
 
 import { useDirectoryWatch } from "@renderer/hooks/use-directory-watch";
 import { useProjectRootsReady } from "@renderer/hooks/use-project-roots-sync";
+import { useFileNavigatorMutations } from "@renderer/components/files/use-navigator-mutations";
+import type { FileNavigatorControls } from "@renderer/components/files/use-navigator-mutations";
 import {
+  NewFileRailAction,
   RailFaultBanner,
   RailNavigatorHeader,
   RailPanelSkeleton,
   railNavigatorMatch,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { TicketFilesList } from "@renderer/components/ticket/ticket-files-panel";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** Join one Main-checkout listing entry to the current project-relative folder. */
 function joinRel(parent: string, name: string): string {
@@ -29,6 +33,7 @@ export function HomeFilesList({
   projectId,
   cwd,
   entries,
+  controls,
   onPreviewFile,
   onPinFile,
   onOpenDirectory,
@@ -36,6 +41,8 @@ export function HomeFilesList({
   projectId: string;
   cwd: string;
   entries: readonly DirEntry[];
+  /** The create/rename/duplicate/delete controller (VC-191); absent in fixtures. */
+  controls?: FileNavigatorControls;
   onPreviewFile(relPath: string): void;
   onPinFile(relPath: string): void;
   onOpenDirectory(relPath: string): void;
@@ -48,6 +55,7 @@ export function HomeFilesList({
         relPath: joinRel(cwd, entry.name),
         kind: entry.kind === "dir" ? "directory" : "file",
       }))}
+      controls={controls}
       onPreviewFile={onPreviewFile}
       onPinFile={onPinFile}
       onOpenDirectory={onOpenDirectory}
@@ -131,6 +139,21 @@ export function HomeFilesPanel({
     void loadDir(cwd);
   });
 
+  // The creation track at Home scope (VC-191): no ticketId, so every verb
+  // resolves against the MAIN checkout — the same checkout this listing reads.
+  // The dir-watch above would eventually notice a create or a delete on its
+  // own; refreshing explicitly is what makes the row appear WITH the gesture
+  // rather than a debounce later.
+  const controls = useFileNavigatorMutations({
+    scope: { projectId: project.id },
+    cwd,
+    host: {
+      refresh: () => void loadDir(cwd),
+      openCreated: (relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath),
+      renameTab: (from, to) => useWorkspaceStore.getState().renameHomeFile(project.id, from, to),
+    },
+  });
+
   // On the whole project-relative path, like the ticket navigator: the same
   // magnifier cannot mean two different things on two drawings of one panel.
   const visibleEntries = entries.filter((entry) =>
@@ -162,6 +185,7 @@ export function HomeFilesPanel({
         }
         onQueryChange={setQuery}
         onNavigateUp={navigateUp}
+        actions={<NewFileRailAction onNewFile={() => controls.startDraft("file")} />}
       />
 
       {error !== null ? (
@@ -180,6 +204,7 @@ export function HomeFilesPanel({
           projectId={project.id}
           cwd={cwd}
           entries={visibleEntries}
+          controls={controls}
           onPreviewFile={onPreviewFile}
           onPinFile={onPinFile}
           onOpenDirectory={(relPath) => void loadDir(relPath, true)}

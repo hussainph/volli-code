@@ -247,6 +247,42 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
+  it("adds projects.authority_policy as a nullable JSON column (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "projects")).toContain("authority_policy");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // NULL is the default and means "inherit every built-in default", so an
+    // existing project needs no backfill to be governed correctly.
+    expect(db.prepare("SELECT authority_policy FROM projects WHERE id = 'p1'").get()).toEqual({
+      authority_policy: null,
+    });
+    db.close();
+  });
+
+  it("refuses an authority_policy that is not JSON (migration 025)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    // A column whose whole contract is "this is JSON" fails at the write, not
+    // several layers up in a parser that would then have to invent a policy for
+    // the corpse.
+    expect(() =>
+      db.prepare("UPDATE projects SET authority_policy = 'enforce' WHERE id = 'p1'").run(),
+    ).toThrow();
+    db.close();
+  });
+
   it("adds tickets.pr_url as a nullable column (migration 009)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
@@ -1340,6 +1376,1224 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
 
     expect(db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 0 });
+    db.close();
+  });
+});
+
+/** A migrated db holding one project, one ticket, one session, one automation, one run (migration 026's suite). */
+function seededAutomationsDb(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath);
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+         VALUES ('s1', 'p1', 't1', 'Chat', 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+         VALUES ('a1', 'p1', 'Review', '/review go', NULL, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automation_runs
+      (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+     VALUES ('r1', 'a1', 'Review', 't1', 's1', 'anthropic', 'claude-opus', 'high', 0)`,
+  ).run();
+  return db;
+}
+
+/** The schema on current main: migration 025 is authority policy, not Automations. */
+function buildCurrentV25Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  const throughCurrentMain = MIGRATIONS.filter((candidate) => candidate.version <= 25);
+  for (const migration of throughCurrentMain) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 25");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p25', 'Current main', '/repo/current', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  return db;
+}
+
+/**
+ * The short-lived VC-126 branch originally used version 025 for Automations
+ * before main assigned that number to `projects.authority_policy`. A developer
+ * who ran that branch has both Automation tables and `user_version = 25`, but
+ * no authority column — this fixture makes migration 026 converge that lineage.
+ */
+function buildLegacyAutomationV25Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 24)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.exec(`
+    CREATE TABLE automations (
+      id           TEXT PRIMARY KEY,
+      project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL CHECK (name <> ''),
+      instructions TEXT NOT NULL CHECK (instructions <> ''),
+      runtime      TEXT CHECK (runtime IS NULL OR json_valid(runtime)),
+      row_version  INTEGER NOT NULL DEFAULT 1,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX idx_automations_project ON automations(project_id, name);
+    CREATE TABLE automation_runs (
+      id              TEXT PRIMARY KEY,
+      automation_id   TEXT REFERENCES automations(id) ON DELETE SET NULL,
+      ticket_id       TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+      session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      provider_id     TEXT NOT NULL CHECK (provider_id <> ''),
+      model_id        TEXT NOT NULL CHECK (model_id <> ''),
+      reasoning_level TEXT NOT NULL CHECK (reasoning_level <> ''),
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX idx_automation_runs_ticket ON automation_runs(ticket_id, created_at);
+    CREATE INDEX idx_automation_runs_automation ON automation_runs(automation_id, created_at);
+    CREATE INDEX idx_automation_runs_session ON automation_runs(session_id);
+  `);
+  db.pragma("user_version = 25");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('legacy-project', 'Legacy', '/repo/legacy', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('legacy-ticket', 'legacy-project', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('legacy-session', 'legacy-project', 'legacy-ticket', 'Chat', 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automations (id, project_id, name, instructions, runtime, created_at, updated_at)
+       VALUES ('legacy-automation', 'legacy-project', 'Review', '/review', NULL, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO automation_runs
+      (id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+     VALUES ('legacy-run', 'legacy-automation', 'legacy-ticket', 'legacy-session', 'anthropic', 'opus', 'high', 0)`,
+  ).run();
+  return db;
+}
+
+describe("migration 026 — Automations command ledger and projections", () => {
+  it("upgrades a database at current main's user_version 25 instead of skipping Automations", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV25Db(dbPath);
+    expect(tableExists(db, "automations")).toBe(false);
+    expect(tableExists(db, "automation_runs")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(tableExists(db, "automation_runs")).toBe(true);
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(db.prepare("SELECT authority_policy FROM projects WHERE id = 'p25'").get()).toEqual({
+      authority_policy: null,
+    });
+    db.close();
+  });
+
+  it("converges the branch-local Automation 025 lineage with main's authority policy", () => {
+    const dbPath = tempDbPath();
+    const db = buildLegacyAutomationV25Db(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(columnNames(db, "projects")).toContain("authority_policy");
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(
+      db
+        .prepare(
+          "SELECT automation_id, automation_name, ticket_id, session_id FROM automation_runs WHERE id = 'legacy-run'",
+        )
+        .get(),
+    ).toEqual({
+      automation_id: "legacy-automation",
+      automation_name: "Review",
+      ticket_id: "legacy-ticket",
+      session_id: "legacy-session",
+    });
+    db.close();
+  });
+
+  it("creates both tables, refuses empty names/instructions and non-JSON runtime", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(tableExists(db, "automation_runs")).toBe(true);
+    expect(tableExists(db, "automation_commands")).toBe(true);
+    expect(tableExists(db, "automation_events")).toBe(true);
+    expect(tableExists(db, "automation_command_receipts")).toBe(true);
+    expect(tableExists(db, "automation_run_deliveries")).toBe(true);
+    db.prepare(
+      "INSERT INTO automation_commands (id, intent, created_at) VALUES ('c1', '{}', 0)",
+    ).run();
+    db.prepare(
+      "INSERT INTO automation_events (id, command_id, kind, payload, created_at) VALUES ('e1', 'c1', 'command.recorded', '{}', 0)",
+    ).run();
+    expect(() =>
+      db.prepare("UPDATE automation_events SET kind = 'edited' WHERE id = 'e1'").run(),
+    ).toThrow();
+    expect(() => db.prepare("DELETE FROM automation_commands WHERE id = 'c1'").run()).toThrow();
+    expect(() => db.prepare("UPDATE automations SET name = '' WHERE id = 'a1'").run()).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET instructions = '' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db.prepare("UPDATE automations SET runtime = 'not json' WHERE id = 'a1'").run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare("UPDATE automations SET runtime = ? WHERE id = 'a1'")
+        .run('{"providerId":"anthropic","modelId":"opus","reasoningLevel":"high"}'),
+    ).not.toThrow();
+    db.close();
+  });
+
+  it("scopes a project Automation to its project (cascade) while a global one carries NULL", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, created_at, updated_at)
+         VALUES ('a2', NULL, 'Global', '/tdd', 0, 0)`,
+    ).run();
+
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+
+    const remaining = db.prepare("SELECT id FROM automations ORDER BY id").all();
+    expect(remaining).toEqual([{ id: "a2" }]);
+    db.close();
+  });
+
+  it("keeps a Run's Automation id/name provenance when its Automation goes, but follows its Session", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    db.prepare("DELETE FROM automations WHERE id = 'a1'").run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+    expect(
+      db
+        .prepare(
+          "SELECT automation_id, automation_name, ticket_id FROM automation_runs WHERE id = 'r1'",
+        )
+        .get(),
+    ).toEqual({
+      automation_id: "a1",
+      automation_name: "Review",
+      ticket_id: null,
+    });
+
+    db.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    db.close();
+  });
+
+  it("stores the resolved model as its own columns, never as a reference", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+
+    expect(columnNames(db, "automation_runs")).toEqual([
+      "id",
+      "automation_id",
+      "automation_name",
+      "ticket_id",
+      "session_id",
+      "provider_id",
+      "model_id",
+      "reasoning_level",
+      "created_at",
+      // VC-133: whether a person was at the door that asked for this Run. Last,
+      // because `ALTER TABLE … ADD COLUMN` appends — the 026 table's own order
+      // is unchanged.
+      "attendance",
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_runs SET provider_id = '' WHERE id = 'r1'").run(),
+    ).toThrow();
+    db.close();
+  });
+});
+
+/**
+ * A database at the version current main ships — every migration through
+ * Automations, and nothing of VC-87's.
+ *
+ * Built by replaying the real migrations up to 26 rather than by pasting a
+ * schema, so the fixture cannot drift from what a user's profile actually
+ * holds. It carries one Session with one event, because the coverage floor is
+ * derived from history and a profile with none is a different case.
+ */
+function buildCurrentV26Db(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 26)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 26");
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p26', 'Current main', '/repo/current', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('s26', 'p26', NULL, 'Worked before metering', 1_000)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, payload)
+       VALUES ('e26', 's26', 1, 7_000, 7_000, '{}', '{"kind":"session.created"}')`,
+  ).run();
+  return db;
+}
+
+describe("migration 027 — the Session usage projection", () => {
+  it("upgrades a database at current main's user_version 26 instead of skipping usage", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV26Db(dbPath);
+    expect(tableExists(db, "session_usage")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(tableExists(db, "session_usage")).toBe(true);
+    expect(tableExists(db, "session_usage_coverage")).toBe(true);
+    // Automations, which owned 026, survives the upgrade untouched.
+    expect(tableExists(db, "automations")).toBe(true);
+    expect(db.prepare("SELECT id FROM projects").all()).toEqual([{ id: "p26" }]);
+    db.close();
+  });
+
+  /**
+   * The bug a marker exists to prevent: an existing profile's past spend is
+   * unrecoverable, so the index starts empty. Without a floor the first read
+   * says "no metered model calls yet" and the second, days later, prints a
+   * total that looks complete and covers only the days since the upgrade.
+   */
+  it("marks an existing profile's history as covered only from its newest fact", () => {
+    const dbPath = tempDbPath();
+    const db = buildCurrentV26Db(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT metered_from FROM session_usage_coverage").get()).toEqual({
+      metered_from: 7_000,
+    });
+    db.close();
+  });
+
+  it("leaves a fresh profile with no boundary at all", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT metered_from FROM session_usage_coverage").get()).toEqual({
+      metered_from: 0,
+    });
+    db.close();
+  });
+
+  it("keeps exactly one coverage row, so no reader can find two floors", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(() =>
+      db.prepare("INSERT INTO session_usage_coverage (id, metered_from) VALUES (2, 0)").run(),
+    ).toThrow();
+    db.close();
+  });
+});
+
+describe("migration 028 — the typed verdict channel", () => {
+  it("creates ticket_signals with the latest-per-kind index", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "ticket_signals")).toBe(true);
+    expect(indexExists(db, "ticket_signals_latest")).toBe(true);
+    expect(columnNames(db, "ticket_signals")).toEqual([
+      "id",
+      "ticket_id",
+      "session_id",
+      "actor",
+      "kind",
+      "verdict",
+      "detail",
+      "created_at",
+    ]);
+    db.close();
+  });
+
+  /**
+   * The vocabulary is fixed in the schema, not merely at the door. A signal
+   * whose kind nobody can query is the `VERDICT:` comment convention again, so
+   * the last writer that could refuse an invented one does.
+   */
+  it("refuses a kind or verdict outside the fixed vocabulary", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    const insert = (kind: string, verdict: string) =>
+      db
+        .prepare(
+          `INSERT INTO ticket_signals (id, ticket_id, session_id, actor, kind, verdict, detail, created_at)
+             VALUES (?, 't1', NULL, 'session', ?, ?, NULL, 1)`,
+        )
+        .run(`${kind}-${verdict}`, kind, verdict);
+
+    expect(() => insert("gut-feel", "pass")).toThrow();
+    expect(() => insert("review", "probably")).toThrow();
+    expect(() => insert("review", "pass")).not.toThrow();
+    db.close();
+  });
+});
+
+describe("migration 029 — durable Ticket Event sequence", () => {
+  it("backfills commit order and never reuses a cursor after deletion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 28)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 28");
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    const insertEvent = db.prepare(
+      `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+       VALUES (?, 't1', ?, 'user', '{}', 100)`,
+    );
+    insertEvent.run("event-a", "archived");
+    insertEvent.run("event-b", "unarchived");
+
+    migrate(db, dbPath);
+
+    expect(
+      db.prepare("SELECT sequence, event_id FROM ticket_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "event-a" },
+      { sequence: 2, event_id: "event-b" },
+    ]);
+
+    db.prepare("DELETE FROM ticket_events WHERE id = 'event-b'").run();
+    insertEvent.run("event-c", "archived");
+    expect(
+      db.prepare("SELECT sequence, event_id FROM ticket_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "event-a" },
+      { sequence: 3, event_id: "event-c" },
+    ]);
+    db.close();
+  });
+
+  it("keeps event identity immutable while allowing body-edit timestamp coalescing", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+       VALUES ('event-a', 't1', 'body_edited', 'user', '{}', 1)`,
+    ).run();
+
+    expect(() =>
+      db.prepare("UPDATE ticket_events SET kind = 'archived' WHERE id = 'event-a'").run(),
+    ).toThrow("ticket event identity is immutable");
+    expect(() =>
+      db.prepare("UPDATE ticket_events SET created_at = 2 WHERE id = 'event-a'").run(),
+    ).not.toThrow();
+    db.close();
+  });
+});
+
+describe("migration 030 — birth-frozen Ticket Session delegation grants", () => {
+  it("stores canonical scoped grants, ancestry, and one-way claim completion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    for (const id of ["parent", "child"]) {
+      db.prepare(
+        `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+         VALUES (?, 'p1', 't1', NULL, 0)`,
+      ).run(id);
+    }
+
+    expect(tableExists(db, "session_delegations")).toBe(true);
+    expect(tableExists(db, "session_verb_grants")).toBe(true);
+    expect(tableExists(db, "session_delegation_claims")).toBe(true);
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('parent', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+       VALUES ('parent', 'session.start', 'own-ticket', 1, 3)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('child', 't1', 'parent', 1)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+           VALUES ('child', 'session_start', 'own-ticket', 1, 3)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+           VALUES ('child', 'session.start', 'own-ticket', 2, 4)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare("UPDATE session_verb_grants SET max_children = 4 WHERE session_id = 'parent'")
+        .run(),
+    ).toThrow("session verb grant is immutable");
+
+    db.prepare(
+      `INSERT INTO session_delegation_claims
+         (parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at)
+       VALUES ('parent', 'call-1', 't1', 'parent:call-1:create', NULL, 0)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE session_delegation_claims
+              SET child_session_id = 'child'
+            WHERE parent_session_id = 'parent' AND tool_call_id = 'call-1'`,
+        )
+        .run(),
+    ).not.toThrow();
+    // One claim opens at most one Session: re-pointing a completed claim is the
+    // write the trigger exists to stop.
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('other', 'p1', 't1', NULL, 0)`,
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          `UPDATE session_delegation_claims
+              SET child_session_id = 'other'
+            WHERE parent_session_id = 'parent' AND tool_call_id = 'call-1'`,
+        )
+        .run(),
+    ).toThrow("session delegation claim is immutable once completed");
+    db.close();
+  });
+
+  /**
+   * The grant has to survive its Ticket. `sessions.ticket_id` detaches on
+   * delete, so a Ticket Session becomes a ticketless one holding a frozen
+   * `session.start` — and the tool door can only recognise it as born-scoped
+   * if the ancestry and grant rows are still there to be read.
+   */
+  it("detaches a deleted Ticket from its delegations instead of erasing the grant", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
+       VALUES ('parent', 'p1', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+       VALUES ('parent', 't1', NULL, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO session_verb_grants (session_id, verb, scope, max_depth, max_children)
+       VALUES ('parent', 'session.start', 'own-ticket', 1, 3)`,
+    ).run();
+
+    expect(() => db.prepare("DELETE FROM tickets WHERE id = 't1'").run()).not.toThrow();
+
+    expect(db.prepare("SELECT ticket_id FROM session_delegations").get()).toEqual({
+      ticket_id: null,
+    });
+    expect(db.prepare("SELECT scope FROM session_verb_grants").get()).toEqual({
+      scope: "own-ticket",
+    });
+    // Everything else about the ancestry stays frozen.
+    expect(() =>
+      db.prepare("UPDATE session_delegations SET depth = 1 WHERE session_id = 'parent'").run(),
+    ).toThrow("session delegation is immutable");
+    db.close();
+  });
+  it("adds the column Trigger and a column-arming table that admits one row per column (031)", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'P', '/p', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+         VALUES ('a1', 'p1', 'Sweep', '/review', '{"kind":"columns","columns":["doing"]}', NULL, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO automations (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+         VALUES ('a2', 'p1', 'Other', '/tdd', NULL, NULL, 1, 0, 0)`,
+    ).run();
+
+    // "A column arms at most one Automation" is the key, not a convention.
+    db.prepare(
+      "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','doing','a1',1)",
+    ).run();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','doing','a2',2)",
+        )
+        .run(),
+    ).toThrow(/UNIQUE|PRIMARY/);
+
+    // A Trigger is JSON or it is not stored at all.
+    expect(() =>
+      db.prepare("UPDATE automations SET trigger_spec = 'not json' WHERE id = 'a1'").run(),
+    ).toThrow(/CHECK/);
+
+    // Neither an Automation nor a project leaves an arming behind it.
+    db.prepare("DELETE FROM automations WHERE id = 'a1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
+    db.prepare(
+      "INSERT INTO automation_column_arming (project_id, status, automation_id, armed_at) VALUES ('p1','done','a2',3)",
+    ).run();
+    db.prepare("DELETE FROM projects WHERE id = 'p1'").run();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_column_arming").get()).toEqual({
+      n: 0,
+    });
+    db.close();
+  });
+});
+
+describe("migration 033 — a Run's attendance", () => {
+  it("is nullable, and bounded to the two words the vocabulary has", () => {
+    const dbPath = tempDbPath();
+    const db = seededAutomationsDb(dbPath);
+    const insert = (id: string, attendance: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO automation_runs
+             (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, attendance, created_at)
+           VALUES (?, 'a1', 'Review', 't1', 's1', 'anthropic', 'claude-opus', 'high', ?, 0)`,
+        )
+        .run(id, attendance);
+
+    insert("r2", "unattended");
+    insert("r3", "attended");
+    // NULLABLE with no backfilled default: a Run recorded before this column
+    // existed genuinely did not record the fact, and the READ is where that
+    // becomes `attended` (`parseAutomationRunAttendance`). Freezing a guess into
+    // the rows would put the degrade rule in two places.
+    insert("r4", null);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 4 });
+
+    // A hand-edited database cannot introduce a third answer the reader would
+    // then have to interpret.
+    expect(() => insert("r5", "maybe")).toThrow(/CHECK/);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims the column", () => {
+    // The case migration 031's reconciler exists for, applied to this column:
+    // several automations branches have landed against this table, so a
+    // developer database can say it is current while missing half the schema.
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.exec("ALTER TABLE automation_runs DROP COLUMN attendance");
+    expect(columnNames(db, "automation_runs")).not.toContain("attendance");
+
+    db.pragma("user_version = 32");
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "automation_runs")).toContain("attendance");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+
+    // And re-running it against a database that already has the column is a
+    // no-op rather than a duplicate-column error.
+    db.pragma("user_version = 32");
+    expect(() => migrate(db, dbPath)).not.toThrow();
+    expect(columnNames(db, "automation_runs")).toContain("attendance");
+    db.close();
+  });
+});
+
+/**
+ * A profile that took migration 020's NUMBER from a parallel branch and so
+ * never got its schema: every later migration ran, `user_version` says 34,
+ * and `blobs`/`blob_links` are simply absent. This is the real shape of the
+ * database VC-220 was reported against.
+ */
+function buildLineageWithout020(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((m) => m.version <= 34 && m.version !== 20)) {
+    if (migration.apply !== undefined) migration.apply(db);
+    else db.exec(migration.sql);
+  }
+  db.pragma("user_version = 34");
+  return db;
+}
+
+/**
+ * Migration 020's own statements, so a test can hand a lineage SOME of what 020
+ * owed in the exact text 020 wrote.
+ *
+ * Read out of the list rather than hand-copied: `sqlite_master` stores the
+ * statement verbatim, so a copy that differed by one space would compare
+ * unequal to the fresh schema for a reason that is not about the schema at all.
+ */
+function migration020Sql(): string {
+  const sql = MIGRATIONS.find((migration) => migration.version === 20)?.sql;
+  if (sql === undefined) throw new Error("migration 020 is no longer in the list");
+  return sql;
+}
+
+/**
+ * A lineage that skipped 020 and then had PART of it land anyway — the shapes a
+ * parallel branch actually leaves behind. `surgery` runs after 020's own
+ * statements, taking back whatever this fork never had.
+ */
+function buildPartial020Lineage(
+  dbPath: string,
+  options: { keepLegacyTable?: boolean; surgery?: string } = {},
+): Database.Database {
+  const db = buildLineageWithout020(dbPath);
+  db.exec(
+    options.keepLegacyTable === true
+      ? migration020Sql().replace("DROP TABLE ticket_attachments;", "")
+      : migration020Sql(),
+  );
+  if (options.surgery !== undefined) {
+    // Foreign keys off for the surgery itself: dropping a parent table under a
+    // child one is exactly the state being simulated, and SQLite refuses to
+    // stage it while it is enforcing. The migration then runs with them ON,
+    // which is how the app opens the database.
+    db.pragma("foreign_keys = OFF");
+    db.exec(options.surgery);
+    db.pragma("foreign_keys = ON");
+  }
+  return db;
+}
+
+/** The three indexes 020 put on `blob_links`, which a partial fork can lack. */
+const BLOB_LINK_INDEXES = [
+  "idx_blob_links_ticket",
+  "idx_blob_links_session",
+  "idx_blob_links_blob",
+] as const;
+
+/** A project and a ticket, so a `blob_links` row has an owner to name. */
+function seedTicket(db: Database.Database): void {
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+       VALUES ('t1', 'p1', 1, 'Ticket', 'body', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+  ).run();
+}
+
+/**
+ * Every table and index, by name and by the statement that made it.
+ *
+ * `IF NOT EXISTS` is normalized away: it is stored verbatim in
+ * `sqlite_master`, and the reconciler needs it where migration 020 — which
+ * lands on a database that provably lacks these tables — did not. The clause is
+ * the only difference the two are allowed to have.
+ */
+function schema(db: Database.Database): Array<{ name: string; sql: string }> {
+  return (
+    db
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type IN ('table', 'index') AND sql IS NOT NULL ORDER BY name",
+      )
+      .all() as Array<{ name: string; sql: string }>
+  ).map(({ name, sql }) => ({ name, sql: sql.replace(/ IF NOT EXISTS /g, " ") }));
+}
+
+describe("migrate — 035, the blobs reconciler (VC-220)", () => {
+  it("lands the tables a skipped 020 owed, and converges on the fresh schema", () => {
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    expect(tableExists(db, "blob_links")).toBe(false);
+    // The cost of the gap, and the reason this is filed under VC-220:
+    // preparing a worktree reads this table, so on such a profile every
+    // Session attach was rejected and every Automation Run opened a Session it
+    // could never deliver its Instructions to.
+    expect(() => db.prepare("SELECT 1 FROM blob_links").get()).toThrow(/no such table/);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
+    // 020 replaced `ticket_attachments`; a lineage that skipped it still had
+    // the old table, and converging means it is gone too.
+    expect(tableExists(db, "ticket_attachments")).toBe(false);
+
+    const freshPath = tempDbPath();
+    const fresh = openRawDb(freshPath);
+    migrate(fresh, freshPath);
+    expect(schema(db)).toEqual(schema(fresh));
+    fresh.close();
+    db.close();
+  });
+
+  it("leaves the lineage that ran 020 exactly as it found it", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    db.prepare(
+      `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+         VALUES ('${"a".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+    ).run();
+
+    // Re-offered the version, as a database restored from a backup would be.
+    db.pragma("user_version = 34");
+    migrate(db, dbPath);
+
+    // The bytes a person attached are still there: the reconciler probes and
+    // returns rather than recreating a table it would have had to drop first.
+    expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("lands the tables when the old one is already gone", () => {
+    // A fork that dropped `ticket_attachments` under its own 020 without ever
+    // creating these two. There is nothing left to tidy, and asking the empty
+    // table how many rows it has would be the only thing that could fail here.
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    db.exec("DROP TABLE ticket_attachments;");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(tableExists(db, "blob_links")).toBe(true);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("keeps a ticket_attachments table that still holds rows", () => {
+    // 020's note says that table never had a caller and so has never held a
+    // row. If one is there anyway, this is not the database that note is about,
+    // and its rows outrank a tidy schema.
+    const dbPath = tempDbPath();
+    const db = buildLineageWithout020(dbPath);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+         VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO tickets (id, project_id, ticket_number, title, body, status, priority, uses_worktree, position, row_version, created_at, updated_at)
+         VALUES ('t1', 'p1', 1, 'Ticket', 'body', 'todo', 'medium', 1, 0, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO ticket_attachments (id, ticket_id, kind, label, file_name, url, created_at)
+         VALUES ('a1', 't1', 'file', 'notes.txt', 'notes.txt', NULL, 1)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "blob_links")).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) as n FROM ticket_attachments").get()).toEqual({ n: 1 });
+    db.close();
+  });
+
+  /**
+   * The PARTIAL profiles, one shape per test.
+   *
+   * The fork did not stop at all-or-nothing: a branch's own version 20 could
+   * land one of the two tables, land both without 020's indexes, or land both
+   * and never drop the legacy table. Each is a database somebody is running,
+   * each reaches this migration exactly once, and a reconciler that returned
+   * early on any of them would leave it diverged for good. Every case asserts
+   * the same two things — nothing a person owns was lost, and the schema now
+   * equals a fresh install's — because those are the two ways this can go wrong.
+   */
+  describe("partial profiles", () => {
+    /** A fresh install's schema, to converge against. */
+    function freshSchema(): Array<{ name: string; sql: string }> {
+      const freshPath = tempDbPath();
+      const fresh = openRawDb(freshPath);
+      migrate(fresh, freshPath);
+      const shape = schema(fresh);
+      fresh.close();
+      return shape;
+    }
+
+    it("lands `blob_links` under a lineage that has only `blobs`", () => {
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });
+      // The attachment bytes this profile already holds — the rows a reconciler
+      // that dropped and recreated `blobs` would take with it.
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"a".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      expect(tableExists(db, "blobs")).toBe(true);
+      expect(tableExists(db, "blob_links")).toBe(false);
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT original_name FROM blobs").all()).toEqual([
+        { original_name: "shot.png" },
+      ]);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 0 });
+      // Dropping the table took its indexes with it; convergence means they are
+      // back, not merely that the table name is.
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(schema(db)).toEqual(freshSchema());
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      db.close();
+    });
+
+    it("lands `blobs` under a lineage that has only `blob_links`", () => {
+      // The half of the fork where the CHILD survived. It is necessarily EMPTY
+      // and that is not an omission in this fixture: every `blob_links` row
+      // names a `blobs` hash, so under the enforcement the app opens with, an
+      // insert on a profile whose parent table is missing fails outright. What
+      // this shape can lose is therefore the rest of the profile, and what it
+      // owes is a usable pair afterwards — both asserted below.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blobs;" });
+      seedTicket(db);
+      expect(tableExists(db, "blobs")).toBe(false);
+      expect(tableExists(db, "blob_links")).toBe(true);
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT id FROM tickets").all()).toEqual([{ id: "t1" }]);
+      expect(schema(db)).toEqual(freshSchema());
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      // Usable, and with the reference live: the two halves were landed as one
+      // schema, not as two table names that happen to both exist.
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"b".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      db.prepare(
+        `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+           VALUES ('l1', '${"b".repeat(64)}', 't1', NULL, 'shot.png', 3)`,
+      ).run();
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 1 });
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+               VALUES ('l2', '${"e".repeat(64)}', 't1', NULL, 'gone.png', 4)`,
+          )
+          .run(),
+      ).toThrow(/FOREIGN KEY/);
+      db.close();
+    });
+
+    it("lands the indexes under a lineage that has both tables and none of them", () => {
+      // Tables are not the whole of 020, and this is the shape that says so:
+      // both names are present, so a two-table probe calls this profile healthy
+      // while every attachment read scans.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, {
+        surgery: BLOB_LINK_INDEXES.map((index) => `DROP INDEX ${index};`).join("\n"),
+      });
+      seedTicket(db);
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"c".repeat(64)}', 'image/png', 9, 'kept.png', 2)`,
+      ).run();
+      db.prepare(
+        `INSERT INTO blob_links (id, blob_hash, ticket_id, session_id, label, created_at)
+           VALUES ('l1', '${"c".repeat(64)}', 't1', NULL, 'kept.png', 3)`,
+      ).run();
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(false);
+
+      migrate(db, dbPath);
+
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+      expect(db.prepare("SELECT COUNT(*) as n FROM blob_links").get()).toEqual({ n: 1 });
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("lands one missing index without disturbing the two that are there", () => {
+      // Half an index set is the same class of divergence as none of it, and it
+      // is the one a fork that added an index later actually produces.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP INDEX idx_blob_links_blob;" });
+
+      migrate(db, dbPath);
+
+      for (const index of BLOB_LINK_INDEXES) expect(indexExists(db, index)).toBe(true);
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("tidies the legacy table a fork left beside both new ones", () => {
+      // The mid-fork state: a branch ran 020's CREATEs and not its DROP, so the
+      // profile carries all three tables. `ticket_attachments` never had a
+      // caller, so an empty one here is the same dead table 020 removed — and
+      // leaving it would be this profile's schema disagreeing with every other
+      // install's forever.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { keepLegacyTable: true });
+      expect(tableExists(db, "ticket_attachments")).toBe(true);
+      expect(tableExists(db, "blobs")).toBe(true);
+      expect(tableExists(db, "blob_links")).toBe(true);
+
+      migrate(db, dbPath);
+
+      expect(tableExists(db, "ticket_attachments")).toBe(false);
+      expect(schema(db)).toEqual(freshSchema());
+      db.close();
+    });
+
+    it("keeps a legacy table that holds rows even when both new tables are there", () => {
+      // The other side of that drop, on the partial shape: a row means this is
+      // not the database 020's note is about, and rows outrank a tidy schema
+      // whichever other tables happen to exist.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { keepLegacyTable: true });
+      seedTicket(db);
+      db.prepare(
+        `INSERT INTO ticket_attachments (id, ticket_id, kind, label, file_name, url, created_at)
+           VALUES ('a1', 't1', 'file', 'notes.txt', 'notes.txt', NULL, 1)`,
+      ).run();
+
+      migrate(db, dbPath);
+
+      expect(db.prepare("SELECT id FROM ticket_attachments").all()).toEqual([{ id: "a1" }]);
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      db.close();
+    });
+
+    it("is idempotent on every shape it has just converged", () => {
+      // A version is offered once, but a database restored from a backup can
+      // meet it again — and these branches are the ones a second pass would
+      // have to be safe on, since they are the ones that DID something.
+      const dbPath = tempDbPath();
+      const db = buildPartial020Lineage(dbPath, { surgery: "DROP TABLE blob_links;" });
+      db.prepare(
+        `INSERT INTO blobs (hash, mime, size_bytes, original_name, created_at)
+           VALUES ('${"d".repeat(64)}', 'image/png', 12, 'shot.png', 1)`,
+      ).run();
+      migrate(db, dbPath);
+      const converged = schema(db);
+
+      db.pragma("user_version = 34");
+      expect(() => migrate(db, dbPath)).not.toThrow();
+
+      expect(schema(db)).toEqual(converged);
+      expect(db.prepare("SELECT COUNT(*) as n FROM blobs").get()).toEqual({ n: 1 });
+      db.close();
+    });
+  });
+});
+
+describe("migration 036 — Automation Session mint provenance (VC-225)", () => {
+  it("backfills accepted Run plans and leaves rejected attempts unmarked", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 35)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 35");
+
+    const acceptedPlan = { sessionOperationId: "accepted-session" };
+    const rejectedPlan = { sessionOperationId: "rejected-session" };
+    const insertCommand = db.prepare(
+      "INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)",
+    );
+    insertCommand.run(
+      "accepted-run",
+      JSON.stringify({ kind: "automation.run", plan: acceptedPlan }),
+      1_000,
+    );
+    insertCommand.run(
+      "rejected-run",
+      JSON.stringify({ kind: "automation.run", plan: rejectedPlan }),
+      2_000,
+    );
+    const insertReceipt = db.prepare(
+      `INSERT INTO automation_command_receipts
+         (id, command_id, status, result, recorded_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    insertReceipt.run(
+      "accepted-receipt",
+      "accepted-run",
+      "accepted",
+      JSON.stringify({ kind: "automation.run.accepted", plan: acceptedPlan }),
+      1_000,
+    );
+    insertReceipt.run(
+      "rejected-receipt",
+      "rejected-run",
+      "rejected",
+      JSON.stringify({ kind: "automation.run.rejected", code: "RUN_IN_FLIGHT", error: "busy" }),
+      2_000,
+    );
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "automation_session_mint_intents")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT session_create_command_id, automation_command_id, recorded_at
+             FROM automation_session_mint_intents`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_create_command_id: "accepted-session:create",
+        automation_command_id: "accepted-run",
+        recorded_at: 1_000,
+      },
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_session_mint_intents SET recorded_at = 3").run(),
+    ).toThrow(/mint intents are immutable/);
+    expect(() => db.prepare("DELETE FROM automation_session_mint_intents").run()).toThrow(
+      /mint intents are immutable/,
+    );
+    db.close();
+  });
+});
+
+describe("migrate — 037, pending armed-column arrivals (VC-226)", () => {
+  it("creates one durable countdown row per Ticket with an exact arrival id", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_runs
+         (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+          status, origin, opened_at, start_at)
+       VALUES ('t1', 'arrival-1', 'p1', 'VC-1', 'a1', 'Review sweep',
+               'doing', 'armed', 1000, 4500)`,
+    ).run();
+
+    expect(
+      db
+        .prepare("SELECT ticket_id, id, automation_id, start_at FROM automation_pending_armed_runs")
+        .get(),
+    ).toEqual({ ticket_id: "t1", id: "arrival-1", automation_id: "a1", start_at: 4500 });
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO automation_pending_armed_runs
+           (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+            status, origin, opened_at, start_at)
+         VALUES ('t1', 'arrival-2', 'p1', 'VC-1', 'a1', 'Review sweep',
+                 'doing', 'armed', 2000, 5500)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+describe("migrate — 038, retained armed-Run attempts (VC-228)", () => {
+  it("stores the exact expiry command independently of later Ticket deletion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_run_attempts
+         (id, command_id, ticket_id, project_id, ticket_display_id, automation_id,
+          automation_name, status, origin, opened_at, start_at, error)
+       VALUES ('arrival-1', 'command-1', 't1', 'p1', 'VC-1', 'a1',
+               'Review sweep', 'doing', 'armed', 1000, 4500, 'Reply interrupted')`,
+    ).run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+
+    expect(
+      db
+        .prepare("SELECT id, command_id, ticket_id FROM automation_pending_armed_run_attempts")
+        .get(),
+    ).toEqual({ id: "arrival-1", command_id: "command-1", ticket_id: "t1" });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
 });

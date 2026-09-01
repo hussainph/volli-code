@@ -25,18 +25,25 @@
  *    any caller, coordination writes want an authenticated session actor, and
  *    a control-tier verb does not get a `cli` access mode AT ALL — agent
  *    control, credential custody, and anything that blocks are named tools in
- *    a Role bundle. The socket attributes its caller and cannot authenticate
- *    one, so a verb whose misuse cannot be tolerated from an arbitrary process
- *    running as the user does not go on it.
+ *    a Role bundle. Since VC-163 the socket AUTHENTICATES a session actor by
+ *    per-attachment token rather than merely attributing one — but that token
+ *    does not survive a hostile process running as the same user, so a verb
+ *    whose misuse cannot be tolerated from such a process still does not go on
+ *    it. Absence is the enforcement; the token only raises the floor.
  *
- * The table records TODAY'S surface, not VC-92's target. `session.start` and
- * `ticket.archive` are on the socket right now, so that is what they declare;
- * VC-162 and VC-163 move them, and `verb-registry.test.ts` names both deltas.
+ * The table records TODAY'S surface. VC-163 moved the last two rows off it:
+ * `session.start` is `tool`-only control tier, and `ticket.archive` is on no
+ * agent surface at all. `verb-registry.test.ts` pins both, and {@link verbTier}
+ * reads an empty access-mode list as no tier rather than as one.
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
+import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
+import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
+import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
 /**
  * Where a verb is projected. `cli` is the Agent CLI (the local agent socket),
@@ -56,11 +63,36 @@ export type VerbActor = "any" | "session" | "role";
 /**
  * Where the verb's one handler binding lives: `main` answers over the agent
  * socket (`apps/desktop/src/main/agent-commands.ts`), `cli` answers locally in
- * the `volli` process and never opens a socket. Declared and checked, never
- * read — dispatch is still a hand-written chain, and the parity test asserts
- * both directions against it.
+ * the `volli` process and never opens a socket.
  */
 export type VerbHandlerSite = "main" | "cli";
+
+/**
+ * The verb's one handler binding: WHERE it is answered, and WHICH handler
+ * answers it (VC-167).
+ *
+ * VC-161 recorded the site alone, and nothing read it — dispatch was a
+ * hand-written `if` chain, so the declaration was CHECKED against the chain by
+ * a source-text scan instead of driving it. The `id` is what closed that: main
+ * keys its dispatch table by these ids, so a declared verb with no handler is
+ * a compile error rather than a runtime `UNSUPPORTED_COMMAND`.
+ *
+ * Pure data, like every other field here — an id, never a function. The
+ * registry lives in `@volli/shared` and the handlers live in Electron main;
+ * a callable here would drag one process's implementation into a package the
+ * other imports.
+ *
+ * The id is the verb's own {@link VerbEntry.key}, and `verb-registry.test.ts`
+ * pins that. Naming it separately is what lets a surface move without the
+ * binding moving with it: when VC-162 flips `session.start` to a `tool` access
+ * mode, the tool surface resolves the SAME `session.start` binding rather than
+ * growing a second implementation of the verb.
+ */
+export interface VerbBinding {
+  readonly site: VerbHandlerSite;
+  /** The handler this verb resolves to — always the entry's own key. */
+  readonly id: string;
+}
 
 /** The heading a listed verb prints under in the CLI reference. */
 export type VerbGroup = "Read" | "Write" | "Session" | "App";
@@ -70,6 +102,25 @@ export type VerbGroup = "Read" | "Write" | "Session" | "App";
  * {@link verbTier}; never a field, never persisted.
  */
 export type VerbTier = "read" | "coordination" | "control";
+
+/** One durable write a voluntary verb intends. */
+export interface VerbDurableWrite {
+  readonly resource: string;
+  readonly operation: "create" | "update" | "append";
+  readonly summary: string;
+}
+
+/**
+ * Human-facing side-effect contract. Detailed help, previews, managed skill
+ * docs, and docs-site projections all read these exact fields.
+ */
+export interface VerbEffects {
+  readonly durableWrites: readonly VerbDurableWrite[];
+  readonly humanVisible: readonly string[];
+  readonly nonEffects: readonly string[];
+  /** Limits a mixed read/write verb's effects to the named option (`doctor --fix`). */
+  readonly when?: string;
+}
 
 /** Help/schema metadata every declared option carries, whatever its kind. */
 export interface VerbOptionCommon {
@@ -90,7 +141,7 @@ export interface VerbOptionCommon {
 /**
  * One option, as data. `kind` is the value shape a caller supplies — a bare
  * flag, one value, a repeatable value, or a fixed run of words — which is what
- * both a usage line and a tool schema need to know.
+ * a usage line needs to know.
  */
 export type VerbOption =
   | (VerbOptionCommon & { readonly kind: "flag" })
@@ -100,13 +151,85 @@ export type VerbOption =
       readonly placeholder: string;
     });
 
+/**
+ * What a provider will accept as a tool name (VC-162).
+ *
+ * Both providers Volli speaks to publish the same bound, and neither is
+ * negotiable: OpenAI's generated `FunctionDefinition` says a name "Must be
+ * a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of
+ * 64", and Anthropic rejects the whole request with `tools.N.custom.name:
+ * String should match pattern '^[a-zA-Z0-9_-]{1,64}$'`.
+ *
+ * A dot is therefore legal in a {@link VerbEntry.key} and illegal on the wire,
+ * which is why {@link VerbToolProjection.name} exists at all.
+ */
+export const VERB_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * One field of a tool's input, as neutral data.
+ *
+ * Deliberately NOT {@link VerbOption}. That table is argv: `-m`, `--model`,
+ * placeholders like `<provider/model>`, hidden aliases, and mutual-exclusion
+ * groups the parser resolves. None of it means anything to a model, and
+ * several parts of it would actively mislead one — a model shown `-m` will
+ * write `-m`. What a tool call needs is a named field with a type, so the two
+ * are separate projections of one verb rather than one table doing both jobs.
+ *
+ * The type vocabulary is closed and small on purpose. `packages/agent-runtime`
+ * compiles these into the runtime's schema types; keeping the vocabulary
+ * closed is what makes that compilation total rather than best-effort, and
+ * keeps `@volli/shared` free of any schema library.
+ */
+export type VerbToolField = {
+  /** The field name the model supplies. Never an argv token. */
+  readonly name: string;
+  /** What this field is, in the only place the model will read it. */
+  readonly description: string;
+  /** Absent means optional; the tool schema marks it so. */
+  readonly required?: boolean;
+} & (
+  | { readonly type: "string" }
+  | { readonly type: "number" }
+  | { readonly type: "enum"; readonly values: readonly string[] }
+  | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
+);
+
+/**
+ * How one verb is projected onto the Agent Tool Surface (VC-162).
+ *
+ * Present exactly when the entry carries a `tool` access mode, which
+ * `verb-registry.test.ts` pins in both directions: a `tool` mode with no
+ * projection is a verb the runtime could not build, and a projection with no
+ * `tool` mode is metadata nothing reads.
+ */
+export interface VerbToolProjection {
+  /**
+   * The callable name on the provider wire — the verb's dot-key with the dot
+   * spelled a provider will accept (`session.start` → `session_start`).
+   *
+   * This is a rendering of the identity, never a second identity. The dot-key
+   * remains what authority, the durable `tool-surface` record, Role bundles
+   * and grants all spell; the runtime adapter translates at the boundary, the
+   * same way product `execute` already reaches Pi as `bash`.
+   */
+  readonly name: string;
+  /**
+   * What the model is told this tool does. Separate from
+   * {@link VerbEntry.summary}, which is written for a person reading `volli
+   * help` and says nothing about when NOT to reach for it.
+   */
+  readonly description: string;
+  /** The tool's input, semantically. Empty means a tool that takes nothing. */
+  readonly input: readonly VerbToolField[];
+}
+
 /** One agent-facing verb. Pure data; see the module comment for what is not here. */
 export interface VerbEntry {
   /** The dot-name — this verb's identity on every surface. */
   readonly key: string;
   readonly accessModes: readonly VerbAccessMode[];
   readonly actor: VerbActor;
-  readonly handler: VerbHandlerSite;
+  readonly handler: VerbBinding;
   /** Whether `volli help` prints the verb. Involuntary verbs stay unlisted. */
   readonly listed: boolean;
   /** Its position in the CLI reference; ignored when the verb is unlisted. */
@@ -118,8 +241,27 @@ export interface VerbEntry {
   readonly example?: string;
   /** Short lines for semantics the option table cannot express. */
   readonly notes?: readonly string[];
+  /** Structured writes and person-visible effects; the canonical side-effect contract. */
+  readonly effects?: VerbEffects;
+  /** How this verb appears on the Agent Tool Surface; required by a `tool` access mode. */
+  readonly tool?: VerbToolProjection;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
   readonly positionalId?: "required" | "optional";
+  /**
+   * What that leading `<id>` NAMES, when it names something a per-project
+   * authority policy has to be resolved from (VC-163).
+   *
+   * `ticket` means the positional is a Ticket display id, and its prefix names
+   * the project the verb's write LANDS IN — which is not necessarily the
+   * project the caller is standing in. Admission needs both, because a policy
+   * is a statement about a project's own board: see `agent-dispatch/admission.ts`.
+   *
+   * Declared rather than inferred from the key or the argument's shape. A verb
+   * added later states what its positional is, and is judged on that; guessing
+   * from `args.id` would silently mis-resolve the day a non-Ticket verb takes
+   * an id that happens to parse as `PREFIX-123`.
+   */
+  readonly positionalSubject?: "ticket";
   /** Rendered after `<id>` for positionals the option table cannot express. */
   readonly extraUsage?: string;
   readonly options: readonly VerbOption[];
@@ -154,7 +296,7 @@ export const VERB_REGISTRY = [
     key: "identify",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "identify" },
     listed: true,
     referenceOrder: 0,
     group: "Read",
@@ -178,7 +320,7 @@ export const VERB_REGISTRY = [
     key: "board",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "board" },
     listed: true,
     referenceOrder: 1,
     group: "Read",
@@ -190,7 +332,7 @@ export const VERB_REGISTRY = [
     key: "ticket.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.list" },
     listed: true,
     referenceOrder: 2,
     group: "Read",
@@ -219,25 +361,35 @@ export const VERB_REGISTRY = [
     key: "ticket.show",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.show" },
     listed: true,
     referenceOrder: 3,
     group: "Read",
     summary: "Show one ticket with recent events and comments.",
-    example: "volli ticket show VC-12 --comments 5",
+    example: "volli ticket show VC-12 --comments-only",
+    notes: [
+      "Latest signal per kind is always printed: signals carry state, comments carry prose.",
+      "Either count takes 0 and performs no history query; zeroing both returns a compact ticket header for signal polling.",
+    ],
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--events",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent events to include.",
+        help: "How many recent events to include; 0 for none.",
       },
       {
         name: "--comments",
         kind: "value",
         placeholder: "<n>",
-        help: "How many recent comments to include.",
+        help: "How many recent comments to include; 0 for none.",
+      },
+      {
+        name: "--comments-only",
+        kind: "flag",
+        help: "Show comments/signals with a compact ticket header; read no event history.",
       },
     ],
   },
@@ -245,13 +397,14 @@ export const VERB_REGISTRY = [
     key: "ticket.events",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.events" },
     listed: true,
     referenceOrder: 4,
     group: "Read",
     summary: "Print a ticket's event log.",
     example: "volli ticket events VC-12 --limit 20",
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of events." },
     ],
@@ -260,9 +413,9 @@ export const VERB_REGISTRY = [
     key: "ticket.create",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.create" },
     listed: true,
-    referenceOrder: 11,
+    referenceOrder: 13,
     group: "Write",
     summary: "Create a ticket (defaults to Backlog).",
     example: 'volli ticket create --title "Fix auth" --label bug',
@@ -270,6 +423,20 @@ export const VERB_REGISTRY = [
       "Defaults to Backlog unless --status is set.",
       "--body and --body-file are mutually exclusive.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "create",
+          summary: "Create one Ticket and its attributed Ticket creation event.",
+        },
+      ],
+      humanVisible: ["The new Ticket appears on the board in the selected column."],
+      nonEffects: [
+        "Creating in Doing does not start a Session or submit a kickoff turn.",
+        "Worktree intent is recorded, but this command does not materialize a checkout.",
+      ],
+    },
     options: [
       {
         name: "--title",
@@ -310,20 +477,34 @@ export const VERB_REGISTRY = [
       },
       { name: "--base", kind: "value", placeholder: "<branch>", help: "Base branch." },
       { name: "--no-worktree", kind: "flag", help: "Skip worktree isolation." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
     key: "ticket.update",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.update" },
     listed: true,
-    referenceOrder: 12,
+    referenceOrder: 14,
     group: "Write",
     summary: "Update a ticket's fields or body.",
     example: 'volli ticket update VC-12 --edit "old" "new"',
     notes: ["At most one body mutation per call.", "--edit needs exactly one match for <old>."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the requested Ticket fields and append attributed Ticket events for changes.",
+        },
+      ],
+      humanVisible: ["Updated fields appear on the Ticket card and in its Ticket workspace."],
+      nonEffects: ["The Ticket does not move, no Session starts, and no worktree is materialized."],
+    },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       { name: "--title", kind: "value", placeholder: "<text>", help: "Replace the title." },
       {
@@ -375,20 +556,36 @@ export const VERB_REGISTRY = [
         help: "Set the harness.",
       },
       { name: "--base", kind: "value", placeholder: "<branch>", help: "Set the base branch." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
     key: "ticket.move",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.move" },
     listed: true,
-    referenceOrder: 13,
+    referenceOrder: 15,
     group: "Write",
     summary: "Move a ticket to another column.",
     example: "volli ticket move VC-12 --to needs-review",
     notes: ["Moving to the current column is a no-op."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary:
+            "Update the Ticket's board status and order and append one status-change Ticket event.",
+        },
+      ],
+      humanVisible: ["The Ticket moves to the selected board column."],
+      nonEffects: [
+        "The move does not start a Session, submit a kickoff turn, or create a worktree.",
+      ],
+    },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--to",
@@ -398,20 +595,33 @@ export const VERB_REGISTRY = [
         required: true,
         help: "Destination column.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
     key: "ticket.comment",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.comment" },
     listed: true,
-    referenceOrder: 14,
+    referenceOrder: 16,
     group: "Write",
     summary: "Add a comment to a ticket.",
     example: 'volli ticket comment VC-12 -m "Ready for review"',
     notes: ["Exactly one of -m or --file."],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary: "Create one attributed Ticket comment and its Ticket activity event.",
+        },
+      ],
+      humanVisible: ["The comment appears in the Ticket activity feed."],
+      nonEffects: ["The Ticket does not move and no Session starts."],
+    },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "-m",
@@ -435,43 +645,144 @@ export const VERB_REGISTRY = [
         group: "message",
         help: "Read the comment from a file.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
-    // VC-92 ruled this one off the agent surface entirely — an app-only
-    // curation act, no bundle and no CLI access mode. It is still on the socket
-    // here because this table records today's surface; VC-163 empties its
-    // access modes, at which point it holds no tier at all.
-    key: "ticket.archive",
+    // The typed verdict channel (VC-85), and the pattern-setting coordination
+    // verb. It replaces the `VERDICT: FIRST-LINE` comment convention the
+    // rc-0.1.0 orchestration pass invented: a convention any reader had to
+    // parse by eye, any writer could spell wrong, and no query could reach.
+    //
+    // Coordination tier, and VC-92 pinned WHY it is the first verb that must
+    // require an authenticated session actor rather than merely attributing
+    // one: an unforgeable verdict channel is the entire point, and a signal
+    // any same-uid process can mint is the convention again with better
+    // syntax. Today the socket attributes; VC-163 is where it authenticates.
+    //
+    // Append-only makes this coordination write the one that most needs a
+    // rehearsal: unlike a move or an update, a mistaken verdict cannot be
+    // edited away. Its preview follows the shared mutation-plan contract.
+    key: "ticket.signal",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "ticket.signal" },
     listed: true,
-    referenceOrder: 15,
+    referenceOrder: 17,
+    group: "Write",
+    summary: "Record a typed verdict on a ticket: which stage, and how it went.",
+    example: 'volli ticket signal VC-12 --kind review --verdict pass --detail "Two nits, fixed"',
+    notes: [
+      "Acts as this session; needs a Volli session, because a verdict is only worth what its signer is.",
+      "Signals carry state and comments carry prose — post both when a verdict needs an argument.",
+      "The board does not move. Use ticket move for that, deliberately.",
+      "Append-only: a later signal of the same kind supersedes an earlier one by being newer.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-signal",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket signal and its signaled Ticket event, in one transaction.",
+        },
+      ],
+      humanVisible: [
+        "The verdict appears in the Ticket activity feed and in ticket show's latest-signal lines.",
+      ],
+      nonEffects: [
+        "The Ticket does not move: signals are orthogonal to the board by design.",
+        "No Session starts, no notification fires, and no earlier signal is edited or erased.",
+      ],
+    },
+    positionalId: "required",
+    positionalSubject: "ticket",
+    options: [
+      {
+        name: "--kind",
+        kind: "value",
+        placeholder: "<kind>",
+        values: `valid: ${TICKET_SIGNAL_KINDS.join(", ")}`,
+        required: true,
+        help: "Which stage this verdict is about.",
+      },
+      {
+        name: "--verdict",
+        kind: "value",
+        placeholder: "<verdict>",
+        values: `valid: ${TICKET_SIGNAL_VERDICTS.join(", ")}`,
+        required: true,
+        help: "How that stage went.",
+      },
+      {
+        name: "--detail",
+        kind: "value",
+        placeholder: "<text>",
+        help: "One line of prose for a reader; the verdict is what machines read.",
+      },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
+  },
+  {
+    // OFF every agent surface (VC-92 §3, done in VC-163). Archiving is app-only
+    // curation: a person deciding a Ticket has stopped being live work. No
+    // bundle carries it, no CLI access mode projects it, and `verbTier` reads
+    // the empty list as no governance class at all rather than as a tier.
+    //
+    // The entry stays HERE, whole, rather than being deleted — that is what
+    // makes the door teach instead of lying. `declaredVerb` finds it and
+    // answers WRONG_DOOR ("exists in the app only; no agent surface executes
+    // it"); deleting the entry would produce UNSUPPORTED_COMMAND, which reads
+    // as "no such verb" and sends an agent looking for a way to do it by hand.
+    // `listed: true` is load-bearing for exactly that reason.
+    //
+    // Reversible the day a workflow needs it: put `"cli"` back. The handler,
+    // the options and the effects contract are all still here and still bound.
+    key: "ticket.archive",
+    accessModes: [],
+    actor: "session",
+    handler: { site: "main", id: "ticket.archive" },
+    listed: true,
+    referenceOrder: 18,
     group: "Write",
     summary: "Archive a ticket (its worktree is preserved).",
     example: "volli ticket archive VC-12",
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket",
+          operation: "update",
+          summary: "Mark the Ticket archived and append its attributed archive event.",
+        },
+      ],
+      humanVisible: [
+        "The Ticket leaves the active board and remains available as archived history.",
+      ],
+      nonEffects: ["The Ticket worktree is preserved and active Sessions are not ended."],
+    },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [],
   },
   {
     key: "ticket.brief",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "ticket.brief" },
     listed: true,
     referenceOrder: 5,
     group: "Read",
     summary: "Print the agent kickoff prompt for a ticket.",
     example: "volli ticket brief VC-12",
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [],
   },
   {
     key: "worktree.status",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "worktree.status" },
     listed: true,
     referenceOrder: 6,
     group: "Read",
@@ -479,13 +790,14 @@ export const VERB_REGISTRY = [
     example: "volli worktree status VC-12",
     notes: ["Read-only; defaults to the ticket owning the current directory."],
     positionalId: "optional",
+    positionalSubject: "ticket",
     options: [],
   },
   {
     key: "worktree.diff",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "worktree.diff" },
     listed: true,
     referenceOrder: 7,
     group: "Read",
@@ -497,6 +809,7 @@ export const VERB_REGISTRY = [
       "--working-tree switches to the uncommitted working-tree view.",
     ],
     positionalId: "optional",
+    positionalSubject: "ticket",
     options: [
       {
         name: "--working-tree",
@@ -506,12 +819,107 @@ export const VERB_REGISTRY = [
     ],
   },
   {
+    // Worktree staleness as a verb (VC-185, split from VC-89 slice 2), so it
+    // stops being per-kickoff prose every session interprets differently.
+    //
+    // COORDINATION TIER, by VC-92's audit principle: no verb needs a higher
+    // tier than the ambient authority its effect already lies within. Sync
+    // mutates only a worktree the `execute` coding tool already reaches with a
+    // two-line git incantation, so control-tier ceremony would buy nothing and
+    // cost composability. An authenticated session actor, on the Agent CLI.
+    //
+    // The one hard constraint, pinned on VC-89 and repeated here because it is
+    // the reason this verb exists: IT MUST NOT BLOCK. Not on gates, not on CI,
+    // not on a remote. A verb that waits is a watch/wake tool (VC-85) and
+    // belongs on the Agent Tool Surface where a runtime can suspend the turn —
+    // the `--watch` wedge is the exact failure this verb was invented to
+    // delete. Its own async Git runner enforces a hard child-process deadline
+    // mechanically; the socket cannot cancel a child once it has accepted a
+    // request. It merges, reports conflicts, and returns.
+    //
+    // VC-178's voluntary-write rule applies here too. Its preview resolves the
+    // base ref and checkout identity, then stops before either merge mode can
+    // mutate the worktree.
+    key: "worktree.sync",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: { site: "main", id: "worktree.sync" },
+    listed: true,
+    referenceOrder: 19,
+    group: "Write",
+    summary: "Merge a ticket's base branch into its worktree branch and report what happened.",
+    example: "volli worktree sync VC-12",
+    notes: [
+      "Defaults to the ticket owning the current directory.",
+      "Merges the base ref this checkout already has (origin/<base> when present, else the local branch) and contacts no remote.",
+      "It never waits: no gate, no CI, no watch. Local Git runs asynchronously behind a hard deadline, then it reports and returns.",
+      "A conflict is an outcome, not an error: status is conflicted, every conflicted path is listed, and the worktree is left conflicted for this session to resolve.",
+      "--dry-run resolves the base ref and branch-identity check without merging or aborting.",
+      "--abort undoes a merge left in flight. Nothing else here cleans up after a conflict.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "worktree",
+          operation: "update",
+          summary:
+            "Merge the base ref into the ticket worktree's checked-out branch, leaving a merge commit or an unresolved merge in that worktree.",
+        },
+      ],
+      humanVisible: [
+        "The ticket's worktree status and Change Set show the merged base, or the conflicted merge awaiting resolution.",
+      ],
+      nonEffects: [
+        "No Ticket moves, no Session starts, and no signal is recorded.",
+        "Nothing is fetched, pushed, or pulled: no remote is contacted and no credential is used.",
+        "No gate, check, or CI run is started or waited on.",
+      ],
+    },
+    positionalId: "optional",
+    positionalSubject: "ticket",
+    options: [
+      {
+        name: "--abort",
+        kind: "flag",
+        help: "Abort a merge left in flight by an earlier conflicted sync.",
+      },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
+  },
+  {
+    // The file-collision radar (VC-185, split from VC-89 slice 3): Volli holds
+    // every worktree's diff, so the overlap between them is a projection it can
+    // already answer — "VC-65 and VC-68 both touch chat-plane.tsx" — instead of
+    // a fact an orchestrator carries in its head until merge time.
+    //
+    // READ TIER, any caller, and VC-92's amendment says why that is the whole
+    // design: this is the verb that most rewards being a CLI string in a bash
+    // pipeline. Zero context cost, composable, and nothing it reports is worth
+    // paying a named tool's prompt rent for.
+    key: "conflicts",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "conflicts" },
+    listed: true,
+    referenceOrder: 8,
+    group: "Read",
+    summary: "Report which active ticket worktrees touch the same files.",
+    example: "volli conflicts --json",
+    notes: [
+      "Compares each active worktree's diff against its own base; no worktree is touched and no remote is contacted.",
+      "Shared paths, not predicted merge failures: two tickets editing opposite ends of one file still merge cleanly.",
+      "No overlap is the healthy answer and prints as one.",
+      "A worktree whose diff could not be read is named as skipped rather than dropped.",
+    ],
+    options: [{ name: "--project", kind: "value", placeholder: "<p>", help: "Target project." }],
+  },
+  {
     key: "project.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "project.list" },
     listed: true,
-    referenceOrder: 8,
+    referenceOrder: 9,
     group: "Read",
     summary: "List all registered projects.",
     example: "volli project list",
@@ -521,9 +929,9 @@ export const VERB_REGISTRY = [
     key: "label.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "label.list" },
     listed: true,
-    referenceOrder: 9,
+    referenceOrder: 10,
     group: "Read",
     summary: "List a project's labels.",
     example: "volli label list --project VC",
@@ -531,25 +939,84 @@ export const VERB_REGISTRY = [
   },
   {
     // Model discovery (VC-78): the same Model Access snapshot the app reads,
-    // filtered for a context window — never a parallel provider probe.
+    // narrowed to models the runtime can use — never a parallel provider probe
+    // or a signed-out catalog in an agent's context.
     key: "model.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "model.list" },
     listed: true,
-    referenceOrder: 10,
+    referenceOrder: 11,
     group: "Read",
-    summary: "List signed-in providers, model ids, and reasoning levels.",
+    summary: "List available providers, model ids, and reasoning levels.",
     example: "volli model list",
     notes: [
       "Copy a printed <provider/model> verbatim into session start --model.",
-      "Shows available models only; --all includes signed-out providers.",
+      "Shows only models this profile can run.",
+    ],
+    options: [],
+  },
+  {
+    // What a pass cost, and where it went (VC-87).
+    //
+    // READ TIER, and VC-92's staging is explicit about why that is the whole
+    // design: an orchestrator sampling spend must not pay context rent for the
+    // privilege. So it is a CLI verb any caller may run rather than a named
+    // tool sitting in every Role bundle's prompt — composable with the shell
+    // the agent already has, and costing no model context until an agent
+    // chooses to run it.
+    //
+    // Deliberately NOT a place to set a budget. Reading a cap is a read; a cap
+    // the capped Session can write is decoration, so setting one is VC-44
+    // app-owned policy and tripping one rides `ticket.signal` (VC-85).
+    //
+    // And deliberately not an account meter. What an API organization has
+    // spent or has left is a different fact with a different credential and a
+    // different freshness, and folding it into this total would let a
+    // catalogue estimate be read as a bill.
+    key: "cost",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "cost" },
+    listed: true,
+    referenceOrder: 12,
+    group: "Read",
+    summary: "Report what Sessions consumed: tokens, cost, and cache class.",
+    example: "volli cost --ticket VC-12 --group-by session",
+    notes: [
+      "Volli's own measurement of its Sessions, not a provider account balance or an invoice.",
+      "~ marks a catalogue estimate, + marks a total only partly priced, and — means nothing could be priced.",
+      "Token classes do not overlap: cache reads bill near 0.1x and cache writes near 1.25-2x, so a falling cached share is what a rising bill starts as.",
+      "Cost is recorded per operation, never per token class — no split of the money by class is derivable.",
+      "--since takes an RFC 3339 instant or a look-back like 7d, 24h or 90m.",
+      "coverage says partial when the window reaches back past the point this profile began metering.",
     ],
     options: [
+      { name: "--ticket", kind: "value", placeholder: "<id>", help: "Only this ticket's spend." },
       {
-        name: "--all",
+        name: "--session",
+        kind: "value",
+        placeholder: "<handle>",
+        help: "Only this session's spend, by short id.",
+      },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
+      {
+        name: "--all-projects",
         kind: "flag",
-        help: "Include signed-out providers and unavailable models.",
+        help: "Every project this profile holds, not just one.",
+      },
+      {
+        name: "--since",
+        kind: "value",
+        placeholder: "<when>",
+        help: "Only operations at or after this instant or look-back.",
+      },
+      {
+        name: "--group-by",
+        kind: "value",
+        placeholder: "<dimension>",
+        values: `valid: ${SESSION_USAGE_GROUPINGS.join(", ")}`,
+        help: "Break the total down along one dimension.",
       },
     ],
   },
@@ -557,13 +1024,16 @@ export const VERB_REGISTRY = [
     key: "session.list",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 17,
+    referenceOrder: 23,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
-    notes: ["Prints each session's title and short id; session peek takes either type."],
+    notes: [
+      "Prints each session's title and short id; session peek takes either type.",
+      "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+    ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
       { name: "--ticket", kind: "value", placeholder: "<id>", help: "Filter by ticket." },
@@ -575,9 +1045,9 @@ export const VERB_REGISTRY = [
     key: "session.peek",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 18,
+    referenceOrder: 24,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -604,24 +1074,124 @@ export const VERB_REGISTRY = [
     // deliberately no headless path — app not running is APP_UNREACHABLE, and
     // `volli app launch` is the sanctioned recovery.
     //
-    // VC-92 ruled it control tier — a named tool in the `project` bundle, off
-    // the socket for every caller. This entry records where it is TODAY, so its
-    // derived tier is coordination until VC-162 flips the access mode.
+    // CONTROL TIER, and now actually so (VC-92 §3, completed in VC-163).
+    //
+    // VC-162 added the `tool` mode and `project` bundle membership beside the
+    // `cli` one, which left the verb dual-surface — and `verbTier` read that
+    // honestly as coordination, because a tier is the WEAKEST door a verb is
+    // reachable through. Removing `cli` and flipping the actor to `role` is
+    // what shuts the socket door, and only now is the control claim true.
+    //
+    // Why it had to leave the socket rather than be gated on it: a socket call
+    // can be attributed but never authenticated, so "only a Project Session may
+    // start Sessions" would have rested on an environment variable any process
+    // running as the user can set. VC-163's per-attachment token narrows that
+    // to injected strings and cross-session confusion; it does not close it
+    // against a hostile same-uid process, and starting agent work is the one
+    // verb whose misuse cannot tolerate that residue. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Both doors still resolve ONE handler id. The agent path is the `project`
+    // bundle's `session_start` tool; the human path is the app.
     key: "session.start",
-    accessModes: ["cli"],
-    actor: "session",
-    handler: "main",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 16,
+    referenceOrder: 20,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
+    // Argv-free since VC-163, because this verb has no argv any more. Notes are
+    // printed on every door (see `commandDetail`), so a note naming `-m` would
+    // teach a flag the shell will refuse — the same lie the suppressed usage
+    // line was suppressed for. What each note says is true of the tool call and
+    // of the app alike.
     notes: [
       "Runs in the app: attended-only, never headless; the board does not move.",
-      "Submits a kickoff turn; -m replaces the default kickoff text and names the session.",
-      "--title sets a permanent title; --model/--reasoning override the app default.",
+      "Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.",
+      "An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session",
+          operation: "create",
+          summary:
+            "Create one durable Ticket Session, freeze its start inputs, and submit its kickoff turn after a ready attachment.",
+        },
+      ],
+      humanVisible: [
+        "The app raises an actionable in-app toast with Open session for an agent-originated start.",
+      ],
+      nonEffects: [
+        "The Ticket does not move.",
+        "The app does not steal focus or navigate until the person uses Open session.",
+      ],
+    },
+    tool: {
+      name: "session_start",
+      // Written for the model, and mostly about restraint: a tool that starts
+      // another agent is a tool that will be used to start another agent
+      // unless the description says when not to. The last line is the one a
+      // caller cannot learn from the schema — this door binds the caller's
+      // identity itself, so there is no project or actor field to supply and
+      // nothing to be gained by describing oneself.
+      description: [
+        "Start an agent chat Session on one Ticket and return as soon as it opens.",
+        "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start at most three Sessions in total; the Sessions it starts cannot start any of their own.",
+        "It does not move the Ticket on the board, and it does not wait for the work to finish.",
+        "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "ticket",
+          type: "string",
+          required: true,
+          description: "The display id of the Ticket to work, for example VC-12.",
+        },
+        {
+          name: "message",
+          type: "string",
+          description:
+            "The kickoff instruction the new Session opens with. Omit to send Volli's default kickoff.",
+        },
+        {
+          name: "title",
+          type: "string",
+          description:
+            "A permanent title for the Session. Omit to let Volli name it from the kickoff.",
+        },
+        {
+          name: "model",
+          type: "object",
+          description: "Run the Session on a specific model instead of the configured default.",
+          fields: [
+            {
+              name: "providerId",
+              type: "string",
+              required: true,
+              description: "Provider id, as `model list` prints it.",
+            },
+            {
+              name: "modelId",
+              type: "string",
+              required: true,
+              description: "Model id, as `model list` prints it.",
+            },
+          ],
+        },
+        {
+          name: "reasoning",
+          type: "enum",
+          values: REASONING_LEVELS,
+          description: "Reasoning level override; the chosen model must support it.",
+        },
+      ],
+    },
     positionalId: "required",
+    positionalSubject: "ticket",
     options: [
       {
         name: "-m",
@@ -658,9 +1228,9 @@ export const VERB_REGISTRY = [
     key: "session.done",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 19,
+    referenceOrder: 25,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -668,17 +1238,34 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a completed done signal command and receipt to the current Session ledger.",
+        },
+      ],
+      humanVisible: [
+        "The done signal and optional reason appear in the Session's durable history.",
+      ],
+      nonEffects: [
+        "No Ticket moves, the Session identity remains openable, and its worktree is not removed.",
+      ],
+    },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
     key: "session.blocked",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 26,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -686,17 +1273,30 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Raises attention on this session; --reason is the text a person sees.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a completed blocked signal command and receipt to the current Session ledger.",
+        },
+      ],
+      humanVisible: ["The Session raises attention in the app and shows the optional reason."],
+      nonEffects: ["No Ticket moves, and the Session is not archived or deleted."],
+    },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
     key: "session.link",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 27,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -704,8 +1304,21 @@ export const VERB_REGISTRY = [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Seeds resume-on-re-entry; usually run from the harness's session-start hook.",
     ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-attachment",
+          operation: "update",
+          summary: "Record the harness-native resume identity on the current terminal attachment.",
+        },
+      ],
+      humanVisible: ["Reopening or resuming the Session uses the recorded harness conversation."],
+      nonEffects: ["No model turn starts, no Ticket moves, and no new Session is created."],
+    },
     positionalId: "required",
-    options: [],
+    options: [
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
+    ],
   },
   {
     // The other involuntary one: a harness's own PATH-shim wrapper announcing
@@ -718,7 +1331,7 @@ export const VERB_REGISTRY = [
     key: "session.harness",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "session.harness" },
     listed: false,
     group: "Session",
     summary: "Record which harness is now running in the current Volli session.",
@@ -741,12 +1354,21 @@ export const VERB_REGISTRY = [
     key: "notify",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 28,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "Electron raises a native macOS notification with the supplied title and body.",
+      ],
+      nonEffects: [
+        "It is not an in-app Sonner toast and creates no Ticket row, Ticket event, or Session event.",
+      ],
+    },
     options: [
       {
         name: "-m",
@@ -765,6 +1387,7 @@ export const VERB_REGISTRY = [
         help: "Alias for -m.",
       },
       { name: "--title", kind: "value", placeholder: "<text>", help: "Notification title." },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
   {
@@ -778,7 +1401,7 @@ export const VERB_REGISTRY = [
     key: "hook",
     accessModes: ["cli"],
     actor: "session",
-    handler: "main",
+    handler: { site: "main", id: "hook" },
     listed: false,
     group: "Session",
     summary: "Report a harness hook event for the current session.",
@@ -790,9 +1413,9 @@ export const VERB_REGISTRY = [
     key: "doctor",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 31,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -800,13 +1423,30 @@ export const VERB_REGISTRY = [
       "Reports outcomes, not configuration: whether typing a harness's name here really reaches Volli's wrapper.",
       "Run it inside a Volli terminal — several checks describe the shell it runs in.",
       "--fix regenerates the wrappers, harness configs and shell integration, then re-runs both Session PATH adoption passes. It names the outcome and added directories for new Sessions; a Session already running keeps its startup environment.",
+      "--dry-run is valid only with --fix and previews the repair without inspecting or touching managed files.",
     ],
+    effects: {
+      when: "--fix",
+      durableWrites: [
+        {
+          resource: "harness-integration",
+          operation: "update",
+          summary:
+            "Regenerate Volli-managed CLI links, wrappers, harness configuration, and shell integration, then refresh Session PATH adoption for future Sessions.",
+        },
+      ],
+      humanVisible: ["The CLI prints the repair result and a fresh integration check."],
+      nonEffects: [
+        "The running Session keeps its startup environment; no Ticket, Session, model turn, or notification is created.",
+      ],
+    },
     options: [
       {
         name: "--fix",
         kind: "flag",
         help: "Regenerate, re-run Session PATH adoption, then re-check.",
       },
+      { name: "--dry-run", kind: "flag", help: "Validate and preview --fix without side effects." },
     ],
   },
   {
@@ -818,9 +1458,9 @@ export const VERB_REGISTRY = [
     key: "prompt.baseline",
     accessModes: ["cli"],
     actor: "any",
-    handler: "main",
+    handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 30,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -848,18 +1488,25 @@ export const VERB_REGISTRY = [
   // The two local verbs. They are on the Agent CLI like every verb above, but
   // `volli` answers them in its own process — so they are absent from
   // AGENT_COMMANDS, which is the SOCKET projection, not the CLI surface. That
-  // difference is exactly what `handler` records.
+  // difference is exactly what `handler.site` records, and it is why main's
+  // dispatch table cannot hold a binding for either: neither reaches the
+  // socket, so neither is in AgentCommandBindingId to be bound.
   {
     key: "app.launch",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 29,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
     notes: ["Retry the failed command once the app is up."],
+    effects: {
+      durableWrites: [],
+      humanVisible: ["The Volli desktop app opens or remains running."],
+      nonEffects: ["No Ticket or Session is created, moved, or signalled."],
+    },
     options: [
       {
         name: "--timeout",
@@ -873,14 +1520,309 @@ export const VERB_REGISTRY = [
     key: "help",
     accessModes: ["cli"],
     actor: "any",
-    handler: "cli",
+    handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 32,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
-    notes: ["Topics: exit-codes, addressing, json, orchestration."],
+    notes: [`Topics: ${HELP_TOPIC_NAMES.join(", ")}.`],
     extraUsage: "[<command> | <topic>]",
+    options: [],
+  },
+  {
+    // The watch/wake tool (VC-85), appended so no frozen surface shifts. The
+    // first tool-only entry: no cli access mode, because a CLI verb must never
+    // wait — a blocking socket request is the `gh pr checks --watch` wedge that
+    // killed two merge sessions, and the socket's own 10-second request timeout
+    // enforces the same rule mechanically. Blocking belongs where the runtime
+    // can suspend the turn and wake it, which is the Agent Tool Surface.
+    key: "ticket.await",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "ticket.await" },
+    listed: false,
+    group: "Session",
+    summary: "Block until a watched ticket signals, is commented on, or moves.",
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+      ],
+      nonEffects: [
+        "No ticket changes: nothing is written, nothing moves, and no other Session is contacted.",
+        "Waiting costs no model turns; the Session is suspended until it wakes.",
+      ],
+    },
+    tool: {
+      name: "ticket_await",
+      // Written for the model, and mostly about when to stop doing something
+      // else: an orchestrator that cannot wait polls, and a poll is a full
+      // turn re-sending the whole conversation. The last two lines carry what
+      // the schema cannot: that the alternative patterns are the failure modes
+      // this tool exists to end, and that project policy — not the tool —
+      // decides what may be awaited.
+      description: [
+        "Wait until one of the named tickets receives a verdict signal, a new comment, or a board move, then wake with that event.",
+        "Use it after delegating work: it replaces polling in a loop and sleeping in bash, both of which waste turns or wedge the session.",
+        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
+        "What may be awaited is project policy; a refusal names what the policy allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "tickets",
+          type: "string",
+          required: true,
+          description: `One to ${MAX_TICKET_AWAIT_TARGETS} ticket display ids in this project, separated by spaces or commas, for example 'VC-12 VC-14'.`,
+        },
+        {
+          name: "for",
+          type: "enum",
+          values: TICKET_AWAIT_FOR,
+          description:
+            "What wakes the wait: a verdict signal, a comment, a board move, or any of the three. Defaults to any.",
+        },
+        {
+          name: "timeoutSeconds",
+          type: "number",
+          description:
+            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+        {
+          name: "cursor",
+          type: "string",
+          description:
+            "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // The orchestrator's Automation verb (VC-134), filed by VC-112's ruling
+    // rather than minted beside it: "Do not mint a verb in this ticket. File it
+    // as a Verb Registry entry under VC-92's rules, in the `project` Role
+    // bundle only." So the whole of that ticket is this row plus one name in
+    // one bundle — no CLI verb, no IPC channel of its own, and no second
+    // implementation of a Run. The handler binding resolves the same Run door
+    // (`main/automations/run.ts`) the palette, the rail and the board already
+    // call, which is what makes a Run an agent started indistinguishable in
+    // its record from a Run a person started by hand.
+    //
+    // Control tier, and tool-only for the reason `session.start` is: this verb
+    // spends model budget and opens agent work, so a socket door would put it
+    // within reach of any process running as the user. A tool call carries its
+    // caller in the binding instead of in the request.
+    //
+    // Why it fans out without the Automation format growing a control flow:
+    // VC-112 keeps one Run to one Session deliberately, and points at the
+    // orchestrator for multi-Ticket work. An agent holding this verb walks the
+    // Tickets itself and starts one Run each, so "one Run, one Session" stays
+    // true while a scheduled sweep still covers a board.
+    //
+    // The agent Target is a ruled exception (VC-230), not an inference from the
+    // saved Trigger. The scheduler and every person-facing Run door keep
+    // VC-112/VC-130's "the Trigger decides the Target": a schedule targets its
+    // Project. This agent-only door may instead aim one invocation of that same
+    // schedule-trigger Automation at one named Ticket. It does not edit the
+    // Trigger; it gives the orchestrator an explicit Ticket target for this Run.
+    //
+    // Appended, never inserted. Declaration order is the canonical tool order,
+    // and a Session whose surface was frozen before this verb existed must find
+    // every tool it already held exactly where it already was.
+    key: "automation.run",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "automation.run" },
+    listed: false,
+    group: "Session",
+    summary: "Run a saved Automation on one Ticket, opening one fresh Session.",
+    effects: {
+      durableWrites: [
+        {
+          resource: "automation-run",
+          operation: "create",
+          summary:
+            "Create one Automation Run with its resolved model and reasoning, open the fresh Session it names with the `automation` Actor, and deliver the Automation's Instructions as that Session's first message.",
+        },
+      ],
+      humanVisible: [
+        "The Run appears in the Ticket's Run history and its Session is marked with the `automation` Actor \u2014 the same record a person's Run by hand writes, with nothing naming the agent that asked for it.",
+      ],
+      nonEffects: [
+        "The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.",
+        "It does not wait for the Run to finish, and the Run does not report back into the calling Session.",
+        "No Automation is created, edited or armed \u2014 this verb runs a saved one and authors nothing.",
+      ],
+    },
+    tool: {
+      name: "automation_run",
+      // Written for the model, and again mostly about restraint. The third
+      // line is the one a caller cannot learn from the schema: an Automation
+      // is a saved thing a person authored, so there is no way to pass
+      // Instructions here and no way to invent one \u2014 a name that does not exist
+      // is answered with the names that do.
+      description: [
+        "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
+        "This includes an Automation whose Trigger is a schedule: although the schedule itself and person-facing Run doors target the Project, this agent-only invocation is a ruled exception that aims its one Run at the named Ticket without changing the Trigger.",
+        "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
+        "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
+        "It does not move the Ticket, and it does not wait for the work to finish.",
+        "Volli binds the calling Session and project itself: name the Automation and the Ticket, and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "automation",
+          type: "string",
+          required: true,
+          description:
+            "The name of the Automation to run, spelled as it is in Volli, for example 'Nightly sweep'.",
+        },
+        {
+          name: "ticket",
+          type: "string",
+          required: true,
+          description:
+            "The display id of the Ticket this agent invocation targets, including for a schedule-trigger Automation, for example VC-12.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // Supervision half one (VC-86): end another Session's work. Control tier
+    // by the same structural argument as `session.start` — control over other
+    // agents is only safe where the caller's identity is unspoofable, so the
+    // verb is ABSENT from the socket rather than gated on it, and the shell
+    // answers WRONG_DOOR. Appended after `automation.run`, because registry
+    // declaration order is the frozen tool order and inserting earlier would
+    // shift `ticket.await` and `automation.run` inside every already-frozen
+    // surface record.
+    //
+    // `listed: true` is load-bearing exactly as it is for `ticket.archive`:
+    // `volli session stop a1b2c3` must teach its real door, never answer
+    // UNSUPPORTED_COMMAND and send the agent hunting for a workaround.
+    key: "session.stop",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.stop" },
+    listed: true,
+    referenceOrder: 21,
+    group: "Session",
+    summary: "Stop another agent session's work, recording who stopped it.",
+    example: "volli session stop a1b2c3d4",
+    notes: [
+      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.",
+      "The Session identity survives: its history stays openable, and a person can reattach it.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a session.stop command and its stopped event, naming the calling Session as the actor, to the target Session's ledger.",
+        },
+      ],
+      humanVisible: [
+        "The target Session shows Stopped wherever sessions list, with the stop and its actor in its durable history.",
+      ],
+      nonEffects: [
+        "The Session is not archived or deleted, its worktree is untouched, and no Ticket moves.",
+        "No new Session starts, and the stopped Session can be reattached by a person.",
+      ],
+    },
+    tool: {
+      name: "session_stop",
+      // Written for the model, and mostly about restraint: a stop is for work
+      // that is wedged or wrong, not work that is merely slow. The liveness
+      // read is named so the model checks before it kills.
+      description: [
+        "Stop another agent Session in this project: interrupt its open turn, release its executor, and record a durable stopped event naming this Session as the actor.",
+        "Use it on a Session that is wedged or doing the wrong work — check `volli session list` or `volli session peek` first; a long quiet turn can be hard work rather than a hang.",
+        "It is not an undo: work already committed stays. The stopped Session's history remains openable, and a person can reattach it.",
+        "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "session",
+          type: "string",
+          required: true,
+          description: "The target's short session id, as `volli session list` prints it.",
+        },
+        {
+          name: "reason",
+          type: "string",
+          description:
+            "One line of why, recorded on the stopped event for the person who reads it later.",
+        },
+      ],
+    },
+    positionalId: "required",
+    options: [],
+  },
+  {
+    // Supervision half two (VC-86): steer a message into a running Session —
+    // the channel the rc-0.1.0 pass lacked when owner direction ("use the
+    // thinking-orbs library") had no way into a mid-flight implementer.
+    // Control tier with `session.stop` for the same structural reason, and
+    // appended after it for the same frozen-order one.
+    key: "session.send",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.send" },
+    listed: true,
+    referenceOrder: 22,
+    group: "Session",
+    summary: "Steer a message into another running agent session.",
+    example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
+    notes: [
+      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.",
+      "The message arrives marked as supervisor steering from this Session, never as the target's own user.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a message.submit command carrying the marked steering message to the target Session's ledger.",
+        },
+      ],
+      humanVisible: [
+        "The steering message appears in the target Session's transcript, marked with the sending Session.",
+      ],
+      nonEffects: [
+        "It does not wait for the target's turn to finish and nothing reports back into the calling Session.",
+        "No Ticket moves, no Session stops, and no new Session starts.",
+      ],
+    },
+    tool: {
+      name: "session_send",
+      description: [
+        "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
+        "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
+        "The message is delivered marked as steering from this Session; it does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "session",
+          type: "string",
+          required: true,
+          description: "The target's short session id, as `volli session list` prints it.",
+        },
+        {
+          name: "message",
+          type: "string",
+          required: true,
+          description: "The steering direction the target Session reads.",
+        },
+      ],
+    },
+    positionalId: "required",
     options: [],
   },
 ] as const satisfies readonly VerbEntry[];
@@ -890,8 +1832,8 @@ type RegistryEntry = (typeof VERB_REGISTRY)[number];
 /** Every declared verb key — the vocabulary rule packs and Role bundles name. */
 export type VerbKey = RegistryEntry["key"];
 
-/** The socket projection at the type level: handler `main`, plus a `cli` access mode. */
-type SocketProjected<E extends VerbEntry> = E extends { handler: "main" }
+/** The socket projection at the type level: handler site `main`, plus a `cli` access mode. */
+type SocketProjected<E extends VerbEntry> = E extends { handler: { site: "main" } }
   ? "cli" extends E["accessModes"][number]
     ? E["key"]
     : never
@@ -903,15 +1845,56 @@ type SocketProjected<E extends VerbEntry> = E extends { handler: "main" }
  */
 export type AgentCommand = SocketProjected<RegistryEntry>;
 
+/** The binding of a socket-projected verb, at the type level. */
+type SocketBinding<E extends VerbEntry> = E extends { handler: { site: "main" } }
+  ? "cli" extends E["accessModes"][number]
+    ? E["handler"]["id"]
+    : never
+  : never;
+
+/**
+ * Every handler id the socket resolves — the key set main's dispatch table is
+ * a total mapping over (VC-167).
+ *
+ * Identical to {@link AgentCommand} today, because every binding id is its own
+ * verb's key. It is a separate type because the two answer different
+ * questions: `AgentCommand` is what a caller may put on the wire, and this is
+ * what main must have a handler for. VC-162 is where they part — a verb that
+ * leaves the `cli` access mode leaves the wire, and its binding goes on being
+ * resolved by the surface that kept it.
+ */
+export type AgentCommandBindingId = SocketBinding<RegistryEntry>;
+
 /**
  * The socket projection: entries whose handler lives in main AND that carry a
  * `cli` access mode. Takes its entries as an argument so a projection can be
  * proven against a synthetic table — no `tool`-only verb exists until VC-162.
  */
 export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly string[] {
-  return entries
-    .filter((entry) => entry.handler === "main" && entry.accessModes.includes("cli"))
-    .map((entry) => entry.key);
+  return socketProjectedFrom(entries).map((entry) => entry.key);
+}
+
+/** The socket-projected entries: a `main` handler site, plus a `cli` access mode. */
+function socketProjectedFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  return entries.filter(
+    (entry) => entry.handler.site === "main" && entry.accessModes.includes("cli"),
+  );
+}
+
+/**
+ * Which handler answers each socket verb — the wire name a caller sends,
+ * mapped to the binding id main's dispatch table is keyed by.
+ *
+ * Derived, never authored, exactly as {@link AGENT_COMMANDS} is: this is the
+ * declaration DRIVING the dispatch, which is what VC-167 replaced VC-161's
+ * source-text parity scan with.
+ */
+export function agentCommandBindingsFrom(
+  entries: readonly VerbEntry[],
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    socketProjectedFrom(entries).map((entry) => [entry.key, entry.handler.id]),
+  );
 }
 
 /**
@@ -920,10 +1903,21 @@ export function agentCommandsFrom(entries: readonly VerbEntry[]): readonly strin
  * the socket surface cannot drift from the registry.
  *
  * The cast restores the literal union {@link agentCommandsFrom} widens to
- * `string`; `verb-registry.test.ts` pins the runtime value to the same 27
- * strings, in the same order, that this list has always held.
+ * `string`; `verb-registry.test.ts` pins the exact runtime value, in order.
+ * That test carries the list rather than this comment carrying a count — the
+ * count was written once and then wrong twice, because a projection changes
+ * whenever a row's access modes do.
  */
 export const AGENT_COMMANDS = agentCommandsFrom(VERB_REGISTRY) as readonly AgentCommand[];
+
+/**
+ * The socket's verb-to-binding map — what main's dispatch table resolves a
+ * request through. The cast restores the literal unions
+ * {@link agentCommandBindingsFrom} widens to `string`.
+ */
+export const AGENT_COMMAND_BINDINGS = agentCommandBindingsFrom(VERB_REGISTRY) as Readonly<
+  Record<AgentCommand, AgentCommandBindingId>
+>;
 
 /**
  * The Verb Tier a verb's access modes and actor requirement imply (VC-92 §2).
@@ -957,21 +1951,104 @@ export function verbTier(entry: Pick<VerbEntry, "accessModes" | "actor">): VerbT
 }
 
 /**
- * The CLI reference projection: listed verbs carrying a `cli` access mode,
- * ordered by data on the entries themselves. Takes its entries as an argument
- * so future tool-only verbs can be proven absent without changing the real
- * registry.
+ * The Agent Tool Surface projection at the type level: entries carrying a
+ * `tool` access mode.
  */
-export function referenceVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
-  const referenceEntries = entries.filter(
-    (entry) => entry.listed && entry.accessModes.includes("cli"),
-  );
-  for (const entry of referenceEntries) {
-    if (!Number.isFinite(entry.referenceOrder)) {
-      throw new Error(`Listed CLI verb ${entry.key} requires referenceOrder`);
+// `E extends VerbEntry ? …` and not a bare `"tool" extends E["accessModes"]`:
+// a conditional distributes over a union only when the CHECKED type is the
+// naked parameter. Written the short way, `E["accessModes"][number]` collapses
+// to the union across every entry — which contains `"tool"` — and the type
+// silently widens to every verb key. `SocketProjected` above has the same
+// shape for the same reason.
+type ToolProjected<E extends VerbEntry> = E extends VerbEntry
+  ? "tool" extends E["accessModes"][number]
+    ? E["key"]
+    : never
+  : never;
+
+/**
+ * A verb key the Agent Tool Surface can carry — the vocabulary a Role bundle
+ * and a Session grant are allowed to name (VC-162).
+ *
+ * Narrower than {@link VerbKey} on purpose. A grant naming `ticket.list` would
+ * be asking for a tool nothing can build, and this type is what makes that a
+ * compile error at every caller inside the product; {@link isVerbToolKey} is
+ * the same check for the durable data a store hands back.
+ */
+export type VerbToolKey = ToolProjected<RegistryEntry>;
+
+/**
+ * The tool projection: entries carrying a `tool` access mode, in declaration
+ * order. Takes its entries as an argument so a projection can be proven
+ * against a synthetic table.
+ *
+ * Declaration order is the canonical tool order. Appending is what keeps a
+ * verb added later from shifting the position of one already in a Session's
+ * frozen surface.
+ */
+export function verbToolsFrom(
+  entries: readonly VerbEntry[],
+): readonly (VerbEntry & { tool: VerbToolProjection })[] {
+  const projected = entries.filter((entry) => entry.accessModes.includes("tool"));
+  for (const entry of projected) {
+    if (entry.tool === undefined) {
+      throw new Error(`Verb ${entry.key} declares a tool access mode with no tool projection`);
+    }
+    if (!VERB_TOOL_NAME_PATTERN.test(entry.tool.name)) {
+      throw new Error(
+        `Verb ${entry.key} projects tool name ${JSON.stringify(entry.tool.name)}, which no provider will accept`,
+      );
     }
   }
-  return referenceEntries.toSorted((left, right) => left.referenceOrder! - right.referenceOrder!);
+  const wireNames = new Set<string>();
+  for (const entry of projected) {
+    const wire = entry.tool!.name;
+    if (wireNames.has(wire)) {
+      throw new Error(`Tool name ${wire} is projected by more than one verb`);
+    }
+    wireNames.add(wire);
+  }
+  return projected as readonly (VerbEntry & { tool: VerbToolProjection })[];
+}
+
+/** Every verb the Agent Tool Surface can carry, in canonical order. */
+export const VERB_TOOLS: readonly (VerbEntry & { tool: VerbToolProjection })[] =
+  verbToolsFrom(VERB_REGISTRY);
+
+/** Their keys, in the same order — the canonical tail of a resolved surface. */
+export const VERB_TOOL_KEYS = VERB_TOOLS.map((entry) => entry.key) as readonly VerbToolKey[];
+
+const VERB_TOOL_KEY_SET: ReadonlySet<string> = new Set(VERB_TOOL_KEYS);
+
+/**
+ * Whether a string is a verb this build can project as a tool.
+ *
+ * The runtime guard behind {@link VerbToolKey}: durable grant data and a
+ * decoded `tool-surface` record arrive as strings, and a key this build does
+ * not project is a name nothing can bind. Callers fail closed on `false`.
+ */
+export function isVerbToolKey(key: string): key is VerbToolKey {
+  return VERB_TOOL_KEY_SET.has(key);
+}
+
+/** Every listed verb on any agent surface, ordered for zero-cost discovery. */
+export function discoverableVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  const listed = entries.filter((entry) => entry.listed);
+  for (const entry of listed) {
+    if (!Number.isFinite(entry.referenceOrder)) {
+      throw new Error(`Listed verb ${entry.key} requires referenceOrder`);
+    }
+  }
+  return listed.toSorted((left, right) => left.referenceOrder! - right.referenceOrder!);
+}
+
+/**
+ * The executable CLI reference projection: discoverable verbs carrying a
+ * `cli` access mode. Tool-only verbs remain in {@link DISCOVERABLE_VERBS} so
+ * help can name their real door without pretending the shell executes them.
+ */
+export function referenceVerbsFrom(entries: readonly VerbEntry[]): readonly VerbEntry[] {
+  return discoverableVerbsFrom(entries).filter((entry) => entry.accessModes.includes("cli"));
 }
 
 const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
@@ -983,9 +2060,8 @@ export function verbEntry(key: string): VerbEntry | undefined {
   return ENTRY_BY_KEY.get(key);
 }
 
-/**
- * The CLI reference projection: the listed verbs, in reference order. `volli
- * help` groups these by {@link VerbEntry.group}; the involuntary verbs (`hook`,
- * `session.harness`) are absent because nothing should type them.
- */
+/** Every listed registry verb, including a tool-only or app-only door. */
+export const DISCOVERABLE_VERBS: readonly VerbEntry[] = discoverableVerbsFrom(VERB_REGISTRY);
+
+/** The listed verbs this build executes through the Agent CLI. */
 export const REFERENCE_VERBS: readonly VerbEntry[] = referenceVerbsFrom(VERB_REGISTRY);

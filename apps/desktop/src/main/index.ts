@@ -26,22 +26,26 @@ import {
   getHarnessAdapter,
   harnessAdapters,
   globalSkillsDir,
+  projectCommandsDir,
   projectSkillsDir,
   draftAttachmentHashes,
+  makeAgentError,
   memoizedPathExists,
+  resolveAgentToolSurface,
   resolveDefaultModel,
   resolveShell,
-  sessionToolIds,
   skillPromptResource,
+  skillResourcePart,
   skillsIndexResource,
   ticketBranchName,
+  userInvokableSkills,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
   VOLLI_USER_ZDOTDIR_ENV,
   workspaceInstallCommand,
 } from "@volli/shared";
 import type {
   PromptResource,
-  RuntimeBrowserPort,
+  RuntimeVerbResult,
   SessionEnvRepair,
   SessionEvent,
   SessionInput,
@@ -72,14 +76,52 @@ import { isInternalNavigationTarget } from "./navigation";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
-import { getProjectById, listProjects } from "./db/projects-repo";
-import { getTicket, getTicketBrief } from "./db/tickets-repo";
+import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import {
+  getAutomation,
+  listAllAutomations,
+  listAutomationsForProject,
+  listColumnArmings,
+  listProjectRunsForAutomation,
+  listRunsForProject,
+  listRunsForTicket,
+  listSkippedOccurrencesForProject,
+} from "./db/automations-repo";
+import { getTicket, getTicketBrief, getTicketRow } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
-import { recordTicketEvent } from "./db/events-repo";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
+import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
+import { readAutomationRunAttendance } from "./db/automations-repo";
+import {
+  beginPendingArmedRunAttempt,
+  deletePendingArmedRun,
+  deletePendingArmedRunAttempt,
+  deletePendingArmedRunForTicket,
+  getPendingArmedRun,
+  getPendingArmedRunAttempt,
+  listPendingArmedRunAttempts,
+  listPendingArmedRuns,
+  putPendingArmedRun,
+  updatePendingArmedRunAttemptError,
+} from "./db/pending-armed-runs-repo";
+import { enabledAutomationIds } from "./automations/enablement";
+import {
+  createPendingArmedRunCoordinator,
+  type PendingArmedRunCoordinator,
+} from "./automations/pending-armed-runs";
+import { createRunAttentionWatch } from "./automations/run-attention";
+import { readNotificationPreferences } from "./notification-preferences";
+import {
+  chatSessionRecord,
+  createDesktopSessionEngine,
+  createSessionWatchdog,
+  watchSessionActivity,
+} from "./session-control";
 import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
+import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
@@ -96,6 +138,7 @@ import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
 import { createAutoTitler } from "./session-runtime/auto-title";
+import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
   createSessions,
   StructuredSessionsError,
@@ -103,6 +146,20 @@ import {
   type SessionToolSurfacePorts,
 } from "./session-runtime/sessions";
 import { loadSkills } from "./skills";
+import { loadPromptTemplates } from "./prompt-templates";
+import { registerAutomationIpcHandlers } from "./automations/ipc";
+import { createAutomationEngine } from "./automations/engine";
+import { createAutomationRunner } from "./automations/run";
+import type { AutomationRunner } from "./automations/run";
+import { createAutomationService } from "./automations/service";
+import { createAutomationScheduler } from "./automations/scheduler";
+import type { AutomationScheduler } from "./automations/scheduler";
+import {
+  advanceScheduleCursor,
+  readScheduleCursors,
+  rebaseScheduleCursor,
+} from "./automations/schedule-cursor";
+import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
   readCompactionPolicy,
@@ -131,6 +188,8 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastPendingArmedRuns,
+  broadcastPendingArmedRunSettled,
   broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionRetitled,
@@ -139,6 +198,10 @@ import {
   broadcastSystemAppearance,
   broadcastUpdateState,
 } from "./broadcast";
+import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
+import { createAgentToolDoor } from "./agent-tool-door";
+import type { AgentToolDoor } from "./agent-tool-door";
+import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
@@ -290,6 +353,10 @@ if (ownsAppProfile) {
 // anything else from the local filesystem.
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
 
+function noOpenNativeBindings(): readonly OpenNativeBinding[] {
+  return [];
+}
+
 // Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
 // and agent-written artifacts now renders real <a href> links, so a click would
 // otherwise navigate the whole BrowserWindow away from the app — or a
@@ -356,24 +423,6 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
   }
   return null;
 }
-
-/**
- * Membership only, exactly like the ask placeholder tool-surface resolution
- * wires beside it: resolution names the tools a new Session records, and no
- * method here is ever called. The adapter binds the real scoped port at
- * attach.
- */
-const membershipUnresolved = async (): Promise<never> => {
-  throw new Error("Tool-surface resolution cannot reach a Browser Tab.");
-};
-const browserMembership: RuntimeBrowserPort = {
-  tabs: membershipUnresolved,
-  navigate: membershipUnresolved,
-  snapshot: membershipUnresolved,
-  act: membershipUnresolved,
-  screenshot: membershipUnresolved,
-  console: membershipUnresolved,
-};
 
 function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -688,10 +737,45 @@ app.whenReady().then(async () => {
   // every window. Wrapping HERE is what makes that claim true: this is the only
   // construction site, so there is no unwatched engine for a caller to hold.
   // See `session-control/activity-watch.ts`.
+  //
+  // The handle is captured into a const first because `dbHandle` is a `let`
+  // that a later branch may reassign: a narrowing on it does not survive into
+  // the callback below, and this is the one place that callback needs it.
+  const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // The Notification rule (VC-112, VC-133): an unattended Run that enters
+  // `waiting` or `error` says so, and nothing else does. It hangs off the
+  // activity watch below because that is the one place every durable Session
+  // write in this process is already seen — see `automations/run-attention.ts`.
+  const runAttention =
+    watchedDb !== null
+      ? createRunAttentionWatch({
+          attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
+          // Re-read per notification rather than captured at boot, so switching
+          // notifications off takes effect on the next one instead of the next
+          // launch. It is one indexed `app_state` read.
+          preferences: () => readNotificationPreferences(watchedDb),
+          notify: ({ title, body }) => new Notification({ title, body }).show(),
+        })
+      : null;
+  // The runtime is composed from the watched Engine below, so this reader is
+  // installed in two steps: the watch closes over the indirection now, and the
+  // real process-local binding list replaces the empty boot answer once the
+  // runtime exists. Durable attachments alone never enter this list.
+  let listOpenNativeBindings = noOpenNativeBindings;
   const sessionActivityWatch =
-    dbHandle.ok === true
-      ? watchSessionActivity(createDesktopSessionEngine(dbHandle.db), {
+    watchedDb !== null
+      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
           publish: broadcastSessionActivity,
+          // Read on the push path as well as the fetch path, so a Run's bolt
+          // survives its Session's first turn (VC-131): the renderer upserts
+          // the whole row, so a push without provenance would erase the mark.
+          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          listOpenNativeBindings: () => listOpenNativeBindings(),
+          observe: (projection) => runAttention?.observe(projection),
+          // The baseline for the rule above: a Session minted in this process
+          // began with no need, which is what makes its first fold an edge
+          // rather than a first sighting (VC-133).
+          observeBirth: (sessionId) => runAttention?.observeBirth(sessionId),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;
@@ -791,6 +875,10 @@ app.whenReady().then(async () => {
       );
     }
   }
+  // Per-Session control grants live beside VC-44's app-owned policy data. The
+  // store is intentionally constructed before any Session surface: it resolves
+  // birth grants and the door later consumes the exact durable record.
+  const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -811,26 +899,41 @@ app.whenReady().then(async () => {
   // same bargain ptyManagerRef strikes with the worktree guards.
   let browserTabsRef: BrowserTabHost | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
-    webAccess !== null && sessionEngine !== null
+    webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: () => {
+          resolve: (role, grants) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
-            // to prove the capability works, but `sessionToolIds` retains only
-            // sanitized names/order; the provider closures are discarded here.
+            // to prove the capability works, but only sanitized names and order
+            // survive this closure; the provider closures are discarded here.
             const web = webPortsFor(webAccess.resolve());
-            return sessionToolIds({
-              tools: PI_TOOLS,
-              // The desktop always owns the ask surface. This placeholder is
-              // never called; the adapter binds the real interaction port.
-              askUser: async () => {
-                throw new Error("Tool-surface resolution cannot ask a question.");
+            return resolveAgentToolSurface({
+              role,
+              capabilities: {
+                coding: PI_TOOLS.tools,
+                // The desktop always owns the ask surface, so `ask_user` is a
+                // standing capability rather than a configured one. Web Access
+                // is the opposite: a profile with no provider gives its
+                // Sessions no web tool at all, rather than one that refuses.
+                interaction: [
+                  "ask_user",
+                  ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
+                  ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
+                  // The desktop always carries the Browser host, so every new
+                  // Session records all six Browser tools. Recorded surfaces
+                  // from older builds keep their shorter list and rebind it.
+                  "browser_tabs",
+                  "browser_navigate",
+                  "browser_snapshot",
+                  "browser_act",
+                  "browser_screenshot",
+                  "browser_console",
+                ],
               },
-              ...web,
-              // The desktop always carries the Browser host, so every new
-              // Session records the six browser tools. Recorded surfaces from
-              // builds without them keep their shorter list and are bound
-              // without a port — the adapter's wants-check honours the record.
-              browser: browserMembership,
+              // The store supplies canonical Registry keys from an immutable
+              // birth record. The resolver remains the fail-closed vocabulary
+              // boundary: a malformed durable grant refuses the Session before
+              // it reaches a model as a mysteriously smaller tool surface.
+              grants,
             });
           },
           record: async (sessionId, tools) => {
@@ -855,6 +958,36 @@ app.whenReady().then(async () => {
     ? new AgentObservability({ db: dbHandle.db, serviceVersion: app.getVersion() })
     : null;
   agentObservability?.start();
+  /**
+   * The Agent Tool Surface's door into main (VC-162) — the same application
+   * handler the socket's `session.start` reaches, entered with a caller main
+   * bound rather than one a request claimed.
+   *
+   * Declared here and assigned far below, because construction is circular: the
+   * Pi adapter a few lines down closes over this to answer verb calls, while
+   * the door itself is built from the Sessions facade, which is built from that
+   * adapter's own host. Something has to be declared across that loop.
+   *
+   * An initialized `let` rather than a `const` reached from above, so a call
+   * that somehow arrived before the assignment gets the sentence written for
+   * that case instead of a `ReferenceError` about a temporal dead zone. Nothing
+   * should: every path between here and the assignment is a handler body that
+   * cannot run before the window exists.
+   */
+  /**
+   * The one place both halves of the session-token seam are known (VC-163).
+   *
+   * Minting belongs to whatever spawns an attachment — the PTY manager and the
+   * Pi execution environment — and verifying belongs to the agent socket. Only
+   * this composition root sees both, which is why the registry is created here
+   * and passed to each side as a narrow function rather than imported by them.
+   *
+   * Process-lived, like the attachments it issues for: see `session-tokens.ts`
+   * for why that lifetime is the design rather than a limitation.
+   */
+  const sessionTokens = createSessionTokenRegistry();
+
+  let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
     dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
       ? createPiRuntimeHost({
@@ -900,11 +1033,23 @@ app.whenReady().then(async () => {
               pathPrefixes: [runtimePaths.binDir],
               identity: {
                 sessionId: identity.sessionId,
+                // Minted per ATTACHMENT, which is what `identity.attachmentId`
+                // names, so a structured Session's shell authenticates exactly
+                // as a spawned PTY's does (VC-163) — and the token dies with
+                // the attachment rather than with the Session.
+                sessionToken: sessionTokens.mint({
+                  sessionId: identity.sessionId,
+                  attachmentId: identity.attachmentId,
+                }),
                 ticketDisplayId:
                   ticket && ticketProject
                     ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
                     : null,
               },
+              // The execution environment is owned by this attachment and its
+              // cleanup runs on every close path. Revoke there so a copied
+              // token cannot outlive the structured attachment that held it.
+              onCleanup: () => sessionTokens.revoke(identity.attachmentId),
             });
           },
           // What this profile can honestly bind now, read once per attachment.
@@ -929,6 +1074,27 @@ app.whenReady().then(async () => {
               waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
             });
           },
+          // The verb half of the Agent Tool Surface (VC-162). Unlike the web
+          // ports this decides no membership — the Session's frozen record does
+          // — it supplies the one closure every bundled verb is answered
+          // through. Referenced lazily because the door is composed further
+          // down this same function, after the facade it calls exists; by the
+          // time any attachment runs, it is built or the launch has no database
+          // and no Sessions either.
+          // The return type is annotated rather than inferred, and has to be:
+          // this closure reaches a door composed from the Sessions facade,
+          // which is built from this same host. Inference would chase that
+          // circle; the annotation cuts it.
+          callVerb: (caller, request, signal): Promise<RuntimeVerbResult> => {
+            if (agentToolDoor === null) {
+              throw new Error("This launch has no Volli verb handlers.");
+            }
+            signal.throwIfAborted();
+            // Forwarded, not just read: `ticket.await` parks on it, and the
+            // signal firing is the only notice a suspended wait ever gets
+            // that its turn was interrupted (VC-85).
+            return agentToolDoor(caller, request, signal);
+          },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is
           // recorded once before the first runtime construction; every later
@@ -950,10 +1116,21 @@ app.whenReady().then(async () => {
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
+              //
+              // A legacy Session has no durable birth-grant record, so it gets
+              // no new grant here. Applying today's role default would be a hot
+              // privilege edit to an existing Session; the fail-closed empty
+              // list leaves only the Role bundle it could honestly have held.
               toolSurface = toolSurfaceTools(
                 await sessionEngine.getOrRecordSessionInput({
                   sessionId,
-                  input: { kind: "tool-surface", tools: sessionToolSurface.resolve() },
+                  input: {
+                    kind: "tool-surface",
+                    tools: sessionToolSurface.resolve(
+                      attaching.ticketId === null ? "project" : "ticket",
+                      [],
+                    ),
+                  },
                   provenance,
                 }),
               );
@@ -963,6 +1140,18 @@ app.whenReady().then(async () => {
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              // The policy a FRESH attachment is pinned to (VC-44), read from
+              // app-owned state and never from the tree the Session is about to
+              // edit. Resolved per attach for the reason the web ports are: what
+              // a Session may do is fixed when it starts, so a Settings change
+              // never lands mid-turn. A rehydrated attachment ignores this and
+              // replays its own recorded Snapshot instead — see
+              // `NativeAttachmentSpec.pinnedAuthority`.
+              authorityPolicy: getProjectAuthorityPolicy(dbHandle.db, project.id),
+              // What history already holds, so the Session-wide fallback
+              // threshold is measured against the Session rather than against
+              // this one attachment.
+              priorAuthorityDenials: projection.authorityDenials,
               // The skills this Session was started with, as recorded ahead of
               // its first attachment (`SessionSkillPorts`). Read from the
               // durable record on EVERY attach — never from disk — so a
@@ -1027,7 +1216,51 @@ app.whenReady().then(async () => {
           artifacts: transcriptArtifacts,
         })
       : null;
+  listOpenNativeBindings =
+    sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  // Automations own a transport-neutral command/event/projection core. Keep
+  // the runner mutable until below: Session RPC's attach door closes over it,
+  // so a human Retry can resume a durable first-message intent too.
+  const automationEngine =
+    sessionDb === null
+      ? null
+      : createAutomationEngine({
+          ledger: new SqliteAutomationLedger(sessionDb),
+          now: Date.now,
+          nextId: randomUUID,
+        });
+  const automationService =
+    sessionDb === null || automationEngine === null
+      ? null
+      : createAutomationService({
+          engine: automationEngine,
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
+          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
+          skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
+          ...(piRuntimeHost === null
+            ? {}
+            : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
+          onMutation: (change) => broadcastDataChanged(change),
+          // Create, enable, and schedule-changing commands establish the new
+          // lifecycle before the scheduler's asynchronous refresh. Relaunch
+          // can therefore still account for a due time missed in that gap.
+          rebaseScheduleCursor: (automationId, through) => {
+            rebaseScheduleCursor(sessionDb, { automationId, through }, Date.now());
+          },
+          // Every record write can add, retime or remove a schedule, and the
+          // enabled switch decides whether one may fire here at all — so the
+          // timer re-reads after each rather than waiting out its own tick.
+          onAutomationsChanged: () => {
+            void automationScheduler?.refresh();
+          },
+        });
+  let automationRunner: AutomationRunner | null = null;
+  let automationScheduler: AutomationScheduler | null = null;
+  let pendingArmedRuns: PendingArmedRunCoordinator | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1064,10 +1297,21 @@ app.whenReady().then(async () => {
                 `The project's skills could not be read: ${read.error}`,
               );
             }
-            // A skill this project switched off is not "hidden from the model"
-            // — it is not available, so resolving it by name fails like any
-            // other name the project does not have.
-            const available = applySkillModes(read.skills, project.skillModes ?? {});
+            // Re-read AFTER disk I/O: a policy write can land while SKILL.md
+            // files are being read, and attach-time delivery must resolve the
+            // policy current at delivery rather than the snapshot that chose
+            // the directory. Human attach-time selection is a user invocation
+            // route, so a model-only author policy is not eligible either.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) {
+              throw new StructuredSessionsError(
+                "SKILL_NOT_FOUND",
+                "The project for this Session was not found.",
+              );
+            }
+            const available = userInvokableSkills(
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
+            );
             // Order and dedup follow the request, not the directory: the
             // record should say what was asked for, once each.
             return [...new Set(names)].map((name) => {
@@ -1090,22 +1334,28 @@ app.whenReady().then(async () => {
             // the user installed rather than to hold an opinion about it.
             //
             // Two things can narrow that, and neither is Volli deciding on the
-            // user's behalf: the skill's own frontmatter (`isUserInvokeOnly`),
-            // and this project's explicit per-skill rule (VC-111, migration
-            // 023). The second exists because this index is ~94% of a fresh
+            // user's behalf: the skill's own frontmatter -- the portable
+            // `disable-model-invocation` every major harness honours -- and
+            // this project's explicit per-skill rule (VC-111, migration 023).
+            // The second exists because this index is ~94% of a fresh
             // Session's Volli-composed prompt and is re-sent as the stable
             // prefix of every turn, so "which skills are worth their prompt
             // share here" is a real question a project should be able to
-            // answer. Both land in the same place -- `applySkillModes` folds
-            // the rule onto `userInvokeOnly`, and `skillsIndexResource` reads
-            // only that.
+            // answer. Both land in the same place -- `applySkillModes` resolves
+            // them into one effective policy per skill, and
+            // `skillsIndexResource` reads only its `modelDiscoverable` axis
+            // (VC-181).
             const read = await loadSkills({
               projectSkillsDir: projectSkillsDir(project.path),
               globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
             });
             if (!read.ok) return null;
+            // Policy is read after the filesystem for the same race the
+            // explicit attach route closes above.
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) return null;
             return skillsIndexResource(
-              applySkillModes(read.skills, project.skillModes ?? {}),
+              applySkillModes(read.skills, currentProject.skillModes ?? {}),
               injectedNames,
             );
           },
@@ -1126,24 +1376,35 @@ app.whenReady().then(async () => {
     piRuntimeHost !== null &&
     sessionDb !== null &&
     sessionSkills !== null &&
-    sessionToolSurface !== null
+    sessionToolSurface !== null &&
+    sessionDelegation !== null
       ? createSessions({
           runtime: sessionRuntime,
-          // Role in, purpose out (VC-53): a Ticket Session resolves the
-          // execution default, a project chat the orchestration one, and each
-          // inherits the project default when it holds no explicit choice of
-          // its own — stated by `resolveDefaultModel`, never substituted.
-          readDefaultModel: (role) =>
-            resolveDefaultModel(
-              readModelAccessDefaults(sessionDb),
-              role === "ticket" ? "ticket" : "global",
-            ),
+          // The inheritance chain, in rung order (VC-112, VC-126): the
+          // project's own runtime preference first — `projects.session_model`
+          // (migration 024, NULL = inherit) — then the app-wide per-purpose
+          // record, Role in and purpose out (VC-53): a Ticket Session resolves
+          // the execution default, a project chat the orchestration one —
+          // stated by `resolveDefaultModel`, never substituted. One closure so
+          // every door — renderer chat, CLI start, an Automation Run — walks
+          // the same rungs.
+          readDefaultModel: (role, projectId) => {
+            const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
+            return (
+              project?.sessionModel ??
+              resolveDefaultModel(
+                readModelAccessDefaults(sessionDb),
+                role === "ticket" ? "ticket" : "global",
+              )
+            );
+          },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
           readModelSelection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
+          grants: sessionDelegation,
           // Consulted only when a start carries an invocation-time model
           // override (the CLI's --model/--reasoning); the saved default was
           // validated when it was chosen.
@@ -1151,15 +1412,11 @@ app.whenReady().then(async () => {
           // One creation path, one event (VC-13 decision 3): the renderer's
           // optimistic-open `create` (VC-16) and the agent socket's `start`
           // both mint through the same path, each carrying the actor its own
-          // door derived.
+          // door derived. Once per Session and not once per call (VC-162), now
+          // that a replayed tool call can mint through it twice — the guard
+          // lives with the ledger that can answer whether it already happened.
           recordSessionStarted: ({ ticketId, sessionId, actor }) => {
-            recordTicketEvent(
-              sessionDb,
-              ticketId,
-              { kind: "session_started", sessionId },
-              Date.now(),
-              actor,
-            );
+            recordSessionStartedOnce(sessionDb, { ticketId, sessionId, now: Date.now(), actor });
           },
         })
       : null;
@@ -1197,7 +1454,20 @@ app.whenReady().then(async () => {
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
           createSession: sessions?.create,
-          attachSession: sessions?.attach,
+          // Every renderer Retry rides this wrapper. A ready attachment is the
+          // recovery point for an Automation's durable first-message intent;
+          // the runner's fixed Session command id reconciles rather than
+          // duplicates if a crash happened after dispatch but before its mark.
+          attachSession:
+            sessions === null
+              ? undefined
+              : async (input) => {
+                  const attached = await sessions.attach(input);
+                  if (attached.state === "ready") {
+                    await automationRunner?.resumeDeliveryForSession(input.sessionId);
+                  }
+                  return attached;
+                },
         });
   /**
    * Model-call titling (VC-81): the one main-side hook both doors feed.
@@ -1230,6 +1500,26 @@ app.whenReady().then(async () => {
           readTicket: (ticketId) => getTicketBrief(sessionDb, ticketId) ?? null,
           inspectModelAccess: ({ signal }) => piRuntimeHost.inspectModelAccess({ signal }),
           completeUtility: (input) => piRuntimeHost.completeUtility(input),
+          // System provenance and no attachment, because there is neither: the
+          // titler runs one model call against a Session it does not attach
+          // to. A fresh event id per call rather than one derived from the
+          // Session, so a second refinement is a second bill instead of a
+          // replay the ledger silently drops.
+          recordUsage: async (sessionId, usage) => {
+            await sessionEngine.observe({
+              id: `usage:auto-title:${randomUUID()}`,
+              kind: "usage.recorded",
+              sessionId,
+              occurredAt: Date.now(),
+              provenance: {
+                source: { kind: "system", id: "auto-title", detail: null },
+                venue: { id: "local", kind: "local" },
+              },
+              attachmentId: null,
+              turnId: null,
+              usage,
+            });
+          },
           retitle: async (sessionId, title) => {
             const submitted = await sessionEngine.submit({
               commandId: randomUUID(),
@@ -1252,6 +1542,85 @@ app.whenReady().then(async () => {
           },
         })
       : null;
+  /**
+   * The kickoff turn's delivery seam, shared by both `session.start` doors.
+   *
+   * `message.submit` resolves when the TURN it started ends, so a door fires it
+   * detached and a refusal lands in the Session's own durable state and the
+   * log. Its ids are the CALLER's, derived from that door's operation id — the
+   * Session Engine deduplicates on the command id, which is what lets a
+   * replayed tool call submit this exact turn again and land one message.
+   */
+  const submitKickoffMessage =
+    sessionRuntime === null
+      ? undefined
+      : async ({
+          sessionId,
+          text,
+          commandId,
+          messageId,
+        }: {
+          sessionId: string;
+          text: string;
+          commandId: string;
+          messageId: string;
+        }): Promise<void> => {
+          await sessionRuntime.command({
+            commandId,
+            sessionId,
+            command: {
+              kind: "message.submit",
+              message: { id: messageId, role: "user", parts: [{ type: "text", text }] },
+            },
+          });
+        };
+  // Every dependency is read through a closure rather than captured, because
+  // this is composed before some of them exist and outlives changes to the
+  // rest: the project list grows, and the facade is built further down this
+  // same function. See the declaration above for why the binding is split.
+  agentToolDoor =
+    sessionDb === null || sessionDelegation === null
+      ? null
+      : createAgentToolDoor({
+          db: sessionDb,
+          projects: () => listProjects(sessionDb),
+          sessions: () => sessions,
+          delegation: sessionDelegation,
+          // `automation.run`'s host (VC-134). Read through a closure like
+          // every other dependency here, because the runner is composed much
+          // further down this same function; and it is the RUNNER, never the
+          // Session facade, so an agent's Run travels the one Run door the
+          // palette and the Ticket rail already call.
+          automations: () =>
+            automationRunner === null
+              ? null
+              : {
+                  list: (projectId) => listAutomationsForProject(sessionDb, projectId),
+                  run: (input) => automationRunner!.run(input),
+                },
+          // `ticket.await`'s two ports (VC-85): the wait is judged against the
+          // caller's project policy when it starts, and parks on the
+          // post-commit wake bus until a planner fact matches.
+          authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
+          subscribeTicketWake,
+          // The supervision operations (VC-86): stop and send act through the
+          // same engine and runtime the app itself does — no parallel door.
+          supervise: () =>
+            sessionEngine !== null && sessionRuntime !== null
+              ? { sessionEngine, runtime: sessionRuntime }
+              : null,
+          ...(submitKickoffMessage === undefined
+            ? {}
+            : { submitSessionMessage: submitKickoffMessage }),
+          ...(autoTitler === null
+            ? {}
+            : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
+          onMutation: (change) => broadcastDataChanged(change),
+          onSessionStarted: (notice) => broadcastSessionStarted(notice),
+          actorTicketDisplay: (ticketId) =>
+            actorSessionTicketDisplay(sessionDb, listProjects(sessionDb), ticketId),
+          now: () => Date.now(),
+        });
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
   // database open recorded above, Node-ABI classification included). Left
@@ -1295,6 +1664,24 @@ app.whenReady().then(async () => {
       ? undefined
       : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
   );
+  // The session watchdog (VC-86): every executor this process holds open is
+  // scanned on a coarse clock, and an open turn silent past the app-wide
+  // threshold self-reports — one durable blocked signal naming the watchdog
+  // and the silence, one notification for the person. Observe posture:
+  // self-termination exists behind the watchdog's optional port and is
+  // deliberately unwired here, so a false positive costs a notification,
+  // never the work.
+  const sessionWatchdog =
+    sessionRuntime !== null && sessionEngine !== null
+      ? createSessionWatchdog({
+          listBindings: () => sessionRuntime.openNativeBindings(),
+          projection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection,
+          submit: (request) => sessionEngine.submit(request),
+          notify: ({ title, body }) => new Notification({ title, body }).show(),
+        })
+      : null;
+  sessionWatchdog?.start();
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -1303,6 +1690,7 @@ app.whenReady().then(async () => {
   registerAcceptedQuitCoordinator({
     lifecycle: app,
     shutdownNativeSessions: async () => {
+      sessionWatchdog?.stop();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
@@ -1511,11 +1899,15 @@ app.whenReady().then(async () => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
+    listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,
+    // Renderer moves now reach main's one durable armed-column arrival owner,
+    // carrying an Option-drag choice when that gesture supplied one.
+    onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -1551,6 +1943,219 @@ app.whenReady().then(async () => {
       },
     },
   );
+  // Automations (VC-112, tracer VC-126): the host half of the command ledger.
+  // CRUD remains available when Sessions are down; only a Run needs the
+  // Session facade. The renderer's Retry arrives through the RPC wrapper above
+  // and resumes this same runner's durable message intent.
+  automationRunner =
+    sessions !== null && sessionRuntime !== null && sessionDb !== null && automationEngine !== null
+      ? createAutomationRunner({
+          engine: automationEngine,
+          findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          findTicket: (ticketId) => getTicket(sessionDb, ticketId),
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
+          listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
+          sessions,
+          promptSupply: async (projectId) => {
+            const project = getProjectById(sessionDb, projectId);
+            if (!project) throw new Error("Unknown project");
+            const [loaded, skills] = await Promise.all([
+              loadPromptTemplates({
+                projectCommandsDir: projectCommandsDir(project.path),
+                globalCommandsDir: join(fsDeps.userDataDir, "commands"),
+              }),
+              loadSkills({
+                projectSkillsDir: projectSkillsDir(project.path),
+                globalSkillsDir: globalSkillsDir(fsDeps.homeDir),
+              }),
+            ]);
+            if (!loaded.ok) throw new Error(loaded.error);
+            if (!skills.ok) throw new Error(skills.error);
+            const currentProject = getProjectById(sessionDb, projectId);
+            if (!currentProject) throw new Error("Unknown project");
+            return {
+              templates: loaded.templates,
+              // Resolve against the policy current after the filesystem read,
+              // not the snapshot that supplied the stable project path.
+              skills: applySkillModes(skills.skills, currentProject.skillModes ?? {}),
+            };
+          },
+          // The composer's message shape, with the Run's durable command/message
+          // ids rather than freshly minted ones. A crash after dispatch is then
+          // a Session-runtime replay, never a duplicate first turn.
+          deliverInstructions: ({ sessionId, commandId, messageId, text, resources }) =>
+            sessionRuntime.command({
+              commandId,
+              sessionId,
+              command: {
+                kind: "message.submit",
+                message: {
+                  id: messageId,
+                  role: "user",
+                  parts: [{ type: "text", text }, ...resources.map(skillResourcePart)],
+                },
+              },
+            }),
+          reportInstructionDeliveryFailure: (input) =>
+            sessionRuntime.reportMessageDeliveryFailure(input),
+          // Projection failures deliberately propagate: the runner fails the
+          // single-flight guard closed instead of treating unknown as idle.
+          readSessionActivity: async (sessionId) => {
+            const snapshot = await sessionRuntime.projection({ sessionId });
+            return chatSessionRecord(snapshot.projection).activity;
+          },
+          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
+          // property rather than sending `undefined` for it: the Electron
+          // transport would carry that by structured clone, and an HTTP one
+          // would mangle it (docs/BOUNDARIES.md rule 3).
+          onRunStarted: ({ projectId, run }) =>
+            broadcastDataChanged(
+              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
+            ),
+        })
+      : null;
+
+  // The armed-column delay window (VC-226) belongs to main, not to any one
+  // renderer. Its SQLite row survives window count (and a relaunch), one timer
+  // serves that row, and every renderer receives the same full projection.
+  if (sessionDb !== null) {
+    const pendingDb = sessionDb;
+    pendingArmedRuns = createPendingArmedRunCoordinator({
+      now: Date.now,
+      nextId: randomUUID,
+      listPending: () => listPendingArmedRuns(pendingDb),
+      getPending: (id) => getPendingArmedRun(pendingDb, id),
+      putPending: (pending) => putPendingArmedRun(pendingDb, pending),
+      deletePending: (id) => deletePendingArmedRun(pendingDb, id),
+      deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
+      beginAttempt: (id, commandId, fallbackError) =>
+        beginPendingArmedRunAttempt(pendingDb, id, commandId, fallbackError),
+      listAttempts: () => listPendingArmedRunAttempts(pendingDb),
+      getAttempt: (id) => getPendingArmedRunAttempt(pendingDb, id),
+      updateAttemptError: (id, error) => updatePendingArmedRunAttemptError(pendingDb, id, error),
+      deleteAttempt: (id) => deletePendingArmedRunAttempt(pendingDb, id),
+      readTicket: (ticketId) => {
+        const row = getTicketRow(pendingDb, ticketId);
+        if (row === undefined || row.archived_at !== null) return undefined;
+        const ticket = getTicket(pendingDb, ticketId);
+        const project = getProjectById(pendingDb, row.project_id);
+        if (ticket === undefined || project === undefined) return undefined;
+        return {
+          projectId: ticket.projectId,
+          status: ticket.status,
+          displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+        };
+      },
+      readPlanning: (projectId) => ({
+        automations: listAutomationsForProject(pendingDb, projectId),
+        armings: listColumnArmings(pendingDb, projectId),
+        enabledAutomationIds: enabledAutomationIds(pendingDb),
+      }),
+      run: async ({ commandId, automationId, ticketId }) => {
+        const runner = automationRunner;
+        if (runner === null) {
+          return {
+            ok: false,
+            code: "RUN_FAILED",
+            error: "The Session runtime is not available this launch.",
+          };
+        }
+        // A Deliberate column move retains the attended semantics its renderer
+        // expiry door had. Only ownership of the timer moved into main.
+        return runner.run({
+          commandId,
+          target: { kind: "automation", automationId },
+          ticketId,
+          modelOverride: null,
+          attendance: "attended",
+        });
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onPendingChanged: broadcastPendingArmedRuns,
+      onSettled: broadcastPendingArmedRunSettled,
+      log: (message) => console.error(message),
+    });
+    pendingArmedRuns.start();
+    app.on("before-quit", () => pendingArmedRuns?.stop());
+  }
+
+  if (automationRunner !== null) {
+    void automationRunner.recover().catch((error: unknown) => {
+      console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
+    });
+  }
+  // The schedule timer (VC-130). It is a thin caller of the pure policy in
+  // `@volli/shared` and of the same Run door a person uses, so everything below
+  // is composition: a clock, Node's timers, the projections it reads, and the
+  // durable command it records a Skipped occurrence through.
+  //
+  // It needs the Run door, so it comes up with the runner: a launch where the
+  // Session runtime never started has no scheduler either, which is honest —
+  // nothing could have run, and the missed occurrences are still owed and will
+  // be recorded as skips by the next launch that can.
+  const runnerForSchedule = automationRunner;
+  if (runnerForSchedule !== null && automationEngine !== null && sessionDb !== null) {
+    const scheduleDb = sessionDb;
+    const scheduleEngine = automationEngine;
+    automationScheduler = createAutomationScheduler({
+      now: Date.now,
+      listAutomations: () => Promise.resolve(listAllAutomations(scheduleDb)),
+      enabledAutomationIds: () => scheduleEngine.enabledAutomationIds(),
+      readCursors: () => Promise.resolve(readScheduleCursors(scheduleDb)),
+      advanceCursor: (input) => {
+        advanceScheduleCursor(scheduleDb, input, Date.now());
+        return Promise.resolve();
+      },
+      recordSkip: async (input) => {
+        const outcome = await scheduleEngine.recordSkip(input);
+        if (!outcome.ok) {
+          // Fail the step rather than resolving over it. The scheduler advances
+          // its cursor only after a step settles, so a refused write leaves the
+          // occurrence owed and the next pass records it again under the same
+          // derived command id. Swallowing it here would step past a skip that
+          // never reached the ledger — a skip that looks exactly like a
+          // silence, which is the one outcome VC-112 forbids.
+          throw new Error(outcome.error);
+        }
+        // The Automations page reads its history on arrival and on every
+        // planning change, so a skip recorded while it is open lands without
+        // anyone reloading.
+        broadcastDataChanged({ projectId: input.skip.projectId });
+      },
+      startRun: async (input) => {
+        // UNATTENDED (VC-133), and this is the case VC-112 names outright:
+        // "a column move is attended because a person is right there; a
+        // schedule is not." A timer fired this; the app may not even have a
+        // window open. If its Session stops for a person, this is how they
+        // find out.
+        const outcome = await runnerForSchedule.runForProject({
+          ...input,
+          attendance: "unattended",
+        });
+        return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => {
+        clearTimeout(handle);
+      },
+    });
+    const scheduler = automationScheduler;
+    void scheduler.start().catch((error: unknown) => {
+      console.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`);
+    });
+    // Nothing new may become due once the app is on its way out; work already
+    // accepted is durable and recovers on the next launch.
+    app.on("before-quit", () => {
+      scheduler.stop();
+    });
+  }
+  registerAutomationIpcHandlers(dbHandle, {
+    service: automationService,
+    runner: automationRunner,
+    ...(pendingArmedRuns === null ? {} : { pendingArmedRuns }),
+  });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
   // against the `color-scheme` this app stamps, so it reports the mode already
@@ -1578,6 +2183,8 @@ app.whenReady().then(async () => {
   const agentRuntime: AgentRuntimeEnvironment = {
     socketPath: runtimePaths.socketPath,
     binDir: runtimePaths.binDir,
+    mintSessionToken: sessionTokens.mint,
+    revokeSessionToken: sessionTokens.revoke,
   };
   /** Wrappers refused this launch because the name would shadow a system tool. */
   let harnessRuntimeRefused: RefusedWrapper[] = [];
@@ -2169,6 +2776,10 @@ app.whenReady().then(async () => {
           db: dbHandle.db,
           sessionEngine: sessionEngine!,
           appVersion: app.getVersion(),
+          // The verifying half of the same registry the attachments mint from.
+          // Without it every socket caller is unauthenticated by default, which
+          // is the fail-closed direction (VC-163).
+          verifySessionToken: sessionTokens.verify,
           observeSession: (sessionId, lines) => ptyManager.peek(sessionId, lines),
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
@@ -2203,17 +2814,27 @@ app.whenReady().then(async () => {
                 submitSessionMessage: async ({
                   sessionId,
                   text,
+                  commandId,
+                  messageId,
                 }: {
                   sessionId: string;
                   text: string;
+                  commandId: string;
+                  messageId: string;
                 }) => {
+                  // Both ids come from the caller's operation, never from
+                  // `randomUUID()` (VC-162). The Session Engine deduplicates a
+                  // `message.submit` by command id, so a start replayed with
+                  // the same operation id submits this exact turn again and
+                  // lands one message — which is what makes a replayed tool
+                  // call idempotent rather than merely unlikely to repeat.
                   await sessionRuntime.command({
-                    commandId: randomUUID(),
+                    commandId,
                     sessionId,
                     command: {
                       kind: "message.submit",
                       message: {
-                        id: randomUUID(),
+                        id: messageId,
                         role: "user",
                         parts: [{ type: "text", text }],
                       },
@@ -2244,6 +2865,10 @@ app.whenReady().then(async () => {
           // down. Read-only commands and no-ops (e.g. a same-column move) never
           // fire it, so a stray broadcast can't slip through.
           onMutation: (change) => broadcastDataChanged(change),
+          // An explicit `volli ticket move` is the other Deliberate-move door.
+          // It reaches the same one main-owned pending arrival as renderer IPC;
+          // no renderer has to exist for the timer to fire.
+          onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
           // The involuntary channel's fan-out (harness-events): every canonical
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.
@@ -2284,7 +2909,10 @@ app.whenReady().then(async () => {
             // it actually points at. An unresolved comparison would call a
             // correct install "another Volli install owns the link".
             shimPath: await realpath(shimPath).catch(() => shimPath),
-            liveSessionIds: ptyManager.liveSessionIds(),
+            // A writing caller is live exactly while its attachment token is
+            // valid at the socket door. PTY membership excludes structured
+            // attachments, so it cannot answer this diagnostic truthfully.
+            liveSessionIds: sessionTokens.liveSessionIds(),
             reporting: dbHandle.ok
               ? listRegisteredHarnesses(dbHandle.db).map((record) => ({
                   harnessId: record.slug,
@@ -2303,7 +2931,7 @@ app.whenReady().then(async () => {
           ({
             v: 1,
             ok: false,
-            error: { code: "DB_UNAVAILABLE", message: dbHandle.error },
+            error: makeAgentError("DB_UNAVAILABLE", dbHandle.error),
           }) as const;
     await agentSocket.start({
       socketPath: runtimePaths.socketPath,

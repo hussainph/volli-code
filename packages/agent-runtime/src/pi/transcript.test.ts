@@ -2,13 +2,16 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { RuntimeFailure } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  assistantUsage,
   attentionReasonFor,
+  costBasisForApi,
   classifyAssistantMessage,
   classifyDiagnostic,
   errorText,
   isTransientTransportFailure,
   recoveryRefFor,
   sanitizeDiagnostic,
+  sessionUsageFrom,
 } from "./transcript";
 
 function assistant(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
@@ -279,5 +282,178 @@ describe("classifyAssistantMessage", () => {
       kind: "failed",
       failure: { reason: "model", message: "The model run failed." },
     });
+  });
+});
+
+describe("assistantUsage", () => {
+  it("measures a reply that only called tools — the spend a transcript never sees", () => {
+    expect(
+      assistantUsage(
+        assistant({
+          content: [{ type: "toolCall", id: "1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-haiku-4-5",
+      inputTokens: 120,
+      outputTokens: 40,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0.3,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  it("measures a reply that failed after the provider had already billed it", () => {
+    const usage = assistantUsage(
+      assistant({ stopReason: "error", errorMessage: "The model run failed." }),
+    );
+    expect(usage?.inputTokens).toBe(120);
+    expect(usage?.costUsd).toBe(0.3);
+  });
+
+  it("reports nothing for a reply the provider never metered", () => {
+    expect(
+      assistantUsage(
+        assistant({
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps an unpriceable cost absent instead of reading it back as free", () => {
+    const usage = assistantUsage(
+      assistant({
+        usage: {
+          input: 10,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: Number.NaN },
+        },
+      }),
+    );
+    expect(usage?.costUsd).toBeNull();
+    expect(usage?.costBasis).toBe("unavailable");
+  });
+});
+
+describe("costBasisForApi", () => {
+  // Every built-in adapter but one multiplies provider token counts by the
+  // local model catalogue. Calling that a bill is the mislabel this map exists
+  // to prevent, so each family is pinned by name rather than defaulted.
+  it.each([
+    "openai-completions",
+    "mistral-conversations",
+    "openai-responses",
+    "azure-openai-responses",
+    "openai-codex-responses",
+    "anthropic-messages",
+    "bedrock-converse-stream",
+    "google-generative-ai",
+    "google-vertex",
+  ])("prices %s from the local catalogue", (api) => {
+    expect(costBasisForApi(api)).toBe("catalog-estimate");
+  });
+
+  // pi-messages carries the backend's own accounting verbatim.
+  it("trusts a backend that reported its own usage", () => {
+    expect(costBasisForApi("pi-messages")).toBe("provider-reported");
+  });
+
+  it("refuses to guess for an API family it does not know", () => {
+    expect(costBasisForApi("some-custom-gateway")).toBe("unavailable");
+  });
+});
+
+describe("sessionUsageFrom", () => {
+  const model = { provider: "anthropic", model: "claude-haiku-4-5", api: "anthropic-messages" };
+
+  it("keeps a provider's own numbers whatever the operation was", () => {
+    expect(
+      sessionUsageFrom(
+        {
+          input: 190_000,
+          output: 900,
+          cacheRead: 12,
+          cacheWrite: 3,
+          totalTokens: 190_915,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.42 },
+        },
+        model,
+        "compaction",
+      ),
+    ).toEqual({
+      cause: "compaction",
+      providerId: "anthropic",
+      modelId: "claude-haiku-4-5",
+      inputTokens: 190_000,
+      outputTokens: 900,
+      cacheReadTokens: 12,
+      cacheWriteTokens: 3,
+      costUsd: 0.42,
+      costBasis: "catalog-estimate",
+    });
+  });
+
+  // Every field non-finite is how a model with no price table arrives. Nothing
+  // was measured, so there is nothing to record — and null here is the same
+  // answer as the all-zero placeholder, arrived at from the other direction.
+  it("reports nothing when every number came back unusable", () => {
+    expect(
+      sessionUsageFrom(
+        {
+          input: Number.NaN,
+          output: Number.NaN,
+          cacheRead: Number.NaN,
+          cacheWrite: Number.NaN,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: Number.POSITIVE_INFINITY,
+          },
+        },
+        model,
+        "utility",
+      ),
+    ).toBeNull();
+  });
+
+  // Pi's compaction result declares its usage block optional. An absent block
+  // and an empty one say the same thing, and both are answered here so no
+  // caller has to remember to guard separately.
+  it("reports nothing when the executor supplied no usage block at all", () => {
+    expect(sessionUsageFrom(undefined, model, "compaction")).toBeNull();
+  });
+
+  it("keeps a priced request whose tokens were never reported", () => {
+    const usage = sessionUsageFrom(
+      {
+        input: Number.NaN,
+        output: Number.NaN,
+        cacheRead: Number.NaN,
+        cacheWrite: Number.NaN,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      model,
+      "utility",
+    );
+    expect(usage).toMatchObject({ cause: "utility", inputTokens: null, costUsd: 0.02 });
   });
 });

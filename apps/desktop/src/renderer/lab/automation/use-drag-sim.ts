@@ -51,6 +51,15 @@
  * for why that is a correctness rule and not a nicety. A release while it is
  * open commits `pickerCell` directly, bypassing `digitSelection` — see `onUp`.
  *
+ * Because ⌥ is a STATE and not an edge, the picker opens from wherever both
+ * halves become true — keydown while a column is hovered, or a pointer move
+ * that carries an already-held ⌥ onto its first column (VC-132). The keydown
+ * path alone left two holes a hand falls into immediately: ⌥ pressed over the
+ * gutter opened nothing and then never would, and a drag STARTED with ⌥ down
+ * never saw a keydown at all. Both were ⌥ held over a column with nothing on
+ * screen honouring it — the exact "invisible modifier reads as a bug" failure
+ * the rejected Option-alone design was thrown out for.
+ *
  * Two other shapes (a centred `t9` dialpad and a `radial` wedge fan) were built
  * and compared here; the owner picked this one after using all three, and they
  * were deleted rather than left to rot as dead variants.
@@ -232,13 +241,13 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       setDigitSelection(cell !== null ? { status: cell.status, index: cell.index } : null);
     }
 
-    function openPicker() {
+    /**
+     * Opens the picker around `hoveredNow` — passed by the caller rather than
+     * read from `state.current`, because the pointer-move path knows a fresher
+     * hover than the ref does (the ref updates on the NEXT render).
+     */
+    function openPicker(hoveredNow: TicketStatus) {
       const selection = state.current.digitSelection;
-      const hoveredNow = state.current.hovered;
-
-      // Anchored to a column that's already decided — the one under the
-      // pointer. There is nothing to open around without one.
-      if (hoveredNow === null) return;
       const index =
         selection !== null && selection.status === hoveredNow
           ? selection.index
@@ -296,10 +305,25 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
         if (selection !== null && next !== null && next !== selection.status) {
           setDigitSelection(null);
         }
+        // ⌥ already held and a column newly underfoot: the state "⌥ over a
+        // column" has just become true, so the column grows now — see the
+        // module doc. The digit-selection reset above ran first on purpose:
+        // a selection bound to some OTHER column must not seed this picker.
+        if (event.altKey && next !== null) {
+          openPicker(next);
+        }
         return;
       }
 
       {
+        // The symmetric half of the state-not-edge rule: a keyup that never
+        // arrived (⌥ released while the window lacked focus) must not leave a
+        // column enlarged under a modifier nobody is holding. The move event
+        // carries the live truth, so read it here too.
+        if (!event.altKey) {
+          closePicker();
+          return;
+        }
         // Spatially anchored, same as the baseline layer: the expanded
         // column simply follows the hover, carrying the whole tile grid with
         // it instead of a bare digit.
@@ -337,7 +361,7 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
         const down = event.type === "keydown";
         setModifierHeld(down);
         if (down && !state.current.pickerOpen) {
-          openPicker();
+          if (state.current.hovered !== null) openPicker(state.current.hovered);
         } else if (!down && state.current.pickerOpen) {
           // HELD for `radial` and `expand`; sticky only for `t9`.
           //
@@ -361,14 +385,18 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
       if (event.type !== "keydown") return;
 
       if (event.key === "Escape") {
-        if (state.current.pickerOpen) {
-          closePicker();
-          return;
-        }
-        // No picker open: cancel the whole drag. Through `resetDragState`, not
-        // by hand — the hand-written version left `origin`, `overList` and
-        // `modifierHeld` at their mid-drag values, so a consumer reading those
-        // at rest saw a drag that was already over.
+        // Cancels the whole drag, picker or no picker — through
+        // `resetDragState`, not by hand: the hand-written version left
+        // `origin`, `overList` and `modifierHeld` at their mid-drag values, so
+        // a consumer reading those at rest saw a drag that was already over.
+        //
+        // It used to close just the picker when one was open, folding the
+        // highlight into `digitSelection`. That died with the state-not-edge
+        // rule above: ⌥ still held over the same column reopens the picker on
+        // the very next pointer move, so "close the picker but keep dragging"
+        // was a state Escape could no longer actually produce. ⌥-up is how a
+        // picker closes without ending the drag; Escape is how a drag ends —
+        // which is also what dnd-kit's own board drag makes it mean.
         resetDragState();
         return;
       }

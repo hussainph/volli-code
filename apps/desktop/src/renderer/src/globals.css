@@ -864,7 +864,7 @@
  * an unmount without help, and the fade out is worth more here than the node.
  *
  * ── MOTION IS THE STATE, NOT JUST THE COLOUR ────────────────────────────
- * Only `working` travels. `waiting` is the same ring standing still.
+ * Only `working` travels; `waiting` is the ring standing still.
  *
  * That is the honest mapping rather than a decoration: something is MOVING on
  * that card exactly when something is moving in the Session, and a blocked
@@ -872,6 +872,11 @@
  * wearing two colours, which asks the reader to know the colour code before
  * the card means anything; told apart by motion they are legible in
  * peripheral vision, before the eye has resolved either.
+ *
+ * There is no third drawing for an executor attached between turns. VC-112's
+ * unattended Runs and the provenance VC-131 added use these same two activity
+ * states; between turns they draw no ring. This keeps every lit card actionable
+ * instead of making attachment itself look like work.
  *
  * It also lets the loud one stay rare. A board with four blocked agents on it
  * has four still outlines instead of four things crawling, and the one that is
@@ -944,13 +949,15 @@
     display 200ms allow-discrete;
 }
 
-.session-ring[data-activity] {
+.session-ring[data-activity="working"],
+.session-ring[data-activity="waiting"] {
   display: block;
   opacity: 1;
 }
 
 @starting-style {
-  .session-ring[data-activity] {
+  .session-ring[data-activity="working"],
+  .session-ring[data-activity="waiting"] {
     opacity: 0;
   }
 }
@@ -1024,7 +1031,10 @@
 
 /* Waiting stands still — see MOTION IS THE STATE above. The whole perimeter is
  * lit rather than one arc parked somewhere on it: a stopped comet reads as an
- * animation that died, while a closed ring reads as a ring. */
+ * animation that died, while a closed ring reads as a ring.
+ *
+ * This is also the same declaration reduced motion applies to every state
+ * below: the signifier remains present while only its motion is removed. */
 .session-ring[data-activity="waiting"]::before {
   animation: none;
   background: var(--session-ring-color);

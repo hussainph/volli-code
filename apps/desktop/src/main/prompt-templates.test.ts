@@ -53,6 +53,7 @@ describe("parsePromptTemplateFile", () => {
     const parsed = parsePromptTemplateFile("---\ndescription: dangling\nstill going");
 
     expect(parsed.description).toBeUndefined();
+    expect(parsed.frontmatterDiagnostic).toContain("no closing fence");
     expect(parsed.body).toBe("---\ndescription: dangling\nstill going");
   });
 
@@ -76,7 +77,17 @@ describe("parsePromptTemplateFile", () => {
     const parsed = parsePromptTemplateFile("---\ndescription: [unclosed\n---\nThe prompt.");
 
     expect(parsed.description).toBeUndefined();
+    expect(parsed.frontmatterDiagnostic).toContain("could not be parsed");
     expect(parsed.body).toBe("The prompt.");
+  });
+
+  it("does not mistake a longer dash line for either fence", () => {
+    const opening = parsePromptTemplateFile("----\ndescription: prose");
+    expect(opening.frontmatterDiagnostic).toBeNull();
+    expect(opening.body).toBe("----\ndescription: prose");
+
+    const closing = parsePromptTemplateFile("---\ndescription: real\n----\nbody");
+    expect(closing.frontmatterDiagnostic).toContain("no closing fence");
   });
 
   it("reads other frontmatter keys without tripping over them", () => {
@@ -90,6 +101,7 @@ describe("parsePromptTemplateFile", () => {
     const parsed = parsePromptTemplateFile("---\njust a string\n---\nBody");
 
     expect(parsed.description).toBeUndefined();
+    expect(parsed.frontmatterDiagnostic).toContain("must be a mapping");
     expect(parsed.body).toBe("Body");
   });
 });

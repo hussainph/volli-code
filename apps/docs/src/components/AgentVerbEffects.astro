@@ -1,0 +1,41 @@
+---
+import { VERB_REGISTRY } from "@volli/shared";
+import type { VerbEffects, VerbEntry } from "@volli/shared";
+
+type EffectVerb = VerbEntry & { effects: VerbEffects };
+const verbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+  (verb): verb is EffectVerb => verb.listed && verb.effects !== undefined,
+);
+---
+
+{
+  verbs.map((verb) => (
+    <section>
+      <h3><code>{verb.key}</code></h3>
+      {verb.effects.when && <p>Applies when <code>{verb.effects.when}</code> is supplied.</p>}
+      {verb.options.some((option) => option.name === "--dry-run") && (
+        <p><strong>Preview:</strong> supports <code>--dry-run</code>.</p>
+      )}
+      <dl>
+        <dt>Durable writes</dt>
+        <dd>
+          {verb.effects.durableWrites.length === 0 ? (
+            "None."
+          ) : (
+            <ul>
+              {verb.effects.durableWrites.map((write) => <li>{write.summary}</li>)}
+            </ul>
+          )}
+        </dd>
+        <dt>What a person sees</dt>
+        <dd>
+          <ul>{verb.effects.humanVisible.map((effect) => <li>{effect}</li>)}</ul>
+        </dd>
+        <dt>Does not do</dt>
+        <dd>
+          <ul>{verb.effects.nonEffects.map((effect) => <li>{effect}</li>)}</ul>
+        </dd>
+      </dl>
+    </section>
+  ))
+}

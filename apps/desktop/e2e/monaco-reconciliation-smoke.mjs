@@ -149,7 +149,14 @@ async function waitFileText(page, needle, dirty = null) {
       if (dirty !== null && state.dirty !== String(dirty)) return null;
       return state;
     },
-    { timeout: 20000 },
+    // Several callers wait on an EXTERNAL write being adopted, which means
+    // waiting on filesystem-watch latency. 20s encodes an assumption about how
+    // fast fsevents delivers, and that assumption holds on a local SSD and not
+    // on a CI runner's shared storage, where check 1 timed out with the editor
+    // never showing the adopted text. Raising the bound does not weaken the
+    // assertion — the content must still be adopted — only how long the probe
+    // is willing to wait for a notification it does not control.
+    { timeout: 45_000 },
   );
 }
 
@@ -520,8 +527,10 @@ async function main() {
         await waitFileText(page, 'export const cleanAgent = "adopted";', false);
         const after = await waitStableFileViewState(page, "cursor to settle after external write");
         const tabsAfter = await readTicketTabs(page, ticketId);
-        const updated = await waitUntil("Updated marker after inspected external write", async () =>
-          (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
+        const updated = await waitUntil(
+          "Updated marker after inspected external write",
+          async () =>
+            (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
         );
 
         const sameTabs = JSON.stringify(tabsBefore) === JSON.stringify(tabsAfter);
@@ -904,14 +913,13 @@ async function main() {
         // Since CONCEPT #51 the default presentation is inline
         // (`renderSideBySide: false`), so the modified editor carries Monaco's
         // deleted-line view-zones: THREE `.view-lines` containers, two of them
-        // `line-delete` zones whose lines measure 0x0. Clicking the editor box
-        // put the pointer in a zone and focused NOTHING (`activeElement` stayed
-        // BODY); taking the first `.view-line` hit a 0x0 zone line and timed out
-        // on actionability. The real text lives in the `monaco-mouse-cursor-text`
-        // container — the only one of the three a human can click. `:visible`
-        // on top of that: Monaco POOLS line nodes, so the first DOM child of
-        // even the right container can be a recycled node with no box, which
-        // fails Playwright's actionability check forever.
+        // `line-delete` zones whose lines measure 0x0. Taking the first
+        // `.view-line` hit a 0x0 zone line and timed out on actionability. The
+        // real text lives in the `monaco-mouse-cursor-text` container — the only
+        // one of the three a human can click. `:visible` on top of that: Monaco
+        // POOLS line nodes, so the first DOM child of even the right container
+        // can be a recycled node with no box, which fails Playwright's
+        // actionability check forever.
         const modifiedDiff = page
           .locator('[data-monaco-diff-status="ready"]')
           .locator(
@@ -922,29 +930,31 @@ async function main() {
         // Focus is the precondition for the keystroke, so assert it rather than
         // assume it: an unfocused editor silently swallows ⌘↑ and the failure
         // then surfaces as an unrelated viewport timeout.
-        // Scroll with the WHEEL, not ⌘↑. Clicking this diff does not focus it:
-        // `document.activeElement` stays BODY through a click on a real, visible
-        // line, so a keyboard scroll is dropped on the floor and the viewport
-        // stayed parked on the first change (scrollTop 269) while this check
-        // waited for line 1. The wheel needs no focus. Monaco clamps one wheel
-        // event to a couple of lines, so step until the top is reached or the
-        // viewport stops moving.
-        await modifiedDiff.hover();
-        let previousTop = null;
+        //
+        // This assertion IS the VC-148 regression guard. A click on a real,
+        // visible line used to leave `document.activeElement` as BODY, so every
+        // editor-local keybinding on the diff — ⌘S included — was unreachable
+        // from a mouse, and this check had to travel by mouse wheel instead.
+        // `monaco-diff-editor.tsx` now hands focus to the pressed side
+        // (`diffFocusTarget`), so the keyboard is the honest instrument here
+        // again: if focus ever stops landing, this fails loudly rather than
+        // being routed around.
         await waitUntil(
-          "modified Diff viewport wheeled to the top",
-          async () => {
-            const top = await diffModifiedScrollTop(page);
-            if (top === 0) return true;
-            if (top !== null && top === previousTop) {
-              throw new Error(`modified Diff viewport stalled at scrollTop ${top}`);
-            }
-            previousTop = top;
-            await page.mouse.wheel(0, -600);
-            await sleep(80);
-            return null;
-          },
-          { timeout: 15000, interval: 0 },
+          "modified Diff focused by the click",
+          async () =>
+            (await page.evaluate(() => {
+              const host = document.querySelector('[data-monaco-diff-status="ready"]');
+              return host !== null && host.contains(document.activeElement);
+            }))
+              ? true
+              : null,
+          { timeout: 3000, interval: 50 },
+        );
+        await page.keyboard.press("Meta+ArrowUp");
+        await waitUntil(
+          "modified Diff viewport at the top after a keyboard scroll",
+          async () => ((await diffModifiedScrollTop(page)) === 0 ? true : null),
+          { timeout: 5000, interval: 50 },
         );
         // The last observation is kept so a timeout can say what the viewport
         // actually held. Bare "last value: null" cannot distinguish "the Diff

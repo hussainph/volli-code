@@ -8,19 +8,26 @@
  * or faking `window.api` — the same split `worktree-done-flow-model.ts` uses.
  *
  * Two invariants it encodes, both settled:
- *  - Surfacing NEVER gates (decision #44): a conflict or failing-check notice
- *    explains why a PR can't merge yet; it never disables the wrap-up action.
+ *  - Surfacing NEVER gates (decision #44): a conflict notice explains why a PR
+ *    can't merge yet; it never disables the wrap-up action.
  *  - Keep is a HARD exemption (decision #16): a kept ticket is never
  *    archive-ready, so the prompt never fights a user's explicit "keep it".
+ *
+ * CI IS NO LONGER THIS MODULE'S SUBJECT (VC-182). It used to emit a second
+ * notice, "N checks failing", with the names in a tooltip — the most this shape
+ * could say about a suite. The card now has a CI row of its own
+ * (`pr-checks-model.ts`) that reports running and passing checks too, links each
+ * one to its log, and sits above these notices. Keeping both would have put two
+ * sentences about the same suite in one card, in two registers, disagreeing
+ * about how much detail the reader gets. The rule that survives is the shared
+ * one: neither surface gates anything.
  */
 import type { TicketRetentionState } from "../../../../ipc/contract";
 
-/** A surfaced, non-gating retention notice — a merge conflict or failing checks. */
+/** A surfaced, non-gating retention notice — today, only a merge conflict. */
 export interface RetentionNotice {
-  /** The one-line summary shown inline ("PR has merge conflicts" / "N checks failing"). */
+  /** The one-line summary shown inline ("PR has merge conflicts"). */
   text: string;
-  /** Full check names for the hover tooltip; `null` when there's nothing extra to list. */
-  detail: string | null;
 }
 
 /** The retention overlay the Done-flow rail composes over its adaptive action. */
@@ -31,7 +38,7 @@ export interface RetentionView {
   kept: boolean;
   /** The archive-reason context line ("PR merged" / "In Done for N+ days"), or `null` when not ready. */
   reasonLine: string | null;
-  /** Non-gating conflict/failing-check notices, conflict first (surfacing only). */
+  /** Non-gating merge-blocker notices (surfacing only). */
   notices: RetentionNotice[];
 }
 
@@ -52,17 +59,15 @@ function reasonLine(state: TicketRetentionState, ttlDays: number | null): string
   return ttlDays !== null ? `In Done for ${ttlDays}+ days` : "In Done long enough to archive";
 }
 
-/** The non-gating conflict/failing-check notices for a PR (empty when there are none). */
+/**
+ * The non-gating notices for a PR (empty when there are none). A list rather
+ * than a boolean because the shape is the stable part: conflicts are one reason
+ * a PR can't merge and there will be others, while WHICH reasons belong here is
+ * the part that has already moved once (checks left for their own row).
+ */
 function resolveNotices(state: TicketRetentionState): RetentionNotice[] {
   const notices: RetentionNotice[] = [];
-  if (state.hasConflicts) notices.push({ text: "PR has merge conflicts", detail: null });
-  const count = state.failingChecks.length;
-  if (count > 0) {
-    notices.push({
-      text: `${count} check${count === 1 ? "" : "s"} failing`,
-      detail: state.failingChecks.join(", "),
-    });
-  }
+  if (state.hasConflicts) notices.push({ text: "PR has merge conflicts" });
   return notices;
 }
 

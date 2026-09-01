@@ -15,6 +15,18 @@ describe("hashRulePack", () => {
     expect(BUILTIN_RULE_PACK_HASH).toBe(hashRulePack(AUTHORITY_RULE_IDS));
   });
 
+  it("pins the built-in pack's hash as a literal, so a pack change is a decision and not a recomputation", () => {
+    // The assertion above is a tautology — both sides recompute from the same
+    // list, so a rule added tomorrow satisfies it silently. This one does not,
+    // and VC-44 is why it now matters: the hash is written into every
+    // attachment's durable Authority Snapshot, so a pack that changed without
+    // anyone noticing leaves every older denial citing a pack id that no longer
+    // corresponds to any pack that ever ran. Nine rules, `d5e3dd88` before VC-3
+    // deleted `tool.not-bundled`.
+    expect(AUTHORITY_RULE_IDS).toHaveLength(9);
+    expect(BUILTIN_RULE_PACK_HASH).toBe("dca89a93");
+  });
+
   it("changes when the pack is reordered, so pack order is part of its identity", () => {
     expect(hashRulePack(AUTHORITY_RULE_IDS.toReversed())).not.toBe(BUILTIN_RULE_PACK_HASH);
   });
@@ -82,6 +94,37 @@ describe("isOverridableAuthorityRule", () => {
   it("keeps every overridable rule inside the built-in pack, so the pack cannot drift from what it lets a person overrule", () => {
     for (const rule of OVERRIDABLE_AUTHORITY_RULES) {
       expect(AUTHORITY_RULE_IDS).toContain(rule);
+    }
+  });
+
+  it("pins the membership itself, so moving a rule across the line is a decision and not a diff", () => {
+    // Asserted as a literal for the reason the pack hash is: the split is a
+    // judgement about what a person's "yes" could carry out, and it should cost
+    // a test edit to change. VC-44 moved the two workspace-containment rules
+    // onto the overridable side when it wired the gate — Seatbelt used to make
+    // consent moot and no longer exists, and Volli's own skills index asks a
+    // Session to read a personal-tier SKILL.md outside the workspace.
+    expect([...OVERRIDABLE_AUTHORITY_RULES]).toEqual([
+      "path.outside-workspace",
+      "path.git-internals",
+      "path.volli-internals",
+      "command.git-escapes-workspace",
+      "command.git-discards-work",
+    ]);
+  });
+
+  it("leaves every rule whose grant would outlive the Session unoverridable", () => {
+    // The hard-deny case: consent could be honoured and must not be. A login
+    // item, a disabled certificate check and a weakened SIP all survive the
+    // Session that asked for them, and a person answering mid-task is not in a
+    // position to weigh that.
+    for (const rule of [
+      "command.tls-weakening",
+      "command.persistence",
+      "command.platform-weakening",
+      "command.destructive-removal",
+    ] as const) {
+      expect(isOverridableAuthorityRule(rule)).toBe(false);
     }
   });
 });

@@ -5,6 +5,10 @@ import { errorMessage } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
+import { DOCUMENT_MODE_CLASS } from "@renderer/editor/document-mode-contribution";
+import { documentModeOptions } from "@renderer/editor/document-mode";
+import { surfaceGoToLine } from "@renderer/editor/go-to-line";
+import { applyFileReveal, onFileReveal, takeFileReveal } from "@renderer/editor/reveal-line";
 import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-registry";
 import {
   applyLiveDocumentReconciliation,
@@ -13,8 +17,13 @@ import {
   type LocalWriteReceipt,
 } from "@renderer/editor/live-document-reconciliation";
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
-import { loadMonacoRuntime, startModelLanguageWorker } from "@renderer/editor/monaco-runtime";
+import {
+  ensureProjectTypeScriptDefaults,
+  loadMonacoRuntime,
+  startModelLanguageWorker,
+} from "@renderer/editor/monaco-runtime";
 import { toastError } from "@renderer/lib/toast";
+import { cn } from "@renderer/lib/utils";
 
 /** What a host's `onSave` reports back: the fresh disk revision, or why it failed. */
 export type MonacoFileSaveResult =
@@ -22,10 +31,12 @@ export type MonacoFileSaveResult =
   | { ok: false; error: string };
 
 /**
- * Monaco options a host may set per document, on top of the source-mode look
- * below. Document Mode is the reason this exists: the same editor, the same
- * model and the same save contract, but no line numbers, no gutter, and a
- * reading measure's padding.
+ * Monaco options a host may set per document, on top of whichever look
+ * {@link FileEditorSurface} selected. Document Mode was the reason this
+ * existed — the same editor, the same model and the same save contract, but no
+ * line numbers, no gutter, and a reading measure's padding — and now that
+ * repository Markdown actually mounts it (VC-192) that look has a name of its
+ * own; this stays for tweaks on top of either one.
  *
  * The keys the component owns are omitted, not merely overridden last: `model`
  * comes from the shared registry, `theme` is owned by the theming engine (issue
@@ -71,6 +82,30 @@ export function attachEditorContribution(
   return contribute?.(context) ?? null;
 }
 
+/** How a word-wrap preference reaches Monaco. */
+export function wordWrapOption(wordWrap: boolean): "on" | "off" {
+  return wordWrap ? "on" : "off";
+}
+
+/**
+ * Which surface this view wears. The two are mutually exclusive and always
+ * were — `editor/source-mode.css` and `editor/document-mode.css` each scope
+ * their rules under their own class — so it is one choice, not a pair of flags.
+ *
+ * `document` is Document Mode over a file that keeps the EXPLICIT save contract
+ * (plan §4.6): repository Markdown, whose ⌘S, dirty flag, close guard and
+ * conflict banner are the ones this component already owns. The autosaving
+ * document surface is a different component (`MonacoDocumentEditor`) precisely
+ * because its save contract differs — not because its look does.
+ */
+export type FileEditorSurface = "source" | "document";
+
+/** The host class each surface's stylesheet scopes its rules under. */
+const SURFACE_CLASS: Record<FileEditorSurface, string> = {
+  source: "volli-source-mode",
+  document: DOCUMENT_MODE_CLASS,
+};
+
 /** The source-mode look: a code file, with its gutter and monospace measure. */
 const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
   automaticLayout: true,
@@ -79,6 +114,18 @@ const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
   lineHeight: 21,
   lineNumbers: "on",
   minimap: { enabled: false },
+  // STAYS 0 — reconsidered under VC-188, which is the decision plan §4.2 asks
+  // for once diagnostics are trustworthy. Configuring the TS worker took this
+  // repository from 9,048 false diagnostics over 644 of its 721 source files to
+  // 537 over 185, but what is left is not thin noise: it is a systematic class,
+  // the type or global that another FILE declares, so roughly one file in four
+  // still carries at least one red mark that is wrong. A squiggle makes that
+  // claim where the code is, beside the evidence, and costs nothing to
+  // disbelieve. A ruler tick makes it in persistent chrome, about a line you
+  // cannot see, with nothing next to it to judge it by — and the plan's own bar
+  // is that "a ruler mark is only good chrome when it marks something real".
+  // Turn this on when a marker can be trusted per file: that is the cross-file
+  // resolution question the LSP gate (§4.8) exists to answer, not this slice.
   overviewRulerLanes: 0,
   hideCursorInOverviewRuler: true,
   scrollBeyondLastLine: false,
@@ -95,11 +142,20 @@ const SOURCE_MODE_OPTIONS: MonacoDocumentOptions = {
 export function fileEditorConstructionOptions(input: {
   readOnly: boolean;
   ariaLabel: string;
+  /** Which look (see {@link FileEditorSurface}); `source` when omitted. */
+  surface?: FileEditorSurface;
+  /**
+   * The user's word-wrap choice (stores/ui). Omitted by a host that has an
+   * opinion of its own — Document Mode always wraps, because prose that did not
+   * would not be prose.
+   */
+  wordWrap?: boolean;
   overrides?: MonacoDocumentOptions;
 }): editor.IStandaloneEditorConstructionOptions {
   return {
-    ...SOURCE_MODE_OPTIONS,
+    ...(input.surface === "document" ? documentModeOptions({}) : SOURCE_MODE_OPTIONS),
     ...input.overrides,
+    ...(input.wordWrap === undefined ? {} : { wordWrap: wordWrapOption(input.wordWrap) }),
     theme: activeMonacoEditorThemeId(),
     readOnly: input.readOnly,
     domReadOnly: input.readOnly,
@@ -117,6 +173,21 @@ export interface MonacoFileEditorProps {
   ariaLabel: string;
   /** Renders a read-only editor (truncated/oversize reads); Cmd-S then never writes. */
   readOnly: boolean;
+  /**
+   * Source Mode (the default) or Document Mode over the same file and the same
+   * save contract — see {@link FileEditorSurface}. Read at creation, like
+   * {@link MonacoFileEditorProps.options}: a host that flips it must also give
+   * the view a new `viewId`, since the two surfaces remember different cursors
+   * in the same document.
+   */
+  surface?: FileEditorSurface;
+  /**
+   * Wrap long lines? The app-wide preference (stores/ui), pushed down rather
+   * than read here so this component keeps taking its whole state from props.
+   * Applied live with `updateOptions` — unlike {@link MonacoFileEditorProps.options},
+   * a wrap flip is the same document in the same view, not a different one.
+   */
+  wordWrap?: boolean;
   /** Performs the actual write. The editor only reads the model and delegates. */
   onSave(text: string): Promise<MonacoFileSaveResult>;
   /** Fires on every dirty transition so the workbench can pin/guard the tab. */
@@ -129,6 +200,12 @@ export interface MonacoFileEditorProps {
   options?: MonacoDocumentOptions;
   /** Attaches Document Mode (or anything else) to this view's editor. */
   contribute?: MonacoEditorContribution;
+  /**
+   * The document's reveal key (`editor/reveal-line.ts`) — how a search result
+   * that opened this file says WHERE in it to land (VC-193). Omitted by a host
+   * with no such gesture; an editor without one simply never checks the slot.
+   */
+  revealKey?: string;
   /** Cursor/folding/scroll persisted by the store, used when the registry has none. */
   initialViewState?: unknown;
   /** Emitted when this view releases, so the store can persist the view state. */
@@ -237,11 +314,13 @@ export function applyExternalSeed(input: {
 }
 
 /**
- * The Monaco view over one file — the ONE source-mode editor, editable or
- * `readOnly`, for every surface that shows file contents. The shared registry
- * owns the model, the baseline and the dirty flag; this component owns only the
- * disposable editor DOM and never writes to disk itself — every save goes out
- * through `onSave` and comes back as a revision to record.
+ * The Monaco view over one file — the ONE file editor, editable or `readOnly`,
+ * in Source Mode or Document Mode, for every surface that shows file contents.
+ * The shared registry owns the model, the baseline and the dirty flag; this
+ * component owns only the disposable editor DOM and never writes to disk itself
+ * — every save goes out through `onSave` and comes back as a revision to
+ * record. Both surfaces therefore save the same way: explicitly, on ⌘S,
+ * conflict-guarded by the host's mtime (CONCEPT #49).
  *
  * Disk changes run through the shared A/L/D reconciliation policy. Disjoint
  * edits merge in place; conflicts preserve both versions behind explicit
@@ -254,10 +333,13 @@ export function MonacoFileEditor({
   viewId,
   ariaLabel,
   readOnly,
+  surface = "source",
+  wordWrap,
   onSave,
   onDirtyChange,
   options,
   contribute,
+  revealKey,
   initialViewState,
   onViewStateChange,
 }: MonacoFileEditorProps) {
@@ -286,20 +368,26 @@ export function MonacoFileEditor({
   const liveRef = React.useRef({
     readOnly,
     ariaLabel,
+    surface,
+    wordWrap,
     onSave,
     onViewStateChange,
     initialViewState,
     options,
     contribute,
+    revealKey,
   });
   liveRef.current = {
     readOnly,
     ariaLabel,
+    surface,
+    wordWrap,
     onSave,
     onViewStateChange,
     initialViewState,
     options,
     contribute,
+    revealKey,
   };
 
   const syncDirty = React.useCallback(() => {
@@ -377,6 +465,8 @@ export function MonacoFileEditor({
     let lease: MonacoLease | null = null;
     let changeSubscription: { dispose(): void } | null = null;
     let contribution: { dispose(): void } | null = null;
+    let goToLine: { dispose(): void } | null = null;
+    let revealSubscription: (() => void) | null = null;
     host.dataset.monacoStatus = "loading";
 
     void loadMonacoRuntime()
@@ -414,11 +504,19 @@ export function MonacoFileEditor({
               readOnly: liveRef.current.readOnly,
               dirty: lease.snapshot().dirty,
             }),
+            surface: liveRef.current.surface,
+            wordWrap: liveRef.current.wordWrap,
             overrides: liveRef.current.options,
           }),
           model: lease.model,
         });
         editorRef.current = editorView;
+
+        // ⌃G, and the editor a palette row means (editor/go-to-line.ts).
+        goToLine = surfaceGoToLine(
+          editorView,
+          runtime.monaco.KeyMod.WinCtrl | runtime.monaco.KeyCode.KeyG,
+        );
 
         // Monaco swallows Cmd-S inside the editor, so the binding has to be
         // editor-local. It only reads the model and delegates to the host.
@@ -452,6 +550,22 @@ export function MonacoFileEditor({
           syncDirty();
         });
 
+        // Land on a match (VC-193). Both halves of the race are served here:
+        // the click that OPENED this tab left its request in the slot while
+        // Monaco was still loading, and a click made from now on arrives
+        // through the subscription. Neither can double-apply — the slot is
+        // taken, not read.
+        const revealTarget = liveRef.current.revealKey;
+        if (revealTarget !== undefined) {
+          const view = editorView;
+          const landOnPending = (): void => {
+            const target = takeFileReveal(revealTarget);
+            if (target !== null) applyFileReveal(view, target);
+          };
+          revealSubscription = onFileReveal(revealTarget, landOnPending);
+          landOnPending();
+        }
+
         const language = lease.snapshot().language;
         host.dataset.monacoStatus = "ready";
         host.dataset.monacoLanguage = language;
@@ -461,6 +575,16 @@ export function MonacoFileEditor({
         // A document parked dirty from an earlier mount may already disagree
         // with the seed we just re-read from disk.
         reconcileExternal(lease, seedRef.current);
+
+        // What the worker about to start should believe about this file's
+        // project (plan §4.2). Fire-and-forget beside the handshake, never
+        // awaited before it: the model is already being checked under the
+        // permissive defaults, and this only makes the answer more accurate.
+        void ensureProjectTypeScriptDefaults(runtime.monaco, activeIdentity.identity).catch(
+          (error: unknown) => {
+            console.warn("[volli] failed to read project TypeScript options:", error);
+          },
+        );
 
         void startModelLanguageWorker(runtime, lease.model)
           .then((worker) => {
@@ -477,6 +601,10 @@ export function MonacoFileEditor({
         if (cancelled) return;
         contribution?.dispose();
         contribution = null;
+        goToLine?.dispose();
+        goToLine = null;
+        revealSubscription?.();
+        revealSubscription = null;
         changeSubscription?.dispose();
         changeSubscription = null;
         editorView?.dispose();
@@ -496,6 +624,8 @@ export function MonacoFileEditor({
       // Before the editor goes: a contribution's widgets and view zones belong
       // to it, and its provider registrations are global.
       contribution?.dispose();
+      goToLine?.dispose();
+      revealSubscription?.();
       changeSubscription?.dispose();
       if (leaseRef.current?.key === key) leaseRef.current = null;
       editorRef.current = null;
@@ -565,6 +695,14 @@ export function MonacoFileEditor({
     });
   }, [ariaLabel, dirty, readOnly]);
 
+  // The word-wrap control is elsewhere (the file tab's menu, the diff's band),
+  // so this arrives while the editor is up and mid-draft: `updateOptions`, never
+  // a remount, which would cost the caret and the undo stack to change a view.
+  React.useEffect(() => {
+    if (wordWrap === undefined) return;
+    editorRef.current?.updateOptions({ wordWrap: wordWrapOption(wordWrap) });
+  }, [wordWrap]);
+
   /**
    * The conflict banner's "use disk" consequence: the draft is genuinely thrown
    * away, so the pre-edit view state is still the right thing to land on. Focus
@@ -610,11 +748,14 @@ export function MonacoFileEditor({
           onOverwriteDisk={() => void runSaveRef.current()}
         />
       )}
-      {/* `volli-source-mode` is the hook `editor/source-mode.css` paints the
-          editor's FURNITURE through (ground, gutter, selection, find widget).
-          It is the Source Mode twin of `volli-document-mode`, and the two are
-          mutually exclusive: a host wears one or the other. */}
-      <div ref={hostRef} className="volli-source-mode min-h-0 w-full flex-1 overflow-hidden" />
+      {/* The surface class is the hook each stylesheet paints the editor's
+          FURNITURE through — `editor/source-mode.css` for the ground, gutter,
+          selection and find widget; `editor/document-mode.css` for the live
+          preview's type and widgets. Mutually exclusive: a host wears one. */}
+      <div
+        ref={hostRef}
+        className={cn(SURFACE_CLASS[surface], "min-h-0 w-full flex-1 overflow-hidden")}
+      />
     </div>
   );
 }

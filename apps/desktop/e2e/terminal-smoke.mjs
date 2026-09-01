@@ -98,7 +98,7 @@ async function visibleCanvasRects(page) {
         const rect = canvas.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })
-      .sort((a, b) => a.y - b.y || a.x - b.x),
+      .toSorted((a, b) => a.y - b.y || a.x - b.x),
   );
 }
 
@@ -143,6 +143,35 @@ async function waitForFileContains(path, needle, timeoutMs = 8000) {
     return null;
   }
 }
+
+/**
+ * Poll a file until its contents MATCH `pattern`, or time out. Returns the
+ * trimmed text, or null.
+ *
+ * `waitForFileContains(path, "")` cannot express "wait for a real value":
+ * every string contains the empty string, so it returns the first partial read
+ * the poller happens to catch. That is why check 9 once reported `child=→` on
+ * CI — it had captured a stray prompt glyph rather than `stty size` output, on
+ * a runner slow enough for the redirect and the read to interleave. Waiting
+ * for the SHAPE of the answer removes the race.
+ */
+async function waitForFileMatching(path, pattern, timeoutMs = 8000) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      last = await fs.readFile(path, "utf8");
+      if (pattern.test(last.trim())) return last.trim();
+    } catch {
+      // not written yet
+    }
+    await sleep(150);
+  }
+  return last === null ? null : last.trim();
+}
+
+/** `stty size` output: "<rows> <cols>". */
+const GRID_SHAPE = /^\d+\s+\d+$/;
 
 /** Number of session tabs the selected workspace shows (close buttons ≙ tabs). */
 async function tabCount(page) {
@@ -537,12 +566,10 @@ async function main() {
     // === 9. Pane-local font zoom: focused grid changes, sibling/UI don't ===
     await focusTerminalAt(page, 0);
     await runInTerminal(page, `stty size > ${rootGridBeforePath}`);
-    const rootGridBefore =
-      (await waitForFileContains(rootGridBeforePath, "", 5000))?.trim() ?? null;
+    const rootGridBefore = await waitForFileMatching(rootGridBeforePath, GRID_SHAPE, 5000);
     await focusTerminalAt(page, 1);
     await runInTerminal(page, `stty size > ${childGridBeforePath}`);
-    const childGridBefore =
-      (await waitForFileContains(childGridBeforePath, "", 5000))?.trim() ?? null;
+    const childGridBefore = await waitForFileMatching(childGridBeforePath, GRID_SHAPE, 5000);
     const chromeBefore = await page.evaluate(() => ({
       dpr: window.devicePixelRatio,
       // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the
@@ -558,11 +585,10 @@ async function main() {
     await page.keyboard.press("Meta+Equal");
     await sleep(1000);
     await runInTerminal(page, `stty size > ${childGridAfterPath}`);
-    const childGridAfter =
-      (await waitForFileContains(childGridAfterPath, "", 5000))?.trim() ?? null;
+    const childGridAfter = await waitForFileMatching(childGridAfterPath, GRID_SHAPE, 5000);
     await focusTerminalAt(page, 0);
     await runInTerminal(page, `stty size > ${rootGridAfterPath}`);
-    const rootGridAfter = (await waitForFileContains(rootGridAfterPath, "", 5000))?.trim() ?? null;
+    const rootGridAfter = await waitForFileMatching(rootGridAfterPath, GRID_SHAPE, 5000);
     const chromeAfter = await page.evaluate(() => ({
       dpr: window.devicePixelRatio,
       // A chrome label that is NOT inside the terminal, to prove ⌘+ zoomed the

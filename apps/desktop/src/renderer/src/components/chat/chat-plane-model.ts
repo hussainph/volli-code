@@ -21,8 +21,12 @@ import type {
 import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import { composerAnswer, type InteractionSubmission } from "@renderer/chat/interaction";
-import type { ComposerIntent, QueuedMessage } from "@renderer/chat/session-model";
+import {
+  composerAnswer,
+  type ComposerIntent,
+  type InteractionSubmission,
+  type QueuedMessage,
+} from "@volli/session-presentation";
 import type { HeldMessage } from "@renderer/stores/chat-drafts";
 
 export function composerModelSelection(input: {

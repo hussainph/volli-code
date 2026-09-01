@@ -62,6 +62,39 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "commented", commentId: "c1" })).toBeNull();
   });
 
+  // The one line whose SUBJECT is the news (VC-131): every other sentence here
+  // describes a change to the Ticket, where who made it is chrome. "started a
+  // session" attributed to nobody is exactly the line that cannot tell a Run
+  // from a person sitting down at the keyboard.
+  it("says which of the three parties started a session", () => {
+    const started = { kind: "session_started", sessionId: "session-1" } as const;
+    expect(describeEvent(started, "automation")).toBe("an Automation started a session");
+    expect(describeEvent(started, "session")).toBe("an agent started a session");
+    expect(describeEvent(started, "user")).toBe("started a session");
+    // The absence of evidence reads as the neutral sentence rather than as a
+    // claim about a party: `unauthenticated` names nobody, and neither does a
+    // caller that held only a payload.
+    expect(describeEvent(started, "unauthenticated")).toBe("started a session");
+    expect(describeEvent(started)).toBe("started a session");
+  });
+
+  it("reads a verdict back with its reason attached (VC-85)", () => {
+    // The detail rides the same line as the verdict. Splitting them is how the
+    // `VERDICT:` comment convention read — a stamp somewhere, the reason
+    // somewhere else — and the typed channel exists to keep them together.
+    expect(
+      describeEvent({
+        kind: "signaled",
+        signalKind: "review",
+        verdict: "fail",
+        detail: "Missing tests",
+      }),
+    ).toBe("signalled review: fail — Missing tests");
+    expect(
+      describeEvent({ kind: "signaled", signalKind: "merge", verdict: "pass", detail: null }),
+    ).toBe("signalled merge: pass");
+  });
+
   it("describes attachment add/remove events", () => {
     expect(describeEvent({ kind: "attachment_added", attachmentId: "a1", label: "spec.pdf" })).toBe(
       'attached "spec.pdf"',
@@ -195,6 +228,15 @@ describe("commentAuthorLabel", () => {
     expect(commentAuthorLabel("agent:my-harness")).toBe("my-harness");
     expect(commentAuthorLabel("automation")).toBe("automation");
   });
+
+  // VC-163: the actor column is a plain string, so this kind arrives here with
+  // nothing to fail the build. Left to the verbatim fallback it would print the
+  // bare enum token as an author's name, on a row a reader has every reason to
+  // read as a name — and this is the one actor that means Volli could not
+  // establish who wrote it.
+  it("spells out an unauthenticated caller rather than printing the raw token", () => {
+    expect(commentAuthorLabel("unauthenticated")).toBe("Unauthenticated caller");
+  });
 });
 
 describe("EVENT_KIND_PRIORITY", () => {
@@ -202,6 +244,7 @@ describe("EVENT_KIND_PRIORITY", () => {
     const expected: TicketEventKind[] = [
       "worktree_failed",
       "status_changed",
+      "signaled",
       "pr_merged",
       "pr_opened",
       "created",
@@ -220,6 +263,16 @@ describe("EVENT_KIND_PRIORITY", () => {
     ];
     expect(EVENT_KIND_PRIORITY).toEqual(expected);
     expect(EVENT_KIND_PRIORITY).not.toContain("commented");
+  });
+
+  it("fronts a bunch with the verdict rather than the bookkeeping around it", () => {
+    const edited = event({ kind: "body_edited" }, 10);
+    const signalled = event(
+      { kind: "signaled", signalKind: "review", verdict: "fail", detail: null },
+      20,
+    );
+    const retagged = event({ kind: "labels_changed", added: ["api"], removed: [] }, 30);
+    expect(pickBunchLabel([edited, signalled, retagged]).id).toBe(signalled.id);
   });
 
   it("outranks a routine edit with a merged PR", () => {

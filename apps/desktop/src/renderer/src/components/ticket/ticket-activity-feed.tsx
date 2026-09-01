@@ -16,6 +16,7 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlayCircleIcon } from "@phosphor-icons/react/dist/csr/PlayCircle";
 import { PlusCircleIcon } from "@phosphor-icons/react/dist/csr/PlusCircle";
 import { RobotIcon } from "@phosphor-icons/react/dist/csr/Robot";
+import { SealCheckIcon } from "@phosphor-icons/react/dist/csr/SealCheck";
 import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import { TrashSimpleIcon } from "@phosphor-icons/react/dist/csr/TrashSimple";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
@@ -70,6 +71,9 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   archived: ArchiveIcon,
   unarchived: ArrowCounterClockwiseIcon,
   commented: ChatCircleIcon,
+  // A verdict is a stamp, not a chat bubble: the glyph says the line was
+  // recorded by a signer rather than written by a talker (VC-85).
+  signaled: SealCheckIcon,
   worktree_changed: GitBranchIcon,
   worktree_scope_changed: GitBranchIcon,
   worktree_failed: WarningCircleIcon,
@@ -85,7 +89,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
 /** The single muted line for one property-change event: icon + sentence + time. */
 function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boolean }) {
   const Icon = EVENT_ICON[event.payload.kind];
-  const sentence = describeEvent(event.payload);
+  const sentence = describeEvent(event.payload, event.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   return (
     <div
@@ -130,7 +134,7 @@ function BunchRow({
   events: TicketEvent[];
 }) {
   const [expanded, setExpanded] = React.useState(false);
-  const sentence = describeEvent(label.payload);
+  const sentence = describeEvent(label.payload, label.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   const Icon = EVENT_ICON[label.payload.kind];
   const hidden = events.length - 1;

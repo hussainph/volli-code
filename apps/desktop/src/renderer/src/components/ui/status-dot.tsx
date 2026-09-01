@@ -50,7 +50,9 @@ export type StatusDotState =
   /** Idle and SIGSTOP'd for the warm tier. */
   | "parked"
   /** Over. */
-  | "exited";
+  | "exited"
+  /** Ended on purpose — a supervisor, the person, or the watchdog (VC-86). */
+  | "stopped";
 
 /**
  * The map, and the only place a Session state becomes a colour.
@@ -90,6 +92,9 @@ const STATUS_DOT_TONE: Record<StatusDotState, string> = {
   idle: "bg-muted-foreground/50",
   parked: "bg-muted-foreground/30",
   exited: "bg-muted-foreground/30",
+  // Ended-by-decision is not an error and asks for nobody: it rests at the
+  // same not-running weight as `exited`. The label, not the dot, says who.
+  stopped: "bg-muted-foreground/30",
 };
 
 /** 6px in a row of text, 8px on a tab. The two the app already draws. */

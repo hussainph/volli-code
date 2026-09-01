@@ -47,14 +47,15 @@
  * like the sidebar width: it's a global chrome preference, not per-workspace,
  * so every ticket you open honors the same choice.
  *
- * `homeRailMode` — which page HOME's rail shows (Now / Sessions), and
+ * `homeRailMode` — which page HOME's rail shows (Now / Sessions / Files /
+ * Search), and
  * `homeEmptyVisual` — which drawing a Project Session's empty chat opens on
  * (Streak / Board / Venue, VC-55). Both persist app-wide for the same reason
  * `railMode` does, and both are their own key rather than a widening of the
  * ticket rail's: the two rails offer different pages, and a ticket's empty chat
  * has one visual to choose from, so there is nothing there to remember.
  *
- * `railMode` — which page the ticket rail shows (Now / Diffs / Files).
+ * `railMode` — which page the ticket rail shows (Now / Diffs / Files / Search).
  * Persisted app-wide like `railCollapsed`. Every value a shipped build could
  * have written stays readable: `resolvePersistedRailMode` maps the retired
  * Sessions/Properties/Session pages, and the pre-icon-rail `detailsExpanded`
@@ -64,6 +65,12 @@
  * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
+ *
+ * `wordWrap` — whether the source editor and the diff wrap long lines. Persisted
+ * app-wide for exactly the reasons `diffPresentation` is, and deliberately not
+ * per file: wrapping is how a person reads code, not a fact about one document.
+ * Defaults ON, which is what `SOURCE_MODE_OPTIONS` hardcoded before there was a
+ * control, so an existing install sees no change until it asks for one.
  *
  * `defaultExternalAppId` — a chosen external app, or explicit `null` for Ask
  * every time. It is app-wide chrome too; a successful Launch Services listing
@@ -131,6 +138,9 @@ export const RAIL_MAX_WIDTH = 560;
 export type DiffPresentation = "inline" | "side-by-side";
 
 const DEFAULT_DIFF_PRESENTATION: DiffPresentation = "inline";
+
+/** Wrapping is what the editor did before it was askable; keep that the default. */
+const DEFAULT_WORD_WRAP = true;
 
 /** A chosen external app, or the explicit preference to ask on every open. */
 export type DefaultExternalAppId = ExternalAppId | null;
@@ -223,6 +233,16 @@ function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
 }
 
 /**
+ * A persisted word-wrap choice. Anything but an explicit `false` wraps — the
+ * same discipline `costVisible` and `sidebarPinned` follow: a missing key or
+ * corrupt JSON lands on the visible default rather than silently turning a
+ * behaviour off that the reader never turned off.
+ */
+function sanitizeWordWrap(wordWrap: unknown): boolean {
+  return wordWrap !== false;
+}
+
+/**
  * A persisted preference may only name an app this build knows how to launch.
  * A later successful Launch Services listing reconciles an uninstalled known
  * app through `reconcileDefaultExternalApp` below.
@@ -303,8 +323,22 @@ interface UiState {
   homeRailMode: HomeRailMode;
   /** Which drawing a Project Session's empty chat opens on. Persisted app-wide. */
   homeEmptyVisual: EmptyVisual;
+  /**
+   * Whether the rails draw what a Session, Ticket or project has cost.
+   * Persisted app-wide (see module doc).
+   *
+   * A DISPLAY preference and nothing more: metering keeps running, the ledger
+   * keeps recording, and `volli cost` would still answer. It governs whether a
+   * number that is nobody's business but the owner's is standing on screen
+   * during a screen-share, a pairing session or a recorded demo. Turning it off
+   * must never be mistaken for turning telemetry off, which is why the Settings
+   * copy says so out loud.
+   */
+  costVisible: boolean;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
+  /** Wrap long lines in the source editor and the diff. Persisted app-wide. */
+  wordWrap: boolean;
   /** Chosen external app, or explicit Ask every time. Persisted app-wide. */
   defaultExternalAppId: DefaultExternalAppId;
   /**
@@ -350,7 +384,11 @@ interface UiState {
   setRailMode(mode: TicketRailMode): void;
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
+  setCostVisible(visible: boolean): void;
   setDiffPresentation(presentation: DiffPresentation): void;
+  setWordWrap(wordWrap: boolean): void;
+  /** The one gesture every word-wrap control makes — a band button, a menu item. */
+  toggleWordWrap(): void;
   setDefaultExternalAppId(appId: DefaultExternalAppId): void;
   /**
    * Reconcile the persisted choice against a successful Launch Services list.
@@ -400,7 +438,9 @@ type PersistedUiState = Pick<
   | "railMode"
   | "homeRailMode"
   | "homeEmptyVisual"
+  | "costVisible"
   | "diffPresentation"
+  | "wordWrap"
   | "defaultExternalAppId"
   | "dismissedEnvironmentFaults"
 > & {
@@ -434,7 +474,9 @@ export function createUiStore(storage?: StateStorage) {
         railMode: DEFAULT_TICKET_RAIL_MODE,
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
+        costVisible: true,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
+        wordWrap: DEFAULT_WORD_WRAP,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         dismissedEnvironmentFaults: [],
         terminalFocusTarget: null,
@@ -460,7 +502,10 @@ export function createUiStore(storage?: StateStorage) {
         setRailMode: (mode) => set({ railMode: mode }),
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
+        setCostVisible: (visible) => set({ costVisible: visible }),
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
+        setWordWrap: (wordWrap) => set({ wordWrap }),
+        toggleWordWrap: () => set((state) => ({ wordWrap: !state.wordWrap })),
         setDefaultExternalAppId: (appId) => set({ defaultExternalAppId: appId }),
         reconcileDefaultExternalApp: (apps) =>
           set((state) =>
@@ -514,7 +559,9 @@ export function createUiStore(storage?: StateStorage) {
           railMode: state.railMode,
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
+          costVisible: state.costVisible,
           diffPresentation: state.diffPresentation,
+          wordWrap: state.wordWrap,
           defaultExternalAppId: state.defaultExternalAppId,
           dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
         }),
@@ -551,9 +598,15 @@ export function createUiStore(storage?: StateStorage) {
             // longer offers lands on the one it opens with.
             homeRailMode: sanitizeHomeRailMode(stored.homeRailMode),
             homeEmptyVisual: sanitizeEmptyVisual(stored.homeEmptyVisual),
+            // Anything other than an explicit `false` shows cost, so a missing
+            // key or corrupt JSON opens on the visible default rather than
+            // silently hiding a feature the reader never turned off — the same
+            // discipline `sidebarPinned` above follows.
+            costVisible: stored.costVisible !== false,
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
+            wordWrap: sanitizeWordWrap(stored.wordWrap),
             defaultExternalAppId: sanitizeDefaultExternalAppId(stored.defaultExternalAppId),
             // A dismissal only survives while this build still raises its kind.
             dismissedEnvironmentFaults: sanitizeEnvironmentFaults(

@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { ChromeBar } from "@renderer/components/chrome-bar";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
@@ -609,6 +610,13 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         />
       </div>
       <Toaster />
+      {/* The armed-column delay window (VC-128, main-owned in VC-226).
+          Window-level beside the Toaster rather than inside the board: any
+          mounted renderer projects main's same durable countdown, whatever
+          page it shows, and Cancel from any window deletes that exact arrival.
+          The timer itself is in main, so an explicit `volli ticket move` still
+          fires with no renderer open. */}
+      <ArmedRunWindows />
       <NewTicketDialog />
       <HarnessTrustDialog />
       <UpdateInstallDialog />

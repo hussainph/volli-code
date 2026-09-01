@@ -1,23 +1,28 @@
 version: 2
 
-# Monthly cadence: every Dependabot PR triggers a CI run against the paid
-# Actions minutes pool, so batch updates instead of weekly drips.
+# Weekly cadence. This was monthly because "every Dependabot PR triggers a CI
+# run against the paid Actions minutes pool" — which stopped being true when
+# the repository went public and standard runners became free. Monthly batching
+# now only delays security fixes and makes each PR a bigger, harder-to-bisect
+# jump, so the reason for it is gone with the bill.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "04:17"
       timezone: Asia/Kuwait
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 3
 
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "04:47"
       timezone: Asia/Kuwait
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 5
     groups:
       non-major-dependencies:
         update-types:
@@ -33,3 +38,21 @@ updates:
       - dependency-name: "typescript"
         update-types:
           - "version-update:semver-major"
+
+      # The vite-plus toolchain is pinned in pnpm-workspace.yaml's catalog and
+      # every manifest that uses it says `catalog:`. Dependabot cannot see
+      # through that indirection: it rewrites the version in pnpm-lock.yaml and
+      # leaves the catalog at the old pin, which is not a tree pnpm will accept
+      # — `vp install` dies on "vite-plus (lockfile: 0.3.0, manifest: catalog:)"
+      # before a single check runs. That is exactly how PR #418 took its whole
+      # 22-update group red, and it will happen again on every group that
+      # catches vite-plus (VC-211 landed the other 20 by hand).
+      #
+      # @vitest/coverage-v8 is ignored for the same move, not a second reason:
+      # vp fails fast when it skews from the vitest bundled inside vite-plus, so
+      # the catalog carries the two as one atomic pin. The catalog entry's own
+      # comment names that lockstep and holds the versions — deliberately not
+      # repeated here, because this file has no way to notice when it goes
+      # stale. Both are bumped together in the vite-plus absorb PR, by a person.
+      - dependency-name: "vite-plus"
+      - dependency-name: "@vitest/coverage-v8"

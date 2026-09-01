@@ -4,8 +4,8 @@
  * `SidebarPanel` + `ActiveLabelTabs` + `NowPanel` and is now the design of
  * record).
  *
- * The panel owns its own header: one centred pill of three pages — Now, Diffs,
- * Files — floating above whichever page is showing. The vertical icon strip
+ * The panel owns its own header: one centred pill of four pages — Now, Diffs,
+ * Files, Search — floating above whichever page is showing. The icon strip
  * that used to run down the rail's outer edge is gone, and so is Properties as
  * a page of its own: it folds inline into Now, under the repository card.
  *
@@ -30,10 +30,13 @@ import * as React from "react";
 import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDots";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import type { Ticket } from "@volli/shared";
 
+import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
+import { TicketUsageRailBlock } from "@renderer/components/usage/usage-rail";
 import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
@@ -49,6 +52,7 @@ const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = 
   now: ChatCircleDotsIcon,
   changes: GitDiffIcon,
   files: FoldersIcon,
+  search: MagnifyingGlassIcon,
 };
 
 /** This surface's pages, in pill order, as {@link RailModeTabs} takes them. */
@@ -76,6 +80,7 @@ export function TicketRail({
   activeTabId,
   filesContent,
   changesContent,
+  searchContent,
 }: {
   projectId: string;
   ticket: Ticket;
@@ -103,6 +108,8 @@ export function TicketRail({
   filesContent?: React.ReactNode;
   /** The Diffs navigator — same seam as `filesContent`. */
   changesContent?: React.ReactNode;
+  /** The Search page (VC-193, plan §4.7) — the same seam again. */
+  searchContent?: React.ReactNode;
 }) {
   const storedMode = useUiStore((state) => state.railMode);
   const setRailMode = useUiStore((state) => state.setRailMode);
@@ -161,6 +168,18 @@ export function TicketRail({
               onShowChanges={showChanges}
             />
             <TicketProperties projectId={projectId} ticket={ticket} />
+            {/* What this Ticket cost, between the facts about it and the
+                Sessions that ran on it (VC-87) — which is where the owner's
+                question sits. It owns its own inset and top padding, so an
+                absent card (cost turned off, or nothing metered on this Ticket)
+                leaves no gap behind it rather than sixteen pixels of dead rail. */}
+            <TicketUsageRailBlock ticketId={ticket.id} />
+            {/* What can be STARTED on this Ticket, between what it cost and who
+                is working on it (VC-129). Above the Sessions roster because it
+                is an act and the roster is a record of acts — and because the
+                Runs it lists are the doors into the Sessions listed under it.
+                The rail never authors: this block runs and links to the page. */}
+            <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
             <TicketSessionsPanel
               ticketId={ticket.id}
               creating={creating}
@@ -174,6 +193,7 @@ export function TicketRail({
         ) : null}
         {mode === "changes" ? changesContent : null}
         {mode === "files" ? filesContent : null}
+        {mode === "search" ? searchContent : null}
       </section>
     </div>
   );

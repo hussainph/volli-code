@@ -14,10 +14,18 @@
  * selecting one means, and the page bodies. This file owns the drawing, the
  * focus mechanics and the motion — nothing else.
  *
- * ONLY THE SELECTED TAB WEARS ITS LABEL, which is what lets three pages fit a
- * 160px pill at the rail's narrowest width without ever truncating a word. The
+ * ONLY THE SELECTED TAB WEARS ITS LABEL, which is what lets four pages fit the
+ * pill at the rail's narrowest width without ever truncating a word. The
  * inactive ones are icons, and carry their name in `aria-label` and a tooltip
  * so neither a screen reader nor a pointer has to guess.
+ *
+ * THE TRACK IS SIZED BY WHAT IT HOLDS, not by a fixed width. It was `w-40` when
+ * every rail had exactly three pages, and the arithmetic (one 84px label tab,
+ * two 32px glyphs, gaps and padding) happened to land there. Search made it
+ * four (VC-193), and a fixed track answers that by SHRINKING its tabs — the
+ * selected one first, since it is the widest — which clips the one word the
+ * pill exists to show. `w-max` keeps every tab at its own size and lets the
+ * pill grow; `max-w-full` keeps it inside a rail dragged to its floor.
  *
  * Translucent and blurred rather than opaque: at `top-0` of a column whose
  * pages scroll beneath it, the bar is a floating material, not a strip the
@@ -106,7 +114,7 @@ export function RailModeTabs<K extends string>({
         aria-label={label}
         // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
         // height (40px), so the track can never disagree with what it holds.
-        className="mx-auto flex w-40 items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
+        className="mx-auto flex w-max max-w-full items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
       >
         {modes.map((mode, index) => {
           const Icon = mode.icon;

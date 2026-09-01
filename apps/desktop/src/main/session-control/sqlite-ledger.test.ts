@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import type { SessionEvent, SessionLedger, SessionObservation } from "@volli/shared";
+import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
@@ -647,6 +647,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } },
+        authority: null,
       },
     });
     expect(
@@ -694,6 +695,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-1", detail: null },
+        authority: null,
       },
     });
     await control.observe({
@@ -826,6 +828,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-2", detail: null },
+        authority: null,
       },
     });
     const prompts = [
@@ -951,6 +954,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-3", detail: null },
+        authority: null,
       },
     });
     await control.observe({
@@ -1096,6 +1100,7 @@ describe("SqliteSessionLedger", () => {
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native: { id: "native-4", detail: null },
+        authority: null,
       },
     });
     await control.observe({
@@ -1301,5 +1306,246 @@ describe("SqliteSessionLedger", () => {
         });
       }),
     ).rejects.toThrow("is not a known Session event payload");
+  });
+});
+
+function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+describe("the Session usage projection", () => {
+  async function meteredSession(
+    control: ReturnType<typeof createSessionEngine>,
+    options: { projectId: string; ticketId: string | null; commandId: string },
+  ): Promise<string> {
+    const created = await control.createSession({
+      commandId: options.commandId,
+      projectId: options.projectId,
+      ticketId: options.ticketId,
+      title: options.commandId,
+      provenance,
+    });
+    return created.session.id;
+  }
+
+  async function record(
+    control: ReturnType<typeof createSessionEngine>,
+    sessionId: string,
+    id: string,
+    occurredAt: number,
+    usage: SessionUsage,
+  ): Promise<void> {
+    await control.observe({
+      id,
+      kind: "usage.recorded",
+      sessionId,
+      occurredAt,
+      provenance,
+      attachmentId: null,
+      turnId: null,
+      usage,
+    });
+  }
+
+  it("indexes a usage fact as it is appended, without re-reading the event log", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-metered",
+    });
+
+    await record(control, sessionId, "usage-1", 1_000, metered({ costUsd: 0.25 }));
+
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                  cost_usd, cost_basis
+             FROM session_usage`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_id: sessionId,
+        project_id: projectId,
+        ticket_id: "ticket-a",
+        occurred_at: 1_000,
+        cause: "assistant",
+        provider_id: "anthropic",
+        model_id: "claude-opus-4-1",
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_tokens: 400,
+        cache_write_tokens: 0,
+        cost_usd: 0.25,
+        cost_basis: "catalog-estimate",
+      },
+    ]);
+  });
+
+  it("keeps an unmeasured token count null rather than storing it as zero", async () => {
+    const { control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-unmeasured",
+    });
+
+    await record(
+      control,
+      sessionId,
+      "usage-null",
+      1_000,
+      metered({
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        costUsd: null,
+        costBasis: "unavailable",
+      }),
+    );
+
+    expect(
+      ctx.db.prepare("SELECT cache_read_tokens, cost_usd, cost_basis FROM session_usage").get(),
+    ).toEqual({ cache_read_tokens: null, cost_usd: null, cost_basis: "unavailable" });
+  });
+
+  it("reads a Ticket's whole bill across its Sessions, in one indexed pass", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-a", usesWorktree: false }));
+    const first = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-first",
+    });
+    const second = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-a",
+      commandId: "create-second",
+    });
+    const elsewhere = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-elsewhere",
+    });
+
+    await record(control, first, "u1", 1_000, metered({ costUsd: 1 }));
+    await record(control, second, "u2", 2_000, metered({ costUsd: 2 }));
+    await record(control, elsewhere, "u3", 3_000, metered({ costUsd: 4 }));
+
+    const report = await control.reportUsage({
+      scope: { kind: "ticket", ticketId: "ticket-a" },
+      groupBy: "session",
+    });
+    expect(report.total.knownCostUsd).toBe(3);
+    expect(report.meteredSessionCount).toBe(2);
+    expect(report.groups.map((group) => group.key)).toEqual([second, first]);
+  });
+
+  it("bounds a report by when the spending happened", async () => {
+    const { control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-windowed",
+    });
+
+    await record(control, sessionId, "old", 1_000, metered({ costUsd: 1 }));
+    await record(control, sessionId, "new", 5_000, metered({ costUsd: 2 }));
+
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, since: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 2, requestCount: 1 } });
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, until: 2_000 }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 1, requestCount: 1 } });
+  });
+
+  // `sessions.ticket_id` is ON DELETE SET NULL. Reading attribution live would
+  // move a deleted Ticket's whole bill into unticketed Project spend, which is
+  // a quieter lie than showing an id that no longer resolves.
+  it("keeps spend attributed to the Ticket it was spent on after that Ticket is deleted", async () => {
+    const { control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-doomed", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-doomed",
+      commandId: "create-doomed",
+    });
+    await record(control, sessionId, "u-doomed", 1_000, metered({ costUsd: 3 }));
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("ticket-doomed");
+
+    const report = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+    expect(report.groups.map((group) => group.key)).toEqual(["ticket-doomed"]);
+  });
+
+  it("can be rebuilt from the facts alone, byte for byte", async () => {
+    const { ledger, control, projectId } = setup();
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: null,
+      commandId: "create-rebuildable",
+    });
+    await record(control, sessionId, "r1", 1_000, metered({ costUsd: 1 }));
+    await record(control, sessionId, "r2", 2_000, metered({ costUsd: 2, modelId: "gpt-5" }));
+
+    const live = await control.reportUsage({ scope: { kind: "all" }, groupBy: "model" });
+    ctx.db.exec("DELETE FROM session_usage");
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+
+    await expect(
+      control.reportUsage({ scope: { kind: "all" }, groupBy: "model" }),
+    ).resolves.toEqual(live);
+  });
+
+  /**
+   * The case that decides whether "rebuildable" is true.
+   *
+   * Deleting the Ticket nulls `sessions.ticket_id`, so a rebuild that read
+   * attribution from the Session row would move this bill into unticketed
+   * spend — the projection would answer one thing before a rebuild and another
+   * after, with no fact having changed. Attribution is on the event, so the
+   * two answers are the same answer.
+   */
+  it("rebuilds a deleted Ticket's spend back onto that Ticket, not into unticketed", async () => {
+    const { ledger, control, projectId } = setup();
+    insertTicket(ctx.db, testTicket(projectId, { id: "ticket-gone", usesWorktree: false }));
+    const sessionId = await meteredSession(control, {
+      projectId,
+      ticketId: "ticket-gone",
+      commandId: "create-rebuild-after-delete",
+    });
+    await record(control, sessionId, "rd1", 1_000, metered({ costUsd: 4 }));
+    const before = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+
+    ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("ticket-gone");
+    await ledger.transaction((transaction) => {
+      transaction.rebuildUsageProjection();
+    });
+
+    const after = await control.reportUsage({ scope: { kind: "all" }, groupBy: "ticket" });
+    expect(after).toEqual(before);
+    expect(after.groups.map((group) => group.key)).toEqual(["ticket-gone"]);
+    // And the Ticket-scoped read still finds it, which is what an orchestrator
+    // asking `volli cost --ticket` after a cleanup actually does.
+    await expect(
+      control.reportUsage({ scope: { kind: "ticket", ticketId: "ticket-gone" } }),
+    ).resolves.toMatchObject({ total: { knownCostUsd: 4, requestCount: 1 } });
   });
 });

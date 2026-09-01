@@ -37,8 +37,10 @@ import type {
   SessionInteractionCancelReason,
   SessionInteractionResolution,
   SessionNativeDetail,
+  SessionUsage,
   SettledAssistantMessage,
   TranscriptDeltaObservation,
+  UsageObservation,
 } from "@volli/shared";
 import { ACTIVITY_METADATA_KEY } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -156,6 +158,16 @@ export type TranslatedObservation =
       kind: "context.compaction_failed";
       reason: CompactionReason;
       detail: string;
+    })
+  /**
+   * What one model operation consumed. Named after the executor's own entry id
+   * rather than counted, so the same operation seen live and replayed after a
+   * restart lands on one durable fact instead of two copies of one bill.
+   */
+  | (TranslatedObservationBase & {
+      kind: "usage.recorded";
+      turnId: string | null;
+      usage: SessionUsage;
     })
   /**
    * The Session's authority refused a call. The executor reports it rather than
@@ -343,6 +355,10 @@ export class RuntimeObservationTranslator {
         return this.#translateDelta(observation, emit);
       case "message-settled":
         return this.#translateSettled(observation, emit);
+      // Emitted like a compaction, and for the same reason: metering touches
+      // no streaming state. It is not a turn boundary and it retires nothing.
+      case "usage":
+        return emit(this.#usageObservation(observation));
       case "activity":
         return this.#translateActivity(observation, emit);
       case "authority":
@@ -387,6 +403,8 @@ export class RuntimeObservationTranslator {
         const settled = this.#settledObservation(observation);
         return settled === null ? [] : [settled];
       }
+      case "usage":
+        return [this.#usageObservation(observation)];
       case "activity":
         return observation.state === "started" || observation.state === "progress"
           ? []
@@ -638,6 +656,29 @@ export class RuntimeObservationTranslator {
       entryId: observation.entryId,
       tokensBefore: observation.tokensBefore,
       tokensAfter: observation.tokensAfter,
+    };
+  }
+
+  /**
+   * One metered model operation, named by the executor's own entry id.
+   *
+   * No counter arm and no fallback, unlike an attention or a failed
+   * compaction. Those can genuinely happen without the executor writing
+   * anything down; a metered operation cannot — the message that spent the
+   * tokens is in the executor's history by the time this is reported, and an
+   * id derived from anything else would let a reattach double the Session's
+   * bill.
+   */
+  #usageObservation(
+    observation: UsageObservation,
+  ): Extract<TranslatedObservation, { kind: "usage.recorded" }> {
+    return {
+      id: `${this.#namespace}:usage:${observation.entryId}`,
+      kind: "usage.recorded",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      turnId: observation.turnId,
+      usage: observation.usage,
     };
   }
 

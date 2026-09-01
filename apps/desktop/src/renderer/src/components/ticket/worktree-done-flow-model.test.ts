@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   formatChangeSetSummary,
+  formatWorktreeState,
   resolveDoneFlow,
   type DoneFlowStage,
   type WorktreeStatusSnapshot,
@@ -216,6 +217,41 @@ describe("resolveDoneFlow — chevron menu", () => {
     const noPr = view(status(), null).menu.openPr;
     expect(noPr.disabled).toBe(true);
     expect(noPr.reason).toBe("No PR yet");
+  });
+});
+
+describe("formatWorktreeState", () => {
+  it("shows working changes, local commits, and commits waiting to push together", () => {
+    expect(formatWorktreeState(status({ uncommitted: true, aheadOfBase: 3, unpushed: 2 }))).toEqual(
+      {
+        working: "Changes",
+        local: "3 commits",
+        remote: "2 to push",
+      },
+    );
+  });
+
+  it("distinguishes a never-pushed branch from one that is up to date", () => {
+    expect(formatWorktreeState(status({ aheadOfBase: 1, unpushed: null }))).toEqual({
+      working: "Clean",
+      local: "1 commit",
+      remote: "Not pushed",
+    });
+    expect(formatWorktreeState(status({ aheadOfBase: 4, unpushed: 0 })).remote).toBe("Up to date");
+  });
+
+  it("keeps no-commit and unknown states honest", () => {
+    expect(formatWorktreeState(status({ aheadOfBase: 0, unpushed: null }))).toEqual({
+      working: "Clean",
+      local: "No commits",
+      remote: "No commits",
+    });
+    expect(formatWorktreeState(status({ aheadOfBase: 0, unpushed: 0 })).remote).toBe("No commits");
+    expect(formatWorktreeState(status())).toEqual({
+      working: "Clean",
+      local: "Unknown",
+      remote: "Unknown",
+    });
   });
 });
 

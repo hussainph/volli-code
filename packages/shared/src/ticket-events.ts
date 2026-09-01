@@ -25,6 +25,14 @@ export const TICKET_EVENT_KINDS = [
   // Comments live in `ticket_comments` (`ticket-comment.ts`); this fact only
   // makes one discoverable from planner history without duplicating it.
   "commented",
+  // A typed verdict signal (VC-85): the structured replacement for the
+  // `VERDICT:` first-line comment convention. Signals carry state and comments
+  // carry prose; a signal never moves the board — deliberate moves and Run
+  // Outcomes own movement. The signal row lives in `ticket_signals` (slice B's
+  // table, mirroring how comments pair with `commented`); the payload here
+  // carries the whole typed fact so planner history and the await tool
+  // (`ticket.await`, VC-85 slice D) can read it without a join.
+  "signaled",
   // Worktree identity (ticket-detail-mvp #14 vision anchor): settable now,
   // automated later — `from`/`to` snapshot the ticket's worktree identity
   // fields (`ticket.ts`) around the change.
@@ -93,8 +101,8 @@ export interface WorktreeIdentity {
  * shared. `insertions`/`deletions` are `null` for binary files — `git diff
  * --numstat` prints `-\t-` for them, and inventing a `0` would read as "no
  * change". `untracked` marks a file present only in `git status --porcelain`
- * (`??`), never in the numstat output, so the working-tree diff can list it with
- * null counts rather than dropping it.
+ * (`??`), never in numstat output. A direct working-tree diff lists it with
+ * unknown counts; the composed Change Set counts readable text against an empty file.
  */
 export interface DiffFileStat {
   path: string;
@@ -105,9 +113,9 @@ export interface DiffFileStat {
 
 /**
  * A worktree diff summary (Done-flow `diff.ts`): the per-file breakdown plus
- * repo-wide totals. `insertions`/`deletions` sum only the non-null (text) files
- * — binary and untracked entries carry null counts and never contribute to the
- * totals, so the totals stay honest line counts.
+ * repo-wide totals. `insertions`/`deletions` sum only files with known text
+ * counts. Binary files and paths that could not be read carry null counts and
+ * never contribute, so the totals stay honest line counts.
  */
 export interface DiffStat {
   files: DiffFileStat[];
@@ -126,6 +134,12 @@ export type TicketEventPayload =
   | { kind: "archived" }
   | { kind: "unarchived" }
   | { kind: "commented"; commentId: string }
+  | {
+      kind: "signaled";
+      signalKind: TicketSignalKind;
+      verdict: TicketSignalVerdict;
+      detail: string | null;
+    }
   | { kind: "worktree_changed"; from: WorktreeIdentity; to: WorktreeIdentity }
   /** The ticket's worktree scoping flipped (isolated worktree ↔ Main checkout) before any worktree existed. */
   | { kind: "worktree_scope_changed"; from: boolean; to: boolean }
@@ -210,7 +224,88 @@ export function trimWorktreeFailureStderr(stderr: string): string {
     : stderr.slice(stderr.length - MAX_WORKTREE_FAILURE_STDERR);
 }
 
-export type TicketEventActorKind = "user" | "session" | "automation";
+/**
+ * The fixed signal vocabulary (VC-85). Fixed rather than project-defined
+ * because fixed kinds are what make signals queryable, and what rule packs and
+ * the Tier-3 classifier can one day judge by identity. `budget` is the kind a
+ * tripped cost cap rides (VC-87's contract); the rest are the stage gates the
+ * rc-0.1.0 pass spelled by convention.
+ */
+export const TICKET_SIGNAL_KINDS = [
+  "validate",
+  "implement",
+  "review",
+  "merge",
+  "human-gate",
+  "budget",
+] as const;
+
+export type TicketSignalKind = (typeof TICKET_SIGNAL_KINDS)[number];
+
+export function isTicketSignalKind(value: unknown): value is TicketSignalKind {
+  return typeof value === "string" && (TICKET_SIGNAL_KINDS as readonly string[]).includes(value);
+}
+
+/** What a signal says about its stage: it passed, it failed, or a person is needed. */
+export const TICKET_SIGNAL_VERDICTS = ["pass", "fail", "blocked"] as const;
+
+export type TicketSignalVerdict = (typeof TICKET_SIGNAL_VERDICTS)[number];
+
+export function isTicketSignalVerdict(value: unknown): value is TicketSignalVerdict {
+  return typeof value === "string" && (TICKET_SIGNAL_VERDICTS as readonly string[]).includes(value);
+}
+
+/**
+ * One recorded verdict (`ticket_signals` table, migration 028) — the typed
+ * replacement for the `VERDICT:` first-line comment convention (VC-85).
+ *
+ * It pairs with the `signaled` event exactly as {@link TicketComment} pairs
+ * with `commented`: the row is the fact, the event makes it discoverable from
+ * planner history, and both are written in one transaction so neither can
+ * exist alone. The two channels stay separate on purpose — comments carry
+ * prose a person reads, signals carry state a machine reads, and folding them
+ * back together is the convention this replaces.
+ *
+ * Append-only, and never a board move. A later signal of the same kind
+ * supersedes an earlier one by being newer; nothing is edited, nothing is
+ * deleted, and a column changes only when someone deliberately moves it.
+ */
+export interface TicketSignal {
+  id: string;
+  ticketId: string;
+  kind: TicketSignalKind;
+  verdict: TicketSignalVerdict;
+  /** Free prose from `--detail`; `null` when the signer supplied none. */
+  detail: string | null;
+  /** {@link USER_ACTOR}, or the `"session"` token a socket write records. */
+  actor: string;
+  /** The Session that signed it; `null` only for a row whose Session was deleted. */
+  sessionId: string | null;
+  /** Epoch milliseconds. */
+  createdAt: number;
+}
+
+/**
+ * Who a ticket event is attributed to.
+ *
+ * `unauthenticated` was added by VC-163 and is the only one of the four that
+ * describes an ABSENCE of evidence rather than a known party. It means: a
+ * process reached the agent socket, Volli could not establish which Session (if
+ * any) it was, and a per-project policy nonetheless permitted the write.
+ *
+ * It exists because the three values beside it were each a claim Volli cannot
+ * support for such a caller. `user` says a person typed it — that attribution
+ * is precisely the lie VC-92 §6 ruled dead, because it granted the highest
+ * trust in the system on the strength of a missing environment variable.
+ * `session` needs a Session id there is none of. `automation` says Volli's own
+ * machinery acted. Recording the absence honestly is the whole point of the
+ * ticket that introduced it.
+ *
+ * Note that a default install never writes one: the built-in policy gives the
+ * unauthenticated caller no coordination verb at all, so reaching this value
+ * requires a person to have granted one per project.
+ */
+export type TicketEventActorKind = "user" | "session" | "automation" | "unauthenticated";
 
 export interface TicketEventActorContext {
   sessionId: string;
@@ -220,9 +315,12 @@ export interface TicketEventActorContext {
 // `session` always carries its context; `automation` may (a session-driven
 // automation) or may NOT (a system-level automation — the worktree ensure/
 // remove/sweep pipeline has no session and stores as a bare token, like `user`).
+// `unauthenticated` never carries one and structurally cannot: a caller Volli
+// could not identify has no Session to cite, which is what makes it that kind.
 // Each `kind` lives in exactly one arm so it stays a clean discriminant.
 export type TicketEventActor =
   | { kind: "user" }
+  | { kind: "unauthenticated" }
   | ({ kind: "session" } & TicketEventActorContext)
   | ({ kind: "automation" } & Partial<TicketEventActorContext>);
 

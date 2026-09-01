@@ -8,27 +8,35 @@
  * process, and no model, while the parts that must touch a disk stay in the one
  * package allowed to.
  *
- * This layer was written as defence in depth beneath a boundary, and neither
- * one ships today. `SessionRuntimeSpec.authority` is optional and no product
- * caller supplies one, so Pi is handed no `beforeToolCall` and nothing below is
- * ever consulted; the Seatbelt sandbox that used to sit under it is no longer
- * installed either, so a Session's tools carry the authority of whoever is
+ * This layer was written as defence in depth beneath a boundary, and the
+ * boundary does not ship. The Seatbelt sandbox that used to sit under it is no
+ * longer installed, so a Session's tools carry the authority of whoever is
  * running Volli. That is a deliberate decision to run Pi at its own defaults,
  * not an erosion — and `docs/plans/authority-two-axis-rearchitecture.md` is
- * where both axes come back. It changes the policy this mechanism carries
- * rather than the mechanism, which is why everything below is kept whole.
+ * where both axes come back.
+ *
+ * The gate itself is wired now. VC-44 made `@volli/shared`'s
+ * `AuthorityPolicy` a durable per-project document and had the desktop adapter
+ * build a Snapshot from it at every attach, so this pack is no longer dormant
+ * code with no caller. What a project's policy decides is whether the Snapshot
+ * *binds*: the day-one default is `observe`, which pins and records the Snapshot
+ * and hands the runtime nothing, so the rules below still refuse nothing unless
+ * a project asks them to. See `AuthorityEnforcement` in `./authority-config.ts`.
  *
  * Read the reasoning below with that in mind. Several rules were deliberately
  * scoped against a kernel boundary they could assume beneath them; those
  * arguments describe the layering this pack was designed for, not what a
- * Session runs under now.
+ * Session runs under now. That gap is what keeps `observe` the honest default
+ * until slice 1 gives both layers one read policy.
  *
- * What a policy decision would add, once there is something to add it to, is a
- * *countable, nameable* refusal for the risk a kernel cannot see the intent of.
- * A `git reset --hard` over a person's uncommitted work is permitted by every
- * boundary ever proposed here and is still the wrong thing to do. Nothing
- * refuses it today.
+ * What a policy decision adds, wherever a project turns it on, is a *countable,
+ * nameable* refusal for the risk a kernel cannot see the intent of. A `git reset
+ * --hard` over a person's uncommitted work is permitted by every boundary ever
+ * proposed here and is still the wrong thing to do.
  */
+
+import type { JudgmentMode } from "./authority-config";
+import type { VerbToolKey } from "./verb-registry";
 
 /**
  * Which working tree a Session executes in.
@@ -98,8 +106,21 @@ export const NON_CODING_TOOL_IDS = [
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
 
-/** The complete durable Agent Tool Surface vocabulary, in canonical order. */
-export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
+/**
+ * The capability half of the Agent Tool Surface vocabulary, in canonical order.
+ *
+ * These are the tools a Session holds by having something wired — an execution
+ * environment, an interaction port, a web boundary — rather than by its Role
+ * naming them. The other half is registry data: verbs carrying a `tool` access
+ * mode (`VERB_TOOL_KEYS`), which a Role bundle and a Session grant name.
+ * `agent-tool-surface.ts` is where the two are read together, and it is the only
+ * place that knows the whole vocabulary.
+ *
+ * Named for what it is rather than `SESSION_TOOL_IDS`, which it was called when
+ * it really was the complete list; a constant whose name overclaims its
+ * contents is how a caller ends up validating half a surface (VC-162).
+ */
+export const CAPABILITY_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as const;
 
 /**
  * Every name the Agent Tool Surface can carry, whatever kind of tool it is.
@@ -116,17 +137,28 @@ export const SESSION_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] as 
  * above are that source, and `sessionToolIds` is the one place they are read
  * together.
  *
- * So this union will hold two spellings, and that is decided rather than
+ * So this union holds two spellings, and that is decided rather than
  * overlooked. Registry verbs are dot-named (`ticket.archive`, `session.start`);
- * the three tools here are not, and are not renamed to match. They are VC-92's
+ * the three tools above are not, and are not renamed to match. They are VC-92's
  * first family — product-authored tools that were already inside Pi's loop, with
  * no registry entry to take a key from — and `ask_user` is a name a model has
  * already been trained against by every harness that ships one. The rule the
  * amendment actually sets is that a name here must not *differ* from its verb's
  * dot-name; a verb with no dot-name cannot differ from one. A tool promoted from
  * the Agent CLI arrives dot-named and keeps it.
+ *
+ * The dot survives everywhere except the provider wire, which accepts no dot at
+ * all — so `VerbToolProjection.name` renders `session.start` as `session_start`
+ * for the tool array, and the runtime adapter translates back before anything
+ * durable is written. This union is the durable spelling, so it keeps the dot.
+ *
+ * Type-only import, and deliberately: `verb-registry.ts` reaches
+ * `agent-runtime.ts` for its own vocabulary, which reaches back here, so a value
+ * import would close a module cycle. Nothing here needs one — the runtime guard
+ * over these names is `isSessionToolId` in `agent-tool-surface.ts`, which is
+ * downstream of both.
  */
-export type SessionToolId = CodingToolId | NonCodingToolId;
+export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey;
 
 /**
  * When silent denial stops being the right answer and the user should be asked.
@@ -147,28 +179,56 @@ export interface AuthorityFallback {
  * The policy one Session executes under, in the shape its durable record will
  * take.
  *
- * Nothing persists it, and with the gate off nothing in the product constructs
- * one either — a Snapshot reaches the runtime only when a caller hands it one,
- * and then lives as long as that attachment. {@link rulePackId} and
- * {@link rulePackHash} are ceremony twice over: computed from a compile-time
- * constant inside one process, and compared by no reader against anything
- * older. The denial
- * ledger they were written ahead of has since shipped — `authority.denied` is a
- * durable Session Event and `SessionProjection.authorityDenials` folds it — and
- * the snapshot that produced those denials still is not recorded anywhere. That
- * is the real, slightly awkward state today: a denial can be read back long
- * after the pack that ruled on it has changed, with nothing durable to say
- * which pack that was. The hash pins nothing until the snapshot itself is.
+ * One is constructed at every attach from the attaching project's
+ * `AuthorityPolicy`, and recorded onto `SessionAttachment.authority` when the
+ * attachment opens (VC-44). It then lives as long as that attachment.
  *
- * What the pinning is *for*, once there is something to pin against: a Session
- * must not have its authority changed under it by an unrelated Settings edit,
- * while the facts the rules read — resolved paths, the current branch, how many
- * denials have accrued — stay live, because they are machine state rather than
- * policy and freezing them would record a lie within seconds.
+ * {@link rulePackId} and {@link rulePackHash} were ceremony until that landed:
+ * computed from a compile-time constant inside one process, and compared by no
+ * reader against anything older. The denial ledger they were written ahead of
+ * had shipped — `authority.denied` is a durable Session Event carrying an
+ * `attachmentId`, and `SessionProjection.authorityDenials` folds it — while the
+ * snapshot that produced those denials was recorded nowhere, so a denial read
+ * back after the pack changed had nothing to say which pack that was. It does
+ * now: the denial's attachment carries the Snapshot, and two attachments of one
+ * Session can be compared against each other.
+ *
+ * What the pinning is *for*: a Session must not have its authority changed under
+ * it by an unrelated Settings edit, while the facts the rules read — resolved
+ * paths, the current branch, how many denials have accrued — stay live, because
+ * they are machine state rather than policy and freezing them would record a lie
+ * within seconds.
  */
 export interface AuthoritySnapshot {
   mode: "auto";
   location: WorkLocationKind;
+  /**
+   * Whether the pack this Snapshot pins actually binds this Session.
+   *
+   * Two values and not three: `AuthorityEnforcement`'s third state is `off`,
+   * and `off` is spelled as the *absence* of a Snapshot rather than as a value
+   * here. That is not a shortening — it is the seam.
+   * `SessionRuntimeSpec.authority` is optional, and Pi installs `beforeToolCall`
+   * only when it is present, so a Session running at Pi's own defaults has no
+   * policy record to carry a posture on. A Snapshot that exists is therefore one
+   * of exactly these two, and the type says so rather than leaving a third value
+   * no runtime path could produce.
+   *
+   * `observe` is durable and inert: the Snapshot is recorded against the
+   * attachment and the runtime is handed nothing, so nothing is refused. That is
+   * what lets the pack be pinned and read back without re-activating it. VC-28
+   * v0 gives `observe` a gate that records what it would have refused.
+   */
+  enforcement: "observe" | "enforce";
+  /**
+   * Who judges a call the deterministic rules cannot settle. Data here,
+   * behaviour in VC-28.
+   *
+   * Pinned rather than read live for the reason the pack is: a Session must not
+   * have the identity of its judge changed under it by a Settings edit made
+   * while it is running.
+   */
+  judgmentMode: JudgmentMode;
   /**
    * The Agent Tool Surface this Session was given, recorded rather than judged.
    *
@@ -181,7 +241,7 @@ export interface AuthoritySnapshot {
    *
    * It stays on the Snapshot because the Snapshot is the durable answer to what
    * a Session was allowed to do, and a denial read back months later is not
-   * interpretable without it. VC-44 persists it; VC-162 makes it registry data
+   * interpretable without it. VC-44 persisted it; VC-162 makes it registry data
    * as `bundle(Role) ∪ grants(session)`.
    */
   tools: readonly SessionToolId[];
@@ -196,8 +256,9 @@ export interface AuthoritySnapshot {
    * mistake the whole rework exists to undo — containment was one dial doing two
    * jobs.
    *
-   * It is null today only because nothing constructs a Snapshot at all. What a
-   * classifier would add is an intent check — whether the user actually asked
+   * It is null today because no classifier exists to name: VC-44 made it policy
+   * data a project can set, and VC-28 builds the thing that would answer to it.
+   * What a classifier adds is an intent check — whether the user actually asked
    * for this — which no boundary has ever answered: a branch sweep or an
    * over-broad `rm` wholly inside the workspace passes every rule here.
    */
@@ -285,8 +346,9 @@ export type PolicyDecision =
  * from it, so adding, removing, or reordering a rule changes the hash. Renaming
  * a rule's behaviour without renaming the rule does not, which is the honest
  * limit of pinning by id — it tightens when per-project packs arrive and the
- * pack becomes data rather than code. Note that no Session persists the hash it
- * ran under yet, so today a changed pack is undetectable in either direction.
+ * pack becomes data rather than code. Every attachment now records the hash it
+ * ran under (VC-44), so a changed pack is visible between two attachments; what
+ * stays invisible is a rule that kept its id and changed its meaning.
  *
  * Nine rules, and the missing tenth is the reason to read this list carefully.
  * `tool.not-bundled` used to lead it: it refused any name outside
@@ -352,17 +414,40 @@ export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
  * loaded cannot be called into existence by consent. Any rule proposed for this
  * pack still has to answer that question before it is placed on either side.
  *
- * `path.outside-workspace` and `command.git-escapes-workspace` are here on a
- * reason that has since expired. Seatbelt denied them whatever this layer
- * decided, so consent was moot; with the sandbox no longer installed they are
- * grantable rather than moot. The list has not been re-derived for that — the
- * pack is dormant, and reopening the question belongs to
- * `docs/plans/authority-two-axis-rearchitecture.md` rather than to a quiet edit
- * here.
+ * `path.outside-workspace` and `command.git-escapes-workspace` were hard denials
+ * on a reason that expired, and VC-44 re-derived them. Seatbelt denied both
+ * whatever this layer decided, so consent was genuinely moot and the list was
+ * right; with the sandbox no longer installed the kernel refuses nothing, so a
+ * "yes" here would be carried out and the first test above is met.
+ *
+ * The second test — could a reasonable person want it — is what settles them,
+ * and the product answers it rather than the rule. Volli's own skills index
+ * tells a Session to activate a skill by reading its `SKILL.md`, and a
+ * personal-tier skill lives under the home directory; a ticket brief offers the
+ * Main checkout as reference. Both are reads outside the workspace that the
+ * product asked for. A refusal no person may lift would make those permanently
+ * impossible while `cat` through `execute` still reads the same bytes, because
+ * no rule judges command operands — an unliftable wall around an open door.
+ *
+ * They stay refusals rather than becoming allowances: the read is still worth
+ * stopping to confirm, and slice 1 of
+ * `docs/plans/authority-two-axis-rearchitecture.md` replaces the question with
+ * one coherent read policy for both layers (VC-45). Until then a person can say
+ * yes, which is the honest state of a boundary with nothing underneath it.
+ *
+ * On the blast radius of moving them, because this is a security-relevant edit
+ * inside a slice that is otherwise about storage: today it changes nothing that
+ * runs. Membership here is read only when a rule has already refused a call, and
+ * the day-one posture is `observe`, which installs no gate — so no call reaches
+ * this list until a project chooses `enforce`. At that point the change is the
+ * difference between a refusal a person may lift and one nobody can, over reads
+ * `execute` was never refused in the first place.
  */
 export const OVERRIDABLE_AUTHORITY_RULES = [
+  "path.outside-workspace",
   "path.git-internals",
   "path.volli-internals",
+  "command.git-escapes-workspace",
   "command.git-discards-work",
 ] as const satisfies readonly AuthorityRuleId[];
 

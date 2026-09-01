@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { waitForResources } from "./wait-for-resources.mjs";
+import { verifyPreloadStandalone } from "./verify-preload-standalone.mjs";
 
 // Runs as the pack config's onSuccess command: tsdown tree-kills the previous
 // run and re-runs this script after EVERY successful rebuild of main+preload,
@@ -94,6 +95,11 @@ await waitForResources({
 });
 
 if (!shuttingDown) {
+  // The same sandbox guard the build pipeline runs: a preload that requires
+  // the sibling runtime chunk dies silently under Electron's sandbox, and the
+  // dev pack emits the same shape the release pack does.
+  verifyPreloadStandalone(NodePath.join(desktopDir, "dist-electron"));
+
   // The electron package's module export IS the absolute binary path string —
   // require() also fetches the ~100MB binary on first use if it is missing.
   const electronBinary = require("electron");

@@ -6,8 +6,9 @@
  * dot, and a second band here would repeat it.
  *
  * Nothing about the Session lives in this component. The stream, the fold, the
- * queue and the lifecycle belong to the resident client (`chat/client.ts`) and
- * the store beside it, both of which outlive every mount — so a chat left for
+ * queue and the lifecycle belong to the resident client
+ * (@volli/session-presentation) and the store beside it, both of which
+ * outlive every mount — so a chat left for
  * the board keeps folding and releases its queued message whether or not this is
  * on screen. Nor does the half-typed message: it is part of the Session too, so
  * it lives in `stores/chat-drafts.ts` and survives both a tab switch and a
@@ -54,24 +55,24 @@ import { Message, MessageContent } from "@renderer/components/ui/ai-elements/mes
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
+  composerAnswerPrompt,
+  footInteraction,
   gatedToolCallId,
   gatedToolCallIds,
   groupTurns,
-  isAwaitingFirstOutput,
-  segmentTurn,
-  type ChatSegment,
-} from "@renderer/chat/activity";
-import { isDeliverable, type MessageDelivery } from "@renderer/chat/client";
-import { weaveCompactionBoundaries } from "@renderer/chat/compaction-boundary";
-import { sessionContextUsage } from "@renderer/chat/context-usage";
-import {
-  composerAnswerPrompt,
-  footInteraction,
   interactionForApproval,
+  isAwaitingFirstOutput,
+  isDeliverable,
   readInteractionResolutionMessage,
+  segmentTurn,
+  sessionContextUsage,
+  weaveCompactionBoundaries,
+  type ChatSegment,
+  type ComposerIntent,
   type InteractionSubmission,
-} from "@renderer/chat/interaction";
-import { type ComposerIntent, type QueuedMessage } from "@renderer/chat/session-model";
+  type MessageDelivery,
+  type QueuedMessage,
+} from "@volli/session-presentation";
 import {
   useSessionController,
   type ChatSessionsStore,

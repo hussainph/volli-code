@@ -18,17 +18,18 @@ import type { ChatSessionRecord, SessionRecord } from "@volli/shared";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 
 /** Home's rail pages. */
-export type HomeRailMode = "now" | "sessions" | "files";
+export type HomeRailMode = "now" | "sessions" | "files" | "search";
 
 /** The pill's words. */
 export const HOME_RAIL_MODE_LABELS: Record<HomeRailMode, string> = {
   now: "Now",
   sessions: "Sessions",
   files: "Files",
+  search: "Search",
 };
 
 /** Page order in the pill, resting page first; new pages append to preserve keyboard order. */
-export const HOME_RAIL_MODES: readonly HomeRailMode[] = ["now", "sessions", "files"];
+export const HOME_RAIL_MODES: readonly HomeRailMode[] = ["now", "sessions", "files", "search"];
 
 /** The resting page: where the Session runs, what it is, and what it has named. */
 export const DEFAULT_HOME_RAIL_MODE: HomeRailMode = "now";
@@ -38,7 +39,11 @@ export const DEFAULT_HOME_RAIL_MODE: HomeRailMode = "now";
  * anything, including a page this build no longer offers.
  */
 export function sanitizeHomeRailMode(raw: unknown): HomeRailMode {
-  return raw === "now" || raw === "sessions" || raw === "files" ? raw : DEFAULT_HOME_RAIL_MODE;
+  // Membership in the page list rather than a hand-written disjunction: a page
+  // added to the pill must not need a second edit here to survive a relaunch.
+  return typeof raw === "string" && (HOME_RAIL_MODES as readonly string[]).includes(raw)
+    ? (raw as HomeRailMode)
+    : DEFAULT_HOME_RAIL_MODE;
 }
 
 /** One row of the Sessions page. */
@@ -46,7 +51,7 @@ export interface HomeSessionRow {
   id: string;
   kind: "chat" | "terminal";
   title: string;
-  /** Liveness, in the app's one dot vocabulary. */
+  /** Activity, in the app's one dot vocabulary. */
   state: StatusDotState;
   /** Newest fact about the Session — what its age is measured from. */
   at: number;
@@ -112,11 +117,11 @@ export function homeSessionRows(
   return rows.toSorted((left, right) => right.at - left.at);
 }
 
-/** A chat row's dot: waiting outranks working, exactly as it does on a tab. */
+/** A chat row's dot: waiting outranks working; between turns is simply idle. */
 function chatState(row: ChatSessionRecord): StatusDotState {
   if (row.activity === "waiting") return "waiting";
   if (row.activity === "working") return "working";
-  return row.live ? "ready" : "idle";
+  return "idle";
 }
 
 /**

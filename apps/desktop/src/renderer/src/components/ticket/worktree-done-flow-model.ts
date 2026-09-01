@@ -3,10 +3,11 @@
  * (docs/plans/done-flow.md "UI", decision #45). Given the latest worktree
  * status, the ticket's durable `prUrl`, and the local busy stage, it returns the
  * one primary action (label + disabled reason) and the always-listed chevron
- * menu (each verb with its own disabled reason). Raw status is never surfaced as
- * standalone lines — it only drives labels and disabled reasons here. Kept
- * side-effect-free and separate from `ticket-repository-summary.tsx` so the rules are
- * unit-testable without mounting React or faking `window.api`.
+ * menu (each verb with its own disabled reason). Raw status is formatted here,
+ * never printed directly: it drives those actions and the compact Git-state
+ * strip on the Diffs page. Kept side-effect-free and separate from
+ * `ticket-repository-summary.tsx` so the rules are unit-testable without
+ * mounting React or faking `window.api`.
  */
 import type { DiffStat } from "@volli/shared";
 
@@ -18,6 +19,43 @@ export interface WorktreeStatusSnapshot {
   behindBase: number | null;
   /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */
   unpushed: number | null;
+}
+
+/** The three terse values shown under the Diffs header. */
+export interface WorktreeStateSummary {
+  working: string;
+  local: string;
+  remote: string;
+}
+
+/**
+ * Formats the working tree → local commits → remote progression without
+ * pretending those are disjoint file buckets. A file can exist in all three
+ * layers over time; the values therefore report state, not a filter count.
+ */
+export function formatWorktreeState(status: WorktreeStatusSnapshot): WorktreeStateSummary {
+  const ahead = status.aheadOfBase;
+  const local =
+    ahead === null
+      ? "Unknown"
+      : ahead === 0
+        ? "No commits"
+        : `${ahead} ${ahead === 1 ? "commit" : "commits"}`;
+
+  let remote: string;
+  if (status.unpushed === null) {
+    remote = ahead === null ? "Unknown" : ahead === 0 ? "No commits" : "Not pushed";
+  } else if (status.unpushed > 0) {
+    remote = `${status.unpushed} to push`;
+  } else {
+    remote = ahead === 0 ? "No commits" : "Up to date";
+  }
+
+  return {
+    working: status.uncommitted ? "Changes" : "Clean",
+    local,
+    remote,
+  };
 }
 
 /**
@@ -211,8 +249,8 @@ export function resolveDoneFlow(
 
 /**
  * "2 files · +11 −2", with a trailing "· +2 binary/untracked" clause when the
- * Change Set has files whose line counts are null (binary or untracked —
- * `DiffFileStat`'s convention, ticket-events.ts). `null` when there are no
+ * Change Set has files whose line counts are unknown (binary, or an untracked
+ * path that raced or could not be read). `null` when there are no
  * changes vs base yet, so the caller can show its own "no changes" copy
  * instead of a hollow "0 files · +0 −0".
  *

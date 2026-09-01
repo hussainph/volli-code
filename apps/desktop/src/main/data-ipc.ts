@@ -3,11 +3,12 @@ import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
   derivePrefix,
   errorMessage,
+  validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
@@ -17,9 +18,18 @@ import {
 } from "@volli/shared";
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import type { Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import type {
+  AuthorityPolicyOverride,
+  Label,
+  Project,
+  SessionProjection,
+  SessionProvenance,
+  Ticket,
+  TicketStatus,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -41,6 +51,8 @@ import type {
   LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
+  ProjectAuthorityPolicyInput,
+  ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
   ProjectIdInput,
@@ -63,12 +75,15 @@ import type {
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
+  UsageReportInput,
+  UsageReportResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
+  TicketMovedNotice,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
@@ -109,6 +124,7 @@ import {
   listProjects,
   nextSortOrder,
   reorderProjects,
+  updateProjectAuthorityPolicy,
   updateProjectBaseBranch,
   updateProjectSessionDefaults,
   updateProjectSetupCommand,
@@ -138,6 +154,7 @@ import {
 } from "./ticket-commands";
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
+import { withTicketWake } from "./ticket-wake";
 import { orphanReport } from "./orphan-sweep";
 import { exportDatabase } from "./menu";
 import {
@@ -383,8 +400,21 @@ export function registerDataIpcHandlers(
      * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+    /**
+     * Reports a renderer move only after its status change committed. Main's
+     * pending-arrival coordinator is the production consumer; absent tests are
+     * a no-op.
+     */
+    onDeliberateMove?: (notice: TicketMovedNotice) => void;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The structured executor bindings this process holds right now. Session
+     * attachments stay durably open across relaunch for lazy rehydration, so a
+     * listing must project `live` from this host fact rather than from the
+     * attachment's durable status. Absent means no executor is currently bound.
+     */
+    listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
     /**
      * The renderer door of model-call titling (VC-81): kicks one refinement
      * off behind a just-written heuristic title. Absent (tests, degraded
@@ -406,6 +436,19 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  /**
+   * Who started each Session in a listing (VC-131). Bound here rather than at
+   * each call site so both listing channels ask the same question the push
+   * channel asks (`activity-watch.ts`) — a fetch and a push that disagreed
+   * would make a Run's bolt flicker as its Session worked.
+   */
+  const provenanceOfSession = (session: SessionProjection): SessionProvenance =>
+    readSessionProvenance(db, {
+      sessionId: session.session.id,
+      ticketId: session.session.ticketId,
+    });
+  const liveAttachmentIds = (): ReadonlySet<string> =>
+    new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
@@ -550,30 +593,76 @@ export function registerDataIpcHandlers(
       return { ok: true, project };
     },
 
+    /**
+     * Records this project's authority departures (VC-172) — the write migration
+     * 025 was missing, and the only door to it.
+     *
+     * THIS is where a policy document is judged. `resolveAuthorityPolicy` runs on
+     * the attach path and degrades a bad document to the defaults rather than
+     * costing a Session its attachment; that bargain is only honest if something
+     * refuses the bad document earlier, where a person is present to be told.
+     * This is that place, and `validateAuthorityPolicyOverride` refuses what the
+     * read path would have silently dropped — an unknown key above all, which
+     * otherwise stores cleanly, reads back cleanly and governs nothing.
+     *
+     * `null` clears every departure, which is not the same as writing an empty
+     * document and is stored identically to a project that never spoke.
+     */
+    "volli:project-authority-policy": (
+      input: ProjectAuthorityPolicyInput,
+    ): ProjectAuthorityPolicyResult => {
+      // `null` is the caller CLEARING every departure, and it is not a document
+      // to be judged — there is nothing in it to be wrong about.
+      let override: AuthorityPolicyOverride | null = null;
+      if (input.override !== null) {
+        const validation = validateAuthorityPolicyOverride(input.override);
+        if (!validation.ok) {
+          return {
+            ok: false,
+            error: "This authority policy cannot be saved.",
+            errors: validation.errors,
+          };
+        }
+        override = validation.override;
+      }
+      const project = updateProjectAuthorityPolicy(db, input.id, override, Date.now());
+      if (!project) return { ok: false, error: "Unknown project" };
+      return { ok: true, project };
+    },
+
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());
       return { ok: true };
     },
 
+    // Every ticket write below announces what it committed on the ticket wake
+    // bus (VC-85). The renderer door has to feed it for the same reason the
+    // agent door does: a waiter cares that a ticket moved, not who moved it,
+    // and a person dragging a card is a legitimate wake. `broadcastDataChanged`
+    // is untouched — the bus is additive, and a UI refresh and an agent wake
+    // are different needs that only look alike today.
     "volli:ticket-create": (input: TicketCreateInput): TicketResult => {
       const now = Date.now();
+      const ticketId = randomUUID();
       return {
         ok: true,
-        ticket: createTicketCommand(
-          db,
-          {
-            id: randomUUID(),
-            projectId: input.projectId,
-            title: input.title,
-            status: input.status,
-            priority: input.priority,
-            body: input.body,
-            labels: input.labels,
-            usesWorktree: input.usesWorktree,
-            preferredHarnessId: input.preferredHarnessId,
-            baseBranch: input.baseBranch,
-          },
-          { now, actor: { kind: "user" } },
+        ticket: withTicketWake(db, ticketId, () =>
+          createTicketCommand(
+            db,
+            {
+              id: ticketId,
+              projectId: input.projectId,
+              title: input.title,
+              status: input.status,
+              priority: input.priority,
+              body: input.body,
+              labels: input.labels,
+              usesWorktree: input.usesWorktree,
+              preferredHarnessId: input.preferredHarnessId,
+              baseBranch: input.baseBranch,
+            },
+            { now, actor: { kind: "user" } },
+          ),
         ),
       };
     },
@@ -585,7 +674,36 @@ export function registerDataIpcHandlers(
       // interrupt can decide whether the move left the active columns. Reading
       // the raw row (never trusting the renderer) keeps the from-status honest.
       const before = getTicketRow(db, input.ticketId);
-      const tickets = moveTicketCommand(db, input, { now, actor });
+      const tickets = withTicketWake(db, input.ticketId, () =>
+        moveTicketCommand(db, input, { now, actor }),
+      );
+      // Main owns the armed-column arrival. Report only a real committed
+      // column change; a same-column reorder (or a mismatched project id that
+      // moved nothing) replaces no pending countdown. The Option-drag choice
+      // travels only on this door.
+      const moved = getTicketRow(db, input.ticketId);
+      if (
+        before !== undefined &&
+        moved !== undefined &&
+        before.status !== moved.status &&
+        moved.status === input.toStatus
+      ) {
+        try {
+          options.onDeliberateMove?.({
+            projectId: moved.project_id,
+            ticketId: input.ticketId,
+            from: before.status as TicketStatus,
+            to: input.toStatus,
+            ...(input.choice === undefined ? {} : { choice: input.choice }),
+          });
+        } catch (error) {
+          // The Ticket move already committed. A pending-projection failure is
+          // logged without lying to the renderer that its status change failed.
+          console.error(
+            `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
+          );
+        }
+      }
       // The move committed above (its own transaction); the interrupt is the
       // side effect, fired only for a real backward move (issue #78).
       if (before !== undefined) {
@@ -619,7 +737,9 @@ export function registerDataIpcHandlers(
       const now = Date.now();
       return {
         ok: true,
-        ticket: setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
+        ticket: withTicketWake(db, input.ticketId, () =>
+          setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
+        ),
       };
     },
 
@@ -641,7 +761,9 @@ export function registerDataIpcHandlers(
       // which cannot tell "just switched on" from "was already on" — and only
       // the transition materializes.
       const before = getTicketRow(db, input.ticketId);
-      const ticket = updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } });
+      const ticket = withTicketWake(db, input.ticketId, () =>
+        updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
+      );
       // Only the one transition goes async. Every other update — a title, a
       // body, a branch stamp — stays the synchronous write it has always been,
       // the same split `volli:ticket-move` makes for its interrupt side effect.
@@ -655,21 +777,27 @@ export function registerDataIpcHandlers(
       const now = Date.now();
       return {
         ok: true,
-        ticket: setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
+        ticket: withTicketWake(db, input.ticketId, () =>
+          setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
+        ),
       };
     },
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
       const now = Date.now();
-      archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } });
+      withTicketWake(db, input.ticketId, () =>
+        archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
+      );
       return { ok: true };
     },
 
     "volli:ticket-unarchive": (input: TicketIdInput): TicketResult => {
-      const ticket = unarchiveTicketCommand(db, input.ticketId, {
-        now: Date.now(),
-        actor: { kind: "user" },
-      });
+      const ticket = withTicketWake(db, input.ticketId, () =>
+        unarchiveTicketCommand(db, input.ticketId, {
+          now: Date.now(),
+          actor: { kind: "user" },
+        }),
+      );
       return { ok: true, ticket };
     },
 
@@ -704,18 +832,20 @@ export function registerDataIpcHandlers(
     },
 
     "volli:comment-create": (input: CommentCreateInput): TicketCommentResult => {
-      const comment = createTicketCommentCommand(
-        db,
-        {
-          ticketId: input.ticketId,
-          body: input.body,
-          // UI-originated: every comment posted through this renderer-facing
-          // channel is authored by the user. Agent-posted session summaries
-          // arrive later via the volli CLI, a different (not-yet-built) path.
-          commentActor: USER_ACTOR,
-          sessionId: input.sessionId,
-        },
-        { now: Date.now(), actor: { kind: "user" } },
+      const comment = withTicketWake(db, input.ticketId, () =>
+        createTicketCommentCommand(
+          db,
+          {
+            ticketId: input.ticketId,
+            body: input.body,
+            // UI-originated: every comment posted through this renderer-facing
+            // channel is authored by the user. Agent-posted session summaries
+            // arrive later via the volli CLI, a different (not-yet-built) path.
+            commentActor: USER_ACTOR,
+            sessionId: input.sessionId,
+          },
+          { now: Date.now(), actor: { kind: "user" } },
+        ),
       );
       return { ok: true, comment };
     },
@@ -815,7 +945,10 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -826,7 +959,10 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
@@ -835,6 +971,20 @@ export function registerDataIpcHandlers(
       // because the chart is about the person rather than the project.
       const startedAt = await sessionEngine.listSessionStarts({ sinceMs: input.sinceMs });
       return { ok: true, startedAt: [...startedAt] };
+    },
+
+    "volli:usage-report": async (input: UsageReportInput): Promise<UsageReportResult> => {
+      // Straight through as well. The engine owns what a mixed basis means and
+      // when a total is only partial (`summarizeSessionUsage`); re-deciding any
+      // of that here would be a second opinion about the same money, which is
+      // exactly what `session-usage-report.ts` refuses to allow.
+      const report = await sessionEngine.reportUsage({
+        scope: input.scope,
+        since: input.sinceMs,
+        until: input.untilMs,
+        groupBy: input.groupBy,
+      });
+      return { ok: true, report };
     },
 
     "volli:venue-snapshot": async (input: VenueSnapshotInput): Promise<VenueSnapshotResult> => {

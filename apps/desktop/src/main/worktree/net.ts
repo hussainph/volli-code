@@ -26,6 +26,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import type { PrCheck, PrCheckState } from "../../ipc/contract";
 import {
   credentialHelperExplanation,
   type CredentialHelperIssue,
@@ -385,12 +386,12 @@ export async function ghFindPr(
 /**
  * The parsed report the retention watch reads off `gh pr view` (issue #76).
  * `state` is normalized to lowercase; `hasConflicts` reflects a `DIRTY`
- * `mergeStateStatus` (the PR can't merge until rebased); `failingChecks` are the
- * human-readable names of the checks the rollup reports as failed/errored — so
- * the wrap-up prompt is never offered on a PR that can't actually merge (the
- * #44 surface-don't-gate contract). NOTE: `gh pr view`'s `statusCheckRollup`
- * does not expose per-check required-ness, so this counts ALL failing checks,
- * not only required ones — surfacing, not gating, is the point.
+ * `mergeStateStatus` (the PR can't merge until rebased); `checks` is the whole
+ * rollup, normalized — so the wrap-up prompt is never offered on a PR that
+ * can't actually merge (the #44 surface-don't-gate contract) and the rail can
+ * show what CI is doing (VC-182). NOTE: `gh pr view`'s `statusCheckRollup`
+ * does not expose per-check required-ness, so this reports ALL checks, not only
+ * required ones — surfacing, not gating, is the point.
  */
 export interface PrStatusReport {
   state: "open" | "merged" | "closed";
@@ -398,8 +399,8 @@ export interface PrStatusReport {
   mergedAt: string | null;
   /** `mergeStateStatus === "DIRTY"` — the branch conflicts with its base. */
   hasConflicts: boolean;
-  /** Names of the checks the rollup reports as failing/errored (may be empty). */
-  failingChecks: string[];
+  /** The PR's whole check rollup, in the order GitHub returned it (may be empty). */
+  checks: PrCheck[];
 }
 
 /** The subset of a `gh pr view --json` body the watch reads (everything untyped-in). */
@@ -433,34 +434,97 @@ const FAILING_CHECK_CONCLUSIONS = new Set([
   "STARTUP_FAILURE",
   "ACTION_REQUIRED",
 ]);
+// Conclusions that are a pass. NEUTRAL is one: GitHub's own rollup treats it as
+// non-blocking, and a check that declines to have an opinion is not a failure.
+const PASSING_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL"]);
+// Conclusions that mean the check never produced a verdict. STALE sits here
+// rather than in either camp: it is a result GitHub has superseded, so counting
+// it as a pass would vouch for a run that no longer describes this commit, and
+// counting it as a failure would block a wrap-up on a run nobody re-read.
+const SKIPPED_CHECK_CONCLUSIONS = new Set(["SKIPPED", "STALE"]);
 // A StatusContext (legacy commit-status) state that means the context failed.
 const FAILING_STATUS_STATES = new Set(["FAILURE", "ERROR"]);
+// The StatusContext state that means it passed.
+const PASSING_STATUS_STATES = new Set(["SUCCESS"]);
 
-/** The failing checks' display names, from both the CheckRun and StatusContext rollup shapes. */
-function extractFailingChecks(rollup: unknown): string[] {
+/** A string field, or `null` when gh omitted it or sent it empty. */
+function text(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/**
+ * One rollup entry's normalized state.
+ *
+ * `pending` is the DEFAULT for anything unrecognized, and that is the deliberate
+ * half of this function. GitHub's enums grow; the two mistakes available when a
+ * new member arrives are to call it a pass (vouching for a verdict we never
+ * read) or to call it a failure (blocking a merge on a value we do not
+ * understand). "Still going" claims neither, and resolves itself on the next
+ * poll for every value that really is transient.
+ */
+function checkState(item: {
+  status?: unknown;
+  conclusion?: unknown;
+  state?: unknown;
+}): PrCheckState {
+  // A CheckRun that has not COMPLETED has no conclusion yet, whatever its
+  // queue state is called (QUEUED / IN_PROGRESS / WAITING / REQUESTED).
+  if (typeof item.status === "string" && item.status !== "COMPLETED") return "pending";
+  const conclusion = text(item.conclusion);
+  if (conclusion !== null) {
+    if (FAILING_CHECK_CONCLUSIONS.has(conclusion)) return "failing";
+    if (PASSING_CHECK_CONCLUSIONS.has(conclusion)) return "passing";
+    if (SKIPPED_CHECK_CONCLUSIONS.has(conclusion)) return "skipped";
+    return "pending";
+  }
+  const status = text(item.state);
+  if (status !== null) {
+    if (FAILING_STATUS_STATES.has(status)) return "failing";
+    if (PASSING_STATUS_STATES.has(status)) return "passing";
+  }
+  return "pending";
+}
+
+/**
+ * The rollup as a flat, normalized list — both the `CheckRun` and the
+ * `StatusContext` shape gh mixes into one array (VC-182). Order is preserved:
+ * GitHub returns the checks in the order the suite declares them, which is the
+ * order a reader recognizes from the PR page, and the rail sorts its own copy.
+ *
+ * An entry that is neither shape (no name, no context) is DROPPED rather than
+ * listed as "check": a row a person cannot identify is not something they can
+ * act on, and inventing a name for it makes the counts describe rows the PR
+ * page does not have.
+ */
+function extractChecks(rollup: unknown): PrCheck[] {
   if (!Array.isArray(rollup)) return [];
-  const names: string[] = [];
+  const checks: PrCheck[] = [];
   for (const entry of rollup) {
     if (typeof entry !== "object" || entry === null) continue;
     const item = entry as {
+      status?: unknown;
       conclusion?: unknown;
       state?: unknown;
       name?: unknown;
       context?: unknown;
+      workflowName?: unknown;
+      detailsUrl?: unknown;
+      targetUrl?: unknown;
     };
-    const failing =
-      (typeof item.conclusion === "string" && FAILING_CHECK_CONCLUSIONS.has(item.conclusion)) ||
-      (typeof item.state === "string" && FAILING_STATUS_STATES.has(item.state));
-    if (!failing) continue;
-    const name =
-      typeof item.name === "string" && item.name.length > 0
-        ? item.name
-        : typeof item.context === "string" && item.context.length > 0
-          ? item.context
-          : "check";
-    names.push(name);
+    // CheckRun carries `name`; StatusContext carries `context`.
+    const name = text(item.name) ?? text(item.context);
+    if (name === null) continue;
+    checks.push({
+      name,
+      workflow: text(item.workflowName),
+      state: checkState(item),
+      // CheckRun links with `detailsUrl`, StatusContext with `targetUrl` — and
+      // the latter is often the empty string, which `text` already reads as
+      // absent rather than turning into a link to nowhere.
+      url: text(item.detailsUrl) ?? text(item.targetUrl),
+    });
   }
-  return names;
+  return checks;
 }
 
 /**
@@ -474,6 +538,11 @@ export async function ghPrStatus(
   input: { worktreePath: string; prUrl: string },
 ): Promise<GhResult<PrStatusReport>> {
   try {
+    // The field list is UNCHANGED by VC-182: `statusCheckRollup` already
+    // carried every field the rail draws — name, workflowName, status,
+    // conclusion, detailsUrl — and the old parse simply discarded all but the
+    // failures. A `gh pr checks` call beside this one would have doubled the
+    // poll's network traffic to re-fetch what this body already answers.
     const { stdout } = await run(
       "gh",
       ["pr", "view", input.prUrl, "--json", "state,mergedAt,mergeStateStatus,statusCheckRollup"],
@@ -492,7 +561,7 @@ export async function ghPrStatus(
       state: normalizePrState(body.state),
       mergedAt: normalizeMergedAt(body.mergedAt),
       hasConflicts: body.mergeStateStatus === "DIRTY",
-      failingChecks: extractFailingChecks(body.statusCheckRollup),
+      checks: extractChecks(body.statusCheckRollup),
     });
   } catch (caught) {
     return { ok: false, failure: classifyGh(caught) };

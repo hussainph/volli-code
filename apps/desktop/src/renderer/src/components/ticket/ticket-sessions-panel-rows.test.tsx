@@ -9,9 +9,33 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { ChatSessionRecord, SessionListingRow } from "@volli/shared";
+import type {
+  ChatSessionRecord,
+  SessionListingRow,
+  SessionProvenance,
+  SessionUsageSummary,
+} from "@volli/shared";
 
 const fixture = vi.hoisted(() => {
+  // Spelled out rather than imported: this block is hoisted above the module's
+  // own imports, so a shared constant would be in its temporal dead zone here.
+  // Unmetered, which is what these rows are about — nothing here calls a model.
+  // Spelled out for the same reason, and it is the resting case: these rows
+  // are Sessions a person opened, so they carry no mark at all (VC-131).
+  const personStarted: SessionProvenance = { kind: "user" };
+  const unmetered: SessionUsageSummary = {
+    requestCount: 0,
+    tokenRequestCount: 0,
+    pricedRequestCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    knownCostUsd: null,
+    costCoverage: "unavailable",
+    costBasis: "unavailable",
+    cachedInputShare: null,
+  };
   const record: ChatSessionRecord = {
     sessionId: "chat-1",
     title: "Trace the dropped decorations",
@@ -31,14 +55,49 @@ const fixture = vi.hoisted(() => {
     sessionId: "chat-0",
     title: "Previous implementation",
     live: false,
-    activity: "idle",
+    activity: "stopped",
+    waitingOn: null,
+  };
+  // The rail is a listing like any other, so it draws the same three marks the
+  // sidebar's bands do (VC-131). One Run, one Session-started child, one row a
+  // person opened — which is the row that must gain nothing.
+  const byRun: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-run",
+    title: "Fix the flaky worktree test",
+    live: true,
+    activity: "working",
+    waitingOn: null,
+  };
+  const byAgent: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-child",
+    title: "Second opinion",
+    live: true,
+    activity: "working",
     waitingOn: null,
   };
   const rows: SessionListingRow[] = [
-    { kind: "chat", record },
-    { kind: "chat", record: ended },
+    { kind: "chat", record, usage: unmetered, provenance: personStarted },
+    { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
+    {
+      kind: "chat",
+      record: byRun,
+      usage: unmetered,
+      provenance: { kind: "automation", automationName: "Nightly sweep" },
+    },
+    {
+      kind: "chat",
+      record: byAgent,
+      usage: unmetered,
+      provenance: {
+        kind: "session",
+        parentSessionId: "chat-0",
+        parentTitle: "Previous implementation",
+      },
+    },
   ];
-  return { record, ended, rows };
+  return { record, ended, byRun, byAgent, rows };
 });
 
 vi.mock("@renderer/stores/ticket-session-records", async () => {
@@ -106,6 +165,29 @@ describe("TicketSessionsPanel rows", () => {
     expect(panel()).toContain('data-state="waiting"');
   });
 
+  describe("who started the Session", () => {
+    it("carries the bolt and the Automation's name on a Run's row", () => {
+      const html = panel();
+
+      expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
+      expect(html).toContain('title="Automation · Nightly sweep"');
+    });
+
+    it("names the parent in a tooltip, and mints no glyph for it", () => {
+      expect(panel()).toContain('title="Started by Previous implementation"');
+    });
+
+    it("gives a person's row nothing — no mark, and no empty tooltip", () => {
+      const html = panel();
+
+      // The row a person opened is present and titled, and carries neither the
+      // Automation's accessible name nor a provenance tooltip of its own.
+      expect(html).toContain(fixture.record.title);
+      expect(html).not.toContain('title=""');
+      expect(html.match(/aria-label="Started by the Automation/g)).toHaveLength(1);
+    });
+  });
+
   it("draws History as a sibling section, never the old rail's drawer", () => {
     // The Calm Stack has no drawer, no collapsible and no full-bleed seam
     // anywhere in the rail (per the retired ticket-right-sidebar lab scratch). History is
@@ -116,6 +198,13 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain(fixture.ended.title);
     expect(html).not.toContain("collapsible");
     expect(html).not.toContain("border-t border-sidebar-border");
+  });
+
+  it("keeps a stopped chat visibly stopped after it moves to History", () => {
+    const html = panel();
+
+    expect(html).toContain("Stopped");
+    expect(html).toContain('data-state="stopped"');
   });
 
   it("insets History with the column instead of a hardcoded edge", () => {

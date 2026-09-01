@@ -1,0 +1,58 @@
+name: CodeQL
+
+# Static analysis for the app that ships as a SIGNED, NOTARIZED desktop binary.
+# Free on public repositories, and worth more here than on a typical web app:
+# an Electron main process holds SQLite, a Unix socket, PTYs, and the user's
+# real filesystem, so an injection or path-traversal finding is a finding about
+# someone's machine.
+#
+# Build-less analysis: CodeQL reads TypeScript/JavaScript directly, so this
+# never runs electron-rebuild or fetches an Electron binary, and it does not
+# duplicate ci.yml's build.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Rediscovers findings when CodeQL ships new queries, not only when the code
+  # moves. Monday 04:00 UTC, off the hour to avoid the scheduling stampede.
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze JS/TS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Uploading the SARIF result is what needs this; nothing else here writes.
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          languages: javascript-typescript
+          # security-extended adds the lower-severity queries the default suite
+          # holds back. This repo is small enough to absorb the extra noise, and
+          # the alternative is not seeing them at all.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          category: /language:javascript-typescript

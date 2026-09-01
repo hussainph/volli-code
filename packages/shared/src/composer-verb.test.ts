@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   COMPACT_VERB,
   COMPOSER_VERBS,
+  COMPOSER_VERB_TABLE,
   COPY_VERB,
   LOGIN_VERB,
   MODEL_VERB,
@@ -11,14 +12,8 @@ import {
   findComposerVerb,
   isComposerVerbName,
   offeredComposerVerbs,
-  visiblePromptTemplates,
   type ComposerVerbMoment,
 } from "./composer-verb";
-import type { PromptTemplate } from "./prompt-template";
-
-function template(overrides: Partial<PromptTemplate> = {}): PromptTemplate {
-  return { name: "review", description: "Review a file", content: "Review $1.", ...overrides };
-}
 
 describe("the verbs there are", () => {
   it("names every built-in, once each", () => {
@@ -34,6 +29,20 @@ describe("the verbs there are", () => {
       expect(isComposerVerbName(verb.name)).toBe(true);
     }
     expect(isComposerVerbName("review")).toBe(false);
+  });
+
+  it("keeps the Map keys, derived rows and row names in exact correspondence", () => {
+    const keys = [...COMPOSER_VERB_TABLE.keys()];
+    expect(keys).toEqual(COMPOSER_VERBS.map((verb) => verb.name));
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const verb of COMPOSER_VERBS) {
+      expect(COMPOSER_VERB_TABLE.get(verb.name)).toMatchObject({
+        description: verb.description,
+        takesInstructions: verb.takesInstructions,
+      });
+      expect(Object.isFrozen(verb)).toBe(true);
+    }
+    expect(Object.isFrozen(COMPOSER_VERBS)).toBe(true);
   });
 
   it("records which verbs read free text and which refuse it", () => {
@@ -229,35 +238,5 @@ describe("findComposerVerb", () => {
     expect(findComposerVerb("/review src/a.ts")).toBeNull();
     expect(findComposerVerb("/")).toBeNull();
     expect(findComposerVerb("")).toBeNull();
-  });
-});
-
-describe("visiblePromptTemplates", () => {
-  it("drops a template whose name a verb has taken", () => {
-    const own = template({ name: "compact", description: "my own compaction prompt" });
-    const other = template();
-
-    // The verb wins the name outright — see the module header. The cost is
-    // visible (the picker shows the verb where this row was) where the reverse
-    // would be silent (a `/compact` that sends a prompt instead of compacting).
-    expect(visiblePromptTemplates([own, other])).toEqual([other]);
-  });
-
-  it("drops a template spelled like any of the newer verbs, too", () => {
-    // `model` and `settings` are words a project plausibly used for a prompt
-    // before these verbs existed. The reservation is the same bargain the
-    // first test names: a visible cost beats an operation silently becoming
-    // a message.
-    const rows = [
-      template({ name: "model" }),
-      template({ name: "settings" }),
-      template({ name: "copy" }),
-    ];
-    expect(visiblePromptTemplates(rows)).toEqual([]);
-  });
-
-  it("leaves an ordinary list alone", () => {
-    const templates = [template(), template({ name: "plan" })];
-    expect(visiblePromptTemplates(templates)).toEqual(templates);
   });
 });

@@ -44,6 +44,23 @@ export function listComments(db: Database.Database, ticketId: string): TicketCom
   return rows.map(mapComment);
 }
 
+/** A bounded chronological tail for CLI reads; zero performs no query. */
+export function listRecentComments(
+  db: Database.Database,
+  ticketId: string,
+  limit: number,
+): TicketComment[] {
+  if (limit === 0) return [];
+  const rows = prepared<[string, number], TicketCommentRow>(
+    db,
+    `SELECT * FROM ticket_comments
+      WHERE ticket_id = ?
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ?`,
+  ).all(ticketId, limit);
+  return rows.toReversed().map(mapComment);
+}
+
 export function getComment(db: Database.Database, commentId: string): TicketComment | undefined {
   const row = prepared<[string], TicketCommentRow>(
     db,

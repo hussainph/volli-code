@@ -17,6 +17,9 @@
  *    Project Session you closed, which reopens from here.
  *  • **Files** — the Main checkout navigator. It opens preview/pinned File tabs
  *    in Home rather than sending the whole app to a separate nav page.
+ *  • **Search** — find across the same Main checkout (VC-193). The same page
+ *    the ticket rail draws, at this scope: one component, two scopes, exactly
+ *    as the two file navigators are one navigator.
  *
  * WHAT IS DELIBERATELY NOT HERE. The "Mentioned" block the design calls for —
  * the tickets a transcript wrote `@vc-nn` at — needs the backlink mechanism
@@ -34,11 +37,13 @@ import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDot
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { effectiveHarnessId, harnessLabel, venueLooseCount, type Project } from "@volli/shared";
 
 import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
+import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
@@ -49,6 +54,7 @@ import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import {
@@ -129,6 +135,18 @@ export function HomeRail({
             onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
           />
         ) : null}
+        {mode === "search" ? (
+          // A match opens in the same replaceable preview slot a navigator row
+          // does (decision #56) — the line it lands on is the search panel's
+          // own business, through `editor/reveal-line.ts`.
+          <FileSearchPanel
+            scope={{ kind: "home", projectId: project.id }}
+            root={project.name}
+            onOpenMatch={(relPath) =>
+              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+            }
+          />
+        ) : null}
       </section>
     </div>
   );
@@ -142,7 +160,12 @@ export function HomeRail({
 const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map((key) => ({
   key,
   label: HOME_RAIL_MODE_LABELS[key],
-  icon: { now: ChatCircleDotsIcon, sessions: ClockCounterClockwiseIcon, files: FoldersIcon }[key],
+  icon: {
+    now: ChatCircleDotsIcon,
+    sessions: ClockCounterClockwiseIcon,
+    files: FoldersIcon,
+    search: MagnifyingGlassIcon,
+  }[key],
 }));
 
 /** Now: where this Session runs, and what it is. */
@@ -163,6 +186,13 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
         <SectionHeading as="h3">Session</SectionHeading>
         <SessionFacts activeTabId={activeTabId} />
       </div>
+      {/* The third scope (VC-87), as ONE card carrying both the project rollup
+          and what the Session in front has contributed to it (VC-203). The
+          Session's cost used to be three extra rows in the block above; two
+          drawings of the same kind of number, a section apart, is what that
+          bought. It renders nothing — padding included — when the reader has
+          turned cost off, or when this project has never metered a model call. */}
+      <HomeUsageRailCard projectId={projectId} sessionId={parseHomeChatTab(activeTabId)} />
     </>
   );
 }
@@ -269,6 +299,10 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
           {ACTIVITY_LABEL[activity]}
         </span>
       </Fact>
+      {/* Cost is NOT a fourth row here. It used to be three (VC-87), and they
+          were the one part of this block drawn in a shape the page repeated
+          somewhere else — the usage card below reports the same figures beside
+          the project total they belong to (VC-203). */}
     </dl>
   );
 }
@@ -335,6 +369,7 @@ const ACTIVITY_LABEL: Record<StatusDotState, string> = {
   idle: "Idle",
   parked: "Parked",
   exited: "Ended",
+  stopped: "Stopped",
 };
 
 /** The chat Session a Home tab id names, or `null` for the Board and terminals. */

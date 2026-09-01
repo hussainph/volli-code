@@ -237,7 +237,46 @@ async function drag(page, sourceBox, target) {
   await page.mouse.move(target.x, target.y, { steps: 20 });
   await sleep(250);
   await page.mouse.up();
-  await sleep(500);
+  await waitForDragSettled(page);
+}
+
+/**
+ * Block until dnd-kit has finished a drag.
+ *
+ * The source card carries `opacity-40` for exactly as long as `isDragging` is
+ * true (ticket-card.tsx), so its absence is the drop having been committed and
+ * the overlay torn down. Every drag here used to end in a flat `sleep(500)`,
+ * which is a bet on the drop animation; on a CI runner that bet expired
+ * mid-drag and the board was read while still in its dragging DOM — which is
+ * why the column headers came back null and every later check failed behind
+ * it. Falls through on timeout so a genuinely stuck drag still fails on its
+ * own assertion rather than here.
+ */
+async function waitForDragSettled(page) {
+  await page
+    .waitForFunction(() => document.querySelector("article.opacity-40") === null, null, {
+      timeout: 10_000,
+    })
+    .catch(() => {});
+  await sleep(250);
+}
+
+/**
+ * `columnCount`, but waits for the board to be readable.
+ *
+ * A single read returns null while the board is mid-transition, and null is
+ * indistinguishable from "the column is gone" in an assertion. Polling makes
+ * the read mean what the check thinks it means.
+ */
+async function waitForColumnCount(page, label, timeoutMs = 10_000) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await columnCount(page, label);
+    if (last !== null) return last;
+    await sleep(150);
+  }
+  return last;
 }
 
 /** Land on Home's Board tab (nav and tab are both remembered per-workspace and
@@ -664,8 +703,8 @@ async function main() {
         if (!cardBox || !doingHeaderBox) throw new Error("card or Doing header not found");
         await drag(page, cardBox, { x: doingHeaderBox.x + 20, y: doingHeaderBox.y + 120 });
         const after = {
-          backlog: await columnCount(page, "Backlog"),
-          doing: await columnCount(page, "Doing"),
+          backlog: await waitForColumnCount(page, "Backlog"),
+          doing: await waitForColumnCount(page, "Doing"),
         };
         const ok =
           before.backlog !== null &&
@@ -723,7 +762,7 @@ async function main() {
           } finally {
             await page.mouse.up();
           }
-          await sleep(500);
+          await waitForDragSettled(page);
 
           if (!targetActive) continue;
           dropped = await waitUntil(
@@ -805,9 +844,10 @@ async function main() {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       // Root items for a fresh no-worktree ticket: Move to, Priority, Labels
-      // (VC-27), Archive. Resume/Remove-worktree only appear with a session.
+      // (VC-27), Automations (VC-129 — run one without opening the Ticket),
+      // Archive. Resume/Remove-worktree only appear with a session.
       const ok =
-        rootCount === 4 &&
+        rootCount === 5 &&
         rootRowsWithIcons === rootCount &&
         moveCount === 4 &&
         moveRowsWithIcons === moveCount &&

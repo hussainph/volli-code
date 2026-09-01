@@ -1,7 +1,7 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { COMPACT_VERB, COMPOSER_VERBS } from "@volli/shared";
+import { COMPACT_VERB, COMPOSER_VERBS, SKILL_POLICY_DEFAULT } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
@@ -560,7 +560,9 @@ describe("what a composed message actually sends", () => {
         name: "logos",
         description: "Design logos",
         body: "# Logos",
-        userInvokeOnly: false,
+        authorPolicy: SKILL_POLICY_DEFAULT,
+        effectivePolicy: SKILL_POLICY_DEFAULT,
+        policyDiagnostic: null,
         root: ".agents/skills/logos",
       },
     ];
@@ -629,8 +631,10 @@ function pickerState(overrides: Partial<ComposerPickerState> = {}): ComposerPick
       {
         kind: "command",
         value: "review",
+        name: "review",
         label: "/review",
         detail: "Review a file",
+        heading: "Commands",
         template: TEMPLATES[0]!,
       },
     ],
@@ -709,13 +713,21 @@ describe("the picker card", () => {
     expect(html).toContain("No match");
   });
 
+  it("takes an open source group's heading from its resolved row", () => {
+    const [command] = pickerState().rows;
+    if (command?.kind !== "command") throw new Error("expected the command fixture");
+    const html = renderPicker(pickerState({ rows: [{ ...command, heading: "Prompt templates" }] }));
+
+    expect(html).toContain(">Prompt templates<");
+  });
+
   it("heads a verb row Actions, apart from the rows that only write text", () => {
     const html = renderPicker(
       pickerState({
         rows: [
           {
             kind: "verb",
-            value: "verb:compact",
+            value: "compact",
             label: "/compact",
             detail: COMPACT_VERB.description,
             verb: COMPACT_VERB,
@@ -746,7 +758,7 @@ describe("the picker card", () => {
           rows: [
             {
               kind: "verb",
-              value: `verb:${verb.name}`,
+              value: verb.name,
               label: `/${verb.name}`,
               detail: verb.description,
               verb,

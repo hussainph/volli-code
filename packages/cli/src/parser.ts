@@ -1,12 +1,18 @@
 import {
   cliVerbName,
   HARNESS_VOCABULARY,
+  HELP_TOPIC_NAMES,
+  isSessionUsageGrouping,
   isTicketPriority,
+  isTicketSignalKind,
+  isTicketSignalVerdict,
   parseColumnToken,
   parseHarnessId,
-  REASONING_LEVELS,
-  REFERENCE_VERBS,
+  parseSessionUsageWindow,
+  SESSION_USAGE_GROUPINGS,
   TICKET_PRIORITIES,
+  TICKET_SIGNAL_KINDS,
+  TICKET_SIGNAL_VERDICTS,
   VERB_REGISTRY,
 } from "@volli/shared";
 import type { VerbEntry, VerbKey } from "@volli/shared";
@@ -22,10 +28,24 @@ export const PRIORITY_VOCABULARY: string = TICKET_PRIORITIES.join(", ");
 
 export type CliParseResult =
   | { ok: true; invocation: CliInvocation }
-  | { ok: false; code: "USAGE"; message: string };
+  | {
+      ok: false;
+      code: "USAGE" | "UNSUPPORTED_COMMAND" | "WRONG_DOOR";
+      message: string;
+      /** Registry identity present only for a declared verb reached through the wrong surface. */
+      verb?: string;
+    };
+
+function refusal(
+  code: "USAGE" | "UNSUPPORTED_COMMAND" | "WRONG_DOOR",
+  message: string,
+  verb?: string,
+): CliParseResult {
+  return { ok: false, code, message, ...(verb === undefined ? {} : { verb }) };
+}
 
 function usage(message: string): CliParseResult {
-  return { ok: false, code: "USAGE", message };
+  return refusal("USAGE", message);
 }
 
 type ParsedValue = { ok: true; value: unknown } | { ok: false; message: string };
@@ -60,36 +80,35 @@ const harnessValue: ValueParser = (raw) => {
     : { ok: true, value: parsed };
 };
 
-/**
- * `--model` splits on the FIRST `/` into providerId/modelId: a provider id
- * never contains one, while a gateway-routed model id may. Whether the pair
- * names a model this profile can actually run is Model Access's judgement,
- * made in the app — the parser only vets the shape, exactly like `--harness`.
- */
-const modelValue: ValueParser = (raw) => {
-  const slash = raw.indexOf("/");
-  const providerId = slash === -1 ? "" : raw.slice(0, slash);
-  const modelId = slash === -1 ? "" : raw.slice(slash + 1);
-  return providerId.length === 0 || modelId.length === 0
-    ? {
-        ok: false,
-        message: `Invalid model ${JSON.stringify(raw)} (expected <provider>/<model>)`,
-      }
-    : { ok: true, value: { providerId, modelId } };
-};
-
-const reasoningValue: ValueParser = (raw) =>
-  (REASONING_LEVELS as readonly string[]).includes(raw)
-    ? { ok: true, value: raw }
-    : {
-        ok: false,
-        message: `Unknown reasoning level ${JSON.stringify(raw)} (valid: ${REASONING_LEVELS.join(", ")})`,
-      };
-
 const columnValue: ValueParser = (raw) => {
   const result = parseColumnToken(raw);
   return result.ok ? { ok: true, value: result.status } : { ok: false, message: result.message };
 };
+
+/**
+ * The two halves of a verdict (VC-85), both closed vocabularies.
+ *
+ * Vetted here as well as in main, unlike `--harness`: a harness slug names
+ * something only the app's registry knows about, but a signal kind is a fixed
+ * word in `@volli/shared` that this process can read. Catching the typo before
+ * the socket is what makes the fixed vocabulary cheap to live with — the
+ * refusal names every valid word, from the same list the door checks against.
+ */
+const signalKindValue: ValueParser = (raw) =>
+  isTicketSignalKind(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown signal kind ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_KINDS.join(", ")})`,
+      };
+
+const signalVerdictValue: ValueParser = (raw) =>
+  isTicketSignalVerdict(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown verdict ${JSON.stringify(raw)} (valid: ${TICKET_SIGNAL_VERDICTS.join(", ")})`,
+      };
 
 const positiveIntValue: ValueParser = (raw, token) => {
   const parsed = Number(raw);
@@ -97,6 +116,55 @@ const positiveIntValue: ValueParser = (raw, token) => {
     ? { ok: true, value: parsed }
     : { ok: false, message: `${token} requires a positive integer` };
 };
+
+/**
+ * A count whose zero is a real answer (VC-85).
+ *
+ * `ticket show --events 0` means "do not read the event log at all", which is
+ * the cheapest poll the read tier can offer and was refused here as a usage
+ * error until this parser existed. It is deliberately NOT the parser every
+ * count option uses: `--limit 0` on a listing verb asks for an empty answer,
+ * which is a question nobody means to ask, so those keep
+ * {@link positiveIntValue} and its refusal.
+ *
+ * The rejection is two-sided by construction — main's own count reader had to
+ * stop treating 0 as "unset" in the same change, or a request this parser now
+ * accepts would still come back with five events.
+ */
+const countValue: ValueParser = (raw, token) => {
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0
+    ? { ok: true, value: parsed }
+    : { ok: false, message: `${token} requires a whole number, 0 or more` };
+};
+
+/**
+ * `--since`, kept as the two shapes a caller may write rather than resolved to
+ * an instant here.
+ *
+ * A look-back is relative to the moment the QUESTION IS ANSWERED, and this
+ * process does not answer it. Resolving `7d` against the CLI's own clock would
+ * work and would be wrong in the one way nobody notices: the window would be
+ * pinned at parse time, and main's injected clock would stop governing an
+ * answer it is supposed to govern.
+ */
+const usageWindowValue: ValueParser = (raw, token) => {
+  const window = parseSessionUsageWindow(raw);
+  return window === null
+    ? {
+        ok: false,
+        message: `${token} expects an RFC 3339 instant or a look-back like 7d, 24h or 90m`,
+      }
+    : { ok: true, value: window };
+};
+
+const usageGroupingValue: ValueParser = (raw) =>
+  isSessionUsageGrouping(raw)
+    ? { ok: true, value: raw }
+    : {
+        ok: false,
+        message: `Unknown grouping ${JSON.stringify(raw)} (valid: ${SESSION_USAGE_GROUPINGS.join(", ")})`,
+      };
 
 /**
  * The executable half of one declared option: what the walker DOES with the
@@ -147,12 +215,17 @@ export interface VerbMechanics {
 // and `session blocked` share these mechanics for the same reason they share a
 // dispatch branch in main: one signal, two names for it.
 const REASON_ONLY: VerbMechanics = {
-  options: { "--reason": { kind: "value", key: "reason" } },
+  options: {
+    "--reason": { kind: "value", key: "reason" },
+    "--dry-run": { kind: "flag", key: "dryRun", value: true },
+  },
 };
 
 const PROJECT_ONLY: VerbMechanics = {
   options: { "--project": { kind: "value", key: "project" } },
 };
+
+const DRY_RUN: OptionMechanics = { kind: "flag", key: "dryRun", value: true };
 
 /**
  * Argv mechanics for every verb the generic walker serves, keyed by registry
@@ -180,8 +253,19 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   "ticket.show": {
     options: {
-      "--events": { kind: "value", key: "events", parse: positiveIntValue },
-      "--comments": { kind: "value", key: "comments", parse: positiveIntValue },
+      "--events": { kind: "value", key: "events", parse: countValue },
+      "--comments": { kind: "value", key: "comments", parse: countValue },
+      // A named polling projection, not merely an output count: main uses the
+      // marker to omit the static ticket body as well as the event log. An
+      // explicit --events still wins, so callers can ask for comments plus a
+      // small event tail without losing the ordinary full-ticket shape.
+      "--comments-only": { kind: "flag", key: "commentsOnly", value: true },
+    },
+    finalize: (args) => {
+      if (args["commentsOnly"] !== true) return null;
+      if (args["events"] === undefined) args["events"] = 0;
+      else delete args["commentsOnly"];
+      return null;
     },
   },
   "ticket.events": {
@@ -199,6 +283,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--harness": { kind: "value", key: "harness", parse: harnessValue },
       "--base": { kind: "value", key: "base" },
       "--no-worktree": { kind: "flag", key: "usesWorktree", value: false },
+      "--dry-run": DRY_RUN,
     },
     finalize: (args) => {
       if (typeof args["title"] !== "string") return "ticket create requires --title";
@@ -236,6 +321,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--remove-label": { kind: "repeated", key: "removeLabels" },
       "--harness": { kind: "value", key: "harness", parse: harnessValue },
       "--base": { kind: "value", key: "base" },
+      "--dry-run": DRY_RUN,
     },
     defaults: { addLabels: [], removeLabels: [] },
     finalize: (_args, counters) =>
@@ -244,7 +330,10 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
         : null,
   },
   "ticket.move": {
-    options: { "--to": { kind: "value", key: "to", parse: columnValue } },
+    options: {
+      "--to": { kind: "value", key: "to", parse: columnValue },
+      "--dry-run": DRY_RUN,
+    },
     required: { to: "ticket move requires --to" },
   },
   "ticket.comment": {
@@ -252,21 +341,71 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "-m": { kind: "value", key: "message" },
       "--message": { kind: "value", key: "message" },
       "--file": { kind: "value", key: "file" },
+      "--dry-run": DRY_RUN,
     },
     finalize: (args) =>
       "message" in args === "file" in args
         ? "ticket comment requires exactly one of -m or --file"
         : null,
   },
-  "ticket.archive": { options: {} },
+  "ticket.signal": {
+    options: {
+      "--kind": { kind: "value", key: "kind", parse: signalKindValue },
+      "--verdict": { kind: "value", key: "verdict", parse: signalVerdictValue },
+      "--detail": { kind: "value", key: "detail" },
+      "--dry-run": DRY_RUN,
+    },
+    // Both are required because a signal with either half missing is not a
+    // weaker signal, it is not one: "review" says nothing without a verdict,
+    // and "pass" says nothing without a stage.
+    required: {
+      kind: "ticket signal requires --kind",
+      verdict: "ticket signal requires --verdict",
+    },
+  },
   "ticket.brief": { options: {} },
   "worktree.status": { options: {} },
   "worktree.diff": {
     options: { "--working-tree": { kind: "flag", key: "workingTree", value: true } },
   },
+  // The one worktree verb that writes (VC-185). `--abort` is a MODE rather
+  // than a modifier: it is the documented way back out of a conflicted sync,
+  // and putting it on the same verb is what makes the exit discoverable from
+  // the entrance. `--dry-run` still resolves the same target, but never runs
+  // either merge mode.
+  "worktree.sync": {
+    options: {
+      "--abort": { kind: "flag", key: "abort", value: true },
+      "--dry-run": DRY_RUN,
+    },
+  },
+  conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
-  "model.list": { options: { "--all": { kind: "flag", key: "all", value: true } } },
+  "model.list": { options: {} },
+  cost: {
+    options: {
+      "--ticket": { kind: "value", key: "ticket" },
+      "--session": { kind: "value", key: "session" },
+      "--project": { kind: "value", key: "project" },
+      "--all-projects": { kind: "flag", key: "allProjects", value: true },
+      "--since": { kind: "value", key: "since", parse: usageWindowValue },
+      "--group-by": { kind: "value", key: "groupBy", parse: usageGroupingValue },
+    },
+    // One scope per question. Two would have to mean something, and the two
+    // available meanings (intersect, or let one win) are both worse than
+    // saying so: a caller who wrote both learns which one main ignored only by
+    // noticing the total is wrong.
+    finalize: (args) => {
+      const scopes = ["ticket", "session", "allProjects"].filter((key) => key in args);
+      // `--project` is the ladder's own word and rides WITH a narrower scope
+      // where it can disagree; `session.list` already refuses that mismatch by
+      // name, and the cost verb does the same in main where both ids resolve.
+      return scopes.length > 1
+        ? `cost takes one of --ticket, --session or --all-projects, not ${scopes.length}`
+        : null;
+    },
+  },
   "session.list": {
     options: {
       "--project": { kind: "value", key: "project" },
@@ -276,18 +415,9 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   "session.peek": {
     options: { "--lines": { kind: "value", key: "lines", parse: positiveIntValue } },
   },
-  "session.start": {
-    options: {
-      "-m": { kind: "value", key: "message" },
-      "--message": { kind: "value", key: "message" },
-      "--title": { kind: "value", key: "title" },
-      "--model": { kind: "value", key: "model", parse: modelValue },
-      "--reasoning": { kind: "value", key: "reasoning", parse: reasoningValue },
-    },
-  },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,
-  "session.link": { options: {} },
+  "session.link": { options: { "--dry-run": DRY_RUN } },
   "session.harness": {
     options: { "--mint": { kind: "flag", key: "mint", value: true } },
   },
@@ -296,10 +426,18 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "-m": { kind: "value", key: "message" },
       "--message": { kind: "value", key: "message" },
       "--title": { kind: "value", key: "title" },
+      "--dry-run": DRY_RUN,
     },
     finalize: (args) => (!("message" in args) ? "notify requires -m" : null),
   },
-  doctor: { options: { "--fix": { kind: "flag", key: "fix", value: true } } },
+  doctor: {
+    options: {
+      "--fix": { kind: "flag", key: "fix", value: true },
+      "--dry-run": DRY_RUN,
+    },
+    finalize: (args) =>
+      args["dryRun"] === true && args["fix"] !== true ? "doctor --dry-run requires --fix" : null,
+  },
   "prompt.baseline": {
     options: {
       "--ticket": { kind: "value", key: "ticket" },
@@ -317,17 +455,17 @@ interface VerbRoute {
   readonly mechanics: VerbMechanics;
 }
 
-/**
- * Every verb the walker serves, addressed the way a caller types it. Built by
- * walking the REGISTRY and keeping the entries this process has mechanics for,
- * so a verb cannot become typeable without being declared first.
- */
-const ROUTES: ReadonlyMap<string, VerbRoute> = new Map(
-  VERB_REGISTRY.flatMap((entry) => {
-    const mechanics = CLI_MECHANICS[entry.key];
-    return mechanics === undefined ? [] : [[cliVerbName(entry.key), { entry, mechanics }]];
-  }),
-);
+/** CLI-executable routes projected from any supplied registry table. */
+function routesFrom(entries: readonly VerbEntry[]): ReadonlyMap<string, VerbRoute> {
+  return new Map(
+    entries.flatMap((entry) => {
+      const mechanics = CLI_MECHANICS[entry.key as VerbKey];
+      return mechanics === undefined || !entry.accessModes.includes("cli")
+        ? []
+        : [[cliVerbName(entry.key), { entry, mechanics }] as const];
+    }),
+  );
+}
 
 /** Teaching error: an unknown option names the command's real options + a help pointer (principle 3). */
 function unknownOptionMessage(entry: VerbEntry, token: string): string {
@@ -336,10 +474,41 @@ function unknownOptionMessage(entry: VerbEntry, token: string): string {
   return `Unknown option ${token}${optionList} — see volli help ${cliVerbName(entry.key)}`;
 }
 
-/** Teaching error: an unrecognized command names the whole command list (principle 3). */
-function unknownCommandMessage(): string {
-  const names = REFERENCE_VERBS.map((entry) => cliVerbName(entry.key)).join(", ");
-  return `Expected a Volli command (commands: ${names})`;
+/** The longest listed registry name matching the front of argv. */
+function declaredVerb(argv: readonly string[], entries: readonly VerbEntry[]): VerbEntry | null {
+  let best: VerbEntry | null = null;
+  let words = 0;
+  for (const entry of entries) {
+    if (!entry.listed) continue;
+    const name = cliVerbName(entry.key).split(" ");
+    if (name.length <= words || name.length > argv.length) continue;
+    if (name.every((part, index) => argv[index] === part)) {
+      best = entry;
+      words = name.length;
+    }
+  }
+  return best;
+}
+
+function wrongDoorMessage(entry: VerbEntry): string {
+  const name = `volli ${cliVerbName(entry.key)}`;
+  if (entry.accessModes.includes("tool")) {
+    return `${name} exists on the Agent Tool Surface as ${entry.key}; the Agent CLI does not execute it.`;
+  }
+  if (entry.accessModes.length === 0) {
+    return `${name} exists in the app only; no agent surface executes it.`;
+  }
+  return `${name} exists on ${entry.accessModes.join(" and ")}, not on the Agent CLI.`;
+}
+
+/** Teaching error: a no-door name lists every declared verb and local topic. */
+function unknownCommandMessage(argv: readonly string[], entries: readonly VerbEntry[]): string {
+  const names = entries
+    .filter((entry) => entry.listed)
+    .map((entry) => cliVerbName(entry.key))
+    .join(", ");
+  const typed = argv.length === 0 ? "(empty)" : argv.slice(0, 2).join(" ");
+  return `No Volli verb matches ${JSON.stringify(typed)} (declared verbs: ${names}; topics: ${HELP_TOPIC_NAMES.join(", ")})`;
 }
 
 /**
@@ -428,21 +597,27 @@ function parseVerb(route: VerbRoute, rest: readonly string[]): CliParseResult {
   return { ok: true, invocation: { command: entry.key, args, json } };
 }
 
-/** Parses argv into the versioned command shape sent over the Volli socket. */
-export function parseCliArgs(argv: readonly string[]): CliParseResult {
+/** Parses argv into a local invocation or a teaching refusal. */
+export function parseCliArgs(
+  argv: readonly string[],
+  entries: readonly VerbEntry[] = VERB_REGISTRY,
+): CliParseResult {
   if (argv.includes("--help") || argv.includes("-h")) return helpFromFlag(argv);
-  // `help`'s command/topic positionals don't fit the option-table model.
   if (argv[0] === "help") return parseHelp(argv.slice(1));
-  // A dot-name is two words on argv (`ticket create`) or one (`doctor`). Match
-  // the longer form first; no one-word verb is also the first word of a
-  // two-word one, so the longest match is the only match.
+
+  const routes = routesFrom(entries);
   if (argv.length >= 2) {
-    const pair = ROUTES.get(`${argv[0]} ${argv[1]}`);
+    const pair = routes.get(`${argv[0]} ${argv[1]}`);
     if (pair !== undefined) return parseVerb(pair, argv.slice(2));
   }
-  const single = ROUTES.get(argv[0]);
+  const single = routes.get(argv[0]);
   if (single !== undefined) return parseVerb(single, argv.slice(1));
-  return usage(unknownCommandMessage());
+
+  const declared = declaredVerb(argv, entries);
+  if (declared !== null && !declared.accessModes.includes("cli")) {
+    return refusal("WRONG_DOOR", wrongDoorMessage(declared), declared.key);
+  }
+  return refusal("UNSUPPORTED_COMMAND", unknownCommandMessage(argv, entries));
 }
 
 /** A `--help`/`-h` anywhere in argv resolves to help for the leading command prefix (exit 0). */

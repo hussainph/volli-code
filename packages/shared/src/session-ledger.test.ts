@@ -31,6 +31,7 @@ import type {
   SessionInteractionPrompt,
   SessionObservation,
 } from "./session-ledger";
+import type { SessionUsage } from "./session-usage";
 
 const session: Session = {
   id: "session-1",
@@ -39,6 +40,9 @@ const session: Session = {
   title: "A durable Session",
   createdAt: 100,
 };
+
+/** What the engine stamps onto a usage fact, standing in for a Session row read. */
+const attribution = { projectId: session.projectId, ticketId: session.ticketId };
 
 const localVenue = { id: "machine-1", kind: "local" as const };
 const systemProvenance = {
@@ -212,21 +216,42 @@ describe("interaction prompts", () => {
 describe("observationPayload", () => {
   it("canonicalizes an omitted adapter-observation attachment id to null", () => {
     expect(
-      observationPayload({
-        id: "adapter-observation-omitted-attachment",
-        sessionId: session.id,
-        occurredAt: 1,
-        provenance: systemProvenance,
-        kind: "adapter.observed",
-        name: "native.session-signal",
-        native: null,
-      } as SessionObservation),
+      observationPayload(
+        {
+          id: "adapter-observation-omitted-attachment",
+          sessionId: session.id,
+          occurredAt: 1,
+          provenance: systemProvenance,
+          kind: "adapter.observed",
+          name: "native.session-signal",
+          native: null,
+        } as SessionObservation,
+        attribution,
+      ),
     ).toEqual({
       kind: "adapter.observed",
       attachmentId: null,
       name: "native.session-signal",
       native: null,
     });
+  });
+
+  it("canonicalizes an omitted usage attachment id to null", () => {
+    const usage = metered();
+    expect(
+      observationPayload(
+        {
+          id: "usage-omitted-attachment",
+          sessionId: session.id,
+          occurredAt: 1,
+          provenance: systemProvenance,
+          kind: "usage.recorded",
+          turnId: null,
+          usage,
+        } as SessionObservation,
+        attribution,
+      ),
+    ).toEqual({ kind: "usage.recorded", attachmentId: null, turnId: null, attribution, usage });
   });
 
   it("round-trips an authority.denied observation into its matching payload", () => {
@@ -243,7 +268,7 @@ describe("observationPayload", () => {
       reason: "rm -rf resolves under a home directory",
     };
 
-    expect(observationPayload(observation)).toEqual({
+    expect(observationPayload(observation, attribution)).toEqual({
       kind: "authority.denied",
       attachmentId: "attachment-1",
       turnId: "turn-1",
@@ -252,7 +277,9 @@ describe("observationPayload", () => {
       reason: "rm -rf resolves under a home directory",
     });
     // A denial before any turn opened carries no turn to blame it on.
-    expect(observationPayload({ ...observation, turnId: null })).toMatchObject({ turnId: null });
+    expect(observationPayload({ ...observation, turnId: null }, attribution)).toMatchObject({
+      turnId: null,
+    });
   });
 
   it("round-trips both halves of a compaction into their matching payloads", () => {
@@ -265,14 +292,17 @@ describe("observationPayload", () => {
     } as const;
 
     expect(
-      observationPayload({
-        ...observed,
-        kind: "context.compacted",
-        reason: "overflow",
-        entryId: "pi-entry-9",
-        tokensBefore: 190_000,
-        tokensAfter: 12_000,
-      }),
+      observationPayload(
+        {
+          ...observed,
+          kind: "context.compacted",
+          reason: "overflow",
+          entryId: "pi-entry-9",
+          tokensBefore: 190_000,
+          tokensAfter: 12_000,
+        },
+        attribution,
+      ),
     ).toEqual({
       kind: "context.compacted",
       attachmentId: "attachment-1",
@@ -282,12 +312,15 @@ describe("observationPayload", () => {
       tokensAfter: 12_000,
     });
     expect(
-      observationPayload({
-        ...observed,
-        kind: "context.compaction_failed",
-        reason: "threshold",
-        detail: "Summarization failed.",
-      }),
+      observationPayload(
+        {
+          ...observed,
+          kind: "context.compaction_failed",
+          reason: "threshold",
+          detail: "Summarization failed.",
+        },
+        attribution,
+      ),
     ).toEqual({
       kind: "context.compaction_failed",
       attachmentId: "attachment-1",
@@ -304,6 +337,7 @@ describe("observationPayload", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: { id: "native-1", detail: { model: "local" } },
+      authority: null,
     };
     const provenance = {
       source: { kind: "adapter" as const, id: "opencode", detail: { plugin: "hook" } },
@@ -462,13 +496,17 @@ describe("observationPayload", () => {
       },
     ];
 
-    expect(observationPayload(observations.at(-1)!)).toEqual({
+    expect(observationPayload(observations.at(-1)!, attribution)).toEqual({
       kind: "interaction.cancelled",
       attachmentId: attachment.id,
       interactionId: "question-1",
       reason: "abandoned",
     });
-    expect(observations.map(observationPayload).map(({ kind }) => kind)).toEqual([
+    expect(
+      observations
+        .map((observation) => observationPayload(observation, attribution))
+        .map(({ kind }) => kind),
+    ).toEqual([
       "attachment.opened",
       "attachment.native_referenced",
       "attachment.failed",
@@ -486,31 +524,37 @@ describe("observationPayload", () => {
       "interaction.cancelled",
     ]);
     expect(
-      observationPayload({
-        id: "10-session-wide",
-        sessionId: session.id,
-        occurredAt: 10,
-        provenance,
-        kind: "adapter.observed",
-        attachmentId: null,
-        name: "native.session-signal",
-        native: null,
-      }),
+      observationPayload(
+        {
+          id: "10-session-wide",
+          sessionId: session.id,
+          occurredAt: 10,
+          provenance,
+          kind: "adapter.observed",
+          attachmentId: null,
+          name: "native.session-signal",
+          native: null,
+        },
+        attribution,
+      ),
     ).toMatchObject({ kind: "adapter.observed", attachmentId: null });
     expect(() =>
-      observationPayload({
-        id: "11",
-        sessionId: session.id,
-        occurredAt: 11,
-        provenance,
-        kind: "command.receipt",
-        receipt: {
-          id: "receipt-1",
-          commandId: "command-1",
-          status: "unreconciled",
-          detail: "Awaiting reconciliation",
+      observationPayload(
+        {
+          id: "11",
+          sessionId: session.id,
+          occurredAt: 11,
+          provenance,
+          kind: "command.receipt",
+          receipt: {
+            id: "receipt-1",
+            commandId: "command-1",
+            status: "unreconciled",
+            detail: "Awaiting reconciliation",
+          },
         },
-      }),
+        attribution,
+      ),
     ).toThrow("require Session Engine stamping");
   });
 
@@ -619,6 +663,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "native_resume" as const,
       native: null,
+      authority: null,
     };
     const native = { id: "native-continuation", detail: { cursor: ["opaque", 3] } };
 
@@ -657,6 +702,59 @@ describe("projectSession", () => {
     });
   });
 
+  // VC-86: the durable stop fact. A supervisor ending another Session's work
+  // must leave a who-did-it record, and a listing must be able to say
+  // "stopped" instead of the indistinguishable "idle" a released attachment
+  // reads as.
+  it("projects a stop with its actor, and clears it when work resumes", () => {
+    const stopped = projectSession(session, [
+      event(2, {
+        kind: "session.stopped",
+        reason: "Wedged for 3h",
+        by: { kind: "session", sessionId: "supervisor-1" },
+      }),
+    ]);
+    expect(stopped.stopped).toEqual({
+      at: 20,
+      reason: "Wedged for 3h",
+      by: { kind: "session", sessionId: "supervisor-1" },
+    });
+    // A stop is a thing that happened: recency moves with it.
+    expect(stopped.lastActivityAt).toBe(20);
+
+    // A later attachment is work resuming: the stop is history, not state.
+    const resumed = projectSession(session, [
+      event(2, {
+        kind: "session.stopped",
+        reason: null,
+        by: { kind: "watchdog" },
+      }),
+      event(3, {
+        kind: "attachment.opened",
+        attachment: {
+          id: "attachment-after-stop",
+          sessionId: session.id,
+          adapterId: "pi",
+          venue: localVenue,
+          continuity: "fresh" as const,
+          native: null,
+          authority: null,
+        },
+      }),
+    ]);
+    expect(resumed.stopped).toBeNull();
+  });
+
+  it("keeps a stop through a racing turn on the attachment it stopped", () => {
+    const projection = projectSession(session, [
+      event(2, { kind: "session.stopped", reason: null, by: { kind: "user" } }),
+      // This turn may already have been admitted when the supervisor recorded
+      // its stop. It must not erase the durable stop before release catches it.
+      event(3, { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" }),
+    ]);
+    expect(projection.stopped).toEqual({ at: 20, reason: null, by: { kind: "user" } });
+  });
+
   it("keeps the Session open when its own creation, runs, turns, and an executor end", () => {
     const attachment = {
       id: "attachment-1",
@@ -665,6 +763,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "native_resume" as const,
       native: null,
+      authority: null,
     };
     const projection = projectSession({ ...session, title: "Seeded" }, [
       event(0, { kind: "attachment.closed", attachmentId: "unknown", outcome: "failed" }),
@@ -697,6 +796,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "context_replay" as const,
       native: { id: null, detail: null },
+      authority: null,
     };
     const projection = projectSession(session, [
       { ...event(0, { kind: "session.created", session }), sessionId: "other-session" },
@@ -761,6 +861,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const projection = projectSession(session, [
       event(1, {
@@ -809,6 +910,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const command = {
       id: "command-ordered",
@@ -873,6 +975,7 @@ describe("projectSession", () => {
       venue: localVenue,
       continuity: "fresh" as const,
       native: null,
+      authority: null,
     };
     const pending = projectSession(session, [
       event(1, { kind: "command.recorded", command: first }),
@@ -939,6 +1042,7 @@ describe("projectSession turn activity", () => {
     venue: localVenue,
     continuity: "fresh" as const,
     native: null,
+    authority: null,
   };
 
   it("opens on a started turn and closes on the completed one", () => {
@@ -1135,6 +1239,63 @@ describe("projectSession authorityDenials", () => {
     ]);
 
     expect(projection.authorityDenials).toBe(3);
+  });
+});
+
+function metered(overrides: Partial<SessionUsage> = {}): SessionUsage {
+  return {
+    cause: "assistant",
+    providerId: "anthropic",
+    modelId: "claude-opus-4-1",
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 0,
+    costUsd: 0.25,
+    costBasis: "catalog-estimate",
+    ...overrides,
+  };
+}
+
+function recorded(sequence: number, usage: SessionUsage): SessionEvent {
+  return event(sequence, {
+    kind: "usage.recorded",
+    attachmentId: "attachment-1",
+    turnId: null,
+    attribution,
+    usage,
+  });
+}
+
+describe("projectSession usage", () => {
+  it("reports a Session that ran no model as unmeasured, not as free", () => {
+    const { usage } = projectSession(session, []);
+    expect(usage.requestCount).toBe(0);
+    expect(usage.knownCostUsd).toBeNull();
+    expect(usage.costCoverage).toBe("unavailable");
+  });
+
+  it("adds every recorded model operation into one Session total", () => {
+    const { usage } = projectSession(session, [
+      recorded(1, metered({ costUsd: 0.25 })),
+      recorded(2, metered({ cause: "compaction", costUsd: 0.05 })),
+      recorded(3, metered({ cause: "utility", costUsd: 0.01 })),
+    ]);
+    expect(usage.requestCount).toBe(3);
+    expect(usage.knownCostUsd).toBe(0.31);
+    expect(usage.costCoverage).toBe("complete");
+    expect(usage.cachedInputShare).toBe(0.8);
+  });
+
+  // Telemetry arriving is not the agent doing something. A backfill or a
+  // reprojection that floated every old Session to the top of a recency-sorted
+  // listing would rewrite the user's sense of what they were last working on.
+  it("does not treat usage as activity", () => {
+    const projection = projectSession(session, [
+      event(2, { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" }),
+      recorded(9, metered()),
+    ]);
+    expect(projection.lastActivityAt).toBe(20);
   });
 });
 

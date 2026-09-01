@@ -1,9 +1,13 @@
 /**
- * Full-database JSON export: one versioned document covering every table in
+ * Full-database JSON export: one versioned document covering the tables in
  * the current schema (`migrations.ts` is the authoritative table list) —
  * user-facing data-export trust, a debug/inspection tool, and a manual
  * backup story alongside the migration backups. Export only: there is
  * deliberately no import/restore path here.
+ *
+ * {@link REBUILDABLE_PROJECTIONS} names what is left out and why: a read model
+ * whose every fact is derived from a table this document does carry is stated
+ * once, in the events, rather than twice.
  *
  * `buildExportDocument` is pure given its inputs (the db handle plus the
  * caller-supplied `appVersion`/`now`) so it stays fully unit-testable
@@ -20,6 +24,38 @@ import { prepared } from "./prepared";
 
 /** Top-level format marker — lets a future importer/reader recognize the document before touching its shape. */
 export const EXPORT_FORMAT = "volli-export";
+
+/**
+ * Tables this document omits ON PURPOSE, because every fact in them is derived
+ * from a table it does carry.
+ *
+ * A DECLARATION, not a note. VC-87's review asked for one of two things about
+ * the usage projection — export it, or say plainly that rebuildable projections
+ * are excluded — because the failure mode of neither is a user opening a rescue
+ * document, finding no cost history, and having no way to tell whether that is
+ * a design decision or a dropped table. `export.test.ts` holds every name here
+ * against the live schema, so an exemption cannot outlive the thing it exempts.
+ *
+ * `session_usage` is a fact INDEX over the `usage.recorded` events in
+ * `session_events`, which this document carries. Every column of it —
+ * attribution included — comes out of the event payload rather than out of any
+ * row it joined, which is what makes the rebuild exact; a copy here would be a
+ * second statement of the same money that a hand-edit could put out of step
+ * with the first.
+ *
+ * `session_usage_coverage` is the same argument one level up: a single row
+ * recording where metering began, which migration 027 derived from the event
+ * history this document carries.
+ *
+ * A table belongs here because it is DERIVED, never because it is large or
+ * awkward. `automations` and `automation_runs` are projections too, and they
+ * are exported, because they project a command ledger whose payloads this
+ * document does not carry — omitting them would lose the records themselves.
+ */
+export const REBUILDABLE_PROJECTIONS: readonly string[] = [
+  "session_usage",
+  "session_usage_coverage",
+];
 
 /** Any value SQLite's `json_valid` columns can carry after parsing. */
 export type ExportJsonValue =
@@ -74,6 +110,8 @@ export interface ExportProject {
   skillModes: string | null;
   sessionHarness: string | null;
   sessionModel: string | null;
+  /** This project's authority departures (migration 025); NULL = inherit every default. */
+  authorityPolicy: string | null;
   /** Per-project skills auto-disclosure consent (migration 020), as the row's 0/1. */
   colorIndex: number;
   sortOrder: number;
@@ -191,6 +229,34 @@ export interface ExportSessionCommandReceipt {
   receiptEventId: string | null;
 }
 
+/** One Ticket Session's durable delegation ancestry (migration 030). */
+export interface ExportSessionDelegation {
+  sessionId: string;
+  /** Null once the Ticket is deleted; the ancestry outlives it. */
+  ticketId: string | null;
+  parentSessionId: string | null;
+  depth: number;
+}
+
+/** One canonical Registry verb grant, with its separate scope and fixed limits. */
+export interface ExportSessionVerbGrant {
+  sessionId: string;
+  verb: string;
+  scope: string;
+  maxDepth: number;
+  maxChildren: number;
+}
+
+/** One fan-out slot claimed by a Ticket Session tool call. */
+export interface ExportSessionDelegationClaim {
+  parentSessionId: string;
+  toolCallId: string;
+  ticketId: string;
+  createCommandId: string;
+  childSessionId: string | null;
+  createdAt: number;
+}
+
 export interface ExportTicketComment {
   id: string;
   ticketId: string;
@@ -206,6 +272,66 @@ export interface ExportAppState {
   key: string;
   value: string;
   updatedAt: number;
+}
+
+/**
+ * One `automations` projection row (migration 026). `runtime` rides as its STORED JSON
+ * string, unparsed — {@link ExportProject.themeCanvas}'s reason: a hand-edited
+ * pin that no longer parses must not take the rescue document down with it.
+ */
+export interface ExportAutomation {
+  id: string;
+  /** `null` is a global Automation — the Ownership axis. */
+  projectId: string | null;
+  name: string;
+  instructions: string;
+  /**
+   * The column Trigger (migration 031), as its STORED JSON string for the same
+   * reason `runtime` is one: a hand-edited row that no longer parses must not
+   * take the rescue document down with it. `null` is "Nothing else".
+   */
+  triggerSpec: string | null;
+  runtime: string | null;
+  rowVersion: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * One `automation_column_arming` row (migration 031): which Automation a column
+ * fires on its own.
+ *
+ * Exported even though arming never travels with a PROJECT. The two claims do
+ * not conflict: arming is absent from git and from anything a second machine
+ * reads, while this document is one machine's own backup of its own database.
+ * Leaving it out would silently lose real state a person set by hand.
+ */
+export interface ExportColumnArming {
+  projectId: string;
+  status: string;
+  automationId: string;
+  armedAt: number;
+}
+
+/** One `automation_runs` projection row (migration 026): identity snapshot plus resolved model columns. */
+export interface ExportAutomationRun {
+  id: string;
+  automationId: string | null;
+  /** Bound Automation name snapshot, retained after record deletion. */
+  automationName: string | null;
+  ticketId: string | null;
+  sessionId: string;
+  providerId: string;
+  modelId: string;
+  reasoningLevel: string;
+  createdAt: number;
+}
+
+/** An accepted Automation Run's durable pre-mint Session command relation (migration 036). */
+export interface ExportAutomationSessionMintIntent {
+  sessionCreateCommandId: string;
+  automationCommandId: string;
+  recordedAt: number;
 }
 
 export interface ExportDocument {
@@ -224,8 +350,15 @@ export interface ExportDocument {
   sessionEvents: ExportSessionEvent[];
   sessionCommands: ExportSessionCommand[];
   sessionCommandReceipts: ExportSessionCommandReceipt[];
+  sessionDelegations: ExportSessionDelegation[];
+  sessionVerbGrants: ExportSessionVerbGrant[];
+  sessionDelegationClaims: ExportSessionDelegationClaim[];
   ticketComments: ExportTicketComment[];
   appState: ExportAppState[];
+  automations: ExportAutomation[];
+  automationRuns: ExportAutomationRun[];
+  automationSessionMintIntents: ExportAutomationSessionMintIntent[];
+  automationColumnArmings: ExportColumnArming[];
 }
 
 export interface BuildExportDocumentOptions {
@@ -252,6 +385,7 @@ interface ProjectRow {
   skill_modes: string | null;
   session_harness: string | null;
   session_model: string | null;
+  authority_policy: string | null;
   color_index: number;
   sort_order: number;
   row_version: number;
@@ -291,6 +425,7 @@ function exportProjects(db: Database.Database): ExportProject[] {
     skillModes: row.skill_modes,
     sessionHarness: row.session_harness,
     sessionModel: row.session_model,
+    authorityPolicy: row.authority_policy,
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
     rowVersion: row.row_version,
@@ -390,6 +525,105 @@ function exportTicketLabels(db: Database.Database): ExportTicketLabel[] {
     "SELECT * FROM ticket_labels ORDER BY ticket_id, label_id",
   ).all();
   return rows.map((row) => ({ ticketId: row.ticket_id, labelId: row.label_id }));
+}
+
+interface AutomationRow {
+  id: string;
+  project_id: string | null;
+  name: string;
+  instructions: string;
+  trigger_spec: string | null;
+  runtime: string | null;
+  row_version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+function exportAutomations(db: Database.Database): ExportAutomation[] {
+  const rows = prepared<[], AutomationRow>(db, "SELECT * FROM automations ORDER BY id").all();
+  return rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    instructions: row.instructions,
+    triggerSpec: row.trigger_spec,
+    runtime: row.runtime,
+    rowVersion: row.row_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+interface ColumnArmingRow {
+  project_id: string;
+  status: string;
+  automation_id: string;
+  armed_at: number;
+}
+
+function exportColumnArmings(db: Database.Database): ExportColumnArming[] {
+  const rows = prepared<[], ColumnArmingRow>(
+    db,
+    "SELECT * FROM automation_column_arming ORDER BY project_id, status",
+  ).all();
+  return rows.map((row) => ({
+    projectId: row.project_id,
+    status: row.status,
+    automationId: row.automation_id,
+    armedAt: row.armed_at,
+  }));
+}
+
+interface AutomationRunRow {
+  id: string;
+  automation_id: string | null;
+  automation_name: string | null;
+  ticket_id: string | null;
+  session_id: string;
+  provider_id: string;
+  model_id: string;
+  reasoning_level: string;
+  created_at: number;
+}
+
+function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
+  const rows = prepared<[], AutomationRunRow>(
+    db,
+    "SELECT * FROM automation_runs ORDER BY id",
+  ).all();
+  return rows.map((row) => ({
+    id: row.id,
+    automationId: row.automation_id,
+    automationName: row.automation_name,
+    ticketId: row.ticket_id,
+    sessionId: row.session_id,
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    reasoningLevel: row.reasoning_level,
+    createdAt: row.created_at,
+  }));
+}
+
+interface AutomationSessionMintIntentRow {
+  session_create_command_id: string;
+  automation_command_id: string;
+  recorded_at: number;
+}
+
+function exportAutomationSessionMintIntents(
+  db: Database.Database,
+): ExportAutomationSessionMintIntent[] {
+  const rows = prepared<[], AutomationSessionMintIntentRow>(
+    db,
+    `SELECT session_create_command_id, automation_command_id, recorded_at
+       FROM automation_session_mint_intents
+      ORDER BY session_create_command_id`,
+  ).all();
+  return rows.map((row) => ({
+    sessionCreateCommandId: row.session_create_command_id,
+    automationCommandId: row.automation_command_id,
+    recordedAt: row.recorded_at,
+  }));
 }
 
 interface TicketEventRow {
@@ -562,6 +796,78 @@ function exportSessionCommandReceipts(db: Database.Database): ExportSessionComma
   }));
 }
 
+interface SessionDelegationRow {
+  session_id: string;
+  ticket_id: string | null;
+  parent_session_id: string | null;
+  depth: number;
+}
+
+function exportSessionDelegations(db: Database.Database): ExportSessionDelegation[] {
+  const rows = prepared<[], SessionDelegationRow>(
+    db,
+    `SELECT session_id, ticket_id, parent_session_id, depth
+       FROM session_delegations
+      ORDER BY session_id COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    ticketId: row.ticket_id,
+    parentSessionId: row.parent_session_id,
+    depth: row.depth,
+  }));
+}
+
+interface SessionVerbGrantRow {
+  session_id: string;
+  verb: string;
+  scope: string;
+  max_depth: number;
+  max_children: number;
+}
+
+function exportSessionVerbGrants(db: Database.Database): ExportSessionVerbGrant[] {
+  const rows = prepared<[], SessionVerbGrantRow>(
+    db,
+    `SELECT session_id, verb, scope, max_depth, max_children
+       FROM session_verb_grants
+      ORDER BY session_id COLLATE BINARY, verb COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    verb: row.verb,
+    scope: row.scope,
+    maxDepth: row.max_depth,
+    maxChildren: row.max_children,
+  }));
+}
+
+interface SessionDelegationClaimRow {
+  parent_session_id: string;
+  tool_call_id: string;
+  ticket_id: string;
+  create_command_id: string;
+  child_session_id: string | null;
+  created_at: number;
+}
+
+function exportSessionDelegationClaims(db: Database.Database): ExportSessionDelegationClaim[] {
+  const rows = prepared<[], SessionDelegationClaimRow>(
+    db,
+    `SELECT parent_session_id, tool_call_id, ticket_id, create_command_id, child_session_id, created_at
+       FROM session_delegation_claims
+      ORDER BY parent_session_id COLLATE BINARY, tool_call_id COLLATE BINARY`,
+  ).all();
+  return rows.map((row) => ({
+    parentSessionId: row.parent_session_id,
+    toolCallId: row.tool_call_id,
+    ticketId: row.ticket_id,
+    createCommandId: row.create_command_id,
+    childSessionId: row.child_session_id,
+    createdAt: row.created_at,
+  }));
+}
+
 interface TicketCommentRow {
   id: string;
   ticket_id: string;
@@ -628,8 +934,15 @@ export function buildExportDocument(
     sessionEvents: exportSessionEvents(db),
     sessionCommands: exportSessionCommands(db),
     sessionCommandReceipts: exportSessionCommandReceipts(db),
+    sessionDelegations: exportSessionDelegations(db),
+    sessionVerbGrants: exportSessionVerbGrants(db),
+    sessionDelegationClaims: exportSessionDelegationClaims(db),
     ticketComments: exportTicketComments(db),
     appState: exportAppState(db),
+    automations: exportAutomations(db),
+    automationRuns: exportAutomationRuns(db),
+    automationSessionMintIntents: exportAutomationSessionMintIntents(db),
+    automationColumnArmings: exportColumnArmings(db),
   };
 }
 

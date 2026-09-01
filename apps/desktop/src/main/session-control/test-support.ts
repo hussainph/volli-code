@@ -8,6 +8,7 @@
  * beside the ledger and must never be imported by production modules.
  */
 import type Database from "better-sqlite3";
+import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord } from "@volli/shared";
 import {
   terminalNativeReference,
@@ -209,6 +210,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
         venue: { id: "local", kind: "local" },
         continuity: "fresh",
         native,
+        // A terminal companion runs no gate; see `pty/manager.ts`.
+        authority: null,
         status: closed ? "closed" : attachment.observed_kind === "failed" ? "failed" : "open",
         openedAt: attachment.observed_kind === "opened" ? session.created_at : null,
         closedAt: closed?.occurred_at ?? null,
@@ -221,9 +224,11 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     modelSelection: null,
     turnActive: false,
     authorityDenials: 0,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: session.created_at,
     // This helper reads the ledger tables directly rather than replaying
     // `session.created` (see the module doc comment) — the live `ticket_id`

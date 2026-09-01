@@ -215,3 +215,39 @@ export async function createTicketViaBridge(page, projectName, ticket) {
     { name: projectName, t: ticket },
   );
 }
+
+/**
+ * Let this probe's bare shell perform coordination writes on one project.
+ *
+ * A smoke process is not a Volli Session: it holds no `VOLLI_SESSION_TOKEN`, so
+ * since VC-163 it is the unauthenticated actor and its default posture is reads
+ * only. A probe whose SUBJECT is something else — live board updates, cost
+ * reporting — needs the writes to land, and this is how it says so.
+ *
+ * It plays the person, through the door a person uses. Policy is app-only by
+ * design (VC-44: the agent must not author the policy that governs it), so
+ * there is no verb for this and no socket path to it; driving the same preload
+ * API the Configure Authority pane drives is the honest way to arrange it.
+ *
+ * A probe whose subject IS the posture must not use this — see
+ * `agent-cli-roundtrip-smoke.mjs`, which asserts the refusal first and only
+ * then widens.
+ *
+ * @param {import("playwright-core").Page} page
+ * @param {string} projectId
+ * @param {readonly string[]} verbs  Verb Registry keys, e.g. `["ticket.move"]`.
+ */
+export async function grantUnauthenticatedWrites(page, projectId, verbs) {
+  const result = await page.evaluate(
+    ([id, coordinationVerbs]) =>
+      window.api.projects.setAuthorityPolicy({
+        id,
+        override: { actors: { unauthenticated: { coordinationVerbs } } },
+      }),
+    [projectId, [...verbs]],
+  );
+  if (result?.ok !== true) {
+    throw new Error(`could not widen ${projectId}'s policy: ${JSON.stringify(result)}`);
+  }
+  return result;
+}
