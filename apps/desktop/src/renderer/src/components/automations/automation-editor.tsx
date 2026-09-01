@@ -188,12 +188,7 @@ function TimeField({
         <div className="flex items-end gap-2">
           <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
             Hour
-            <ScheduleNumberInput
-              value={hour}
-              max={23}
-              ariaLabel="Hour"
-              onChange={onHourChange}
-            />
+            <ScheduleNumberInput value={hour} max={23} ariaLabel="Hour" onChange={onHourChange} />
           </label>
           <span aria-hidden className="h-6 text-ui leading-6 text-muted-foreground">
             :
@@ -629,10 +624,10 @@ function AutomationEditorForm({
           ) : null}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={closeEditor}>
+          <Button variant="ghost" size="sm" onClick={closeEditor}>
             Cancel
           </Button>
-          <Button disabled={incomplete || saving} onClick={() => void submit()}>
+          <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
             {automation === null ? "Create automation" : "Save changes"}
           </Button>
         </DialogFooter>

@@ -184,6 +184,14 @@ function button(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+function paragraph(copy: string): HTMLParagraphElement {
+  const found = [...document.querySelectorAll("p")].find(
+    (candidate) => candidate.textContent === copy,
+  );
+  if (found === undefined) throw new Error(`no paragraph reading ${copy}`);
+  return found;
+}
+
 /** Types into a controlled input the way React's own event system sees it. */
 function setInputValue(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
@@ -280,7 +288,17 @@ describe("the page", () => {
     await mount({});
 
     expect(text()).toContain("New Automation");
-    expect(text()).toContain("Nothing has run in this project yet.");
+    const runNotice = paragraph("Nothing has run in this project yet.");
+    expect(runNotice.classList.contains("text-ui")).toBe(true);
+    expect(runNotice.classList.contains("text-sm")).toBe(false);
+  });
+
+  it("uses the UI type rung for an ownership section's inline empty notice", async () => {
+    await mount({ automations: [automation({ projectId: null })] });
+
+    const sectionNotice = paragraph("Nothing yet in this project.");
+    expect(sectionNotice.classList.contains("text-ui")).toBe(true);
+    expect(sectionNotice.classList.contains("text-sm")).toBe(false);
   });
 });
 
@@ -373,7 +391,9 @@ describe("running by hand", () => {
       setInputValue(find, "nothing like this");
     });
 
-    expect(document.body.textContent).toContain("No tickets here.");
+    const ticketNotice = paragraph("No tickets here.");
+    expect(ticketNotice.classList.contains("text-ui")).toBe(true);
+    expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
 });
 

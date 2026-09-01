@@ -96,6 +96,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe("the dialog footer", () => {
+  it("keeps both actions on the dialog-footer size rung", async () => {
+    await mountEditor();
+
+    expect(buttonContaining("Cancel").dataset.size).toBe("sm");
+    expect(buttonContaining("Create automation").dataset.size).toBe("sm");
+  });
+});
+
 describe("the schedule time field", () => {
   it("uses a content-sized themed trigger and editable numeric parts", async () => {
     await mountEditor();

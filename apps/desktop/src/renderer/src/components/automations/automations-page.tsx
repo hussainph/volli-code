@@ -273,7 +273,7 @@ function AutomationSection({
     <section className="flex flex-col gap-1">
       <SectionHeading className="h-6 leading-6">{title}</SectionHeading>
       {automations.length === 0 ? (
-        <p className="py-2 text-sm text-muted-foreground">{emptyNote}</p>
+        <p className="py-2 text-ui text-muted-foreground">{emptyNote}</p>
       ) : (
         automations.map((automation) => (
           <AutomationRowItem
@@ -499,7 +499,7 @@ function RunOnTicketDialog({
           />
           <div className="flex max-h-80 flex-col overflow-y-auto">
             {matches.length === 0 ? (
-              <p className="py-2 text-sm text-muted-foreground">No tickets here.</p>
+              <p className="py-2 text-ui text-muted-foreground">No tickets here.</p>
             ) : (
               matches.map((ticket) => {
                 const ticketDisplayId = displayTicketId(ticketPrefix, ticket.ticketNumber);
@@ -569,7 +569,7 @@ function RunHistory({
     <section className="flex flex-col gap-1">
       <SectionHeading className="h-6 leading-6">Runs</SectionHeading>
       {entries.length === 0 ? (
-        <p className="py-2 text-sm text-muted-foreground">Nothing has run in this project yet.</p>
+        <p className="py-2 text-ui text-muted-foreground">Nothing has run in this project yet.</p>
       ) : (
         entries.map((entry) =>
           entry.kind === "run" ? (

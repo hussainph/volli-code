@@ -557,10 +557,10 @@ function RunOnceForm({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={incomplete} onClick={submit}>
+          <Button size="sm" disabled={incomplete} onClick={submit}>
             Run
           </Button>
         </DialogFooter>

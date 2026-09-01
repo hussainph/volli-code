@@ -423,6 +423,16 @@ describe("Run once", () => {
     });
   }
 
+  it("uses the dialog-footer size for both actions", async () => {
+    await openRunOnce();
+
+    const cancel = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Cancel",
+    );
+    expect(cancel?.dataset.size).toBe("sm");
+    expect(runButton().dataset.size).toBe("sm");
+  });
+
   it("refuses to start with nothing to say", async () => {
     await openRunOnce();
 
