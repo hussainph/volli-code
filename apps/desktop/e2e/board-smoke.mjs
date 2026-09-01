@@ -772,7 +772,7 @@ async function main() {
             Promise.any(
               [first, second].map(async (id) => {
                 const animation = await cardById(page, id).evaluate((article) => {
-                  const slot = article.parentElement?.parentElement;
+                  const slot = article.closest("[data-board-ticket-slot]");
                   return slot instanceof HTMLElement
                     ? {
                         transform: getComputedStyle(slot).transform,
@@ -784,7 +784,7 @@ async function main() {
                 return true;
               }),
             ),
-          { timeout: 250 },
+          { timeout: 1_000, interval: 50 },
         )
           .then(() => true)
           .catch(() => false);

@@ -369,6 +369,16 @@ function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): v
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
 export function createBoardStore(gateway: BoardGateway = defaultGateway) {
   return create<BoardState>()((set, get) => {
+    interface MoveLane {
+      /** Requests execute in commit order even when several optimistic drops overlap. */
+      tail: Promise<void>;
+      /** The newest optimistic move currently represented on screen. */
+      revision: number;
+      /** Last authoritative slice, used if the newest queued move fails. */
+      confirmed: Ticket[];
+    }
+    const moveLanes = new Map<string, MoveLane>();
+
     /**
      * Merges a change into the project's filter record (initializing from
      * {@link EMPTY_TICKET_FILTER}) — the one write path behind the four
@@ -514,14 +524,25 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       if (optimistic === previous) return;
       set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
-      const result = await writeThrough(verb, call);
-      if (!result) {
-        // Preserve tickets created while the move was in flight instead of
-        // restoring a stale whole-project snapshot over them.
-        reconcileSlice(projectId, (slice) => mergeAuthoritative(previous, slice));
-        return;
+      let lane = moveLanes.get(projectId);
+      if (lane === undefined) {
+        lane = { tail: Promise.resolve(), revision: 0, confirmed: previous };
+        moveLanes.set(projectId, lane);
       }
-      reconcileSlice(projectId, (slice) => mergeAuthoritative(result.tickets, slice));
+      const revision = ++lane.revision;
+      const write = lane.tail.then(async () => {
+        const result = await writeThrough(verb, call);
+        if (result) lane.confirmed = result.tickets;
+
+        // A later optimistic drop is already on screen. Its queued request must
+        // be the one that reconciles; applying this older snapshot would make
+        // the renderer disagree with SQLite until an unrelated refresh.
+        if (revision !== lane.revision) return;
+        reconcileSlice(projectId, (slice) => mergeAuthoritative(lane.confirmed, slice));
+      });
+      lane.tail = write;
+      await write;
+      if (moveLanes.get(projectId) === lane && lane.tail === write) moveLanes.delete(projectId);
     }
 
     return {

@@ -328,11 +328,16 @@ export const Board = React.memo(function Board({
       const dx = source.left - destination.left;
       const dy = source.top - destination.top;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      const easing = getComputedStyle(slot).getPropertyValue("--ease-swift").trim();
+      // Web Animations does not resolve `var(...)` in its options dictionary;
+      // read the canonical motion token from the element instead. If a future
+      // shell omits it, skip the flourish rather than throwing during layout.
+      if (easing === "") continue;
       for (const animation of slot.getAnimations()) animation.cancel();
       slot.dataset.boardSlotAnimated = "true";
       slot.animate(
         [{ transform: `translate3d(${dx}px, ${dy}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
-        { duration: 200, easing: "var(--ease-swift)" },
+        { duration: 200, easing },
       );
     }
   }, [storeTickets, reducedMotion]);
@@ -508,7 +513,9 @@ export const Board = React.memo(function Board({
   React.useEffect(() => {
     if (selectedIds.length === 0) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented || dragging) return;
+      // During a drag, Escape belongs to dnd-kit's cancellation path and keeps
+      // the selected group intact. At rest it remains the board deselect key.
       // An Escape aimed at a focused control — the add-card composer, the ⌘K
       // search pill, an open context menu/dialog — is that control's dismissal,
       // not a board deselect; it still bubbles to window, so filter it out here.
@@ -518,7 +525,7 @@ export const Board = React.memo(function Board({
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedIds.length, projectId, selectTicket]);
+  }, [selectedIds.length, projectId, selectTicket, dragging]);
 
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after real pointer travel. Keyboard drags come free
@@ -838,12 +845,16 @@ export const Board = React.memo(function Board({
     // rects immediately after the destination DOM commits, before it paints.
     window.requestAnimationFrame(() => {
       pendingSlotAnimation.current = sourceRects;
-      const move = useBoardStore
+      void useBoardStore
         .getState()
         .moveTickets(projectId, completed.ticketIds, drop.toStatus, drop.toIndex, choice);
-      void move.finally(() => {
+      // The IPC response can beat React's concurrent commit; clearing in the
+      // Promise's finally would then erase the FLIP input before the layout
+      // effect sees it. The effect clears eagerly, and this is only a stale-ref
+      // fallback for a no-op/unmount path.
+      window.setTimeout(() => {
         if (pendingSlotAnimation.current === sourceRects) pendingSlotAnimation.current = null;
-      });
+      }, 1_000);
     });
   }
 

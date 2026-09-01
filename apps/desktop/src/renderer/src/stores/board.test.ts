@@ -341,6 +341,45 @@ describe("moveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
+  it("serializes overlapping moves so an older reply cannot replace a newer optimistic drop", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const authoritativeFirst = [{ ...a, status: "doing" as const, order: 0 }, b];
+    const authoritativeSecond = [
+      { ...a, status: "doing" as const, order: 0 },
+      { ...b, status: "doing" as const, order: 1 },
+    ];
+    const resolvers: Array<(result: { ok: true; tickets: Ticket[] }) => void> = [];
+    const gateway = fakeGateway({
+      moveTicket: vi.fn<BoardGateway["moveTicket"]>(
+        () => new Promise((resolve) => resolvers.push(resolve)),
+      ),
+    });
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    const first = store.getState().moveTicket("p1", "a", "doing", 0);
+    const second = store.getState().moveTicket("p1", "b", "doing", 1);
+
+    await vi.waitFor(() => expect(gateway.moveTicket).toHaveBeenCalledTimes(1));
+    expect(
+      store.getState().ticketsByProject.p1?.filter((entry) => entry.status === "doing"),
+    ).toHaveLength(2);
+
+    resolvers[0]?.({ ok: true, tickets: authoritativeFirst });
+    await first;
+    await vi.waitFor(() => expect(gateway.moveTicket).toHaveBeenCalledTimes(2));
+    // The first authoritative snapshot still has b in Backlog, but the second
+    // optimistic move remains on screen until its own queued write answers.
+    expect(
+      store.getState().ticketsByProject.p1?.filter((entry) => entry.status === "doing"),
+    ).toHaveLength(2);
+
+    resolvers[1]?.({ ok: true, tickets: authoritativeSecond });
+    await second;
+    expect(store.getState().ticketsByProject.p1).toEqual(authoritativeSecond);
+  });
+
   it("carries what the ⌥ picker named through the committed move door", async () => {
     // Main owns classification and the countdown, so the choice travels on the
     // move request instead of opening a renderer-local observer afterward.
@@ -463,6 +502,7 @@ describe("moveTicket", () => {
     store.getState().hydrate({ p1: [a, ticket({ id: "b", status: "backlog", order: 1 })] }, {});
 
     const move = store.getState().moveTicket("p1", "a", "doing", 0);
+    await vi.waitFor(() => expect(gateway.moveTicket).toHaveBeenCalledOnce());
     store.getState().forget("p1"); // project removed mid-flight
     resolveMove({ ok: true, tickets: [{ ...a, status: "doing", order: 0 }] });
     await move;
