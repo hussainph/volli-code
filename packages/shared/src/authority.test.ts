@@ -82,8 +82,9 @@ describe("non-coding tool vocabulary", () => {
 });
 
 describe("isBudgetCause", () => {
-  it("recognizes the complete budget vocabulary and rejects rule-pack causes", () => {
-    for (const cause of BUDGET_CAUSE_IDS) expect(isBudgetCause(cause)).toBe(true);
+  it("recognises the budget namespace without classifying authority rules as budgets", () => {
+    expect(BUDGET_CAUSE_IDS).toEqual(["budget.delegation-children"]);
+    expect(isBudgetCause("budget.delegation-children")).toBe(true);
     expect(isBudgetCause("call.unreadable")).toBe(false);
     expect(isBudgetCause("command.persistence")).toBe(false);
   });
