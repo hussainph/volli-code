@@ -2570,3 +2570,30 @@ describe("migrate — 037, pending armed-column arrivals (VC-226)", () => {
     db.close();
   });
 });
+
+describe("migrate — 038, retained armed-Run attempts (VC-228)", () => {
+  it("stores the exact expiry command independently of later Ticket deletion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_run_attempts
+         (id, command_id, ticket_id, project_id, ticket_display_id, automation_id,
+          automation_name, status, origin, opened_at, start_at, error)
+       VALUES ('arrival-1', 'command-1', 't1', 'p1', 'VC-1', 'a1',
+               'Review sweep', 'doing', 'armed', 1000, 4500, 'Reply interrupted')`,
+    ).run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+
+    expect(
+      db
+        .prepare("SELECT id, command_id, ticket_id FROM automation_pending_armed_run_attempts")
+        .get(),
+    ).toEqual({ id: "arrival-1", command_id: "command-1", ticket_id: "t1" });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

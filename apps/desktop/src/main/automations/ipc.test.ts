@@ -16,6 +16,7 @@ import type {
   AutomationSetEnabledResult,
   AutomationSkipsResult,
   PendingArmedRunCancelResult,
+  PendingArmedRunRetryResult,
   PendingArmedRunsResult,
   Result,
 } from "../../ipc/contract";
@@ -107,7 +108,7 @@ function setup(
     runner?: AutomationRunner | null;
     inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
     now?: () => number;
-    pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "cancel">;
+    pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "failures" | "cancel" | "retry">;
   } = {},
 ) {
   const project = testProject();
@@ -174,6 +175,7 @@ describe("automation IPC", () => {
       "volli:automation-set-enabled",
       "volli:automation-pending-armed-runs",
       "volli:automation-cancel-pending-armed-run",
+      "volli:automation-retry-pending-armed-run",
       "volli:automation-skips-for-project",
       "volli:automation-run-for-project",
     ]) {
@@ -184,7 +186,7 @@ describe("automation IPC", () => {
     }
   });
 
-  it("lists and Cancels main's exact shared pending arrival", async () => {
+  it("lists, Cancels and retries main's exact shared armed arrival", async () => {
     const pending = {
       id: "arrival-1",
       ticketId: "ticket-1",
@@ -197,12 +199,17 @@ describe("automation IPC", () => {
       openedAt: 1_000,
       startAt: 4_500,
     };
+    const failure = { pending, error: "IPC reply lost" };
     const cancel = vi.fn(() => true);
-    setup({ pendingArmedRuns: { list: () => [pending], cancel } });
+    const retry = vi.fn(() => true);
+    setup({
+      pendingArmedRuns: { list: () => [pending], failures: () => [failure], cancel, retry },
+    });
 
     expect(await call<PendingArmedRunsResult>("volli:automation-pending-armed-runs")).toEqual({
       ok: true,
       pending: [pending],
+      failures: [failure],
     });
     expect(
       await call<PendingArmedRunCancelResult>("volli:automation-cancel-pending-armed-run", {
@@ -210,6 +217,12 @@ describe("automation IPC", () => {
       }),
     ).toEqual({ ok: true, cancelled: true });
     expect(cancel).toHaveBeenCalledExactlyOnceWith("arrival-1");
+    expect(
+      await call<PendingArmedRunRetryResult>("volli:automation-retry-pending-armed-run", {
+        id: pending.id,
+      }),
+    ).toEqual({ ok: true, retrying: true });
+    expect(retry).toHaveBeenCalledExactlyOnceWith("arrival-1");
   });
 
   it("is a transport-only adapter over command receipts, events, and projections", async () => {

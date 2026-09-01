@@ -954,6 +954,27 @@ export interface PendingArmedRun {
   startAt: number;
 }
 
+/**
+ * An expired armed arrival whose Run reply is not yet known.
+ *
+ * The pending snapshot is retained after the countdown closes so a renderer
+ * can still name the exact move that failed. `commandId` stays main-side: it is
+ * the durable Run intent a Retry must reuse, not a new command for the person
+ * to carry over IPC.
+ */
+export interface PendingArmedRunAttempt {
+  pending: PendingArmedRun;
+  commandId: string;
+  /** Last transport failure, or the interrupted-attempt fallback stored before Run is called. */
+  error: string;
+}
+
+/** Renderer-safe view of a retained attempt; main never sends its command id. */
+export interface PendingArmedRunFailure {
+  pending: PendingArmedRun;
+  error: string;
+}
+
 export type ArmedMoveDecision =
   | { kind: "nothing" }
   | { kind: "open-window"; automation: Automation; origin: PendingArmedRunOrigin };

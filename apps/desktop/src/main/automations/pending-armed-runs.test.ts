@@ -1,4 +1,10 @@
-import type { Automation, ColumnArming, PendingArmedRun, TicketStatus } from "@volli/shared";
+import type {
+  Automation,
+  ColumnArming,
+  PendingArmedRun,
+  PendingArmedRunAttempt,
+  TicketStatus,
+} from "@volli/shared";
 import { ARMED_RUN_DELAY_MS } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -50,13 +56,22 @@ interface ManualTimer {
   cleared: boolean;
 }
 
-function harness(options: { windowCount?: number; rows?: Map<string, PendingArmedRun> } = {}) {
+function harness(
+  options: {
+    windowCount?: number;
+    rows?: Map<string, PendingArmedRun>;
+    attempts?: Map<string, PendingArmedRunAttempt>;
+  } = {},
+) {
   let now = 1_000;
   let next = 0;
   const rows = options.rows ?? new Map<string, PendingArmedRun>();
+  const attempts = options.attempts ?? new Map<string, PendingArmedRunAttempt>();
   const timers: ManualTimer[] = [];
   const windows = Array.from({ length: options.windowCount ?? 0 }, () => [] as PendingArmedRun[][]);
-  const run = vi.fn(async () => RUN_OK);
+  const run = vi.fn(
+    async (_input: { commandId: string; automationId: string; ticketId: string }) => RUN_OK,
+  );
   let status: TicketStatus | null = "doing";
   let armings: readonly ColumnArming[] = [ARMING];
   let enabledIds: readonly string[] = [AUTOMATION.id];
@@ -72,6 +87,23 @@ function harness(options: { windowCount?: number; rows?: Map<string, PendingArme
       return row === undefined ? false : rows.delete(row.ticketId);
     },
     deletePendingForTicket: (ticketId) => rows.delete(ticketId),
+    beginAttempt: (id, commandId, fallbackError) => {
+      const pending = [...rows.values()].find((candidate) => candidate.id === id);
+      if (pending === undefined) return undefined;
+      rows.delete(pending.ticketId);
+      const attempt = { pending, commandId, error: fallbackError };
+      attempts.set(id, attempt);
+      return attempt;
+    },
+    listAttempts: () => [...attempts.values()],
+    getAttempt: (id) => attempts.get(id),
+    updateAttemptError: (id, error) => {
+      const attempt = attempts.get(id);
+      if (attempt === undefined) return false;
+      attempts.set(id, { ...attempt, error });
+      return true;
+    },
+    deleteAttempt: (id) => attempts.delete(id),
     readTicket: () =>
       status === null ? undefined : { projectId: "p1", status, displayId: "VC-12" },
     readPlanning: () => ({
@@ -105,6 +137,7 @@ function harness(options: { windowCount?: number; rows?: Map<string, PendingArme
   return {
     coordinator,
     rows,
+    attempts,
     timers,
     windows,
     run,
@@ -151,6 +184,37 @@ describe("main-owned pending armed Runs", () => {
       ticketId: "t1",
     });
     expect(h.rows.size).toBe(0);
+  });
+
+  it("retains the expiry command across a lost reply so Retry cannot mint a second Session", async () => {
+    const h = harness();
+    const sessions = new Map<string, string>();
+    h.run.mockImplementation(async ({ commandId }) => {
+      if (!sessions.has(commandId)) sessions.set(commandId, `session-${sessions.size + 1}`);
+      if (h.run.mock.calls.length === 1) throw new Error("IPC reply lost");
+      return {
+        ...RUN_OK,
+        run: { ...RUN_OK.run, sessionId: sessions.get(commandId)! },
+        receipt: { ...RUN_OK.receipt, commandId },
+      };
+    });
+    h.coordinator.start();
+    noteArrival(h);
+
+    await h.elapse();
+
+    expect(h.coordinator.failures()).toEqual([
+      { pending: expect.objectContaining({ id: "arrival-1" }), error: "IPC reply lost" },
+    ]);
+    expect(h.attempts.get("arrival-1")?.commandId).toBe("command-1");
+
+    expect(h.coordinator.retry("arrival-1")).toBe(true);
+    await h.coordinator.settled();
+
+    expect(h.run.mock.calls.map(([input]) => input.commandId)).toEqual(["command-1", "command-1"]);
+    expect(sessions.size).toBe(1);
+    expect(h.attempts.size).toBe(0);
+    expect(h.coordinator.failures()).toEqual([]);
   });
 
   it("publishes one shared countdown to two windows and Cancel from either clears both", async () => {

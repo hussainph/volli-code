@@ -3,8 +3,9 @@
  *
  * Main owns the durable record, the one timer and the Run attempt. Every
  * renderer receives the same whole list, renders it, and can Cancel the exact
- * arrival from either window. No renderer lifecycle can create, duplicate or
- * prevent a Run anymore.
+ * arrival from either window. Expiry failures return as Retry actions keyed by
+ * that arrival while main retains the Run command id. No renderer lifecycle
+ * can create, duplicate or prevent a Run anymore.
  */
 import { create } from "zustand";
 import { errorMessage, type PendingArmedRun } from "@volli/shared";
@@ -46,14 +47,47 @@ export async function cancelArmedRun(id: string): Promise<void> {
   }
 }
 
+function failureToastId(id: string): string {
+  return `armed-run-failure:${id}`;
+}
+
+function announceFailure(pending: PendingArmedRun, error: string): void {
+  toastError(`Couldn't run automation: ${error}`, {
+    id: failureToastId(pending.id),
+    action: {
+      label: "Retry",
+      onClick: () => void retryPendingArmedRun(pending),
+    },
+  });
+}
+
+/** Retries one exact expired move; main supplies its retained Run command id. */
+export async function retryPendingArmedRun(pending: PendingArmedRun): Promise<void> {
+  try {
+    const result = await window.api.automations.retryPendingArmedRun({ id: pending.id });
+    if (!result.ok) {
+      announceFailure(pending, result.error);
+      return;
+    }
+    // Another window may have completed the same retained attempt first. Its
+    // settlement broadcast normally closes this toast; this response also
+    // heals a window that missed that event.
+    if (!result.retrying) toast.dismiss(failureToastId(pending.id));
+  } catch (error) {
+    // Main still owns the retained id when this renderer's IPC reply is lost.
+    announceFailure(pending, errorMessage(error));
+  }
+}
+
 /** Preserves the existing post-window surfaces while main owns the attempt. */
 export function announcePendingArmedRunSettlement(notice: PendingArmedRunSettledNotice): void {
-  if (notice.kind === "abandoned") {
-    announceAbandon(notice.pending, notice.reason);
+  if (notice.kind === "failed") {
+    announceFailure(notice.pending, notice.error);
     return;
   }
-  if (notice.kind === "failed") {
-    toastError(`Couldn't run automation: ${notice.error}`);
+  toast.dismiss(failureToastId(notice.pending.id));
+  if (notice.kind === "abandoned") {
+    announceAbandon(notice.pending, notice.reason);
     return;
   }
 

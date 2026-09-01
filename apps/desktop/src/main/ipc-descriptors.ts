@@ -1307,6 +1307,11 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
     invalidError: "Invalid pending armed run cancellation",
   },
+  "volli:automation-retry-pending-armed-run": {
+    guard: (args): args is IpcArgs<"volli:automation-retry-pending-armed-run"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
+    invalidError: "Invalid pending armed run retry",
+  },
   "volli:automation-skips-for-project": {
     guard: (args): args is IpcArgs<"volli:automation-skips-for-project"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",

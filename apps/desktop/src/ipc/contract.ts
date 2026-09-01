@@ -53,6 +53,7 @@ import type {
   DeliberateMoveChoice,
   ModelSelection,
   PendingArmedRun,
+  PendingArmedRunFailure,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -1615,8 +1616,11 @@ export type AutomationRunStartResult =
       receipt?: AutomationCommandReceipt;
     };
 
-/** Main's complete pending-countdown projection. */
-export type PendingArmedRunsResult = Result<{ pending: PendingArmedRun[] }>;
+/** Main's complete countdown and retained-failure projection. */
+export type PendingArmedRunsResult = Result<{
+  pending: PendingArmedRun[];
+  failures: PendingArmedRunFailure[];
+}>;
 
 /** Cancel identifies one exact arrival, never whichever later move shares its Ticket. */
 export interface PendingArmedRunCancelInput {
@@ -1624,6 +1628,13 @@ export interface PendingArmedRunCancelInput {
 }
 
 export type PendingArmedRunCancelResult = Result<{ cancelled: boolean }>;
+
+/** Retry also names the exact move; main supplies its retained command id. */
+export interface PendingArmedRunRetryInput {
+  id: string;
+}
+
+export type PendingArmedRunRetryResult = Result<{ retrying: boolean }>;
 
 /** What main learned after removing an expired countdown from the pending projection. */
 export type PendingArmedRunSettledNotice =
@@ -1701,6 +1712,11 @@ export interface VolliAutomationIpcContract {
   "volli:automation-cancel-pending-armed-run": {
     args: [input: PendingArmedRunCancelInput];
     result: PendingArmedRunCancelResult;
+  };
+  /** Retries one expired arrival with the Run command id main retained for it. */
+  "volli:automation-retry-pending-armed-run": {
+    args: [input: PendingArmedRunRetryInput];
+    result: PendingArmedRunRetryResult;
   };
   /**
    * Every due time this project's schedules missed, newest first (VC-130).
