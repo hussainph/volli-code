@@ -224,9 +224,76 @@ describe("Ticket Session delegation grants", () => {
     expect(replay).toEqual(first);
     expect(second).toMatchObject({ ok: true });
     expect(third).toMatchObject({ ok: true });
-    // The cap travels with the refusal so the door can name the number rather
-    // than telling a model it hit "a limit" it has no way to size.
-    expect(overLimit).toEqual({ ok: false, reason: "limit", maxChildren: 3 });
+    // The whole current allowance travels with the refusal so the door can
+    // name the number rather than telling a model it hit "a limit" it has no
+    // way to size — and the number stays honest after extensions widen it.
+    expect(overLimit).toEqual({ ok: false, reason: "limit", allowed: 3 });
+  });
+
+  /**
+   * VC-204: the allowance is a soft cap. A person's "once" is one extension
+   * row, and the claims ledger — not the door — stays the judge of whether the
+   * next claim fits under grant-plus-extensions.
+   */
+  it("widens the allowance by exactly one per recorded extension", () => {
+    const h = harness();
+    h.store.recordBirth(h.root.id, h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id }));
+    for (const toolCallId of ["call-1", "call-2", "call-3"]) {
+      expect(h.store.claimStart(claim(h.root.id, h.ticket.id, toolCallId))).toMatchObject({
+        ok: true,
+      });
+    }
+    expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-4"))).toEqual({
+      ok: false,
+      reason: "limit",
+      allowed: 3,
+    });
+
+    h.store.recordExtension({ parentSessionId: h.root.id, toolCallId: "call-4" });
+    // Idempotent per asking call: a replayed call finds its extension rather
+    // than earning a second slot.
+    h.store.recordExtension({ parentSessionId: h.root.id, toolCallId: "call-4" });
+
+    expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-4"))).toMatchObject({ ok: true });
+    // One "once" was one slot: the fifth start is refused, and the refusal
+    // names the widened allowance rather than the born one.
+    expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-5"))).toEqual({
+      ok: false,
+      reason: "limit",
+      allowed: 4,
+    });
+  });
+
+  it("refuses an extension for a Session never born with a start grant", () => {
+    const h = harness();
+
+    expect(() =>
+      h.store.recordExtension({ parentSessionId: h.root.id, toolCallId: "call-1" }),
+    ).toThrow("born with a start grant");
+    expect(() => h.store.recordExtension({ parentSessionId: h.root.id, toolCallId: "" })).toThrow(
+      "tool call id",
+    );
+  });
+
+  /**
+   * The slot belongs to the parent, not the asking call: an extension whose
+   * start never became durable stays spendable, because the person granted one
+   * more Session and one more Session is what they get.
+   */
+  it("keeps an extension spendable after its own start was released", () => {
+    const h = harness();
+    h.store.recordBirth(h.root.id, h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id }));
+    for (const toolCallId of ["call-1", "call-2", "call-3"]) {
+      expect(h.store.claimStart(claim(h.root.id, h.ticket.id, toolCallId))).toMatchObject({
+        ok: true,
+      });
+    }
+    h.store.recordExtension({ parentSessionId: h.root.id, toolCallId: "call-4" });
+    expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-4"))).toMatchObject({ ok: true });
+
+    h.store.releaseIfUnstarted({ parentSessionId: h.root.id, toolCallId: "call-4" });
+
+    expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-5"))).toMatchObject({ ok: true });
   });
 
   it("reclaims a failed start claim without letting a replay spend a second slot", () => {
@@ -240,7 +307,7 @@ describe("Ticket Session delegation grants", () => {
     expect(h.store.claimStart(claim(h.root.id, h.ticket.id, "call-4"))).toEqual({
       ok: false,
       reason: "limit",
-      maxChildren: 3,
+      allowed: 3,
     });
 
     h.store.releaseIfUnstarted({ parentSessionId: h.root.id, toolCallId: "call-1" });
