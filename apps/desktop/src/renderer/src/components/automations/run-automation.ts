@@ -8,8 +8,8 @@
  *
  * Two ways to land, and the difference is what the person was doing:
  *
- *  - {@link runAutomationOnTicket} NAVIGATES. It is a Ticket-context run by
- *    name: the person asked for this Run and has nothing else on screen they
+ *  - {@link runAutomationOnTicket} NAVIGATES. It is the palette's "run by
+ *    name": the person asked for this Run and has nothing else on screen they
  *    were in the middle of.
  *  - {@link runAutomationFromListing} does not. Someone on a listing surface
  *    is working through a list, and taking the window away from it is VC-13
@@ -112,10 +112,9 @@ async function startProjectRun(input: {
  * Run one Automation at the PROJECT (VC-130) — the Target a schedule Trigger
  * names, reached by hand.
  *
- * Three surfaces press it, and they are the same act:
+ * Two surfaces press it, and they are the same act:
  *
- *  - A **scheduled record's Play**, on the Automations page or in the command
- *    palette. VC-112 rules that
+ *  - A **scheduled record's Play**, on the Automations page. VC-112 rules that
  *    the Trigger decides the Target, so running a scheduled Automation by hand
  *    must open the Project Session its schedule would have opened. Asking which
  *    Ticket instead would make the by-hand Run a different piece of work from
@@ -123,8 +122,9 @@ async function startProjectRun(input: {
  *  - A **Skipped occurrence's "Run now"**, from the Run history (VC-112: "a
  *    person may start it by hand afterwards").
  *
- * It does NOT navigate: the person may be reading the list or moving through
- * the palette, so the door arrives as a toast action (VC-13 decision 2).
+ * Like every other listing-surface Run it does NOT navigate: the person is
+ * reading a page and may well start a second one, so the door arrives as a
+ * toast action (VC-13 decision 2).
  *
  * It starts ONE Run, whatever number of occurrences a skip row stands for. A
  * skip covering fifty missed hours is fifty occurrences that will never be
@@ -169,9 +169,9 @@ export async function runAutomationForProject(input: {
 /**
  * Run on the Ticket the person is looking at, and open the Session.
  *
- * The palette's Ticket-target "run by name", and the ticket rail's own button
- * (VC-129): in both, the person asked for this Run with the Ticket already in
- * front of them, so the fresh Session opens as that Ticket's tab rather than announcing itself
+ * The palette's "run by name", and the ticket rail's own button (VC-129): in
+ * both, the person asked for this Run with the Ticket already in front of them,
+ * so the fresh Session opens as that Ticket's tab rather than announcing itself
  * in a toast. It is not the listing surfaces' no-redirect case — nothing is
  * taken away, because the Session lands beside the rail that started it.
  */

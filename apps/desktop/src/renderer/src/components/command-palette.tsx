@@ -14,10 +14,7 @@ import {
   type SessionProvenance,
 } from "@volli/shared";
 
-import {
-  runAutomationForProject,
-  runAutomationOnTicket,
-} from "@renderer/components/automations/run-automation";
+import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
 import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
@@ -114,9 +111,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     void useAutomationsStore.getState().refresh(selectedProjectId);
   }, [open, selectedProjectId]);
 
-  // A Ticket-target Run uses the OPEN Ticket, resolved against the live board
-  // so a remembered id whose Ticket is gone offers nothing. A schedule's
-  // Trigger targets the selected Project instead and needs no open Ticket.
+  // "Run by name" targets the OPEN Ticket, resolved against the live board so
+  // a remembered id whose Ticket is gone offers nothing (VC-126; the richer
+  // choose-a-ticket surfaces are VC-127/VC-129).
   const selectedProject = projects.find((candidate) => candidate.id === selectedProjectId) ?? null;
   const runContext = open
     ? paletteRunContext(
@@ -127,7 +124,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     : null;
   const automationRuns = buildAutomationRunItems(
     selectedProjectId === null ? [] : (automationsByProject[selectedProjectId] ?? []),
-    selectedProjectId,
     runContext,
   );
 
@@ -258,33 +254,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {automationRuns.map((item) => (
               <Command.Item
                 key={`automation-run:${item.automationId}`}
-                value={`run automation ${item.name} ${item.runTarget === "ticket" ? item.ticketDisplayId : "project"}`}
-                keywords={[
-                  item.name,
-                  item.runTarget === "ticket" ? item.ticketDisplayId : "project",
-                  "run",
-                  "automation",
-                ]}
+                value={`run automation ${item.name} ${item.ticketDisplayId}`}
+                keywords={[item.name, item.ticketDisplayId, "run", "automation"]}
                 onSelect={() => {
-                  // The Trigger decides the Target here exactly as it does on
-                  // the Automations page: schedules take the Project door;
-                  // every other Trigger takes the open Ticket door.
-                  if (item.runTarget === "project") {
-                    void runAutomationForProject({
-                      automationId: item.automationId,
-                      automationName: item.name,
-                      projectId: item.projectId,
-                    });
-                  } else {
-                    void runAutomationOnTicket({
-                      target: { kind: "automation", automationId: item.automationId },
-                      ticketId: item.ticketId,
-                      // Run by name, on the Automation's own Runtime. The
-                      // per-invocation override lives where a person has already
-                      // stopped to choose, not on a name typed in flight.
-                      modelOverride: null,
-                    });
-                  }
+                  // The palette closes now; the run navigates to the fresh
+                  // Session itself the moment main answers (run-automation.ts).
+                  void runAutomationOnTicket({
+                    target: { kind: "automation", automationId: item.automationId },
+                    ticketId: item.ticketId,
+                    // Run by name, on the Automation's own Runtime. The
+                    // per-invocation override lives where a person has already
+                    // stopped to choose (VC-112), not on a name typed in flight.
+                    modelOverride: null,
+                  });
                   finishNavigation();
                 }}
                 className={PALETTE_ROW}
@@ -297,9 +279,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   </span>
                 </span>
                 <span className="shrink-0 text-label text-muted-foreground">
-                  {item.runTarget === "ticket"
-                    ? `Run on ${item.ticketDisplayId}`
-                    : "Run for project"}
+                  Run on {item.ticketDisplayId}
                 </span>
               </Command.Item>
             ))}

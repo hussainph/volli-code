@@ -3,9 +3,14 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SKILL_POLICY_DEFAULT, type SkillReference } from "@volli/shared";
+import {
+  NO_AUTOMATION_TRIGGER,
+  SKILL_POLICY_DEFAULT,
+  type Automation,
+  type SkillReference,
+} from "@volli/shared";
 
-import { AutomationEditorDialog } from "./automation-editor";
+import { AutomationEditorPanel } from "./automation-editor";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 let root: Root | null = null;
@@ -22,7 +27,21 @@ const LONG_SKILL: SkillReference = {
   root: ".agents/skills/review-every-boundary",
 };
 
-async function mountEditor(): Promise<void> {
+function automation(overrides: Partial<Automation> = {}): Automation {
+  return {
+    id: "automation-1",
+    projectId: "p1",
+    name: "Review sweep",
+    instructions: "/review",
+    trigger: NO_AUTOMATION_TRIGGER,
+    runtime: null,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+async function mountEditor(record: Automation | null = null): Promise<void> {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
@@ -36,12 +55,18 @@ async function mountEditor(): Promise<void> {
       },
     },
   });
-  useAutomationsStore.setState({ editor: { projectId: "p1", automation: null } });
+  useAutomationsStore.setState({ editor: { projectId: "p1", automation: record } });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root?.render(<AutomationEditorDialog />);
+    root?.render(
+      <AutomationEditorPanel
+        projectId="p1"
+        automation={record}
+        history={<div data-slot="run-history">Recent runs</div>}
+      />,
+    );
   });
 }
 
@@ -96,12 +121,18 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("the dialog footer", () => {
-  it("keeps both actions on the dialog-footer size rung", async () => {
+describe("the page editor hierarchy", () => {
+  it("keeps one clear save action and moves record settings into the inspector", async () => {
     await mountEditor();
 
-    expect(buttonContaining("Cancel").dataset.size).toBe("sm");
     expect(buttonContaining("Create automation").dataset.size).toBe("sm");
+    expect(document.querySelector('[data-slot="automation-editor"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Ownership"]')).not.toBeNull();
+    expect(document.querySelector('[role="radiogroup"][aria-label="Trigger"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Runtime model"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Name"]')?.classList.contains("text-heading")).toBe(
+      true,
+    );
   });
 });
 
@@ -136,59 +167,91 @@ describe("the schedule time field", () => {
     expect(minute.classList.contains("tabular-nums")).toBe(true);
   });
 
-  it("gives hourly minutes the same themed numeric treatment", async () => {
+  it("keeps a two-digit draft intact while the second key is typed", async () => {
     await mountEditor();
     await act(async () => {
       buttonContaining("On a schedule").click();
     });
     await act(async () => {
-      buttonContaining("Hourly").click();
+      (document.querySelector('[aria-label="Time"]') as HTMLButtonElement).click();
     });
+
+    const hour = document.querySelector('[aria-label="Hour"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      hour.focus();
+      setter?.call(hour, "1");
+      hour.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(hour.value).toBe("1");
+
+    await act(async () => {
+      setter?.call(hour, "17");
+      hour.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(hour.value).toBe("17");
+    expect(document.querySelector('[aria-label="Time"]')?.textContent).toContain("17:00");
+  });
+
+  it("gives hourly minutes the same themed numeric treatment", async () => {
+    await mountEditor(
+      automation({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "hourly", minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    );
 
     const minute = document.querySelector(
       '[aria-label="Minutes past the hour"]',
     ) as HTMLInputElement;
-    expect(minute.type).toBe("number");
+    expect(minute.inputMode).toBe("numeric");
     expect(minute.classList.contains("tabular-nums")).toBe(true);
   });
 });
 
 describe("schedule wording", () => {
-  it("names each cadence plainly and gives Weekly one visible day choice", async () => {
-    await mountEditor();
-    await act(async () => {
-      buttonContaining("On a schedule").click();
-    });
+  it("gives Weekly one visible day choice beside its time", async () => {
+    await mountEditor(
+      automation({
+        trigger: {
+          kind: "schedule",
+          schedule: {
+            preset: "weekly",
+            weekday: "monday",
+            hour: 9,
+            minute: 0,
+            timeZone: "Europe/London",
+          },
+        },
+      }),
+    );
 
-    for (const cadence of ["Hourly", "Every day", "Mon–Fri", "Weekly"]) {
-      expect(buttonContaining(cadence)).toBeTruthy();
-    }
-    await act(async () => {
-      buttonContaining("Weekly").click();
-    });
-
+    const schedule = document.querySelector('[aria-label="Schedule"]');
     const weekday = document.querySelector('[aria-label="Day of the week"]');
-    const scheduleRow = document.querySelector('[aria-label="Schedule"]')?.parentElement;
+    expect(schedule?.textContent).toContain("Weekly");
     expect(weekday?.textContent).toContain("Monday");
-    expect(scheduleRow?.parentElement?.textContent).toContain("onMondayat09:00");
+    expect(document.querySelector('[aria-label="Time"]')?.textContent).toContain("09:00");
     // The weekday is one compact dropdown, not another seven-segment strip.
     expect(document.querySelector('[aria-label="Day of the week"] [aria-pressed]')).toBeNull();
   });
 
   it("spells the hourly offset as minutes past the hour", async () => {
-    await mountEditor();
-    await act(async () => {
-      buttonContaining("On a schedule").click();
-    });
-    await act(async () => {
-      buttonContaining("Hourly").click();
-    });
+    await mountEditor(
+      automation({
+        trigger: {
+          kind: "schedule",
+          schedule: { preset: "hourly", minute: 0, timeZone: "Europe/London" },
+        },
+      }),
+    );
 
     const minute = document.querySelector(
       '[aria-label="Minutes past the hour"]',
     ) as HTMLInputElement;
     expect(minute.value).toBe("00");
-    expect(minute.parentElement?.parentElement?.textContent).toContain(":past the hour");
+    expect(minute.parentElement?.textContent).toContain("Minutes past the hour");
   });
 });
 
@@ -197,14 +260,17 @@ describe("the Instructions picker", () => {
     await mountEditor();
     await typeInstructions("/");
 
-    const dialog = document.querySelector('[data-slot="dialog-content"]');
-    const body = document.querySelector('[data-slot="automation-editor-body"]');
+    const editor = document.querySelector('[data-slot="automation-editor"]');
+    const stack = document.querySelector('[data-slot="composer-picker-stack"]');
+    const overlay = document.querySelector('[data-slot="composer-picker-overlay"]');
     const picker = document.querySelector('[data-slot="composer-picker"]');
 
     expect(picker?.textContent).toContain(LONG_SKILL.name);
-    expect(dialog?.contains(picker)).toBe(true);
-    // This is the load-bearing width rule: DialogContent is a grid, and
-    // `min-w-0` lets this item shrink below the picker's intrinsic row width.
-    expect(body?.classList.contains("min-w-0")).toBe(true);
+    expect(editor?.contains(picker)).toBe(true);
+    expect(stack?.classList.contains("relative")).toBe(true);
+    expect(stack?.classList.contains("min-w-0")).toBe(true);
+    expect(overlay?.classList.contains("absolute")).toBe(true);
+    // Floating suggestions do not take a flow slot before the Run history.
+    expect(document.querySelector('[data-slot="run-history"]')?.textContent).toBe("Recent runs");
   });
 });

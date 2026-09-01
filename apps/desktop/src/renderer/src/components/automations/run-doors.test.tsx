@@ -522,21 +522,6 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
     );
   });
 
-  it("the command palette's scheduled row, at the Project", async () => {
-    // No open Ticket is required: a schedule's Trigger names the Project, and
-    // the palette must not retarget it merely because it is a global surface.
-    useWorkspaceStore.getState().openHomeBoard("p1");
-    installApi({ list: vi.fn(async () => ({ ok: true, automations: [NIGHTLY] })) });
-    await render(<CommandPalette open onOpenChange={() => {}} />);
-
-    await act(async () => {
-      commandItem("Run for project").click();
-    });
-
-    expect(run).not.toHaveBeenCalled();
-    expect(runForProject).toHaveBeenCalledWith(askedFor({ automationId: "a3", projectId: "p1" }));
-  });
-
   it("the page's Play on a scheduled record, at the Project", async () => {
     // The schedule's Target is the Project (VC-112), so this door reaches the
     // OTHER channel — and it must not quietly become a Ticket Run.

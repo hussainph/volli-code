@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AUTOMATION_SCHEDULE_PRESET_LABELS,
   AUTOMATION_SCHEDULE_PRESETS,
   AUTOMATION_SCHEDULE_STAGGER_MS,
   hostTimeZone,
   isScheduleTimeZone,
   nextScheduleOccurrence,
   parseAutomationSchedule,
+  SCHEDULE_WEEKDAY_LABELS,
   SCHEDULE_WEEKDAYS,
   schedulePhrase,
   scheduleSentence,
@@ -142,7 +144,14 @@ describe("the sentence", () => {
 
   it("names every preset and every weekday", () => {
     expect(AUTOMATION_SCHEDULE_PRESETS).toEqual(["hourly", "daily", "weekdays", "weekly"]);
+    expect(AUTOMATION_SCHEDULE_PRESET_LABELS).toEqual({
+      hourly: "Hourly",
+      daily: "Every day",
+      weekdays: "Mon–Fri",
+      weekly: "Weekly",
+    });
     expect(SCHEDULE_WEEKDAYS).toHaveLength(7);
+    expect(SCHEDULE_WEEKDAY_LABELS.wednesday).toBe("Wednesday");
     for (const weekday of SCHEDULE_WEEKDAYS) {
       expect(
         schedulePhrase({ preset: "weekly", weekday, hour: 0, minute: 1, timeZone: LONDON }),

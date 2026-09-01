@@ -1,37 +1,25 @@
 /**
- * The Automation editor: the app's ONE authoring surface (VC-112 — "only the
- * nav page authors, every other surface just runs"), reached from the
- * Automations page's New / Edit / Duplicate actions and from the command
- * palette's create. The form — name, Ownership, Trigger, Instructions,
- * Runtime — is the record's whole editable shape either way.
+ * The Automation editor: the app's one authoring surface, embedded in the
+ * Automations page beside its persistent record rail. Trigger, Instructions
+ * and Runtime are separate visual regions instead of one row of competing
+ * pills; the form still writes the same record through the same store doors.
  *
- * It creates and it edits, off one field: `editor.automation` is the record
- * being edited or `null` for a create. The alternative — a second dialog for
- * edit — is how the one authoring surface quietly becomes two that drift.
- *
- * Ownership is EDITABLE ON CREATE ONLY. It decides where an Automation is
- * listed, and main treats it as identity (`updateAutomation` takes no
- * `projectId`): a record that could move between scopes would take its Run
- * history somewhere those Runs never happened.
- *
- * Two reuses are the point of this file, not conveniences:
- *
- *  - **Instructions get the chat composer's own grammar.** The box lives
- *    inside {@link ComposerPickerStack} with the same project-scoped supply
- *    the chat composer reads (`usePromptTemplates`, `useFileIndex`), so `/`
- *    offers the same templates and Skills and `@` the same files, inserted by
- *    the same picker. Expansion happens at RUN time in main, through the same
- *    shared function the composer's send uses — never at save.
- *  - **The Runtime pin is the composer's own two pills.** Model and reasoning
- *    travel together as one selection; the pill pair cannot spell a level its
- *    model does not offer, and main re-validates against Model Access at save.
- *
- * Save refusals render inline under the form — a rejected name or pin is a
- * correction to what is still on screen, not a failure behind anyone's back.
+ * Instructions use the chat composer's grammar and supplies. The page opts the
+ * shared picker into its floating layout so a slash list overlays the textarea
+ * rather than moving the editor and Run history below it. Chat keeps the
+ * shared stack's normal-flow default.
  */
 import * as React from "react";
-
+import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
+import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
+import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import {
+  AUTOMATION_SCHEDULE_PRESET_LABELS,
+  AUTOMATION_SCHEDULE_PRESETS,
   automationScheduleProblem,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -39,6 +27,7 @@ import {
   hostTimeZone,
   isAutomationRuntimePin,
   NO_AUTOMATION_TRIGGER,
+  SCHEDULE_WEEKDAY_LABELS,
   SCHEDULE_WEEKDAYS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -50,34 +39,18 @@ import {
   type ScheduleWeekday,
   type TicketStatus,
 } from "@volli/shared";
-
-import {
-  INSTRUCTIONS_PLACEHOLDER,
-  MANUAL_TRIGGER_LABEL,
-  ownershipLabel,
-} from "./automations-page-model";
-import { TimeZonePicker } from "./time-zone-picker";
+import { reclampEffort } from "@volli/session-presentation";
 
 import {
   ComposerPickerStack,
-  ModelPill,
   offerableModels,
   useComposerCaretBinding,
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
-import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@renderer/components/ui/dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
-import { Segmented } from "@renderer/components/ui/segmented";
 import {
   Select,
   SelectContent,
@@ -88,46 +61,29 @@ import {
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
-import { useAutomationsStore } from "@renderer/stores/automations";
 import { cn } from "@renderer/lib/utils";
+import { useAutomationsStore } from "@renderer/stores/automations";
+
+import { INSTRUCTIONS_PLACEHOLDER, MANUAL_TRIGGER_LABEL } from "./automations-page-model";
+import { TimeZonePicker } from "./time-zone-picker";
 
 const NO_MODELS: readonly ComposerModel[] = [];
 
-/** The blank the pill reads as its disabled "Model" resting label. */
-const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
-
 type OwnershipChoice = "project" | "global";
-type RuntimeChoice = "inherit" | "pin";
-/**
- * The Trigger control's three answers — the whole set VC-112 rules, complete
- * as of VC-130. "Only when I run it" is the default and a complete answer
- * rather than an inert one: run by hand is universal, so the Trigger says only
- * what ELSE starts this Automation.
- */
 type TriggerChoice = "none" | "columns" | "schedule";
 
-/** What a new schedule opens on: nine in the morning, here, every day. */
 const DEFAULT_SCHEDULE_HOUR = 9;
 const DEFAULT_SCHEDULE_WEEKDAY: ScheduleWeekday = "monday";
-
-/** Cadence names that stand on their own before the row's specific grammar. */
-const SCHEDULE_PRESET_OPTIONS: readonly { key: AutomationSchedulePreset; label: string }[] = [
-  { key: "hourly", label: "Hourly" },
-  { key: "daily", label: "Every day" },
-  { key: "weekdays", label: "Mon–Fri" },
-  { key: "weekly", label: "Weekly" },
-];
-
-/** Full names: the weekly dropdown has room to say which day it means. */
-const WEEKDAY_OPTIONS: readonly { key: ScheduleWeekday; label: string }[] = SCHEDULE_WEEKDAYS.map(
-  (weekday) => ({ key: weekday, label: `${weekday[0]!.toUpperCase()}${weekday.slice(1)}` }),
-);
 
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-/** One schedule number, keyboard-typeable and arrow-adjustable. */
+/**
+ * A schedule number keeps a string draft while focused, so typing `17` does
+ * not have its first `1` reformatted to `01` before the second key lands.
+ * Only complete in-range integers reach the schedule record.
+ */
 function ScheduleNumberInput({
   value,
   max,
@@ -139,28 +95,37 @@ function ScheduleNumberInput({
   ariaLabel: string;
   onChange(value: number): void;
 }) {
+  const focused = React.useRef(false);
+  const [draft, setDraft] = React.useState(() => twoDigits(value));
+
+  React.useEffect(() => {
+    if (!focused.current) setDraft(twoDigits(value));
+  }, [value]);
+
   return (
     <Input
-      type="number"
       inputMode="numeric"
-      min={0}
-      max={max}
       aria-label={ariaLabel}
-      value={twoDigits(value)}
-      className="h-6 w-14 px-2 text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-      onFocus={(event) => event.currentTarget.select()}
+      value={draft}
+      className="h-6 w-14 px-2 text-center tabular-nums"
+      onFocus={(event) => {
+        focused.current = true;
+        event.currentTarget.select();
+      }}
+      onBlur={() => {
+        focused.current = false;
+        setDraft(twoDigits(value));
+      }}
       onChange={(event) => {
-        const next = Number(event.currentTarget.value);
-        // A schedule always holds a real integer. A half-typed or out-of-range
-        // value leaves the last valid one in place rather than entering the
-        // record as a repair main has to guess at later.
-        if (Number.isInteger(next) && next >= 0 && next <= max) onChange(next);
+        const next = event.currentTarget.value.replace(/\D/g, "").slice(0, 2);
+        if (next !== "" && Number(next) > max) return;
+        setDraft(next);
+        if (next !== "") onChange(Number(next));
       }}
     />
   );
 }
 
-/** A token-themed replacement for the platform's native time picker. */
 function TimeField({
   hour,
   minute,
@@ -179,8 +144,9 @@ function TimeField({
           variant="outline"
           size="sm"
           aria-label="Time"
-          className="min-w-20 shrink-0 tabular-nums"
+          className="min-w-20 self-start tabular-nums"
         >
+          <ClockIcon />
           {twoDigits(hour)}:{twoDigits(minute)}
         </Button>
       </PopoverTrigger>
@@ -208,69 +174,220 @@ function TimeField({
   );
 }
 
-/**
- * The dialog itself, mounted once beside the command palette. It renders only
- * while the store says an editor is open, and everything in it resets by
- * REMOUNT (the `key` below): a dialog dismissed mid-draft starts blank next
- * time, which for a short form is less surprising than a resurrected draft
- * with no visible home. The key names the RECORD, so switching from one
- * Automation's Edit to another's without closing re-seeds the fields.
- */
-export function AutomationEditorDialog() {
-  const editor = useAutomationsStore((state) => state.editor);
-  if (editor === null) return null;
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-label text-muted-foreground uppercase">{children}</h2>;
+}
+
+function TriggerChoice({
+  value,
+  selected,
+  icon: Icon,
+  onSelect,
+  children,
+}: {
+  value: TriggerChoice;
+  selected: TriggerChoice;
+  icon: typeof PlayIcon;
+  onSelect(value: TriggerChoice): void;
+  children: React.ReactNode;
+}) {
+  const active = value === selected;
   return (
-    <AutomationEditorForm
-      key={`${editor.projectId}:${editor.automation?.id ?? "new"}`}
-      projectId={editor.projectId}
-      automation={editor.automation}
-    />
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={() => onSelect(value)}
+      className={cn(
+        "flex h-7 w-full items-center gap-2 rounded-lg border px-2 text-left text-ui outline-none",
+        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        active
+          ? "border-ring bg-accent text-foreground"
+          : "border-border text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">{children}</span>
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 rounded-full border",
+          active ? "border-primary bg-primary" : "border-muted-foreground",
+        )}
+      />
+    </button>
   );
 }
 
-function AutomationEditorForm({
+function ColumnPicker({
+  value,
+  onChange,
+}: {
+  value: readonly TicketStatus[];
+  onChange(value: readonly TicketStatus[]): void;
+}) {
+  const label =
+    value.length === 0
+      ? "Choose columns"
+      : value.map((status) => TICKET_STATUS_LABELS[status]).join(", ");
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Columns"
+          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45"
+        >
+          <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-1">
+        {TICKET_STATUSES.map((status) => {
+          const selected = value.includes(status);
+          return (
+            <button
+              key={status}
+              type="button"
+              role="checkbox"
+              aria-checked={selected}
+              onClick={() =>
+                onChange(
+                  TICKET_STATUSES.filter((candidate) =>
+                    candidate === status ? !selected : value.includes(candidate),
+                  ),
+                )
+              }
+              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:bg-accent"
+            >
+              <CheckIcon className={cn("size-3.5", !selected && "invisible")} weight="bold" />
+              {TICKET_STATUS_LABELS[status]}
+            </button>
+          );
+        })}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function modelValue(model: Pick<ComposerModel, "providerId" | "modelId">): string {
+  return `${model.providerId}/${model.modelId}`;
+}
+
+function RuntimeFields({
+  models,
+  pin,
+  onChange,
+}: {
+  models: readonly ComposerModel[];
+  pin: ModelSelection | null;
+  onChange(pin: ModelSelection | null): void;
+}) {
+  const selectedModel =
+    pin === null
+      ? undefined
+      : models.find(
+          (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
+        );
+  const unavailableValue =
+    pin !== null && selectedModel === undefined ? `unavailable:${modelValue(pin)}` : null;
+  const value = pin === null ? "inherit" : (selectedModel?.id ?? unavailableValue!);
+  const levels = selectedModel?.reasoningLevels ?? [];
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          if (next === "inherit") {
+            onChange(null);
+            return;
+          }
+          const model = models.find((candidate) => candidate.id === next);
+          if (model === undefined) return;
+          const selection = composerModelSelection({
+            providerId: model.providerId,
+            modelId: model.modelId,
+            reasoningLevel: reclampEffort(model.reasoningLevels, pin?.reasoningLevel ?? ""),
+          });
+          if (selection !== null) onChange(selection);
+        }}
+      >
+        <SelectTrigger className="w-full" aria-label="Runtime model">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="inherit">
+            <CpuIcon />
+            Project default
+          </SelectItem>
+          {unavailableValue === null || pin === null ? null : (
+            <SelectItem value={unavailableValue}>
+              <CpuIcon />
+              {pin.providerId} · {pin.modelId}
+            </SelectItem>
+          )}
+          {models.map((model) => (
+            <SelectItem key={model.id} value={model.id}>
+              <CpuIcon />
+              {model.providerLabel} · {model.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {pin !== null && levels.length > 1 ? (
+        <Select
+          value={pin.reasoningLevel}
+          onValueChange={(reasoningLevel) => {
+            const next = composerModelSelection({ ...pin, reasoningLevel });
+            if (next !== null) onChange(next);
+          }}
+        >
+          <SelectTrigger className="w-full" aria-label="Reasoning effort">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {levels.map((level) => (
+              <SelectItem key={level} value={level}>
+                <CpuIcon />
+                {level}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+    </div>
+  );
+}
+
+export function AutomationEditorPanel({
   projectId,
   automation,
+  actions,
+  history,
 }: {
   projectId: string;
   automation: Automation | null;
+  actions?: React.ReactNode;
+  history?: React.ReactNode;
 }) {
-  const closeEditor = useAutomationsStore((state) => state.closeEditor);
   const save = useAutomationsStore((state) => state.save);
   const update = useAutomationsStore((state) => state.update);
-
-  // This id survives an invoke failure while the dialog stays mounted, so the
-  // person's Retry repeats durable intent instead of creating a second record.
-  const [commandId] = React.useState(() => crypto.randomUUID());
+  const commandId = React.useRef(crypto.randomUUID());
   const [name, setName] = React.useState(automation?.name ?? "");
-  // A new Automation opens an EMPTY box (VC-112). The placeholder is what
-  // pushes toward `/skill`; seeding prose here is what that rule forbids.
   const [instructions, setInstructions] = React.useState(automation?.instructions ?? "");
   const [ownership, setOwnership] = React.useState<OwnershipChoice>(
     automation === null || automation.projectId !== null ? "project" : "global",
   );
-  // Inherited by default (VC-112): workflows persist while models churn, so
-  // the model must not be part of an Automation's identity. A stored pin that
-  // no longer parses opens on "inherit" rather than pretending to be one.
-  const [runtimeChoice, setRuntimeChoice] = React.useState<RuntimeChoice>(
-    automation !== null && isAutomationRuntimePin(automation.runtime) ? "pin" : "inherit",
-  );
   const [pin, setPin] = React.useState<ModelSelection | null>(
     automation !== null && isAutomationRuntimePin(automation.runtime) ? automation.runtime : null,
   );
-  // The Trigger opens on what the record holds. A stored Trigger is already
-  // canonical (main parses on the way in), so the columns seed straight from
-  // it and an Automation offered nowhere opens on "Only when I run it".
   const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(() =>
     automation === null || automation.trigger.kind === "none" ? "none" : automation.trigger.kind,
   );
   const [columns, setColumns] = React.useState<readonly TicketStatus[]>(() =>
     automation === null ? [] : automationTriggerColumns(automation.trigger),
   );
-  // The schedule's parts are held SEPARATELY rather than as the stored union,
-  // so switching "every week" to "every hour" and back does not forget the hour
-  // that was already chosen. The union is projected from them below, which is
-  // what keeps the RECORD unable to spell "hourly, at 09:00".
   const storedSchedule = automation === null ? null : automationTriggerSchedule(automation.trigger);
   const [preset, setPreset] = React.useState<AutomationSchedulePreset>(
     storedSchedule?.preset ?? "daily",
@@ -280,27 +397,18 @@ function AutomationEditorForm({
       ? storedSchedule.weekday
       : DEFAULT_SCHEDULE_WEEKDAY,
   );
-  const [hour, setHour] = React.useState<number>(
+  const [hour, setHour] = React.useState(
     storedSchedule !== null && storedSchedule.preset !== "hourly"
       ? storedSchedule.hour
       : DEFAULT_SCHEDULE_HOUR,
   );
-  const [minute, setMinute] = React.useState<number>(storedSchedule?.minute ?? 0);
-  // The host's zone seeds a NEW schedule and is never read again: from the
-  // moment it is stored, the stored zone wins and travelling moves nothing
-  // (VC-112).
-  const [timeZone, setTimeZone] = React.useState<string>(
-    storedSchedule?.timeZone ?? hostTimeZone(),
-  );
+  const [minute, setMinute] = React.useState(storedSchedule?.minute ?? 0);
+  const [timeZone, setTimeZone] = React.useState(storedSchedule?.timeZone ?? hostTimeZone());
   const [problem, setProblem] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
 
-  // The composer's own supply, project-scoped exactly as the chat composer
-  // reads it — same templates, same ruled skills, same file index.
   const { templates, skills } = usePromptTemplates(projectId);
   const fileIndex = useFileIndex(projectId);
-
-  // The pin picker's catalog: the same offerable set every composer shows.
   const access = useModelAccessClient();
   const inspect = access?.inspect;
   const hiddenModels = access?.hiddenModels;
@@ -310,14 +418,10 @@ function AutomationEditorForm({
     let current = true;
     void Promise.all([inspect({}), hiddenModels()])
       .then(([snapshot, hidden]) => {
-        if (!current) return;
-        setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
+        if (current) setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
       })
       .catch(() => {
-        // An unreadable catalog costs the pin control, never the dialog:
-        // inherit still saves, and the pill explains itself by being disabled.
-        if (!current) return;
-        setModels(NO_MODELS);
+        if (current) setModels(NO_MODELS);
       });
     return () => {
       current = false;
@@ -336,323 +440,254 @@ function AutomationEditorForm({
       : triggerChoice === "columns" && columns.length > 0
         ? { kind: "columns", columns }
         : NO_AUTOMATION_TRIGGER;
-  // A schedule Run's Target is the Project, so a scheduled Automation has to
-  // belong to one. On a CREATE that is settled by forcing the choice — the
-  // control shows "This project" and stops offering the other answer, which is
-  // legible in a way a refusal at Save is not. On an EDIT, Ownership is
-  // identity and cannot move, so a globally listed record gets the shared
-  // refusal below and the one action that resolves it.
   const ownershipChoice: OwnershipChoice = triggerChoice === "schedule" ? "project" : ownership;
   const savingProjectId =
     automation === null ? (ownershipChoice === "project" ? projectId : null) : automation.projectId;
   const scheduleProblem = automationScheduleProblem({ projectId: savingProjectId, trigger });
-  const runtime = runtimeChoice === "pin" ? pin : null;
-  const pinStops =
-    pin === null
-      ? []
-      : (models.find(
-          (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
-        )?.reasoningLevels ?? []);
-  // The store's own draft rule gates Save; main re-checks it on the write.
   const incomplete =
     name.trim().length === 0 ||
     instructions.trim().length === 0 ||
-    // A column Trigger naming no column is not a column Trigger. Blocking Save
-    // says so at the moment of the choice, rather than letting the record
-    // collapse it to "Nothing else" behind the person's back.
     (triggerChoice === "columns" && columns.length === 0) ||
-    scheduleProblem !== null ||
-    (runtimeChoice === "pin" && pin === null);
+    scheduleProblem !== null;
 
-  const submit = async () => {
+  async function submit(): Promise<void> {
     if (incomplete || saving) return;
     setSaving(true);
     try {
       const refusal =
         automation === null
           ? await save({
-              commandId,
+              commandId: commandId.current,
               projectId: savingProjectId,
               name,
               instructions,
               trigger,
-              runtime,
+              runtime: pin,
             })
           : await update({
-              commandId,
+              commandId: commandId.current,
               automationId: automation.id,
               name,
               instructions,
               trigger,
-              runtime,
+              runtime: pin,
             });
-      if (refusal === null) closeEditor();
-      else setProblem(refusal);
+      if (refusal === null) {
+        commandId.current = crypto.randomUUID();
+        setProblem(null);
+      } else {
+        setProblem(refusal);
+      }
     } catch (error) {
       setProblem(errorMessage(error));
     } finally {
       setSaving(false);
     }
-  };
+  }
 
   return (
-    <Dialog open onOpenChange={(open) => (open ? undefined : closeEditor())}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{automation === null ? "New Automation" : "Edit Automation"}</DialogTitle>
-        </DialogHeader>
-        {/* DialogContent is a grid. Its child needs an explicit zero minimum
-            so a long picker row cannot use its intrinsic width to push the
-            dialog past its own max width. */}
-        <div data-slot="automation-editor-body" className="flex min-w-0 flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-              placeholder="Name"
-              aria-label="Name"
-              className="flex-1"
-            />
-            {/* Ownership decides WHERE this is listed, and main treats it as
-                identity on update — so an existing record states it and does
-                not offer to move it. */}
-            {automation === null ? (
-              <Segmented<OwnershipChoice>
-                ariaLabel="Ownership"
-                value={ownershipChoice}
-                options={[
-                  { key: "project", label: "This project" },
-                  { key: "global", label: "All projects" },
-                ]}
-                // A schedule has to name the project it runs in, so while one
-                // is chosen this states the only valid answer instead of
-                // offering a second that Save would refuse.
-                disabled={triggerChoice === "schedule"}
-                onChange={setOwnership}
-              />
-            ) : (
-              <span className="shrink-0 text-label text-muted-foreground">
-                {ownershipLabel(automation)}
-              </span>
-            )}
-          </div>
-          {/* The Trigger: what starts this BESIDES a person. Running by hand
-              is universal (VC-112), so it is never one of the answers. It
-              reads as a sentence the second control finishes: "Only when I run
-              it", or "Ticket enters" — and then which columns. The columns sit
-              on their own row rather than beside the segmented pill, so the
-              choice of ANSWER and the choice of COLUMNS are not one
-              undifferentiated strip of five-plus chips. The schedule's own row
-              (VC-130) sits in the same place for the same reason, and gives
-              each cadence enough grammar to read without decoding it. */}
-          <div className="flex flex-col gap-2">
-            <Segmented<TriggerChoice>
-              ariaLabel="Trigger"
-              value={triggerChoice}
-              options={[
-                // One word across editor and page: the Automations page prints
-                // this same constant on every row that names no column.
-                { key: "none", label: MANUAL_TRIGGER_LABEL },
-                { key: "columns", label: "Ticket enters" },
-                { key: "schedule", label: "On a schedule" },
-              ]}
-              onChange={setTriggerChoice}
-            />
-            {triggerChoice === "schedule" ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Segmented<AutomationSchedulePreset>
-                  ariaLabel="Schedule"
-                  value={preset}
-                  options={SCHEDULE_PRESET_OPTIONS}
-                  onChange={setPreset}
+    <div data-slot="automation-editor" className="flex min-h-0 flex-1 flex-col">
+      <header className="flex shrink-0 items-center gap-4 border-b border-border px-6 py-4">
+        <input
+          autoFocus
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+          aria-label="Name"
+          placeholder="Name this automation"
+          className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        {actions}
+        <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
+          {automation === null ? "Create automation" : "Save changes"}
+        </Button>
+      </header>
+
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
+        <main className="min-h-0 overflow-y-auto p-6">
+          <div className="mx-auto flex w-full max-w-content flex-col gap-6">
+            <section className="flex min-h-0 flex-col gap-2">
+              <SectionLabel>Instructions</SectionLabel>
+              <ComposerPickerStack
+                value={instructions}
+                onValueChange={setInstructions}
+                ready
+                interactionOpen={false}
+                promptTemplates={templates}
+                skills={skills}
+                verbs={[]}
+                files={fileIndex.getIndex()}
+                onFilePickerOpen={fileIndex.refresh}
+                layout="overlay"
+              >
+                <InstructionsTextarea
+                  value={instructions}
+                  onValueChange={setInstructions}
+                  className="min-h-48 rounded-xl bg-card px-4 py-4 shadow-raised"
                 />
+              </ComposerPickerStack>
+            </section>
+            {history}
+          </div>
+        </main>
+
+        <aside className="min-h-0 overflow-y-auto border-l border-border bg-rail/30">
+          <section className="flex flex-col gap-2 border-b border-border p-4">
+            <SectionLabel>Ownership</SectionLabel>
+            {automation === null ? (
+              <Select
+                value={ownershipChoice}
+                disabled={triggerChoice === "schedule"}
+                onValueChange={(value) => setOwnership(value as OwnershipChoice)}
+              >
+                <SelectTrigger className="w-full" aria-label="Ownership">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="project">
+                    <FolderOpenIcon />
+                    This project
+                  </SelectItem>
+                  <SelectItem value="global">
+                    <GlobeIcon />
+                    All projects
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="flex h-7 items-center gap-2 text-ui text-foreground">
+                {automation.projectId === null ? <GlobeIcon /> : <FolderOpenIcon />}
+                {automation.projectId === null ? "All projects" : "This project"}
+              </div>
+            )}
+          </section>
+
+          <section className="flex flex-col gap-2 border-b border-border p-4">
+            <SectionLabel>Trigger</SectionLabel>
+            <div role="radiogroup" aria-label="Trigger" className="flex flex-col gap-1">
+              <TriggerChoice
+                value="none"
+                selected={triggerChoice}
+                icon={PlayIcon}
+                onSelect={setTriggerChoice}
+              >
+                {MANUAL_TRIGGER_LABEL}
+              </TriggerChoice>
+              <TriggerChoice
+                value="columns"
+                selected={triggerChoice}
+                icon={ArrowRightIcon}
+                onSelect={setTriggerChoice}
+              >
+                Ticket enters
+              </TriggerChoice>
+              <TriggerChoice
+                value="schedule"
+                selected={triggerChoice}
+                icon={ClockIcon}
+                onSelect={setTriggerChoice}
+              >
+                On a schedule
+              </TriggerChoice>
+            </div>
+
+            {triggerChoice === "columns" ? (
+              <ColumnPicker value={columns} onChange={setColumns} />
+            ) : null}
+
+            {triggerChoice === "schedule" ? (
+              <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2">
+                <Select
+                  value={preset}
+                  onValueChange={(value) => setPreset(value as AutomationSchedulePreset)}
+                >
+                  <SelectTrigger className="w-full" aria-label="Schedule">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUTOMATION_SCHEDULE_PRESETS.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        <ClockIcon />
+                        {AUTOMATION_SCHEDULE_PRESET_LABELS[value]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {preset === "weekly" ? (
+                  <Select
+                    value={weekday}
+                    onValueChange={(value) => setWeekday(value as ScheduleWeekday)}
+                  >
+                    <SelectTrigger className="w-full" aria-label="Day of the week">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SCHEDULE_WEEKDAYS.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          <ClockIcon />
+                          {SCHEDULE_WEEKDAY_LABELS[value]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : null}
                 {preset === "hourly" ? (
-                  <>
-                    {/* An hourly schedule has no hour to state — only the
-                        minute past each one. A time field here would ask for an
-                        hour the record cannot hold. */}
-                    <span className="text-ui text-muted-foreground">at</span>
-                    <span className="flex items-center gap-1">
-                      <span className="text-ui text-muted-foreground">:</span>
-                      <ScheduleNumberInput
-                        value={minute}
-                        max={59}
-                        ariaLabel="Minutes past the hour"
-                        onChange={setMinute}
-                      />
-                    </span>
-                    <span className="text-ui text-muted-foreground">past the hour</span>
-                  </>
-                ) : (
-                  <>
-                    {preset === "weekly" ? (
-                      <>
-                        <span className="text-ui text-muted-foreground">on</span>
-                        <Select
-                          value={weekday}
-                          onValueChange={(value) => {
-                            const next = SCHEDULE_WEEKDAYS.find((day) => day === value);
-                            if (next !== undefined) setWeekday(next);
-                          }}
-                        >
-                          <SelectTrigger size="sm" aria-label="Day of the week" className="px-2">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {WEEKDAY_OPTIONS.map((option) => (
-                              <SelectItem key={option.key} value={option.key}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </>
-                    ) : null}
-                    <span className="text-ui text-muted-foreground">at</span>
-                    <TimeField
-                      hour={hour}
-                      minute={minute}
-                      onHourChange={setHour}
-                      onMinuteChange={setMinute}
+                  <label className="flex items-center justify-between gap-2 text-ui text-muted-foreground">
+                    Minutes past the hour
+                    <ScheduleNumberInput
+                      value={minute}
+                      max={59}
+                      ariaLabel="Minutes past the hour"
+                      onChange={setMinute}
                     />
-                  </>
+                  </label>
+                ) : (
+                  <TimeField
+                    hour={hour}
+                    minute={minute}
+                    onHourChange={setHour}
+                    onMinuteChange={setMinute}
+                  />
                 )}
-                <TimeZonePicker value={timeZone} onChange={setTimeZone} />
+                <TimeZonePicker
+                  value={timeZone}
+                  onChange={setTimeZone}
+                  className="w-full max-w-none"
+                />
               </div>
             ) : null}
             {scheduleProblem === null ? null : (
-              // A blocked state with one recovery action — one of the copy
-              // rule's stated exceptions. Ownership is identity on an existing
-              // record, so this is the only place the way out can be named.
               <p className="text-label text-muted-foreground">{scheduleProblem}</p>
             )}
-            {triggerChoice === "columns" ? (
-              <div className="flex flex-wrap gap-2">
-                {TICKET_STATUSES.map((status) => {
-                  const named = columns.includes(status);
-                  return (
-                    <Button
-                      key={status}
-                      variant="ghost"
-                      size="sm"
-                      role="checkbox"
-                      aria-checked={named}
-                      data-trigger-column={status}
-                      className={cn(
-                        "border px-2 text-ui",
-                        named
-                          ? "border-ring bg-accent text-foreground"
-                          : "border-border text-muted-foreground",
-                      )}
-                      onClick={() =>
-                        // Board order, never click order — the record stores
-                        // board order, and a form that disagrees with what it
-                        // saved is a form that has to be re-read after saving.
-                        setColumns((current) =>
-                          TICKET_STATUSES.filter((candidate) =>
-                            candidate === status
-                              ? !current.includes(status)
-                              : current.includes(candidate),
-                          ),
-                        )
-                      }
-                    >
-                      {TICKET_STATUS_LABELS[status]}
-                    </Button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-          <ComposerPickerStack
-            value={instructions}
-            onValueChange={setInstructions}
-            ready
-            interactionOpen={false}
-            promptTemplates={templates}
-            skills={skills}
-            // Verbs are chat operations (/compact); an Automation's
-            // Instructions can invoke none of them.
-            verbs={[]}
-            files={fileIndex.getIndex()}
-            onFilePickerOpen={fileIndex.refresh}
-          >
-            <InstructionsTextarea value={instructions} onValueChange={setInstructions} />
-          </ComposerPickerStack>
-          <div className="flex items-center gap-2">
-            <Segmented<RuntimeChoice>
-              ariaLabel="Runtime"
-              value={runtimeChoice}
-              options={[
-                { key: "inherit", label: "Default model" },
-                { key: "pin", label: "Pin" },
-              ]}
-              onChange={setRuntimeChoice}
-            />
-            {runtimeChoice === "pin" ? (
-              <>
-                <ModelPill
-                  models={models}
-                  selection={pin ?? NO_PIN}
-                  disabled={false}
-                  onChange={(next) => {
-                    // A level the wire grammar does not spell cannot be
-                    // recorded, so a pill that produced one changes nothing
-                    // rather than half of it — the composer's own rule.
-                    const picked = composerModelSelection(next);
-                    if (picked !== null) setPin(picked);
-                  }}
-                />
-                {pin !== null && pinStops.length > 1 ? (
-                  <EffortPill
-                    levels={pinStops}
-                    value={pin.reasoningLevel}
-                    onChange={(level) => {
-                      const picked = composerModelSelection({ ...pin, reasoningLevel: level });
-                      if (picked !== null) setPin(picked);
-                    }}
-                  />
-                ) : null}
-              </>
-            ) : null}
-          </div>
-          {problem !== null ? (
-            <p role="alert" className="text-label text-destructive">
-              {problem}
-            </p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" size="sm" onClick={closeEditor}>
-            Cancel
-          </Button>
-          <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
-            {automation === null ? "Create automation" : "Save changes"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </section>
+
+          <section className="flex flex-col gap-2 p-4">
+            <SectionLabel>Runtime</SectionLabel>
+            <RuntimeFields models={models} pin={pin} onChange={setPin} />
+          </section>
+        </aside>
+      </div>
+      {problem === null ? null : (
+        <p role="alert" className="border-t border-border px-6 py-2 text-label text-destructive">
+          {problem}
+        </p>
+      )}
+    </div>
   );
 }
 
 /**
- * The Instructions box: a plain textarea wearing the stack's caret binding,
- * wired exactly as the chat's own textarea wires it — `handleKeyDown` first
- * (the picker's keys are its own), `trackCaret` on change, select and keyup.
- *
- * EXPORTED for the ticket rail's Run once form (VC-129), which sends the same
- * Instructions through the same expansion at launch and would otherwise re-wire
- * this binding a second time. That is not a second authoring surface: an
- * Unbound Run saves nothing and has nothing to name, so what travels is the
- * BOX, never the editor around it.
+ * The Instructions box with the shared composer's caret binding. Exported for
+ * Run once, whose unbound Instructions use the same grammar without becoming
+ * another Automation authoring surface.
  */
 export function InstructionsTextarea({
   value,
   onValueChange,
+  className,
 }: {
   value: string;
   onValueChange(value: string): void;
+  className?: string;
 }) {
   const caret = useComposerCaretBinding();
   return (
@@ -662,9 +697,10 @@ export function InstructionsTextarea({
       aria-label="Instructions"
       placeholder={INSTRUCTIONS_PLACEHOLDER}
       className={cn(
-        "min-h-32 w-full resize-y rounded-lg border border-border bg-transparent px-3 py-2",
+        "min-h-32 w-full resize-y rounded-lg border border-border bg-transparent px-4 py-2",
         "text-sm text-foreground outline-none placeholder:text-muted-foreground",
         "focus-visible:border-ring",
+        className,
       )}
       onChange={(event) => {
         caret.trackCaret(event.currentTarget);

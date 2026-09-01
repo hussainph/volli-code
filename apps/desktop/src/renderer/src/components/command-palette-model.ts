@@ -10,7 +10,6 @@ import {
   type Ticket,
 } from "@volli/shared";
 
-import { listingRunTarget } from "@renderer/components/automations/automations-page-model";
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
 
 export interface CommandPaletteTicketItem {
@@ -160,25 +159,15 @@ export function buildCommandPaletteItems(
 
 /* ------------------------------------------------------------ automations */
 
-/** One "Run ⟨name⟩" row — run by hand from the palette (VC-126). */
-export type CommandPaletteAutomationRunItem =
-  | {
-      kind: "automation-run";
-      automationId: string;
-      name: string;
-      ownership: AutomationOwnership;
-      runTarget: "ticket";
-      ticketId: string;
-      ticketDisplayId: string;
-    }
-  | {
-      kind: "automation-run";
-      automationId: string;
-      name: string;
-      ownership: AutomationOwnership;
-      runTarget: "project";
-      projectId: string;
-    };
+/** One "Run ⟨name⟩ on ⟨ticket⟩" row — run by hand from the palette (VC-126). */
+export interface CommandPaletteAutomationRunItem {
+  kind: "automation-run";
+  automationId: string;
+  name: string;
+  ownership: AutomationOwnership;
+  ticketId: string;
+  ticketDisplayId: string;
+}
 
 /**
  * The Ticket a palette-run would target: the workspace's open Ticket,
@@ -191,37 +180,24 @@ export interface CommandPaletteRunContext {
 
 /**
  * The run rows the palette offers — every Automation the selected project
- * lists that has a valid Target, in main's own order. The Trigger decides that
- * Target: a schedule runs at the Project, while every other Trigger needs the
- * open Ticket. With no selected project there is no list; with no open Ticket,
- * scheduled rows remain valid and Ticket-target rows are omitted.
+ * lists (its own plus the global shelf, in main's own order), each targeting
+ * the open Ticket. No open Ticket means no rows rather than rows that would
+ * have to invent a target: the palette is "run by name", and the richer
+ * choose-a-ticket surfaces are later slices (VC-127, VC-129).
  */
 export function buildAutomationRunItems(
   automations: readonly Automation[],
-  projectId: string | null,
   context: CommandPaletteRunContext | null,
 ): CommandPaletteAutomationRunItem[] {
-  if (projectId === null) return [];
-  return automations.flatMap((automation): CommandPaletteAutomationRunItem[] => {
-    const row = {
-      kind: "automation-run" as const,
-      automationId: automation.id,
-      name: automation.name,
-      ownership: automationOwnership(automation),
-    };
-    if (listingRunTarget(automation) === "project") {
-      return [{ ...row, runTarget: "project", projectId }];
-    }
-    if (context === null) return [];
-    return [
-      {
-        ...row,
-        runTarget: "ticket",
-        ticketId: context.ticketId,
-        ticketDisplayId: context.displayId,
-      },
-    ];
-  });
+  if (context === null) return [];
+  return automations.map((automation) => ({
+    kind: "automation-run",
+    automationId: automation.id,
+    name: automation.name,
+    ownership: automationOwnership(automation),
+    ticketId: context.ticketId,
+    ticketDisplayId: context.displayId,
+  }));
 }
 
 /* ---------------------------------------------------------------- editor */
@@ -241,8 +217,8 @@ export interface CommandPaletteEditorItem {
 /**
  * The editor rows, given whether an editor is actually on screen to answer
  * them. Nothing open means no rows rather than a row that would open a line
- * prompt over no document — the same fail-closed stance palette Run rows take
- * when their Trigger's Target is unavailable.
+ * prompt over no document — the same stance `buildAutomationRunItems` takes
+ * about a run with no Ticket to run on.
  */
 export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEditorItem[] {
   if (!editorOpen) return [];

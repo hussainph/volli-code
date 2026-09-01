@@ -37,6 +37,14 @@ export const AUTOMATION_SCHEDULE_PRESETS = ["hourly", "daily", "weekdays", "week
 
 export type AutomationSchedulePreset = (typeof AUTOMATION_SCHEDULE_PRESETS)[number];
 
+/** The standalone cadence names every authoring and listing surface uses. */
+export const AUTOMATION_SCHEDULE_PRESET_LABELS = {
+  hourly: "Hourly",
+  daily: "Every day",
+  weekdays: "Mon–Fri",
+  weekly: "Weekly",
+} as const satisfies Readonly<Record<AutomationSchedulePreset, string>>;
+
 /**
  * The days a weekly schedule can name, in `Date`'s own order so the index IS
  * the `getUTCDay()` value and no lookup table can drift from one.
@@ -56,6 +64,17 @@ export const SCHEDULE_WEEKDAYS = [
 ] as const;
 
 export type ScheduleWeekday = (typeof SCHEDULE_WEEKDAYS)[number];
+
+/** The full weekday names shared by the editor control and saved schedule sentence. */
+export const SCHEDULE_WEEKDAY_LABELS: Readonly<Record<ScheduleWeekday, string>> = {
+  sunday: "Sunday",
+  monday: "Monday",
+  tuesday: "Tuesday",
+  wednesday: "Wednesday",
+  thursday: "Thursday",
+  friday: "Friday",
+  saturday: "Saturday",
+};
 
 /**
  * One authored schedule — the structured data behind a self-contained cadence
@@ -207,16 +226,6 @@ export function parseAutomationSchedule(raw: unknown): AutomationSchedule | null
 
 /* ------------------------------------------------------- the sentence ----- */
 
-const WEEKDAY_LABELS: Record<ScheduleWeekday, string> = {
-  sunday: "Sunday",
-  monday: "Monday",
-  tuesday: "Tuesday",
-  wednesday: "Wednesday",
-  thursday: "Thursday",
-  friday: "Friday",
-  saturday: "Saturday",
-};
-
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
 }
@@ -239,13 +248,13 @@ export function scheduleTimeLabel(schedule: AutomationSchedule): string {
 export function schedulePhrase(schedule: AutomationSchedule): string {
   switch (schedule.preset) {
     case "hourly":
-      return `Hourly at ${scheduleTimeLabel(schedule)} past the hour`;
+      return `${AUTOMATION_SCHEDULE_PRESET_LABELS.hourly} at ${scheduleTimeLabel(schedule)} past the hour`;
     case "daily":
-      return `Every day at ${scheduleTimeLabel(schedule)}`;
+      return `${AUTOMATION_SCHEDULE_PRESET_LABELS.daily} at ${scheduleTimeLabel(schedule)}`;
     case "weekdays":
-      return `Mon–Fri at ${scheduleTimeLabel(schedule)}`;
+      return `${AUTOMATION_SCHEDULE_PRESET_LABELS.weekdays} at ${scheduleTimeLabel(schedule)}`;
     case "weekly":
-      return `Weekly on ${WEEKDAY_LABELS[schedule.weekday]} at ${scheduleTimeLabel(schedule)}`;
+      return `${AUTOMATION_SCHEDULE_PRESET_LABELS.weekly} on ${SCHEDULE_WEEKDAY_LABELS[schedule.weekday]} at ${scheduleTimeLabel(schedule)}`;
   }
 }
 
