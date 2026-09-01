@@ -112,17 +112,20 @@ export function announcePendingArmedRunSettlement(notice: PendingArmedRunSettled
       void useTicketSessionRecordsStore.getState().refresh(pending.ticketId);
       // A Deliberate move never redirects. The toast action remains the only
       // door into the fresh Session, exactly as before main owned the timer.
-      toast.success(`${pending.automationName} started on ${pending.ticketDisplayId}`, {
-        action: {
-          label: "Open session",
-          onClick: () => {
-            chat.openChatTab(pending.ticketId, action.sessionId);
-            useWorkspaceStore.getState().openTicketWorkspace(action.projectId, pending.ticketId, {
-              tabId: chatTabId(action.sessionId),
-            });
+      toast.success(
+        `${action.automationName ?? pending.automationName} started on ${pending.ticketDisplayId}`,
+        {
+          action: {
+            label: "Open session",
+            onClick: () => {
+              chat.openChatTab(pending.ticketId, action.sessionId);
+              useWorkspaceStore.getState().openTicketWorkspace(action.projectId, pending.ticketId, {
+                tabId: chatTabId(action.sessionId),
+              });
+            },
           },
         },
-      });
+      );
       return;
     }
   }

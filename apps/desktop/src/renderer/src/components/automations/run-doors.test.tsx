@@ -27,14 +27,18 @@
  *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and
  *    `automations/pending-armed-runs.test.ts`.
  *
- * Nothing here asserts where a started Run LANDS (a tab, a toast, Model
- * Access); that is `run-automation-model.ts`'s decision and each surface's own
- * test. What is asserted is that the door asks, and asks for the right Run.
+ * The cases normally stop before asserting where a started Run LANDS (a tab,
+ * a toast, Model Access); that is `run-automation-model.ts`'s decision and each
+ * surface's own test. The skipped-row rename regression is the exception: it
+ * spans that row's historical name and the launch outcome, so this is the one
+ * place both sides of its toast are present. Every case still asserts that the
+ * door asks, and asks for the right Run.
  */
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { toast } from "sonner";
 import type {
   Automation,
   AutomationRun,
@@ -61,8 +65,8 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-// The landing's toasts are noise here, and `sonner` needs a real DOM host it
-// has no reason to get in this file.
+// Most landing toasts are noise here; the skipped-row rename case inspects one.
+// Mocking `sonner` also avoids needing a real DOM host for the rest.
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
 }));
@@ -131,19 +135,37 @@ const NIGHTLY: Automation = {
 
 const ARMING: ColumnArming = { projectId: "p1", status: "doing", automationId: "a1", armedAt: 5 };
 
+/** Main's successful door answer, including the name shared with the Session title. */
+function runSuccess(input: {
+  automationId: string;
+  automationName: string;
+  ticketId: string | null;
+}) {
+  const started: AutomationRun = {
+    id: "run-1",
+    automationId: input.automationId,
+    automationName: input.automationName,
+    ticketId: input.ticketId,
+    sessionId: "s1",
+    model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    attendance: "attended",
+    createdAt: 1,
+  };
+  return {
+    ok: true as const,
+    run: started,
+    projectId: "p1",
+    receipt: { id: "r", commandId: "c", status: "completed" as const, recordedAt: 1 },
+  };
+}
+
 /** The one Run door every renderer surface has to reach, and its Project twin. */
-const run = vi.fn(async () => ({
-  ok: true as const,
-  run: { sessionId: "s1" },
-  projectId: "p1",
-  receipt: { id: "r", commandId: "c", status: "completed", recordedAt: 0 },
-}));
-const runForProject = vi.fn(async () => ({
-  ok: true as const,
-  run: { sessionId: "s1" },
-  projectId: "p1",
-  receipt: { id: "r", commandId: "c", status: "completed", recordedAt: 0 },
-}));
+const run = vi.fn(async () =>
+  runSuccess({ automationId: "a1", automationName: "Review sweep", ticketId: "t1" }),
+);
+const runForProject = vi.fn(async () =>
+  runSuccess({ automationId: "a3", automationName: "Nightly sweep", ticketId: null }),
+);
 
 /** Every read a mounted surface makes on arrival, answered from the seed. */
 const doors = {
@@ -510,9 +532,19 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     expect(runForProject).toHaveBeenCalledWith(askedFor({ automationId: "a3", projectId: "p1" }));
   });
 
-  it("Run now on a Skipped occurrence", async () => {
+  it("Run now on a Skipped occurrence uses main's launch-time name after a rename", async () => {
+    runForProject.mockResolvedValueOnce(
+      runSuccess({
+        automationId: "a3",
+        automationName: "Renamed nightly sweep",
+        ticketId: null,
+      }),
+    );
     installApi({
-      list: vi.fn(async () => ({ ok: true, automations: [NIGHTLY] })),
+      list: vi.fn(async () => ({
+        ok: true,
+        automations: [{ ...NIGHTLY, name: "Renamed nightly sweep" }],
+      })),
       skipsForProject: vi.fn(
         async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
           ok: true,
@@ -520,6 +552,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
             {
               id: "skip-1",
               automationId: "a3",
+              // The historical skip keeps the name from when it was recorded.
               automationName: "Nightly sweep",
               projectId: "p1",
               dueAt: 5,
@@ -543,5 +576,11 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
 
     expect(runForProject).toHaveBeenCalledTimes(1);
     expect(runForProject).toHaveBeenCalledWith(askedFor({ automationId: "a3", projectId: "p1" }));
+    // Main resolved the renamed record into both this answer and the Session
+    // title; the toast must not reuse the skip's historical snapshot.
+    expect(toast.success).toHaveBeenCalledWith(
+      "Renamed nightly sweep started",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
   });
 });

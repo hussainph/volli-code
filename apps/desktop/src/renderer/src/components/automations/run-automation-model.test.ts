@@ -25,7 +25,12 @@ describe("runAutomationAction", () => {
           recordedAt: 1,
         },
       }),
-    ).toEqual({ kind: "open-session", sessionId: "session-1", projectId: "p1" });
+    ).toEqual({
+      kind: "open-session",
+      sessionId: "session-1",
+      projectId: "p1",
+      automationName: "Review",
+    });
   });
 
   it("opens Model Access for the missing-default refusal — recovery, not an error", () => {

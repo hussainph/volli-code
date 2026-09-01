@@ -1000,6 +1000,34 @@ describe("createAutomationRunner", () => {
     expect(h.delivered).toHaveLength(1);
   });
 
+  it("returns the launch-time name used for the Session after a skipped row's snapshot goes stale", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h, { name: "Old nightly sweep" });
+    const skipSnapshotName = automation.name;
+    const updated = await h.engine.update({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      name: "Renamed nightly sweep",
+      instructions: automation.instructions,
+      trigger: automation.trigger,
+      runtime: null,
+    });
+    if (!updated.ok) throw new Error("update refused");
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("run refused");
+    expect(skipSnapshotName).toBe("Old nightly sweep");
+    expect(h.creates[0]?.title).toBe("Renamed nightly sweep");
+    expect(outcome.run.automationName).toBe(h.creates[0]?.title);
+  });
+
   it("replays a retried Project Run rather than opening a second Session", async () => {
     const h = harness();
     const automation = await savedAutomation(h);
