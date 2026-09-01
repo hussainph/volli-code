@@ -82,8 +82,12 @@ export function useSplitDnd(): SplitDndState | null {
 }
 
 export interface SplitDndProps {
-  /** Whose surface this is — what a native payload is checked against. */
-  origin: SplitDragOrigin;
+  /**
+   * Whose surface this is — what a native payload is checked against. `null`
+   * while the surface has no subject (Home before a project is selected),
+   * which accepts nothing: no sentinel value stands in for "nobody".
+   */
+  origin: SplitDragOrigin | null;
   /** Every pane's movable tab ids, in the order that pane draws them. */
   panes: readonly SplitPaneTabs[];
   /** A tab drop that asks for a store write. */
@@ -209,7 +213,7 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
  * says whether the pointer is still over this window at all, so dragging a
  * Session out to another app does not leave a plane lit up behind it.
  */
-function useAcceptedNativeDrag(origin: SplitDragOrigin): SplitDragPayload | null {
+function useAcceptedNativeDrag(origin: SplitDragOrigin | null): SplitDragPayload | null {
   const payload = React.useSyncExternalStore(subscribeSplitDrag, splitDragSnapshot);
   const [left, setLeft] = React.useState(false);
 
@@ -233,6 +237,6 @@ function useAcceptedNativeDrag(origin: SplitDragOrigin): SplitDragPayload | null
     };
   }, [payload]);
 
-  if (payload === null || left) return null;
+  if (payload === null || left || origin === null) return null;
   return splitDropAccepts(payload, origin) ? payload : null;
 }

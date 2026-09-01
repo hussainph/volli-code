@@ -260,6 +260,11 @@ export default defineConfig(({ mode }) => ({
         // dragged Session may land on this surface at all (a ticket-A chat must
         // not open on Home), and which store write a drop is.
         "src/components/split/split-drop.ts",
+        // …and the routing between that meaning and the store twin that writes
+        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // cannot answer the same drop differently. Its wrong answer is a drop
+        // that lands somewhere other than where the zone said it would.
+        "src/components/split/split-surface-drop.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.

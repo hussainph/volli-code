@@ -88,12 +88,17 @@ import {
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
-  splitDropEdge,
   type SplitDragPayload,
   type SplitDropOperation,
   type SplitDropZone,
 } from "@renderer/components/split/split-drop";
 import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
+import {
+  nativeDropWrite,
+  reorderDropWrite,
+  tabDropWrite,
+  type SplitSurfaceWrites,
+} from "@renderer/components/split/split-surface-drop";
 import { paneStripLabel, paneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
@@ -445,108 +450,99 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   }, []);
 
   /**
-   * A drop on one pane's strip. While unsplit it arranges the SURFACE, exactly
-   * as it always did; while split it rewrites that pane's own order and leaves
-   * the surface arrangement alone (VC-202 §2).
+   * This surface's half of the drop-routing seam (`split-surface-drop.ts`):
+   * Home's store twins, and Home's own doors for a native payload. The
+   * decisions — pane-or-surface reorder, the unsplit centre's activation door,
+   * the first split's strip claim — live in the seam, one copy shared with the
+   * ticket workspace. `null` while no project is selected: there is no surface
+   * for a drop to write to.
    */
+  const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
+    if (selectedId === null) return null;
+    return {
+      reorderSurface: (movedId, ids) => moveHomeTab(selectedId, movedId, ids),
+      reorderPane: (paneId, movedId, ids) => moveHomeTabInPane(selectedId, paneId, movedId, ids),
+      moveTabToPane: (tabId, paneId) => moveHomeTabToPane(selectedId, tabId, paneId),
+      splitPane: (paneId, edge, tabId, surfaceTabIds) =>
+        splitHomePane(selectedId, paneId, edge, { tabId, surfaceTabIds }),
+      // The door the row's own tab click takes: the tab comes to the front,
+      // and a terminal onto the container's own ledger too — the same pair
+      // `handleSelect` writes.
+      activateTab: (tabId, payload) => {
+        setHomeActiveTab(selectedId, tabId);
+        if (payload.type === "session" && payload.kind === "terminal") {
+          setActiveSession(selectedId, tabId);
+        }
+      },
+      // A chat is adopted and a terminal is not: only an open terminal may be
+      // dragged (its tab is what the pane takes), while a chat Session is
+      // durable and its tab is minted on arrival. A terminal whose tab closed
+      // mid-drag leaves nothing to place.
+      openPayload: (payload) => {
+        if (payload.type === "file") {
+          previewHomeFile(selectedId, payload.relPath);
+          return fileTabId(payload.relPath);
+        }
+        if (payload.kind === "chat") {
+          const chat = useChatSessionsStore.getState();
+          chat.adoptChatSession(payload.sessionId);
+          chat.openChatTab(selectedId, payload.sessionId);
+          return chatTabId(payload.sessionId);
+        }
+        return terminalTabs.some((tab) => tab.sessionId === payload.sessionId)
+          ? payload.sessionId
+          : null;
+      },
+    };
+  }, [
+    moveHomeTab,
+    moveHomeTabInPane,
+    moveHomeTabToPane,
+    previewHomeFile,
+    selectedId,
+    setActiveSession,
+    setHomeActiveTab,
+    splitHomePane,
+    terminalTabs,
+  ]);
+
+  /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
   const reorderInPane = React.useCallback(
     (paneId: string, movedId: string, ids: readonly string[]) => {
-      if (selectedId === null) return;
-      if (splitView === null) moveHomeTab(selectedId, movedId, ids);
-      else moveHomeTabInPane(selectedId, paneId, movedId, ids);
+      if (dropWrites === null) return;
+      reorderDropWrite(
+        { isSplit: splitView !== null, orderedTabIds },
+        dropWrites,
+        paneId,
+        movedId,
+        ids,
+      );
     },
-    [moveHomeTab, moveHomeTabInPane, selectedId, splitView],
+    [dropWrites, orderedTabIds, splitView],
   );
 
-  /**
-   * A tab let go somewhere on Home (VC-202 §4). What the drop MEANS was decided
-   * by `split-drop.ts`; this is the three store writes it can ask for, and the
-   * one thing only the surface knows — the strip as it stands, which the first
-   * split records as the primary pane's claim.
-   */
+  /** A tab let go somewhere on Home (VC-202 §4) — the seam routes, the twins write. */
   const applySplitDrop = React.useCallback(
     (operation: SplitDropOperation) => {
-      if (selectedId === null) return;
-      if (operation.kind === "reorder") {
-        reorderInPane(operation.paneId, operation.movedId, operation.ids);
-        return;
-      }
-      if (operation.kind === "move") {
-        moveHomeTabToPane(selectedId, operation.tabId, operation.paneId);
-        return;
-      }
-      splitHomePane(selectedId, operation.paneId, operation.edge, {
-        tabId: operation.tabId,
-        surfaceTabIds: orderedTabIds,
-      });
+      if (dropWrites === null) return;
+      tabDropWrite({ isSplit: splitView !== null, orderedTabIds }, dropWrites, operation);
     },
-    [moveHomeTabToPane, orderedTabIds, reorderInPane, selectedId, splitHomePane],
+    [dropWrites, orderedTabIds, splitView],
   );
 
-  /**
-   * A Session or file row dragged out of a sidebar and dropped on a pane.
-   *
-   * The tab has to EXIST before a pane can hold it, so the payload is opened
-   * first through the same door its own row would have used — which is why a
-   * chat is adopted here and a terminal is not: only an open terminal may be
-   * dragged (its tab is what the pane takes), while a chat Session is durable
-   * and its tab is minted on arrival. The assignment is then the same
-   * split-or-move a tab drop makes.
-   */
+  /** A Session or file row dropped on a pane — opened by Home's doors, placed by the seam. */
   const handleNativeDrop = React.useCallback(
     (payload: SplitDragPayload, paneId: string, zone: SplitDropZone) => {
-      if (selectedId === null) return;
-      let tabId: string | null = null;
-      if (payload.type === "file") {
-        previewHomeFile(selectedId, payload.relPath);
-        tabId = fileTabId(payload.relPath);
-      } else if (payload.kind === "chat") {
-        const chat = useChatSessionsStore.getState();
-        chat.adoptChatSession(payload.sessionId);
-        chat.openChatTab(selectedId, payload.sessionId);
-        tabId = chatTabId(payload.sessionId);
-      } else if (terminalTabs.some((tab) => tab.sessionId === payload.sessionId)) {
-        // A terminal row drags only while its tab is open; if it closed
-        // mid-drag there is nothing to place.
-        tabId = payload.sessionId;
-      }
-      if (tabId === null) return;
-      const edge = splitDropEdge(zone);
-      if (edge === null) {
-        // On an UNSPLIT surface a centre drop cannot be a pane move — there is
-        // no split for `moveHomeTabToPane` to write to (it returns state
-        // unchanged), and a drop whose zone lit "Move here" must not land as
-        // nothing. "Here" is the surface's only pane, so the drop answers with
-        // the door the row's own tab click takes: the tab comes to the front
-        // (and a terminal onto the container's own ledger too — the same pair
-        // `handleSelect` writes).
-        if (splitView === null) {
-          setHomeActiveTab(selectedId, tabId);
-          if (payload.type === "session" && payload.kind === "terminal") {
-            setActiveSession(selectedId, tabId);
-          }
-          return;
-        }
-        moveHomeTabToPane(selectedId, tabId, paneId);
-        return;
-      }
-      splitHomePane(selectedId, paneId, edge, {
-        tabId,
-        // Including the tab just opened: this render's list predates it.
-        surfaceTabIds: [...orderedTabIds, tabId],
-      });
+      if (dropWrites === null) return;
+      nativeDropWrite(
+        { isSplit: splitView !== null, orderedTabIds },
+        dropWrites,
+        payload,
+        paneId,
+        zone,
+      );
     },
-    [
-      moveHomeTabToPane,
-      orderedTabIds,
-      previewHomeFile,
-      selectedId,
-      setActiveSession,
-      setHomeActiveTab,
-      splitHomePane,
-      splitView,
-      terminalTabs,
-    ],
+    [dropWrites, orderedTabIds, splitView],
   );
 
   /**
@@ -673,7 +669,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // sit above both. A ticket workspace nests its OWN inside this one, which
     // is what keeps a ticket tab from ever being dropped on Home.
     <SplitDnd
-      origin={{ scope: "project", projectId: selectedId ?? "", ticketId: null }}
+      // No subject, no origin: with no project selected there is no surface a
+      // payload could be checked against, and a null origin accepts nothing.
+      origin={
+        selectedId === null ? null : { scope: "project", projectId: selectedId, ticketId: null }
+      }
       panes={split.panes.map((pane) => ({
         paneId: pane.id,
         tabIds: pane.tabIds.filter((id) => !isHomeBoardTab(id)),

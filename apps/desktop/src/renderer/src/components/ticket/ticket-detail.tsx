@@ -64,11 +64,16 @@ import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
-  splitDropEdge,
   type SplitDragPayload,
   type SplitDropOperation,
   type SplitDropZone,
 } from "@renderer/components/split/split-drop";
+import {
+  nativeDropWrite,
+  reorderDropWrite,
+  tabDropWrite,
+  type SplitSurfaceWrites,
+} from "@renderer/components/split/split-surface-drop";
 import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
 import { paneStripLabel, partitionPaneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
@@ -1147,72 +1152,46 @@ export function TicketDetail({
   }
 
   /**
-   * A drop on one pane's strip. While unsplit it arranges the SURFACE, exactly
-   * as it always did; while split it rewrites that pane's own order and leaves
-   * the surface arrangement alone (VC-202 §2) — where a pane's tabs sit is the
-   * pane's business.
+   * This workspace's half of the drop-routing seam (`split-surface-drop.ts`):
+   * the ticket store twins, and this workspace's own doors for a native
+   * payload. The decisions — pane-or-surface reorder, the unsplit centre's
+   * activation door, the first split's strip claim — live in the seam, one
+   * copy shared with Home.
    */
+  const dropWrites: SplitSurfaceWrites = {
+    reorderSurface: (movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids),
+    reorderPane: (paneId, movedId, ids) =>
+      moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids),
+    moveTabToPane: (tabId, paneId) => moveTicketTabToPane(projectId, ticket.id, tabId, paneId),
+    splitPane: (paneId, edge, tabId, surfaceTabIds) =>
+      splitTicketPane(projectId, ticket.id, paneId, edge, { tabId, surfaceTabIds }),
+    // The door the strip's own select takes.
+    activateTab: (tabId) => setActiveTab(tabId),
+    openPayload: openDroppedPayload,
+  };
+  const dropState = { isSplit: splitView !== null, orderedTabIds: tabs.map((tab) => tab.id) };
+
+  /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
   function reorderInPane(paneId: string, movedId: string, ids: readonly string[]): void {
-    if (splitView === null) moveTicketTab(projectId, ticket.id, movedId, ids);
-    else moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids);
+    reorderDropWrite(dropState, dropWrites, paneId, movedId, ids);
   }
 
-  /**
-   * A tab let go somewhere on this workspace (VC-202 §4). What the drop MEANS
-   * was decided by `split-drop.ts`; this is the three store writes it can ask
-   * for, and the one thing only the surface knows — the strip as it stands,
-   * which the first split of a workspace records as the primary pane's claim.
-   */
+  /** A tab let go somewhere on this workspace (VC-202 §4) — the seam routes, the twins write. */
   function applySplitDrop(operation: SplitDropOperation): void {
-    if (operation.kind === "reorder") {
-      reorderInPane(operation.paneId, operation.movedId, operation.ids);
-      return;
-    }
-    if (operation.kind === "move") {
-      moveTicketTabToPane(projectId, ticket.id, operation.tabId, operation.paneId);
-      return;
-    }
-    splitTicketPane(projectId, ticket.id, operation.paneId, operation.edge, {
-      tabId: operation.tabId,
-      surfaceTabIds: tabs.map((tab) => tab.id),
-    });
+    tabDropWrite(dropState, dropWrites, operation);
+  }
+
+  /** A Session or file row dropped on a pane — opened by this workspace's doors, placed by the seam. */
+  function handleNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void {
+    nativeDropWrite(dropState, dropWrites, payload, paneId, zone);
   }
 
   /**
-   * A Session or file row dragged out of a rail and dropped on a pane.
-   *
-   * The tab has to EXIST before a pane can hold it, so the payload is opened
-   * first through the same door its own row would have used — which is why a
-   * chat is adopted here and a terminal is not: only an open terminal may be
+   * Opens what a native payload names, and answers with the tab id it landed
+   * in. A chat is adopted and a terminal is not: only an open terminal may be
    * dragged (its tab is what the pane takes), while a chat Session is durable
-   * and its tab is minted on arrival. The pane assignment is then the same
-   * split-or-move a tab drop makes.
+   * and its tab is minted on arrival.
    */
-  function handleNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void {
-    const tabId = openDroppedPayload(payload);
-    if (tabId === null) return;
-    const edge = splitDropEdge(zone);
-    if (edge === null) {
-      // On an UNSPLIT workspace a centre drop cannot be a pane move — there is
-      // no split for `moveTicketTabToPane` to write to (it returns state
-      // unchanged), and a drop whose zone lit "Move here" must not land as
-      // nothing. "Here" is the workspace's only pane, so the drop answers with
-      // the door a strip click takes: the tab comes to the front.
-      if (splitView === null) {
-        setActiveTab(tabId);
-        return;
-      }
-      moveTicketTabToPane(projectId, ticket.id, tabId, paneId);
-      return;
-    }
-    splitTicketPane(projectId, ticket.id, paneId, edge, {
-      tabId,
-      // Including the tab just opened: this render's `tabs` predates it.
-      surfaceTabIds: [...tabs.map((tab) => tab.id), tabId],
-    });
-  }
-
-  /** Opens what a native payload names, and answers with the tab id it landed in. */
   function openDroppedPayload(payload: SplitDragPayload): string | null {
     if (payload.type === "file") {
       previewTicketFile(projectId, ticket.id, payload.relPath);
