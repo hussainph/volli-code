@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { cn } from "@renderer/lib/utils";
-import type { SplitViewDirection } from "@volli/shared";
+import { SPLIT_VIEW_MAX_RATIO, SPLIT_VIEW_MIN_RATIO, type SplitViewDirection } from "@volli/shared";
 
 /**
  * The grip between two surface panes (VC-202).
@@ -89,6 +89,12 @@ export function SplitViewDivider({ direction, ratio, onChange }: SplitViewDivide
       role="separator"
       aria-orientation={vertical ? "vertical" : "horizontal"}
       aria-label={vertical ? "Resize left and right panes" : "Resize top and bottom panes"}
+      // Where it stands, as a percentage of the model's own clamp — the px
+      // floor is a live-layout fact AT cannot usefully be told, but 15–85 and
+      // the current share are stable answers to "how far can this go".
+      aria-valuemin={Math.round(SPLIT_VIEW_MIN_RATIO * 100)}
+      aria-valuemax={Math.round(SPLIT_VIEW_MAX_RATIO * 100)}
+      aria-valuenow={Math.round(ratio * 100)}
       tabIndex={0}
       data-slot="split-view-divider"
       className={cn(

@@ -201,4 +201,11 @@ describe("SplitViewDivider", () => {
     });
     expect(onChange).toHaveBeenCalledTimes(2);
   });
+
+  it("tells AT where it stands, inside the model's own clamp", () => {
+    const grip = render(vi.fn(), "row", 0.3);
+    expect(grip.getAttribute("aria-valuenow")).toBe("30");
+    expect(grip.getAttribute("aria-valuemin")).toBe("15");
+    expect(grip.getAttribute("aria-valuemax")).toBe("85");
+  });
 });
