@@ -1,20 +1,13 @@
 /**
- * Run an Automation by hand from any renderer surface — the command palette,
- * and the Automations page's own row action. The decision of what to do with
- * the door's answer is `run-automation-model.ts`; this module is the glue that
- * performs it: the adopt + open pair every externally-minted Session already
- * rides (the session-started toast's own action in `main.tsx`), plus the rail
- * refresh `startTicketChat` does for the same reason.
+ * Run an Automation by hand from any renderer surface. The decision of what to
+ * do with the door's answer is `run-automation-model.ts`; this module performs
+ * it and keeps the fresh Session resident for the toast's action.
  *
- * Two ways to land, and the difference is what the person was doing:
- *
- *  - {@link runAutomationOnTicket} NAVIGATES. It is the palette's "run by
- *    name": the person asked for this Run and has nothing else on screen they
- *    were in the middle of.
- *  - {@link runAutomationFromListing} does not. Someone on a listing surface
- *    is working through a list, and taking the window away from it is VC-13
- *    decision 2's no-redirect rule — so the finished Run becomes a toast whose
- *    action is the door (the shape VC-128's armed window also uses).
+ * Universal landing ruling (VC-234, superseding the listing-versus-context
+ * reading of VC-13 decision 2): NO Automation Run door navigates. Success is
+ * always announced in place with an "Open session" action, and the person
+ * decides whether to leave what they are doing. Rails, menus, pages, palettes,
+ * drops, and skipped occurrences do not get different answers.
  */
 import {
   automationRunRetryKey,
@@ -35,12 +28,19 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
 
-/** One Run request, as every caller in the renderer spells it. */
-export interface RunRequest {
+/** The transport fields shared by every Ticket-targeted Run request. */
+interface RunRequest {
   target: AutomationRunTarget;
   ticketId: string;
   /** This invocation's Runtime, or `null` to resolve it the ordinary way. */
   modelOverride: ModelSelection | null;
+}
+
+/** The context every Ticket Run success toast names. */
+export interface TicketRunRequest extends RunRequest {
+  /** Fallback for an Unbound Run or a launch answer without a resolved name. */
+  automationName: string;
+  ticketDisplayId: string;
 }
 
 /**
@@ -116,15 +116,14 @@ async function startProjectRun(input: {
  *
  *  - A **scheduled record's Play**, on the Automations page. VC-112 rules that
  *    the Trigger decides the Target, so running a scheduled Automation by hand
- *    must open the Project Session its schedule would have opened. Asking which
- *    Ticket instead would make the by-hand Run a different piece of work from
+ *    must start the Project Session its schedule would have started. Asking
+ *    which Ticket instead would make the by-hand Run a different piece of work from
  *    the automatic one, which is the one thing this control must not be.
  *  - A **Skipped occurrence's "Run now"**, from the Run history (VC-112: "a
  *    person may start it by hand afterwards").
  *
- * Like every other listing-surface Run it does NOT navigate: the person is
- * reading a page and may well start a second one, so the door arrives as a
- * toast action (VC-13 decision 2).
+ * Like every other Automation Run door it does NOT navigate: VC-234's universal
+ * rule makes the success toast's "Open session" action the only door.
  *
  * It starts ONE Run, whatever number of occurrences a skip row stands for. A
  * skip covering fifty missed hours is fifty occurrences that will never be
@@ -147,7 +146,7 @@ export async function runAutomationForProject(input: {
     case "toast":
       toastError(action.message);
       return;
-    case "open-session": {
+    case "session-started": {
       useChatSessionsStore.getState().adoptChatSession(action.sessionId);
       toast.success(`${action.automationName ?? input.automationName} started`, {
         action: {
@@ -167,62 +166,16 @@ export async function runAutomationForProject(input: {
 }
 
 /**
- * Run on the Ticket the person is looking at, and open the Session.
+ * Run on one Ticket without navigating (VC-234's universal landing ruling).
  *
- * The palette's "run by name", and the ticket rail's own button (VC-129): in
- * both, the person asked for this Run with the Ticket already in front of them,
- * so the fresh Session opens as that Ticket's tab rather than announcing itself
- * in a toast. It is not the listing surfaces' no-redirect case — nothing is
- * taken away, because the Session lands beside the rail that started it.
+ * Every caller supplies the words its success toast can fall back to, but the
+ * launch answer wins when main resolved a bound Automation under a newer name
+ * (VC-231). A missing default model still opens Model Access: that is recovery
+ * for the Run the person requested, not a successful landing.
  */
-export async function runAutomationOnTicket(input: RunRequest): Promise<void> {
-  const action = await startRun(input);
-  if (action === null) return;
-  switch (action.kind) {
-    case "open-model-access":
-      useUiStore.getState().setSettingsOpen(true, "model-access");
-      return;
-    case "toast":
-      toastError(action.message);
-      return;
-    case "open-session":
-      openRunSession({
-        sessionId: action.sessionId,
-        projectId: action.projectId,
-        ticketId: input.ticketId,
-      });
-      return;
-  }
-}
-
-/**
- * Run one Automation from a surface that LISTS it (VC-112: running by hand is
- * universal, and every listing surface can do it). The Automations page and the
- * board card's own context menu are the callers today.
- *
- * It never navigates. The person is on a page of records, quite possibly
- * running a second one next, and a Session that seizes the window is VC-13
- * decision 2's redirect — so success is a toast naming the Automation and the
- * Ticket, whose action is the only door. A missing default model still opens
- * Model Access: that is not a redirect but the recovery for a configuration
- * state, and this person is waiting on a Run they asked for.
- */
-export async function runAutomationFromListing(input: {
-  automationId: string;
-  automationName: string;
-  ticketId: string;
-  ticketDisplayId: string;
-  /**
-   * This invocation's Runtime, or `null` to resolve it the ordinary way.
-   * Required rather than optional: every listing surface has to say whether it
-   * offers the per-invocation override (VC-112 puts it on the deliberate
-   * surfaces only), and an omitted field would let a new caller inherit an
-   * answer it never gave.
-   */
-  modelOverride: ModelSelection | null;
-}): Promise<void> {
+export async function runAutomationOnTicket(input: TicketRunRequest): Promise<void> {
   const action = await startRun({
-    target: { kind: "automation", automationId: input.automationId },
+    target: input.target,
     ticketId: input.ticketId,
     modelOverride: input.modelOverride,
   });
@@ -234,11 +187,12 @@ export async function runAutomationFromListing(input: {
     case "toast":
       toastError(action.message);
       return;
-    case "open-session": {
+    case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
-      // So the Ticket's rail holds the row without waiting on a refresh nobody
-      // on this page would trigger.
+      // Keep the Ticket's rail current while the person remains on the surface
+      // that started the Run. Opening the toast action must not be required for
+      // the fresh history row to exist.
       void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
       toast.success(
         `${action.automationName ?? input.automationName} started on ${input.ticketDisplayId}`,
@@ -263,11 +217,11 @@ export async function runAutomationFromListing(input: {
  * Open the Session a Run created — the adopt + open pair every externally
  * minted Session already rides.
  *
- * Extracted from the success arm above so the Automations page's Run history
- * (VC-127) opens a Session by exactly the same steps a fresh Run does. A
- * history row that navigated differently from the launch it records would be
- * two answers to "where does this Run live", and the one nobody exercises is
- * the one that rots.
+ * Extracted from the success arm above so the fresh Run's toast action and the
+ * Automations page's Run history (VC-127) open a Session by exactly the same
+ * steps. Two explicit doors with different navigation would be two answers to
+ * "where does this Run live", and the one nobody exercises is the one that
+ * rots.
  *
  * `ticketId: null` is a Session that belongs to no Ticket — a Run whose Ticket
  * was deleted, or (VC-130) one that named the project instead. It opens in

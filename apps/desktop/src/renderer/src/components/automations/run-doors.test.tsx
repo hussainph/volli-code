@@ -27,12 +27,11 @@
  *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and
  *    `automations/pending-armed-runs.test.ts`.
  *
- * The cases normally stop before asserting where a started Run LANDS (a tab,
- * a toast, Model Access); that is `run-automation-model.ts`'s decision and each
- * surface's own test. The skipped-row rename regression is the exception: it
- * spans that row's historical name and the launch outcome, so this is the one
- * place both sides of its toast are present. Every case still asserts that the
- * door asks, and asks for the right Run.
+ * Most cases stop before asserting where a started Run lands; that is the
+ * shared glue's decision. The rail and palette cases pin VC-234's two changed
+ * doors (toast in place, with "Open session"), and the skipped-row case pins
+ * VC-231's launch-resolved name across a historical row. Every case still
+ * asserts that the door asks, and asks for the right Run.
  */
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
@@ -344,6 +343,7 @@ beforeEach(() => {
   installApi();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.getState().hydrate({ p1: [TICKET] }, { p1: [] });
+  useWorkspaceStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -370,7 +370,8 @@ afterEach(async () => {
 });
 
 describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
-  it("the Ticket rail's split button", async () => {
+  it("the Ticket rail's split button toasts in place with the Session door", async () => {
+    useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     await act(async () => {
@@ -385,6 +386,13 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         modelOverride: null,
       }),
     );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Review sweep started on VC-12",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
+    // Adopting the Session keeps it resident, but VC-234 leaves the rail's
+    // current tab alone until the person presses the toast action.
+    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the rail's per-invocation Runtime, spent on this one Run", async () => {
@@ -496,8 +504,17 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     );
   });
 
-  it("the command palette's run-by-name row", async () => {
+  it("the command palette's run-by-name row toasts in place with main's resolved name", async () => {
     // The palette runs on the OPEN Ticket, so the open Ticket is the seed.
+    // Main's launch answer carries a newer name than this palette snapshot;
+    // VC-231 says that answer wins in every success toast.
+    run.mockResolvedValueOnce(
+      runSuccess({
+        automationId: "a1",
+        automationName: "Renamed review sweep",
+        ticketId: "t1",
+      }),
+    );
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<CommandPalette open onOpenChange={() => {}} />);
 
@@ -512,6 +529,11 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         modelOverride: null,
       }),
     );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Renamed review sweep started on VC-12",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
+    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the page's Play on a scheduled record, at the Project", async () => {

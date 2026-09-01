@@ -1,7 +1,8 @@
 /**
  * The ticket rail's Automations block (VC-129): one split button that runs an
- * Automation on THIS Ticket without leaving it, and this Ticket's Runs under
- * it, each a door back to its Session.
+ * Automation on THIS Ticket without leaving the current tab, and this Ticket's
+ * Runs under it, each a door back to its Session. VC-234 makes that landing
+ * universal: success toasts with an "Open session" action and never navigates.
  *
  * **The rail runs; it does not author.** There is no form here for making an
  * Automation, and that is a ruling rather than an omission (VC-112): an
@@ -40,6 +41,7 @@ import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 
 import {
+  displayTicketId,
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
   type AutomationRun,
@@ -105,6 +107,7 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { selectTicketRuns, useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** The blank the pill reads as its resting "Model" label — the composer's own. */
@@ -135,6 +138,11 @@ export function TicketAutomationsPanel({
   ticket: Ticket;
 }) {
   const enabledIds = useAutomationsStore((state) => state.enabledIds);
+  const ticketPrefix = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === projectId)?.ticketPrefix,
+  );
+  const ticketDisplayId =
+    ticketPrefix === undefined ? "this ticket" : displayTicketId(ticketPrefix, ticket.ticketNumber);
   const runs = useAutomationsStore((state) => selectTicketRuns(state, ticket.id));
   const refreshTicketRuns = useAutomationsStore((state) => state.refreshTicketRuns);
   const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(null);
@@ -162,7 +170,9 @@ export function TicketAutomationsPanel({
     }
     void runAutomationOnTicket({
       target: { kind: "automation", automationId: action.automation.id },
+      automationName: action.automation.name,
       ticketId: ticket.id,
+      ticketDisplayId,
       modelOverride,
     }).finally(() => void refreshTicketRuns(ticket.id));
   };
@@ -207,6 +217,7 @@ export function TicketAutomationsPanel({
         onClose={() => setRunOnce(null)}
         projectId={projectId}
         ticketId={ticket.id}
+        ticketDisplayId={ticketDisplayId}
         models={models}
         onStarted={() => void refreshTicketRuns(ticket.id)}
       />
@@ -370,8 +381,8 @@ function AutomationRunControl({
 /**
  * This Ticket's Runs, newest first, each a door back to its Session — the
  * Automations page's own history row at rail width, opened through the same
- * `openRunSession` a fresh Run uses. A history row that navigated differently
- * from the launch it records would be two answers to "where does this Run live".
+ * `openRunSession` as a fresh Run's toast action. The two explicit doors use
+ * one answer to "where does this Run live".
  */
 function TicketRuns({ projectId, runs }: { projectId: string; runs: readonly AutomationRun[] }) {
   if (runs.length === 0) return null;
@@ -428,6 +439,7 @@ function RunOnceDialog({
   onClose,
   projectId,
   ticketId,
+  ticketDisplayId,
   models,
   onStarted,
 }: {
@@ -435,6 +447,7 @@ function RunOnceDialog({
   onClose(): void;
   projectId: string;
   ticketId: string;
+  ticketDisplayId: string;
   models: readonly ComposerModel[];
   onStarted(): void;
 }) {
@@ -447,6 +460,7 @@ function RunOnceDialog({
       key={`${request.modelOverride?.providerId ?? ""}:${request.modelOverride?.modelId ?? ""}:${request.modelOverride?.reasoningLevel ?? ""}`}
       projectId={projectId}
       ticketId={ticketId}
+      ticketDisplayId={ticketDisplayId}
       models={models}
       modelOverride={request.modelOverride}
       onClose={onClose}
@@ -458,6 +472,7 @@ function RunOnceDialog({
 function RunOnceForm({
   projectId,
   ticketId,
+  ticketDisplayId,
   models,
   modelOverride,
   onClose,
@@ -465,6 +480,7 @@ function RunOnceForm({
 }: {
   projectId: string;
   ticketId: string;
+  ticketDisplayId: string;
   models: readonly ComposerModel[];
   modelOverride: ModelSelection | null;
   onClose(): void;
@@ -492,7 +508,9 @@ function RunOnceForm({
     onClose();
     void runAutomationOnTicket({
       target: { kind: "unbound", instructions },
+      automationName: UNBOUND_RUN_LABEL,
       ticketId,
+      ticketDisplayId,
       modelOverride: choice === "pin" ? pin : null,
     }).finally(onStarted);
   };

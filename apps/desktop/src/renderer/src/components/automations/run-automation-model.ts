@@ -10,8 +10,9 @@
  *    the door carries one);
  *  - every other refusal toasts, because a person asked for a Run and did not
  *    get one (surface-every-failure, CLAUDE.md);
- *  - success exposes the fresh Session and the launch-time Automation name;
- *    each caller decides whether that lands as navigation or a toast action.
+ *  - success exposes the fresh Session and the launch-time Automation name so
+ *    every Run door can announce it without navigating (VC-234). The toast's
+ *    "Open session" action is the only route into the fresh Session.
  */
 import type { AutomationRunStartResult } from "../../../../ipc/contract";
 
@@ -19,7 +20,7 @@ export type RunAutomationAction =
   | { kind: "open-model-access" }
   | { kind: "toast"; message: string }
   | {
-      kind: "open-session";
+      kind: "session-started";
       sessionId: string;
       projectId: string;
       /** The name main resolved into both the Run record and Session title. */
@@ -29,7 +30,7 @@ export type RunAutomationAction =
 export function runAutomationAction(result: AutomationRunStartResult): RunAutomationAction {
   if (result.ok) {
     return {
-      kind: "open-session",
+      kind: "session-started",
       sessionId: result.run.sessionId,
       projectId: result.projectId,
       automationName: result.run.automationName,

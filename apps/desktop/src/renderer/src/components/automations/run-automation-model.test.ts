@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { runAutomationAction } from "./run-automation-model";
 
 describe("runAutomationAction", () => {
-  it("navigates to the fresh Session on success", () => {
+  it("exposes the fresh Session for the success toast without choosing navigation", () => {
     expect(
       runAutomationAction({
         ok: true,
@@ -26,7 +26,7 @@ describe("runAutomationAction", () => {
         },
       }),
     ).toEqual({
-      kind: "open-session",
+      kind: "session-started",
       sessionId: "session-1",
       projectId: "p1",
       automationName: "Review",
