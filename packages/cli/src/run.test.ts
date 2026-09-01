@@ -501,6 +501,38 @@ describe("runCli", () => {
     ]);
   });
 
+  // A degraded identify measures the same two questions doctor does, so it
+  // takes the same outer boundary: the enclosing checkout, not the directory
+  // the agent happens to have cd'd into.
+  it("reads the workspace root for a degraded identify in a package subdirectory", async () => {
+    const stdout: string[] = [];
+    const present = new Set([
+      "/work/volli/.git",
+      "/work/volli/package.json",
+      "/work/volli/pnpm-lock.yaml",
+      "/work/volli/node_modules",
+      "/work/volli/packages/shared/package.json",
+    ]);
+
+    await runCli(["identify", "--json"], {
+      env: { VOLLI_SOCKET: "/profiles/volli.sock", PATH: "/usr/bin" },
+      cwd: "/work/volli/packages/shared",
+      stdout: (text) => stdout.push(text),
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({ resolved: {} }),
+      pathExists: (path) => present.has(path),
+      request: async () => {
+        throw new AgentClientError("APP_UNREACHABLE", "not running");
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    const env = (JSON.parse(stdout[0]!) as { env: Record<string, unknown> }).env;
+    expect(env["requiredTools"]).toEqual(["git", "node", "pnpm"]);
+    expect(env["dependencies"]).toBe("installed");
+  });
+
   it("honors --json for local help without contacting the app", async () => {
     const stdout: string[] = [];
     let requested = false;
@@ -918,6 +950,58 @@ describe("runCli — doctor", () => {
 
     expect(code).toBe(0);
     expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "yarn"]);
+  });
+
+  it("bounds the observation at a non-git project cwd", async () => {
+    const requests: AgentRequest[] = [];
+    const present = new Set(["/Users/me/package.json", "/Users/me/node_modules"]);
+    await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/Users/me/projects/empty",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      pathExists: (path) => present.has(path),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.args["requiredTools"]).toEqual([]);
+  });
+
+  // The other half of that boundary: no registered project scopes a CLI
+  // measurement, so an audit run from a package subdirectory has to find its
+  // own outer edge. Bounding it at the cwd would name npm for a pnpm monorepo
+  // and call an installed workspace uninstalled — the same confident wrong
+  // answer from the opposite direction.
+  it("still reads the workspace root from a package subdirectory", async () => {
+    const requests: AgentRequest[] = [];
+    const present = new Set([
+      "/work/.git",
+      "/work/package.json",
+      "/work/pnpm-lock.yaml",
+      "/work/packages/a/package.json",
+    ]);
+    await runCli(["doctor"], {
+      env: { VOLLI_SOCKET: "/socket" },
+      cwd: "/work/packages/a",
+      stdout: () => undefined,
+      stderr: () => undefined,
+      readText: async () => "",
+      observe: async () => ({}),
+      pathExists: (path) => present.has(path),
+      request: async (_socket, request) => {
+        requests.push(request);
+        return { v: 1, ok: true, data: { checks: [], summary: "All 0 checks passed." } };
+      },
+      launch: async () => ({ alreadyRunning: true }),
+    });
+
+    expect(requests[0]?.args["requiredTools"]).toEqual(["git", "node", "pnpm"]);
   });
 
   // A preview that validated different input than the real call would is not a

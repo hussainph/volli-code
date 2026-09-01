@@ -1405,7 +1405,7 @@ export async function goToBoard(page) {
  * `scope` is a Locator (a rail, a strip's container) or the Page itself.
  */
 export async function startTerminalSession(scope) {
-  await scope.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  await scope.getByRole("button", { name: "Other things to open", exact: true }).first().click();
   const page = scope.page?.() ?? scope;
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
 }

@@ -31,7 +31,7 @@ import { ChatCircleDotsIcon } from "@phosphor-icons/react/dist/csr/ChatCircleDot
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { GitDiffIcon } from "@phosphor-icons/react/dist/csr/GitDiff";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import type { SkillReference, Ticket } from "@volli/shared";
+import type { Ticket } from "@volli/shared";
 
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
@@ -74,8 +74,7 @@ export function TicketRail({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
   activeTabId,
@@ -88,10 +87,8 @@ export function TicketRail({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   /** Focus (or open) a session tab in the main strip — deliberate selection only. */
   onActivateSession(sessionId: string): void;
   /** Open (adopting first, if nothing is attached) a chat Session's tab. */
@@ -188,8 +185,7 @@ export function TicketRail({
               creating={creating}
               onNewSession={onNewSession}
               onNewChat={onNewChat}
-              skills={skills}
-              onNewChatWithSkill={onNewChatWithSkill}
+              onNewBrowser={onNewBrowser}
               onActivateSession={onActivateSession}
               onActivateChat={onActivateChat}
             />

@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   dialog,
   ipcMain,
   nativeTheme,
@@ -51,7 +52,12 @@ import type {
   SessionToolId,
 } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
-import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
+import type {
+  BrowserTabStateEvent,
+  FirstPaintHint,
+  VolliIpcChannel,
+  VolliIpcEvent,
+} from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
@@ -269,6 +275,9 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
+import { BrowserTabHost } from "./browser/tab-host";
+import { registerBrowserTabIpcHandlers } from "./browser/ipc";
+import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -413,6 +422,13 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
+  }
 }
 
 function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
@@ -811,23 +827,28 @@ app.whenReady().then(async () => {
    */
   const readSessionEnvironment = async (
     cwd: string | null,
+    projectRoot: string | null,
     pathExists?: (path: string) => boolean,
   ) => {
     const outcome = await loginPathBootstrap.apply();
     const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
-    const report = await buildSessionEnvReport({
+    const reportInput = {
       // Read after apply: the bootstrap is the one writer that puts binDir
       // first even when the login shell could not be reached.
       path: process.env.PATH ?? "",
       provenance: outcome.kind,
       interactiveProvenance,
-      // A host-wide read has no project dependency fact to infer from main's
-      // own cwd, so the report leaves that one field unmeasured.
-      cwd: cwd ?? undefined,
       // A caller with a further workspace question of its own passes its memo
       // in, so the whole read stats each path once (Settings, below).
       ...(pathExists === undefined ? {} : { pathExists }),
-    });
+    };
+    // A host-wide read has no project dependency fact to infer from main's own
+    // cwd. Scoped reads carry both where the caller stands and the outer
+    // project boundary; constructing the two shapes separately keeps that
+    // all-or-nothing contract visible to TypeScript.
+    const report = await buildSessionEnvReport(
+      cwd === null || projectRoot === null ? reportInput : { ...reportInput, cwd, projectRoot },
+    );
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
     // their concrete facts instead of widening them to that fallback shape.
@@ -878,6 +899,10 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  // Assigned once the BrowserTabHost is built inside the ready path below; the
+  // attach-time browser-port resolver reads it lazily, long after boot — the
+  // same bargain ptyManagerRef strikes with the worktree guards.
+  let browserTabsRef: BrowserTabHost | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -898,6 +923,15 @@ app.whenReady().then(async () => {
                   "ask_user",
                   ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
+                  // The desktop always carries the Browser host, so every new
+                  // Session records all six Browser tools. Recorded surfaces
+                  // from older builds keep their shorter list and rebind it.
+                  "browser_tabs",
+                  "browser_navigate",
+                  "browser_snapshot",
+                  "browser_act",
+                  "browser_screenshot",
+                  "browser_console",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1030,6 +1064,21 @@ app.whenReady().then(async () => {
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          // The Session's Browser capability, composed at attach over the one
+          // host: the registry decides which tabs the scope may see, and the
+          // CDP wire is each tab's app-private debugger — never a debug port.
+          resolveBrowserPort: (scope) => {
+            const host = browserTabsRef;
+            if (host === null) {
+              throw new Error("The Browser host is not ready; retry the attachment.");
+            }
+            return createAgentBrowserPort({
+              host,
+              scope,
+              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
+              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+            });
+          },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web
           // ports this decides no membership — the Session's frozen record does
           // — it supplies the one closure every bundled verb is answered
@@ -2269,7 +2318,28 @@ app.whenReady().then(async () => {
 
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
-  const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+  });
+  browserTabsRef = browserTabs;
+  registerBrowserTabIpcHandlers(browserTabs);
+  const createOwnedWindow = (): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint());
+    // Browser Tabs are live machine resources, not durable documents. Once the
+    // app window that can place them closes, keeping invisible remote pages
+    // running would leave network/timers with no reachable owner.
+    window.once("closed", () => browserTabs.closeAll());
+    return window;
+  };
+  const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
@@ -2678,8 +2748,8 @@ app.whenReady().then(async () => {
             // than the tool they were told to have.
             const pathExists = memoizedPathExists(existsSync);
             return {
-              ...(await readSessionEnvironment(cwd, pathExists)),
-              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, pathExists),
+              ...(await readSessionEnvironment(cwd, cwd, pathExists)),
+              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, cwd, pathExists),
             };
           },
           systemPathIssues: () => readSystemPathIssues(),
@@ -2819,7 +2889,7 @@ app.whenReady().then(async () => {
           // the one current pass — boot normally, a fresh pass after repair —
           // so the report never describes a PATH from before adoption finished
           // and is read at CALL time, never captured.
-          sessionEnv: (cwd) => readSessionEnvironment(cwd),
+          sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.
@@ -2945,7 +3015,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager, currentFirstPaint());
+      createOwnedWindow();
     }
   });
 });

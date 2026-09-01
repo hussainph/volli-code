@@ -1,7 +1,10 @@
+import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { NewSessionControl } from "./new-session-control";
+import { ContextMenuItem } from "@renderer/components/ui/context-menu";
+import { DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
+import { NewSessionControl, newSessionMenuRows } from "./new-session-control";
 
 const noop = (): void => {};
 
@@ -9,6 +12,34 @@ const noop = (): void => {};
 function buttonTag(html: string, label: string): string {
   const labelOffset = html.indexOf(`aria-label="${label}"`);
   return html.slice(html.lastIndexOf("<button", labelOffset), html.indexOf(">", labelOffset) + 1);
+}
+
+interface ItemProps {
+  children?: React.ReactNode;
+  onSelect?(): void;
+}
+
+/**
+ * Both menus are portalled and closed at rest, so static markup cannot see a
+ * row. The control is hook-free, so the honest read is to call it and walk the
+ * tree it returns — the same shape `context-menu.test.tsx` uses.
+ */
+function collect(node: React.ReactNode, type: React.ElementType): React.ReactElement<ItemProps>[] {
+  const found: React.ReactElement<ItemProps>[] = [];
+  for (const child of React.Children.toArray(node)) {
+    if (!React.isValidElement(child)) continue;
+    if (child.type === type) found.push(child as React.ReactElement<ItemProps>);
+    found.push(...collect((child.props as ItemProps).children, type));
+  }
+  return found;
+}
+
+/** A menu row's own words, ignoring its icon and any shortcut glyph. */
+function labelOf(item: React.ReactElement<ItemProps>): string {
+  return React.Children.toArray(item.props.children)
+    .filter((child) => typeof child === "string")
+    .join("")
+    .trim();
 }
 
 describe("NewSessionControl", () => {
@@ -20,7 +51,7 @@ describe("NewSessionControl", () => {
     // Two buttons, not one: the label half commits, the caret half opens.
     expect(html.match(/<button/g)).toHaveLength(2);
     expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other session kinds")).toContain('aria-haspopup="menu"');
+    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
     // The word is the target as much as the label — a terminal is two presses
     // and never has a peer control beside the default.
     expect(html).toContain("Chat");
@@ -33,7 +64,64 @@ describe("NewSessionControl", () => {
     );
 
     expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other session kinds")).toContain('disabled=""');
+    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
+  });
+
+  it("gathers chat, terminal and browser into the one menu, and drops skills", () => {
+    let opened = 0;
+    const handlers = {
+      onNewChat: noop,
+      onNewBrowser: () => (opened += 1),
+      onNewTerminal: noop,
+    };
+
+    for (const [menu, type] of [
+      ["dropdown", DropdownMenuItem],
+      ["context", ContextMenuItem],
+    ] as const) {
+      const rows = collect(newSessionMenuRows(menu, handlers), type);
+      // Sessions first, then the surface — the separator's distinction. Both
+      // menus are the same offer reached two ways, so both are asked.
+      expect(rows.map(labelOf)).toEqual(["Chat", "Terminal", "Browser"]);
+      // Gone on purpose: a skill is a property of the chat you are about to
+      // have, not a kind of thing to open.
+      expect(rows.map(labelOf)).not.toContain("Chat with skill");
+
+      // The row is wired, not decorative.
+      rows.find((item) => labelOf(item) === "Browser")?.props.onSelect?.();
+    }
+    expect(opened).toBe(2);
+  });
+
+  it("keeps Browser inside the menu rather than beside it as a second button", () => {
+    const html = renderToStaticMarkup(
+      <NewSessionControl
+        disabled={false}
+        onNewChat={noop}
+        onNewBrowser={noop}
+        onNewTerminal={noop}
+      />,
+    );
+
+    // Still exactly the two halves of one pill. Offering a Browser Tab must not
+    // grow a third target in the strip — that standalone button is the shape
+    // this menu replaced.
+    expect(html.match(/<button/g)).toHaveLength(2);
+    expect(html).not.toContain('aria-label="New Browser Tab"');
+  });
+
+  it("offers no Browser row on a surface that cannot host one", () => {
+    const handlers = { onNewChat: noop, onNewTerminal: noop };
+
+    // An item is a promise the press has to keep, so a mount with no handler
+    // shows no row at all rather than a dead one.
+    expect(
+      collect(newSessionMenuRows("dropdown", handlers), DropdownMenuItem).map(labelOf),
+    ).toEqual(["Chat", "Terminal"]);
+    expect(collect(newSessionMenuRows("context", handlers), ContextMenuItem).map(labelOf)).toEqual([
+      "Chat",
+      "Terminal",
+    ]);
   });
 
   it("announces ⌘T only where the chord starts what the control starts", () => {

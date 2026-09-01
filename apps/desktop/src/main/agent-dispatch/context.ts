@@ -109,12 +109,14 @@ export interface AgentCommandServiceOptions {
   /**
    * The `env` block `volli identify` reports (VC-94): the session's resolved
    * PATH, its provenance, the measured tools resolved against it and the
-   * subset this project implies, and whether its dependencies are installed. Injected because
-   * main is the only process that knows HOW the PATH came to be — it ran the
-   * boot probe and owns the adoption outcome — and absent (tests) means
-   * identify answers without an env block rather than inventing one.
+   * subset this project implies, and whether its dependencies are installed.
+   * The cwd and its project root keep workspace walks inside the resolved
+   * checkout. Injected because main is the only process that knows HOW the PATH
+   * came to be — it ran the boot probe and owns the adoption outcome — and
+   * absent (tests) means identify answers without an env block rather than
+   * inventing one.
    */
-  sessionEnv?: (cwd: string) => Promise<SessionEnvReport>;
+  sessionEnv?: (cwd: string, projectRoot: string) => Promise<SessionEnvReport>;
   /**
    * The product Session start route (VC-13) — the same facade the renderer's
    * `sessions.create` RPC rides, threaded in the way {@link sessionEngine} is

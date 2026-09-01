@@ -74,6 +74,7 @@ async function mount(tabs: readonly HomeTabDescriptor[]): Promise<string> {
           onCloseOtherFiles={noop}
           onNewSession={noop}
           onNewChat={noop}
+          onNewBrowser={noop}
           creating={false}
           railCollapsed={false}
           railTogglable

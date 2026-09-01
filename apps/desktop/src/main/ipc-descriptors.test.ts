@@ -19,7 +19,98 @@ import {
   AGENT_OBSERVABILITY_IPC,
   WEB_ACCESS_CHANNELS,
   WEB_ACCESS_IPC,
+  BROWSER_CHANNELS,
+  BROWSER_IPC,
 } from "./ipc-descriptors";
+
+describe("BROWSER_IPC descriptor table", () => {
+  it("derives the complete Browser Tab command surface from its descriptors", () => {
+    expect(BROWSER_CHANNELS).toEqual(Object.keys(BROWSER_IPC));
+    expect(BROWSER_CHANNELS).toEqual([
+      "volli:browser-open",
+      "volli:browser-close",
+      "volli:browser-list",
+      "volli:browser-navigate",
+      "volli:browser-back",
+      "volli:browser-forward",
+      "volli:browser-reload",
+      "volli:browser-set-bounds",
+      "volli:browser-show",
+      "volli:browser-hide",
+      "volli:browser-toggle-devtools",
+    ]);
+  });
+
+  it("accepts a scoped HTTP(S)-shaped open request and rejects malformed fields", () => {
+    const { guard, invalidError } = BROWSER_IPC["volli:browser-open"];
+    expect(
+      guard([{ projectId: "project-1", ticketId: "ticket-1", url: "http://localhost:3000" }]),
+    ).toBe(true);
+    expect(guard([{ projectId: "project-1", url: "https://example.com" }])).toBe(true);
+    expect(guard([{ projectId: 7, url: "https://example.com" }])).toBe(false);
+    expect(guard([{ projectId: "project-1", ticketId: 7, url: "https://example.com" }])).toBe(
+      false,
+    );
+    expect(guard([{ projectId: "project-1", url: 7 }])).toBe(false);
+    expect(guard([])).toBe(false);
+    expect(invalidError).toBe("Invalid Browser Tab request");
+  });
+
+  it("accepts project and optional Ticket list scopes, rejecting an ambient list", () => {
+    const { guard } = BROWSER_IPC["volli:browser-list"];
+    expect(guard([{ projectId: "project-1" }])).toBe(true);
+    expect(guard([{ projectId: "project-1", ticketId: "ticket-1" }])).toBe(true);
+    expect(guard([{}])).toBe(false);
+    expect(guard([{ projectId: "project-1", ticketId: null }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one opaque string id for close, history, visibility, reload, and DevTools", () => {
+    const channels = [
+      "volli:browser-close",
+      "volli:browser-back",
+      "volli:browser-forward",
+      "volli:browser-reload",
+      "volli:browser-show",
+      "volli:browser-hide",
+      "volli:browser-toggle-devtools",
+    ] as const;
+    for (const channel of channels) {
+      const { guard } = BROWSER_IPC[channel];
+      expect(guard([{ tabId: "opaque-1" }])).toBe(true);
+      expect(guard([{ tabId: 1 }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ tabId: "opaque-1" }, {}])).toBe(false);
+    }
+  });
+
+  it("requires both opaque id and URL string for address navigation", () => {
+    const { guard } = BROWSER_IPC["volli:browser-navigate"];
+    expect(guard([{ tabId: "opaque-1", url: "http://localhost:3000" }])).toBe(true);
+    expect(guard([{ tabId: "opaque-1" }])).toBe(false);
+    expect(guard([{ tabId: 1, url: "https://example.com" }])).toBe(false);
+    expect(guard([{ tabId: "opaque-1", url: 7 }])).toBe(false);
+  });
+
+  it("accepts one finite, non-negative renderer-measured host rectangle", () => {
+    const { guard } = BROWSER_IPC["volli:browser-set-bounds"];
+    expect(
+      guard([
+        {
+          tabId: "opaque-1",
+          bounds: { x: 12.5, y: 48.25, width: 800.5, height: 600.5 },
+        },
+      ]),
+    ).toBe(true);
+    expect(guard([{ tabId: "opaque-1", bounds: { x: 0, y: 0, width: -1, height: 600 } }])).toBe(
+      false,
+    );
+    expect(
+      guard([{ tabId: "opaque-1", bounds: { x: 0, y: 0, width: Infinity, height: 600 } }]),
+    ).toBe(false);
+    expect(guard([{ tabId: "opaque-1", bounds: null }])).toBe(false);
+  });
+});
 
 describe("UPDATE_IPC descriptor table", () => {
   /**

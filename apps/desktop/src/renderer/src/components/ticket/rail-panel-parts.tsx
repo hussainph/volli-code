@@ -83,9 +83,19 @@ export const RAIL_CARD_ROW =
  * {@link RAIL_PANEL_MARGIN}; one nested inside an already-inset block wants
  * nothing, and baking a margin in here would make the second case override the
  * first rather than compose with it.
+ *
+ * `shrink-0` because `overflow-hidden` is load-bearing twice over: it clips
+ * rows to the rounded corners, and — per the flexbox spec — it also collapses
+ * the item's automatic minimum size (`min-height: auto`) to ZERO. Flex items
+ * shrink BEFORE a scroll container's scrollbar engages, so in the Now page's
+ * `overflow-y-auto` column a long-enough sessions list handed all of its
+ * compression to the one child with a zero floor: the repository card crushed
+ * to a border-and-corners sliver in prod 0.1.2 while every text block around
+ * it bottomed out at its content height. The card refuses to shrink; overflow
+ * is the column scrollbar's job.
  */
 export const RAIL_CARD_FRAME =
-  "overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 dark:bg-accent/50";
+  "shrink-0 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 dark:bg-accent/50";
 
 /** The seam above every card row but the first. */
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
