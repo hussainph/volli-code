@@ -1328,6 +1328,34 @@ describe("SessionRuntime native adapter contract", () => {
     expect(sessionPersonNeed(projection)).toBe("error");
   });
 
+  it("records a message failure for a Session with no live executor under the host adapter identity", async () => {
+    // The crash-recovery arm: an Automation delivery sweep can report a refusal
+    // after the binding that refused it is already gone. The Attention then
+    // carries the host executor's own identity and no venue — the intent
+    // outlives the attachment, so the report must not require one.
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "detached-failure-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId: created.sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message could not be delivered: transport closed",
+    });
+
+    const { projection } = await runtime.projection({ sessionId: created.sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message could not be delivered: transport closed",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+  });
+
   it("retires an unrecoverable attach Attention once an attach succeeds", async () => {
     // The sibling of the configuration case above, and it used to be the one
     // that never ended: the clear path named `configuration_invalid` alone, so
