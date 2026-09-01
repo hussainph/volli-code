@@ -589,19 +589,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         />
       </div>
       <Toaster />
-      {/* The armed-column delay window (VC-128). Window-level beside the Toaster
-          rather than inside the board: a Deliberate move can be made from a
-          ticket's own status pill or by an explicit `volli ticket move`, and
-          its countdown must not depend on the board being the surface on
-          screen. It does depend on a WINDOW being open, and that bound is real
-          rather than theoretical — on macOS the app outlives its last window
-          and the CLI still reaches main through its socket, so a `volli ticket
-          move` made with nothing on screen is a pure status change that starts
-          no Run. That is the safe direction, and `main.tsx` states it beside
-          the subscription that hears those moves. What a mounted window still
-          cannot promise is that somebody is LOOKING: the countdown and its
-          Cancel are here for whoever is, and a Run that starts says so in a
-          toast either way (VC-133 owns notifying a person who is not). */}
+      {/* The armed-column delay window (VC-128, main-owned in VC-226).
+          Window-level beside the Toaster rather than inside the board: any
+          mounted renderer projects main's same durable countdown, whatever
+          page it shows, and Cancel from any window deletes that exact arrival.
+          The timer itself is in main, so an explicit `volli ticket move` still
+          fires with no renderer open. */}
       <ArmedRunWindows />
       <NewTicketDialog />
       <HarnessTrustDialog />

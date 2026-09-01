@@ -1,5 +1,5 @@
-import { ARMED_RUN_DELAY_MS, NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, ColumnArming } from "@volli/shared";
+import { ARMED_RUN_DELAY_MS, NO_AUTOMATION_TRIGGER } from "./automation";
+import type { Automation, ColumnArming } from "./automation";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -9,7 +9,7 @@ import {
   armedRunVerdict,
   openArmedRun,
   type PendingArmedRun,
-} from "./armed-move-model";
+} from "./automation";
 
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
@@ -38,6 +38,7 @@ const ENABLED: readonly string[] = ["a1"];
 function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
   return {
     ...openArmedRun({
+      id: "arrival-1",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
       projectId: "p1",
@@ -204,6 +205,7 @@ describe("armedMoveDecision — what the ⌥ picker named (VC-132)", () => {
 describe("openArmedRun", () => {
   it("puts the deadline exactly 3500 ms out and snapshots what it will start", () => {
     const window = openArmedRun({
+      id: "arrival-1",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
       projectId: "p1",
@@ -223,6 +225,7 @@ describe("openArmedRun", () => {
     // The whole ruling in one assertion: a named target does not bypass the
     // window, it opens it.
     const window = openArmedRun({
+      id: "arrival-1",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
       projectId: "p1",

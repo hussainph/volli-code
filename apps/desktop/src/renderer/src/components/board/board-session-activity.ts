@@ -9,39 +9,27 @@
  * anything, does not care which Session, and collapses a ticket's whole roster
  * into one word.
  *
- * ── THE THREE WORDS ───────────────────────────────────────────────────────
+ * ── THE TWO WORDS ─────────────────────────────────────────────────────────
  * `working` is an agent producing right now; `waiting` is one blocked on a
- * person; `live` is a Run's Session that is still attached between the two.
- * Nothing else lights a card: `parked`/`exited` are not running at all, and a
- * plain `idle` Session is one that merely EXISTS, which is true of most cards
- * in Doing and would make the signal mean nothing.
+ * person. Nothing else lights a card: `parked`/`exited` are not running at all,
+ * and an `idle` Session merely EXISTS, which is true of most cards in Doing and
+ * would make the signal mean nothing.
  *
  * WAITING OUTRANKS WORKING, which is main's own precedence for a single chat
  * (`chatActivity` in `session-control/chat-attachment.ts`) applied to a ticket:
  * an agent that has asked a question is still inside an open turn, and a card
  * that said "working" there would hide the one thing the user could act on. A
  * ticket with one Session blocked and another producing is a ticket that needs
- * a person, and that is what the card says. `live` ranks below both, so it can
- * only ever light a card nothing louder had already lit.
+ * a person, and that is what the card says.
  *
- * ── WHY `live` EXISTS, AND WHY ONLY FOR A RUN ─────────────────────────────
- * VC-112 asks the board card for "a live ring while the Run's Session is
- * live", and the emphasis is the point: **the ring means live, not finishing.**
- * A Run is unattended by construction — nobody is sitting in that chat — so the
- * card is the only place its existence is visible, and it must hold the ring
- * for as long as the Session is ATTACHED rather than dropping it the moment the
- * agent stops producing between turns. A person watching a card go dark would
- * read a Run that is still holding a worktree as one that had finished.
- *
- * It is scoped to a Run's Session for exactly the reason the paragraph above
- * refuses `idle`: every card in Doing has an idle Session on it, and a ring on
- * all of them is a ring on none. Provenance (VC-131) is what makes the narrow
- * version expressible — before it, this module could not tell a Run's Session
- * apart from the one a person left open, so it had to refuse both.
- *
- * A Run's Session that has been STOPPED is deliberately not live: the stop fact
- * is main's newer truth about that Session (VC-86), and a ring over work
- * somebody ended is the "finishing" reading this word exists to refuse.
+ * ── RUNS USE THE SAME WORDS ────────────────────────────────────────────────
+ * VC-112 introduced the board ring for unattended Runs, and VC-131 made their
+ * Sessions distinguishable by provenance. Neither creates a third activity:
+ * the ring says what the Session is doing, not whether an executor is attached.
+ * A Run producing or blocked therefore draws the same `working` or `waiting`
+ * ring as any other Session. Between turns it draws nothing. That deliberately
+ * trades continuous Run presence for a ring whose every appearance has a
+ * useful meaning.
  *
  * ── THE TWO SOURCES ───────────────────────────────────────────────────────
  * Terminal panes are read from the live sessions store, through the same
@@ -60,16 +48,10 @@
 import { WORKING_WINDOW_MS } from "@renderer/stores/sessions";
 import { sessionActivityState, sessionPanes } from "@renderer/stores/sessions";
 import type { SessionContainer } from "@renderer/stores/sessions";
-import { drawsSessionProvenanceMark, sessionProvenanceOf } from "@volli/shared";
-import type {
-  ChatSessionRecord,
-  SessionActivityState,
-  SessionHarnessState,
-  SessionProvenance,
-} from "@volli/shared";
+import type { ChatSessionRecord, SessionActivityState, SessionHarnessState } from "@volli/shared";
 
 /** What a card can say. A ticket with nothing running is simply absent from the map. */
-export type TicketSessionActivity = "working" | "waiting" | "live";
+export type TicketSessionActivity = "working" | "waiting";
 
 export interface BoardSessionActivity {
   /** ticketId → its loudest running state. Absent means nothing is running there. */
@@ -78,7 +60,7 @@ export interface BoardSessionActivity {
    * Epoch ms of the next instant this answer changes with no new input — a
    * terminal's output window closing. `null` when nothing here depends on the
    * clock, which is the common case: every chat word is pushed, and a board
-   * with no live terminal on it never needs waking.
+   * with no open terminal on it never needs waking.
    */
   nextBoundaryAt: number | null;
 }
@@ -93,37 +75,10 @@ export interface BuildBoardSessionActivityInput {
   harness: Readonly<Record<string, SessionHarnessState>>;
   /** This project's chat Sessions, as the pushed listing holds them. */
   chatSessions: readonly ChatSessionRecord[];
-  /**
-   * Who started each Session, keyed by Session id and sparse — the same map the
-   * sidebar reads (`stores/project-sessions.ts`). A miss is the resting case,
-   * so a board built without it lights no `live` ring at all, which is the
-   * board this module drew before the word existed.
-   */
-  provenance?: Readonly<Record<string, SessionProvenance>>;
   now: number;
 }
 
 const EMPTY: BoardSessionActivity = { byTicket: {}, nextBoundaryAt: null };
-const NO_PROVENANCE: Readonly<Record<string, SessionProvenance>> = {};
-
-/** `waiting` beats `working` beats `live` beats nothing — see the module doc. */
-const LOUDNESS: Record<TicketSessionActivity, number> = { waiting: 0, working: 1, live: 2 };
-
-function louder(
-  current: TicketSessionActivity | undefined,
-  next: TicketSessionActivity | undefined,
-): TicketSessionActivity | undefined {
-  if (next === undefined) return current;
-  if (current === undefined) return next;
-  return LOUDNESS[next] < LOUDNESS[current] ? next : current;
-}
-
-/** What one Session's own state says, or `undefined` when it says nothing. */
-function cardWord(state: SessionActivityState): TicketSessionActivity | undefined {
-  if (state === "waiting") return "waiting";
-  if (state === "working") return "working";
-  return undefined;
-}
 
 export function buildBoardSessionActivity(
   input: BuildBoardSessionActivityInput,
@@ -135,11 +90,11 @@ export function buildBoardSessionActivity(
     if (nextBoundaryAt === null || at < nextBoundaryAt) nextBoundaryAt = at;
   };
 
-  const mark = (ticketId: string, word: TicketSessionActivity | undefined): void => {
-    const next = louder(byTicket[ticketId], word);
-    if (next !== undefined) byTicket[ticketId] = next;
+  const mark = (ticketId: string, state: SessionActivityState): void => {
+    if (state === "waiting" || (state === "working" && byTicket[ticketId] === undefined)) {
+      byTicket[ticketId] = state;
+    }
   };
-  const provenance = input.provenance ?? NO_PROVENANCE;
 
   for (const ticketId of input.ticketIds) {
     const container = input.containers[ticketId];
@@ -149,14 +104,12 @@ export function buildBoardSessionActivity(
         const lastOutput = input.lastOutputAt[pane.sessionId] ?? null;
         mark(
           ticketId,
-          cardWord(
-            sessionActivityState(
-              lastOutput,
-              pane.exitCode !== null,
-              input.now,
-              input.parkState[pane.sessionId]?.parked ?? false,
-              input.harness[pane.sessionId]?.declared ?? null,
-            ),
+          sessionActivityState(
+            lastOutput,
+            pane.exitCode !== null,
+            input.now,
+            input.parkState[pane.sessionId]?.parked ?? false,
+            input.harness[pane.sessionId]?.declared ?? null,
           ),
         );
         // +1 because the window is inclusive (`<=`), so the first instant the
@@ -173,20 +126,7 @@ export function buildBoardSessionActivity(
   for (const record of input.chatSessions) {
     // A ticketless chat is a project Project Session; it has no card to light.
     if (record.ticketId === null) continue;
-    const word = cardWord(record.activity);
-    // A Run's Session that is attached but between turns. `record.live` is main's
-    // own answer about the ATTACHMENT rather than about the turn, which is what
-    // makes this "live" instead of "still producing"; `activity` is consulted
-    // only to keep a stopped Session out (see the module doc).
-    mark(
-      record.ticketId,
-      word ??
-        (record.live &&
-        record.activity !== "stopped" &&
-        drawsSessionProvenanceMark(sessionProvenanceOf(provenance, record.sessionId))
-          ? "live"
-          : undefined),
-    );
+    mark(record.ticketId, record.activity);
   }
 
   return Object.keys(byTicket).length === 0 && nextBoundaryAt === null

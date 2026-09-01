@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { nextScheduleOccurrence, NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { ModelAccessSnapshot, ModelSelection } from "@volli/shared";
 import type {
   AutomationArmingsResult,
@@ -15,6 +15,9 @@ import type {
   AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
   AutomationSkipsResult,
+  PendingArmedRunCancelResult,
+  PendingArmedRunRetryResult,
+  PendingArmedRunsResult,
   Result,
 } from "../../ipc/contract";
 
@@ -33,7 +36,14 @@ vi.mock("electron", () => ({
 import { registerAutomationIpcHandlers } from "./ipc";
 import { createAutomationEngine } from "./engine";
 import { enabledAutomationIds } from "./enablement";
+import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
 import type { AutomationRunner } from "./run";
+import { createAutomationScheduler } from "./scheduler";
+import {
+  advanceScheduleCursor,
+  readScheduleCursors,
+  rebaseScheduleCursor,
+} from "./schedule-cursor";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
@@ -97,6 +107,8 @@ function setup(
   overrides: {
     runner?: AutomationRunner | null;
     inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
+    now?: () => number;
+    pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "failures" | "cancel" | "retry">;
   } = {},
 ) {
   const project = testProject();
@@ -104,9 +116,11 @@ function setup(
   const ticket = testTicket(project.id);
   insertTicket(ctx.db, ticket);
   const mutations: Array<{ projectId?: string }> = [];
+  const scheduleRebases: string[] = [];
+  const now = overrides.now ?? (() => 5_000);
   const engine = createAutomationEngine({
     ledger: new SqliteAutomationLedger(ctx.db),
-    now: () => 5_000,
+    now,
     nextId: randomUUID,
   });
   const service = createAutomationService({
@@ -121,12 +135,22 @@ function setup(
     skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
+    rebaseScheduleCursor: (automationId, through) => {
+      scheduleRebases.push(automationId);
+      rebaseScheduleCursor(ctx.db, { automationId, through }, now());
+    },
   });
   registerAutomationIpcHandlers(
     { ok: true, db: ctx.db },
-    { service, runner: overrides.runner ?? null },
+    {
+      service,
+      runner: overrides.runner ?? null,
+      ...(overrides.pendingArmedRuns === undefined
+        ? {}
+        : { pendingArmedRuns: overrides.pendingArmedRuns }),
+    },
   );
-  return { project, ticket, mutations, engine, service };
+  return { project, ticket, mutations, scheduleRebases, engine, service };
 }
 
 describe("automation IPC", () => {
@@ -149,6 +173,9 @@ describe("automation IPC", () => {
       "volli:automation-runs-for-project",
       "volli:automation-enablement",
       "volli:automation-set-enabled",
+      "volli:automation-pending-armed-runs",
+      "volli:automation-cancel-pending-armed-run",
+      "volli:automation-retry-pending-armed-run",
       "volli:automation-skips-for-project",
       "volli:automation-run-for-project",
     ]) {
@@ -157,6 +184,45 @@ describe("automation IPC", () => {
         error: "The local database failed to open.",
       });
     }
+  });
+
+  it("lists, Cancels and retries main's exact shared armed arrival", async () => {
+    const pending = {
+      id: "arrival-1",
+      ticketId: "ticket-1",
+      projectId: "project-1",
+      ticketDisplayId: "VC-12",
+      automationId: "automation-1",
+      automationName: "Review sweep",
+      status: "doing" as const,
+      origin: "armed" as const,
+      openedAt: 1_000,
+      startAt: 4_500,
+    };
+    const failure = { pending, error: "IPC reply lost" };
+    const cancel = vi.fn(() => true);
+    const retry = vi.fn(() => true);
+    setup({
+      pendingArmedRuns: { list: () => [pending], failures: () => [failure], cancel, retry },
+    });
+
+    expect(await call<PendingArmedRunsResult>("volli:automation-pending-armed-runs")).toEqual({
+      ok: true,
+      pending: [pending],
+      failures: [failure],
+    });
+    expect(
+      await call<PendingArmedRunCancelResult>("volli:automation-cancel-pending-armed-run", {
+        id: pending.id,
+      }),
+    ).toEqual({ ok: true, cancelled: true });
+    expect(cancel).toHaveBeenCalledExactlyOnceWith("arrival-1");
+    expect(
+      await call<PendingArmedRunRetryResult>("volli:automation-retry-pending-armed-run", {
+        id: pending.id,
+      }),
+    ).toEqual({ ok: true, retrying: true });
+    expect(retry).toHaveBeenCalledExactlyOnceWith("arrival-1");
   });
 
   it("is a transport-only adapter over command receipts, events, and projections", async () => {
@@ -910,14 +976,14 @@ describe("automation IPC", () => {
   });
 
   it("switches an Automation on for this machine through a durable command", async () => {
-    const { project, mutations } = setup();
+    const { project, mutations, scheduleRebases } = setup();
     const one = createAutomation(
       ctx.db,
       {
         projectId: project.id,
         name: "One",
         instructions: "x",
-        trigger: NO_AUTOMATION_TRIGGER,
+        trigger: NIGHTLY,
         runtime: null,
       },
       1,
@@ -928,11 +994,13 @@ describe("automation IPC", () => {
         projectId: null,
         name: "Two",
         instructions: "x",
-        trigger: NO_AUTOMATION_TRIGGER,
+        trigger: NIGHTLY,
         runtime: null,
       },
       1,
     );
+    advanceScheduleCursor(ctx.db, { automationId: one.id, through: 1_000 }, 2);
+    advanceScheduleCursor(ctx.db, { automationId: two.id, through: 2_000 }, 2);
 
     // VC-112: a machine fires nothing until someone turns something on there,
     // so a record nobody has switched on here is absent from the set.
@@ -953,6 +1021,7 @@ describe("automation IPC", () => {
       // the projection it writes is machine-local.
       receipt: { status: "completed" },
     });
+    expect(readScheduleCursors(ctx.db)).toEqual({ [one.id]: 5_000, [two.id]: 2_000 });
     await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
       commandId: "22222222-2222-4222-8222-222222222222",
       automationId: two.id,
@@ -976,17 +1045,21 @@ describe("automation IPC", () => {
 
     // No `volli:data-changed` fan-out: no projection of the RECORD moved.
     expect(mutations).toEqual([]);
+    // Switching on starts a durable baseline for the new lifecycle. Switching
+    // off does not create another lifecycle or disturb that last position.
+    expect(scheduleRebases).toEqual([one.id, two.id]);
+    expect(readScheduleCursors(ctx.db)).toEqual({ [one.id]: 5_000, [two.id]: 5_000 });
   });
 
   it("replays one enablement command rather than flipping the switch twice", async () => {
-    const { project } = setup();
+    const { project, scheduleRebases } = setup();
     const automation = createAutomation(
       ctx.db,
       {
         projectId: project.id,
         name: "One",
         instructions: "x",
-        trigger: NO_AUTOMATION_TRIGGER,
+        trigger: NIGHTLY,
         runtime: null,
       },
       1,
@@ -1001,6 +1074,7 @@ describe("automation IPC", () => {
       "volli:automation-set-enabled",
       request,
     );
+    advanceScheduleCursor(ctx.db, { automationId: automation.id, through: 10_000 }, 6_000);
     // Somebody else switched it off in between; the retry must answer with its
     // own recorded outcome rather than re-deciding the set.
     await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
@@ -1015,6 +1089,10 @@ describe("automation IPC", () => {
 
     expect(replayed).toEqual(accepted);
     expect(enabledAutomationIds(ctx.db)).toEqual([]);
+    // Replaying the old receipt is not a fresh enable and cannot reset what the
+    // schedule watched after that command originally completed.
+    expect(scheduleRebases).toEqual([automation.id]);
+    expect(readScheduleCursors(ctx.db)).toEqual({ [automation.id]: 10_000 });
   });
 
   it("refuses a switch for a record that is gone, and guards the wire shape", async () => {
@@ -1073,6 +1151,131 @@ describe("automation IPC", () => {
     // The stored zone is part of the record, not a rendering choice: it comes
     // back exactly as written, whatever this machine's own zone is.
     expect(listed.automations[0]?.trigger).toEqual(NIGHTLY);
+  });
+
+  it("rebases an edited schedule without treating metadata edits as a new lifecycle", async () => {
+    const { project, scheduleRebases } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    // Creation establishes its initial baseline before waking the scheduler.
+    expect(scheduleRebases).toEqual([created.automation.id]);
+    expect(readScheduleCursors(ctx.db)).toEqual({ [created.automation.id]: 5_000 });
+
+    advanceScheduleCursor(ctx.db, { automationId: created.automation.id, through: 10_000 }, 6_000);
+    const retimed = {
+      kind: "schedule" as const,
+      schedule: { ...NIGHTLY.schedule, minute: 45 },
+    };
+    await call<AutomationResult>("volli:automation-update", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: retimed,
+      runtime: null,
+    });
+    // A rebase replaces the old lifecycle even when its cursor was later.
+    expect(readScheduleCursors(ctx.db)).toEqual({ [created.automation.id]: 5_000 });
+
+    advanceScheduleCursor(ctx.db, { automationId: created.automation.id, through: 20_000 }, 7_000);
+    await call<AutomationResult>("volli:automation-update", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      name: "Nightly sweep",
+      instructions: "/sweep more",
+      trigger: retimed,
+      runtime: null,
+    });
+
+    expect(scheduleRebases).toEqual([created.automation.id, created.automation.id]);
+    // The unchanged schedule still owes its watched occurrences after a metadata edit.
+    expect(readScheduleCursors(ctx.db)).toEqual({ [created.automation.id]: 20_000 });
+  });
+
+  it("records a missed occurrence after enable crashes before the asynchronous sweep", async () => {
+    let now = Date.parse("2026-06-10T12:00:00Z");
+    const { project } = setup({ now: () => now });
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+
+    // The first occurrence passes while the record is switched off. Enabling
+    // after it starts a fresh lifecycle, so that disabled gap remains silent.
+    const disabledDueAt = nextScheduleOccurrence({
+      schedule: NIGHTLY.schedule,
+      staggerKey: created.automation.id,
+      after: now,
+    });
+    now = disabledDueAt + 60_000;
+    const enabledAt = now;
+    await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      enabled: true,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({ [created.automation.id]: enabledAt });
+
+    // Simulate process exit before onAutomationsChanged's fire-and-forget sweep:
+    // no scheduler runs until after the next due time has passed. A new engine
+    // and scheduler then stand in for the relaunched main process over the same
+    // durable database.
+    const missedDueAt = nextScheduleOccurrence({
+      schedule: NIGHTLY.schedule,
+      staggerKey: created.automation.id,
+      after: enabledAt,
+    });
+    now = missedDueAt + 60_000;
+    const relaunchedEngine = createAutomationEngine({
+      ledger: new SqliteAutomationLedger(ctx.db),
+      now: () => now,
+      nextId: randomUUID,
+    });
+    const runs: string[] = [];
+    const scheduler = createAutomationScheduler({
+      now: () => now,
+      listAutomations: () => Promise.resolve(listAutomationsForProject(ctx.db, project.id)),
+      enabledAutomationIds: () => relaunchedEngine.enabledAutomationIds(),
+      readCursors: () => Promise.resolve(readScheduleCursors(ctx.db)),
+      advanceCursor: (input) => {
+        advanceScheduleCursor(ctx.db, input, now);
+        return Promise.resolve();
+      },
+      recordSkip: async (input) => {
+        const outcome = await relaunchedEngine.recordSkip(input);
+        if (!outcome.ok) throw new Error(outcome.error);
+      },
+      startRun: (input) => {
+        runs.push(input.commandId);
+        return Promise.resolve({ ok: true });
+      },
+      setTimer: () => 0 as unknown as NodeJS.Timeout,
+      clearTimer: () => undefined,
+    });
+
+    await scheduler.start();
+
+    expect(runs).toEqual([]);
+    expect(listSkippedOccurrencesForProject(ctx.db, project.id)).toMatchObject([
+      {
+        automationId: created.automation.id,
+        dueAt: missedDueAt,
+        missedCount: 1,
+        reason: { kind: "app-closed" },
+      },
+    ]);
   });
 
   it("refuses a schedule this build cannot read, rather than repairing it", async () => {
@@ -1325,10 +1528,9 @@ describe("automation IPC", () => {
       }),
     ).toMatchObject({
       ok: true,
-      // ATTENDED: the only caller of this CHANNEL is "Run now" on a Skipped
-      // occurrence — a person recovering an evening the app was closed for.
-      // The schedule timer runs the same Automation through the same runner
-      // method, but it is inside main and passes `unattended`.
+      // ATTENDED: every IPC caller is a person — Skipped-occurrence Run now,
+      // scheduled-page Play, or the palette. The schedule timer uses the same
+      // runner method inside main, bypasses IPC, and passes `unattended`.
       run: { ticketId: null, sessionId: "session-project-1", attendance: "attended" },
     });
 

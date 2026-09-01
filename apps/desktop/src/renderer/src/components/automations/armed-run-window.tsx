@@ -81,7 +81,7 @@ export function ArmedRunWindows() {
       aria-live="polite"
     >
       {windows.map((window) => (
-        <ArmedRunCard key={window.ticketId} window={window} now={now} />
+        <ArmedRunCard key={window.id} window={window} now={now} />
       ))}
     </div>
   );
@@ -121,7 +121,7 @@ function ArmedRunCard({ window, now }: { window: PendingArmedRun; now: number })
           // would be one more place for the scale to drift out of step.
           // The one control in the window. Named for what it does to the RUN,
           // not to the move: the move is already kept.
-          onClick={() => cancelArmedRun(window.ticketId)}
+          onClick={() => void cancelArmedRun(window.id)}
         >
           Cancel
         </Button>

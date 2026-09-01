@@ -425,18 +425,6 @@ export function listProjectRunsForAutomation(
   return rows.map(mapRun);
 }
 
-/** The newest Run on a Ticket, or undefined — retained for older read-only callers. */
-export function latestRunForTicket(
-  db: Database.Database,
-  ticketId: string,
-): AutomationRun | undefined {
-  const row = prepared<[string], AutomationRunRow>(
-    db,
-    "SELECT * FROM automation_runs WHERE ticket_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-  ).get(ticketId);
-  return row ? mapRun(row) : undefined;
-}
-
 /* ------------------------------------- column arming (migration 031) ------- */
 
 /**

@@ -2460,3 +2460,140 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
     });
   });
 });
+
+describe("migration 036 — Automation Session mint provenance (VC-225)", () => {
+  it("backfills accepted Run plans and leaves rejected attempts unmarked", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 35)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 35");
+
+    const acceptedPlan = { sessionOperationId: "accepted-session" };
+    const rejectedPlan = { sessionOperationId: "rejected-session" };
+    const insertCommand = db.prepare(
+      "INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)",
+    );
+    insertCommand.run(
+      "accepted-run",
+      JSON.stringify({ kind: "automation.run", plan: acceptedPlan }),
+      1_000,
+    );
+    insertCommand.run(
+      "rejected-run",
+      JSON.stringify({ kind: "automation.run", plan: rejectedPlan }),
+      2_000,
+    );
+    const insertReceipt = db.prepare(
+      `INSERT INTO automation_command_receipts
+         (id, command_id, status, result, recorded_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    insertReceipt.run(
+      "accepted-receipt",
+      "accepted-run",
+      "accepted",
+      JSON.stringify({ kind: "automation.run.accepted", plan: acceptedPlan }),
+      1_000,
+    );
+    insertReceipt.run(
+      "rejected-receipt",
+      "rejected-run",
+      "rejected",
+      JSON.stringify({ kind: "automation.run.rejected", code: "RUN_IN_FLIGHT", error: "busy" }),
+      2_000,
+    );
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "automation_session_mint_intents")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT session_create_command_id, automation_command_id, recorded_at
+             FROM automation_session_mint_intents`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_create_command_id: "accepted-session:create",
+        automation_command_id: "accepted-run",
+        recorded_at: 1_000,
+      },
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_session_mint_intents SET recorded_at = 3").run(),
+    ).toThrow(/mint intents are immutable/);
+    expect(() => db.prepare("DELETE FROM automation_session_mint_intents").run()).toThrow(
+      /mint intents are immutable/,
+    );
+    db.close();
+  });
+});
+
+describe("migrate — 037, pending armed-column arrivals (VC-226)", () => {
+  it("creates one durable countdown row per Ticket with an exact arrival id", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_runs
+         (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+          status, origin, opened_at, start_at)
+       VALUES ('t1', 'arrival-1', 'p1', 'VC-1', 'a1', 'Review sweep',
+               'doing', 'armed', 1000, 4500)`,
+    ).run();
+
+    expect(
+      db
+        .prepare("SELECT ticket_id, id, automation_id, start_at FROM automation_pending_armed_runs")
+        .get(),
+    ).toEqual({ ticket_id: "t1", id: "arrival-1", automation_id: "a1", start_at: 4500 });
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO automation_pending_armed_runs
+           (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+            status, origin, opened_at, start_at)
+         VALUES ('t1', 'arrival-2', 'p1', 'VC-1', 'a1', 'Review sweep',
+                 'doing', 'armed', 2000, 5500)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+describe("migrate — 038, retained armed-Run attempts (VC-228)", () => {
+  it("stores the exact expiry command independently of later Ticket deletion", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_run_attempts
+         (id, command_id, ticket_id, project_id, ticket_display_id, automation_id,
+          automation_name, status, origin, opened_at, start_at, error)
+       VALUES ('arrival-1', 'command-1', 't1', 'p1', 'VC-1', 'a1',
+               'Review sweep', 'doing', 'armed', 1000, 4500, 'Reply interrupted')`,
+    ).run();
+    db.prepare("DELETE FROM tickets WHERE id = 't1'").run();
+
+    expect(
+      db
+        .prepare("SELECT id, command_id, ticket_id FROM automation_pending_armed_run_attempts")
+        .get(),
+    ).toEqual({ id: "arrival-1", command_id: "command-1", ticket_id: "t1" });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

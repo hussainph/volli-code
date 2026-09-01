@@ -137,7 +137,10 @@ describe("buildBoardSessionActivity", () => {
     expect(build({ chatSessions: [chat({ activity: "waiting" })] }).byTicket).toEqual({
       t1: "waiting",
     });
-    expect(build({ chatSessions: [chat({ activity: "idle" })] }).byTicket).toEqual({});
+    // Executor attachment is not a third card state. Between turns, an
+    // unattended Run and a chat somebody closed are both quiet on the board.
+    expect(build({ chatSessions: [chat({ activity: "idle", live: true })] }).byTicket).toEqual({});
+    expect(build({ chatSessions: [chat({ activity: "idle", live: false })] }).byTicket).toEqual({});
   });
 
   it("lets waiting outrank working whichever order the Sessions arrive in", () => {
@@ -159,87 +162,6 @@ describe("buildBoardSessionActivity", () => {
         ],
       }).byTicket,
     ).toEqual({ t1: "waiting" });
-  });
-
-  // VC-131's board criterion: "the ring means live, not finishing". A Run is
-  // unattended, so the card is the only place its existence is visible, and it
-  // must hold the ring while the Session is ATTACHED rather than dropping it
-  // whenever the agent pauses between turns.
-  describe("a Run's Session, which lights a card its own activity would not", () => {
-    const RUN = { c1: { kind: "automation" as const, automationName: "Nightly sweep" } };
-
-    it("holds the ring while an idle Run's Session is still attached", () => {
-      expect(
-        build({ chatSessions: [chat({ activity: "idle" })], provenance: RUN }).byTicket,
-      ).toEqual({ t1: "live" });
-    });
-
-    // The pre-Run window: a Run whose `automation_runs` row has not landed is
-    // still a Run, and the card is the only place its existence is visible. A
-    // ring that went out because the bookkeeping behind it was incomplete would
-    // read as a Run that had finished.
-    it("holds the ring for a Run whose Automation cannot be named", () => {
-      expect(
-        build({
-          chatSessions: [chat({ activity: "idle" })],
-          provenance: { c1: { kind: "automation", automationName: null } },
-        }).byTicket,
-      ).toEqual({ t1: "live" });
-    });
-
-    it("drops it when the attachment closes, which is what `live` means", () => {
-      expect(
-        build({ chatSessions: [chat({ activity: "idle", live: false })], provenance: RUN })
-          .byTicket,
-      ).toEqual({});
-    });
-
-    it("drops it for work somebody ended — a stopped Run is not live", () => {
-      expect(
-        build({ chatSessions: [chat({ activity: "stopped" })], provenance: RUN }).byTicket,
-      ).toEqual({});
-    });
-
-    // The whole reason the word is scoped to a Run. Every card in Doing has an
-    // idle Session on it, and a ring on all of them is a ring on none.
-    it("never lights an idle Session a person opened, marked or not", () => {
-      expect(build({ chatSessions: [chat({ activity: "idle" })] }).byTicket).toEqual({});
-      expect(
-        build({
-          chatSessions: [chat({ activity: "idle" })],
-          provenance: {
-            c1: { kind: "session", parentSessionId: "parent", parentTitle: "Orchestrator" },
-          },
-        }).byTicket,
-      ).toEqual({});
-    });
-
-    it("ranks below both louder words, in either arrival order", () => {
-      expect(
-        build({
-          chatSessions: [
-            chat({ sessionId: "c1", activity: "idle" }),
-            chat({ sessionId: "c2", activity: "working" }),
-          ],
-          provenance: RUN,
-        }).byTicket,
-      ).toEqual({ t1: "working" });
-      expect(
-        build({
-          chatSessions: [
-            chat({ sessionId: "c2", activity: "waiting" }),
-            chat({ sessionId: "c1", activity: "idle" }),
-          ],
-          provenance: RUN,
-        }).byTicket,
-      ).toEqual({ t1: "waiting" });
-    });
-
-    it("still yields to the loudest word when its own Session is the loud one", () => {
-      expect(
-        build({ chatSessions: [chat({ activity: "working" })], provenance: RUN }).byTicket,
-      ).toEqual({ t1: "working" });
-    });
   });
 
   it("ignores a ticketless chat — a Project Session has no card to light", () => {

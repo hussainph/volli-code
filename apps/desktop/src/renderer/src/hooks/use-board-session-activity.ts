@@ -100,9 +100,6 @@ export function useBoardSessionActivity(
   const projectRows =
     useProjectSessionsStore((state) => state.byProject[projectId]) ?? EMPTY_PROJECT_SESSION_ROWS;
   const chatSessions = projectRows.chat;
-  // Sparse, and replaced only when a marked Session arrives, so a board with no
-  // Automations on it hands the same empty map to every rebuild (VC-131).
-  const provenance = projectRows.provenance;
 
   // The baseline the pushes are folded onto. `ensure` is at-most-once per
   // project across every surface, so the board asking for it costs nothing when
@@ -129,10 +126,9 @@ export function useBoardSessionActivity(
             parkState,
             harness,
             chatSessions,
-            provenance,
             now,
           }),
-    [ticketIds, containers, lastOutputAt, parkState, harness, chatSessions, provenance, now],
+    [ticketIds, containers, lastOutputAt, parkState, harness, chatSessions, now],
   );
 
   const nextBoundaryAt = activity.nextBoundaryAt;

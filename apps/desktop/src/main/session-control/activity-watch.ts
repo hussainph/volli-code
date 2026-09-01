@@ -39,7 +39,7 @@
  * observer bolted onto the write path, and a fold that throws must not be able
  * to fail the command that triggered it.
  */
-import type { SessionEngine } from "@volli/session-engine";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import { PERSON_STARTED } from "@volli/shared";
 import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
 
@@ -68,6 +68,13 @@ export interface SessionActivityWatchPorts {
    * every row reads as person-started, which is the quiet answer.
    */
   provenanceOf?: (session: { sessionId: string; ticketId: string | null }) => SessionProvenance;
+  /**
+   * The executor bindings this host process holds right now. Durable structured
+   * attachments survive relaunch so they can be lazily rehydrated, but they do
+   * not make a listing row live until one of these bindings exists again.
+   * Read once per flush so every row in a publication burst sees one snapshot.
+   */
+  listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
   /**
    * Every folded Session's projection, handed over BEFORE the row-difference
    * gate below (VC-133).
@@ -179,6 +186,9 @@ export function watchSessionActivity(
   async function flush(): Promise<void> {
     const ids = [...dirty];
     dirty.clear();
+    const liveAttachmentIds = new Set(
+      (ports.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId),
+    );
     for (const sessionId of ids) {
       try {
         const projection = await engine.getSession({ sessionId });
@@ -196,6 +206,7 @@ export function watchSessionActivity(
             sessionId: projection.session.id,
             ticketId: projection.session.ticketId,
           }),
+          liveAttachmentIds,
         );
         const signature = JSON.stringify(row);
         if (published.get(sessionId) === signature) continue;

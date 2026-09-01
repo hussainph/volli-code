@@ -293,6 +293,19 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     insertSkippedOccurrence(this.db, skip);
   }
 
+  insertRunSessionMintIntent(input: {
+    automationCommandId: string;
+    sessionCreateCommandId: string;
+    recordedAt: number;
+  }): void {
+    prepared(
+      this.db,
+      `INSERT INTO automation_session_mint_intents
+        (session_create_command_id, automation_command_id, recorded_at)
+       VALUES (?, ?, ?)`,
+    ).run(input.sessionCreateCommandId, input.automationCommandId, input.recordedAt);
+  }
+
   getRun(runId: string): AutomationRun | null {
     return getAutomationRun(this.db, runId) ?? null;
   }

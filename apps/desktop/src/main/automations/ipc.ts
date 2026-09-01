@@ -21,6 +21,9 @@ import type {
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  PendingArmedRunCancelResult,
+  PendingArmedRunRetryResult,
+  PendingArmedRunsResult,
   AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
   AutomationSkipsResult,
@@ -29,6 +32,7 @@ import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
 import type { IpcHandlerTable } from "../ipc-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "../ipc-registry";
+import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
 import type { AutomationRunner } from "./run";
 import type { AutomationService } from "./service";
 
@@ -37,6 +41,8 @@ export interface AutomationIpcDeps {
   service: AutomationService | null;
   /** The Run host, absent when the Session runtime never came up this launch. */
   runner: AutomationRunner | null;
+  /** Main's canonical pending-arrival projection plus its Cancel and retained Retry doors. */
+  pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "failures" | "cancel" | "retry">;
 }
 
 export function registerAutomationIpcHandlers(handle: DbHandle, deps: AutomationIpcDeps): void {
@@ -77,8 +83,9 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       //
       // Every surface behind this channel is one a person had to act on to
       // reach: the Ticket rail's split button, the board card's context menu,
-      // the armed column's 3500ms drop window, the command palette. VC-112:
-      // "a column move is attended because a person is right there."
+      // or the command palette. Main's armed-column coordinator now calls the
+      // runner directly and stamps its own attendance. VC-112: "a column move
+      // is attended because a person is right there."
       //
       // The renderer does not get to say so — `AutomationRunInput` carries no
       // attendance field and the guard would reject one. Being this handler is
@@ -114,6 +121,25 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
     "volli:automation-set-enabled": async (input): Promise<AutomationSetEnabledResult> =>
       service.setEnabled(input),
 
+    "volli:automation-pending-armed-runs": (): PendingArmedRunsResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : {
+            ok: true,
+            pending: deps.pendingArmedRuns.list(),
+            failures: deps.pendingArmedRuns.failures(),
+          },
+
+    "volli:automation-cancel-pending-armed-run": (input): PendingArmedRunCancelResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : { ok: true, cancelled: deps.pendingArmedRuns.cancel(input.id) },
+
+    "volli:automation-retry-pending-armed-run": (input): PendingArmedRunRetryResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : { ok: true, retrying: deps.pendingArmedRuns.retry(input.id) },
+
     "volli:automation-skips-for-project": (input): AutomationSkipsResult =>
       service.skipsForProject(input.projectId),
 
@@ -130,11 +156,10 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
           error: "The Session runtime is not available this launch.",
         };
       }
-      // ATTENDED for the same reason as the Ticket door above: the only caller
-      // of this CHANNEL is "Run now" on a Skipped occurrence, which is a person
-      // recovering an evening the app was closed for. The schedule timer runs
-      // the same Automation through the same runner method, but it does not
-      // come through IPC — it is inside main, and it passes `unattended`.
+      // ATTENDED for the same reason as the Ticket door above: every IPC caller
+      // is a person — Skipped-occurrence Run now, scheduled-page Play, or the
+      // palette. The schedule timer uses the same runner method inside main,
+      // bypasses IPC, and passes `unattended`.
       return deps.runner.runForProject({ ...input, attendance: "attended" });
     },
   };

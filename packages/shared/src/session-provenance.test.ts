@@ -51,9 +51,9 @@ describe("sessionProvenanceOf", () => {
 describe("drawsSessionProvenanceMark", () => {
   it("marks only a Run-started Session", () => {
     expect(drawsSessionProvenanceMark(AUTOMATION)).toBe(true);
-    // A Run whose Automation cannot be named is still a Run: the bolt and the
-    // board's live ring both hang off this answer, and losing them in the
-    // pre-Run window is what makes a Run read as person-started.
+    // A Run whose Automation cannot be named is still a Run: its provenance
+    // bolt hangs off this answer, and losing it in the pre-Run window is what
+    // makes a Run read as person-started.
     expect(drawsSessionProvenanceMark(UNNAMED)).toBe(true);
   });
 

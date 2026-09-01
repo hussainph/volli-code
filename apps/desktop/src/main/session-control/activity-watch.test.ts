@@ -146,9 +146,10 @@ describe("watchSessionActivity", () => {
   it("republishes only when the row actually changed", async () => {
     const publish = vi.fn();
     let live = projection();
+    let liveBindings: { attachmentId: string }[] = [];
     const watch = watchSessionActivity(
       stubEngine(() => live),
-      { publish },
+      { publish, listOpenNativeBindings: () => liveBindings },
     );
     const write = async () => {
       await watch.engine.observe({} as never);
@@ -165,10 +166,25 @@ describe("watchSessionActivity", () => {
     await write();
     expect(publish).toHaveBeenCalledTimes(1); // no OPEN attachment yet — still idle
 
-    live = projection({ turnActive: true, attachments: [openAttachment()] });
+    const attachment = openAttachment();
+    live = projection({ turnActive: true, attachments: [attachment], liveExecutor: attachment });
     await write();
+    // The adapter identity is newly visible, so the row republishes, but a
+    // relaunch with no executor binding stays honestly non-live and idle.
     expect(publish).toHaveBeenCalledTimes(2);
-    expect(publish.mock.calls[1]![0].row.record.activity).toBe("working");
+    expect(publish.mock.calls[1]![0].row.record).toMatchObject({
+      adapterId: "pi",
+      live: false,
+      activity: "idle",
+    });
+
+    liveBindings = [{ attachmentId: attachment.id }];
+    await write();
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(publish.mock.calls[2]![0].row.record).toMatchObject({
+      live: true,
+      activity: "working",
+    });
 
     watch.stop();
   });

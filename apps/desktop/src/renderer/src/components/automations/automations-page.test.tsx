@@ -16,22 +16,18 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import {
-  openRunSession,
-  runAutomationFromListing,
-  runAutomationForProject,
-} from "./run-automation";
+import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 
-// The Run glue is the palette's too, and it is where a Run's no-redirect
-// landing is decided; what this file owns is whether the PAGE calls it, and
-// with which Automation and which Ticket.
+// The Run glue is the palette's too, and it owns VC-234's universal toast
+// landing; this file owns whether the PAGE calls it, and with which Automation
+// and which Ticket.
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
-  runAutomationFromListing: vi.fn(),
+  runAutomationOnTicket: vi.fn(),
   runAutomationForProject: vi.fn(),
 }));
 
@@ -167,7 +163,7 @@ async function mount(seed: {
     // (`ui/sidebar.tsx`): the lane header's arming bolt is the board's own
     // control, tooltip and all.
     root?.render(
-      <TooltipProvider>
+      <TooltipProvider delayDuration={0}>
         <AutomationsPage />
       </TooltipProvider>,
     );
@@ -178,10 +174,34 @@ function text(): string {
   return container?.textContent ?? "";
 }
 
+function hasUiText(needle: string): boolean {
+  return [...document.querySelectorAll(".text-ui")].some((candidate) =>
+    candidate.textContent?.includes(needle),
+  );
+}
+
 function button(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
   return found as HTMLElement;
+}
+
+/** Opens a tooltip through the pointer door its Radix trigger actually listens to. */
+async function showTooltip(trigger: HTMLElement): Promise<HTMLElement> {
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const found = document.querySelector('[data-slot="tooltip-content"]');
+  if (found === null) throw new Error("tooltip did not open");
+  return found as HTMLElement;
+}
+
+/** Opens a dropdown through the pointer door its Radix trigger actually listens to. */
+async function openDropdown(trigger: HTMLElement): Promise<void> {
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
 }
 
 /** Types into a controlled input the way React's own event system sees it. */
@@ -203,7 +223,7 @@ beforeEach(() => {
   }));
   for (const door of Object.values(doors)) door.mockReset();
   vi.mocked(openRunSession).mockReset();
-  vi.mocked(runAutomationFromListing).mockReset();
+  vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationForProject).mockReset();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
@@ -248,6 +268,7 @@ describe("the page", () => {
 
     expect(text()).toContain("Only when I run it");
     expect(text()).toContain("Default model");
+    expect(hasUiText("Only when I run it")).toBe(true);
   });
 
   it("prints a column Trigger's own columns rather than claiming manual-only", async () => {
@@ -353,8 +374,8 @@ describe("running by hand", () => {
       ticketRow?.click();
     });
 
-    expect(runAutomationFromListing).toHaveBeenCalledWith({
-      automationId: "automation-1",
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "automation", automationId: "automation-1" },
       automationName: "Review sweep",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
@@ -383,6 +404,7 @@ describe("run history", () => {
 
     expect(text()).toContain("Review sweep");
     expect(text()).toContain("claude-opus · high");
+    expect(hasUiText("claude-opus · high")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -539,39 +561,62 @@ describe("the lane view", () => {
     ).toBe("1");
   });
 
-  it("pins the armed row to 1 ahead of its authored rank — while it is switched on here", async () => {
-    const armed = [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }];
-    const orders = [
-      {
-        projectId: "p1",
-        status: "doing",
-        rankedAutomationIds: ["implement", "shared"],
-        orderedAt: 1,
-      },
-    ];
+  it("pins the armed row to 1 and fills its bolt while it is switched on here", async () => {
     await mount({
       automations: [doingAndReview, doingOnly],
-      armings: armed,
-      orders,
+      armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+      ],
       enabled: ["shared"],
     });
 
-    expect(
-      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
-    ).toBe("1");
+    const bolt = button("Doing runs Standards sweep");
+    expect(bolt.getAttribute("data-arming-state")).toBe("ready");
+    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    const row = document.querySelector('[data-lane-row="doing:shared"]');
+    expect(row?.getAttribute("data-lane-digit")).toBe("1");
+    expect(row?.getAttribute("data-lane-arming")).toBe("ready");
+  });
 
-    // Switched off here, a plain drop runs nothing — so the pin lets go and the
-    // authored rank stands, exactly as the drag reads it.
-    await act(async () => {
-      root?.unmount();
+  it("marks an armed-but-switched-off bolt, tooltip, menu row, and authored lane digit alike", async () => {
+    await mount({
+      automations: [doingAndReview, doingOnly],
+      armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+      ],
+      enabled: [],
     });
-    container?.remove();
-    useAutomationsStore.setState({ byProject: {}, armingByProject: {}, orderByProject: {} });
-    await mount({ automations: [doingAndReview, doingOnly], armings: armed, orders, enabled: [] });
 
-    expect(
-      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
-    ).toBe("2");
+    const label = "Doing is armed with Standards sweep — switched off";
+    const bolt = button(label);
+    expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
+    expect(bolt.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+    expect((await showTooltip(bolt)).textContent).toBe(label);
+
+    // No effective arming means no pin: the authored digit remains, and the
+    // annotation says why this persisted arming will not fire on a plain drop.
+    const row = document.querySelector('[data-lane-row="doing:shared"]');
+    expect(row?.getAttribute("data-lane-digit")).toBe("2");
+    expect(row?.getAttribute("data-lane-arming")).toBe("switched-off");
+    expect(row?.textContent).toContain("Armed · Switched off");
+
+    await openDropdown(bolt);
+    const menuRow = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
+      (candidate) => candidate.textContent?.includes("Standards sweep"),
+    );
+    expect(menuRow?.textContent).toContain("Switched off");
   });
 });
 
@@ -595,7 +640,7 @@ describe("schedules (VC-130)", () => {
     });
 
     expect(document.body.textContent).not.toContain("Run “Nightly sweep” on");
-    expect(runAutomationFromListing).not.toHaveBeenCalled();
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
     expect(runAutomationForProject).toHaveBeenCalledTimes(1);
     expect(runAutomationForProject).toHaveBeenCalledWith({
       automationId: "automation-1",
@@ -657,6 +702,7 @@ describe("schedules (VC-130)", () => {
 
     // Fifty missed occurrences, one Run: a missed occurrence is never replayed
     // (VC-112), and this is the by-hand recovery offered instead.
+    expect(hasUiText("Skipped")).toBe(true);
     expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledWith({
       automationId: "automation-1",

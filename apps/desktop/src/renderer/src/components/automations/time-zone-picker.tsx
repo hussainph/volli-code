@@ -65,7 +65,13 @@ export function TimeZonePicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" aria-label="Time zone" className="max-w-52 shrink-0">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Time zone"
+          title={value}
+          className="max-w-52 shrink-0"
+        >
           <span className="truncate">{value}</span>
         </Button>
       </PopoverTrigger>

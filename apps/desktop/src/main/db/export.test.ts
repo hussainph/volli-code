@@ -91,6 +91,7 @@ describe("buildExportDocument — empty db", () => {
     expect(document.appState).toEqual([]);
     expect(document.automations).toEqual([]);
     expect(document.automationRuns).toEqual([]);
+    expect(document.automationSessionMintIntents).toEqual([]);
     expect(document.automationColumnArmings).toEqual([]);
   });
 
@@ -225,6 +226,20 @@ describe("buildExportDocument — populated db", () => {
       { projectId: project.id, status: "doing", automationId: automation.id },
       72,
     );
+    ctx.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run(
+        "automation-run-command",
+        JSON.stringify({ kind: "automation.run", plan: { sessionOperationId: "session-mint" } }),
+        73,
+      );
+    ctx.db
+      .prepare(
+        `INSERT INTO automation_session_mint_intents
+           (session_create_command_id, automation_command_id, recorded_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run("session-mint:create", "automation-run-command", 73);
 
     const document = await buildExportDocument(ctx.db, {
       appVersion: "9.9.9",
@@ -435,6 +450,13 @@ describe("buildExportDocument — populated db", () => {
         modelId: "claude-opus",
         reasoningLevel: "high",
         createdAt: 71,
+      },
+    ]);
+    expect(document.automationSessionMintIntents).toEqual([
+      {
+        sessionCreateCommandId: "session-mint:create",
+        automationCommandId: "automation-run-command",
+        recordedAt: 73,
       },
     ]);
     // Column arming rides along even though it never travels with a PROJECT:

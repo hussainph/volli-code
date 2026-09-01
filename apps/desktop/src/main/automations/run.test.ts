@@ -32,7 +32,7 @@ import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
-import { StructuredSessionsError } from "../session-runtime/sessions";
+import { sessionCreateCommandId, StructuredSessionsError } from "../session-runtime/sessions";
 import type { SessionStartInput } from "../session-runtime/sessions";
 
 let ctx: TestDb;
@@ -77,6 +77,7 @@ interface Harness {
     resources: readonly PromptResource[];
   }>;
   logs: string[];
+  deliveryFailures: Array<{ sessionId: string; commandId: string; detail: string }>;
   projectId: string;
   ticketId: string;
   attachState: "ready" | "needs-recovery";
@@ -104,6 +105,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
   const logs: string[] = [];
+  const deliveryFailures: Harness["deliveryFailures"] = [];
   const sessionsByOperation = new Map<string, string>();
   let nextSession = 0;
   let attachState: Harness["attachState"] = "ready";
@@ -131,6 +133,22 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
           // this row (`listProjectRunsForAutomation`) — a fake that skipped it
           // would leave the schedule's own single-flight guard untestable.
           insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
+          ctx.db
+            .prepare(
+              `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+               VALUES (?, ?, ?, ?, NULL)`,
+            )
+            .run(
+              sessionCreateCommandId(input.operationId),
+              sessionId,
+              42_000,
+              JSON.stringify({
+                kind: "session.create",
+                projectId: input.projectId,
+                ticketId: input.ticketId,
+                title: input.title,
+              }),
+            );
         }
         return { sessionId, model: RESOLVED };
       },
@@ -147,6 +165,10 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     promptSupply: async () => ({ templates: [TEMPLATE], skills: [SKILL] }),
     deliverInstructions: async (input) => {
       delivered.push(input);
+      return { receipt: { status: "accepted" } };
+    },
+    reportInstructionDeliveryFailure: async (input) => {
+      deliveryFailures.push(input);
     },
     readSessionActivity: async () => "idle",
     log: (message) => logs.push(message),
@@ -160,6 +182,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     attaches,
     delivered,
     logs,
+    deliveryFailures,
     projectId: project.id,
     ticketId: ticket.id,
     get attachState() {
@@ -387,6 +410,45 @@ describe("createAutomationRunner", () => {
     expect(h.delivered).toEqual([
       expect.objectContaining({ text: "Persisted instructions", resources: [] }),
     ]);
+  });
+
+  it("credits a scheduled Project Run when Run insertion dies after Session mint", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    // The Session transaction will commit first. Abort only the following Run
+    // projection transaction to leave the exact process-death window on disk.
+    ctx.db.exec(`
+      CREATE TRIGGER fail_scheduled_run_insert
+      BEFORE INSERT ON automation_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated process death before Run insert');
+      END;
+    `);
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "unattended",
+      }),
+    ).rejects.toThrow("simulated process death before Run insert");
+
+    expect(h.creates).toHaveLength(1);
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT automation_command_id
+             FROM automation_session_mint_intents
+            WHERE session_create_command_id = ?`,
+        )
+        .get(sessionCreateCommandId(h.creates[0]!.operationId)),
+    ).toEqual({ automation_command_id: expect.any(String) });
+    expect(readSessionProvenance(ctx.db, { sessionId: "session-1", ticketId: null })).toEqual({
+      kind: "automation",
+      automationName: null,
+    });
   });
 
   it("replays one command id while its Session is working, without a second Session or first turn", async () => {
@@ -938,6 +1000,34 @@ describe("createAutomationRunner", () => {
     expect(h.delivered).toHaveLength(1);
   });
 
+  it("returns the launch-time name used for the Session after a skipped row's snapshot goes stale", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h, { name: "Old nightly sweep" });
+    const skipSnapshotName = automation.name;
+    const updated = await h.engine.update({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      name: "Renamed nightly sweep",
+      instructions: automation.instructions,
+      trigger: automation.trigger,
+      runtime: null,
+    });
+    if (!updated.ok) throw new Error("update refused");
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    if (!outcome.ok) throw new Error("run refused");
+    expect(skipSnapshotName).toBe("Old nightly sweep");
+    expect(h.creates[0]?.title).toBe("Renamed nightly sweep");
+    expect(outcome.run.automationName).toBe(h.creates[0]?.title);
+  });
+
   it("replays a retried Project Run rather than opening a second Session", async () => {
     const h = harness();
     const automation = await savedAutomation(h);
@@ -1207,6 +1297,81 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
       });
     });
   }
+
+  it("turns a rejected kickoff receipt into Session failure Attention and retains the intent", async () => {
+    const h = harness({
+      deliverInstructions: async () => ({
+        receipt: {
+          status: "rejected",
+          code: "PI_MESSAGE_REJECTED",
+          detail: "Pi refused the kickoff turn",
+        },
+      }),
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    const [pending] = await h.engine.pendingDeliveriesForSession(outcome.run.sessionId);
+    expect(pending).toMatchObject({
+      runId: outcome.run.id,
+      sessionId: outcome.run.sessionId,
+      messageCommandId: expect.any(String),
+    });
+    expect(h.deliveryFailures).toEqual([
+      {
+        sessionId: outcome.run.sessionId,
+        commandId: pending?.messageCommandId,
+        detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+      },
+    ]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} first-message receipt is rejected; retaining its delivery intent`,
+    ]);
+  });
+
+  it("turns a thrown kickoff delivery into Session failure Attention and retains the intent", async () => {
+    const h = harness({
+      deliverInstructions: async () => {
+        throw new Error("Pi delivery socket closed");
+      },
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    const [pending] = await h.engine.pendingDeliveriesForSession(outcome.run.sessionId);
+    expect(pending).toMatchObject({ runId: outcome.run.id, sessionId: outcome.run.sessionId });
+    expect(h.deliveryFailures).toEqual([
+      {
+        sessionId: outcome.run.sessionId,
+        commandId: pending?.messageCommandId,
+        detail:
+          "The Automation Run's first message could not be delivered: Pi delivery socket closed",
+      },
+    ]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not deliver its Instructions: Pi delivery socket closed`,
+    ]);
+  });
 
   it("says so when the attach that would have delivered them is refused", async () => {
     // The owner's Run, at the seam. Its Session was minted, its attach was

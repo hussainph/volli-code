@@ -126,6 +126,30 @@ describe("chatSessionRecord", () => {
     });
   });
 
+  it("keeps a durable open attachment reattachable but not live after relaunch", () => {
+    const attachment = structuredAttachment({ adapterId: "pi" });
+    const relaunched = projectionWith([attachment], {
+      // The ledger still projects the attachment as open so Pi can lazily
+      // rehydrate it. This is durable history, not a process-local binding.
+      liveExecutor: attachment,
+      turnActive: true,
+    });
+
+    expect(chatSessionRecord(relaunched, false)).toMatchObject({
+      adapterId: "pi",
+      live: false,
+      activity: "idle",
+    });
+    expect(relaunched.liveExecutor).toEqual(attachment);
+
+    // Once this process really binds the executor, the same durable projection
+    // is live again; a turn still in progress reads as work.
+    expect(chatSessionRecord(relaunched, true)).toMatchObject({
+      live: true,
+      activity: "working",
+    });
+  });
+
   it("reads a closed structured attachment as not live, keeping its adapter", () => {
     expect(
       chatSessionRecord(projectionWith([structuredAttachment({ status: "closed", closedAt: 5 })])),

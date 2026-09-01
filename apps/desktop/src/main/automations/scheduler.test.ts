@@ -63,6 +63,9 @@ interface Harness {
   /** Every delay the timer was armed with, newest last. */
   delays: number[];
   setNow(at: number): void;
+  setEnabled(automationIds: readonly string[]): void;
+  /** Starts a lifecycle now exactly as an enable or schedule edit does. */
+  rebaseCursor(automationId: string): void;
   /** Runs whatever the timer is waiting for, as if the delay elapsed. */
   fire(): Promise<void>;
 }
@@ -76,6 +79,7 @@ function harness(options: {
   listAutomations?: () => Promise<readonly Automation[]>;
 }): Harness {
   let now = options.now;
+  let enabled = [...(options.enabled ?? ["a1"])];
   const cursors: ScheduleCursors = { ...options.cursors };
   const runs: Harness["runs"] = [];
   const skips: Harness["skips"] = [];
@@ -87,7 +91,7 @@ function harness(options: {
     now: () => now,
     listAutomations:
       options.listAutomations ?? (() => Promise.resolve(options.automations ?? [automation()])),
-    enabledAutomationIds: () => Promise.resolve(options.enabled ?? ["a1"]),
+    enabledAutomationIds: () => Promise.resolve([...enabled]),
     readCursors: () => Promise.resolve({ ...cursors }),
     advanceCursor: (input) => {
       const current = cursors[input.automationId];
@@ -125,6 +129,12 @@ function harness(options: {
     delays,
     setNow: (at) => {
       now = at;
+    },
+    setEnabled: (automationIds) => {
+      enabled = [...automationIds];
+    },
+    rebaseCursor: (automationId) => {
+      cursors[automationId] = now;
     },
     fire: async () => {
       const fireTimer = pending;
@@ -497,6 +507,37 @@ describe("the pass as a whole", () => {
     h.scheduler.stop();
     await h.scheduler.refresh();
     expect(h.delays.length).toBe(armed);
+  });
+
+  it("starts a re-enabled schedule at now, not at the hours it was off", async () => {
+    const hourly: AutomationSchedule = { preset: "hourly", minute: 30, timeZone: LONDON };
+    const firstDue = due(Date.parse("2026-06-10T12:00:00Z"), hourly);
+    const secondDue = due(firstDue, hourly);
+    const beforeDue = firstDue - 60_000;
+    const h = harness({
+      now: beforeDue,
+      automations: [automation({ trigger: { kind: "schedule", schedule: hourly } })],
+      cursors: { a1: beforeDue - 1 },
+    });
+    await h.scheduler.start();
+
+    // The schedule is switched off before either occurrence, then both due
+    // times pass while it is explicitly outside the scheduler's enabled set.
+    h.setEnabled([]);
+    await h.scheduler.refresh();
+    const reenabledAt = secondDue + 60_000;
+    h.setNow(reenabledAt);
+
+    // With the stale cursor, the first occurrence would be recorded as a skip
+    // and the second replayed inside grace. Enabling starts a new lifecycle at
+    // its command time before refreshing, so the disabled gap is not owed.
+    h.rebaseCursor("a1");
+    h.setEnabled(["a1"]);
+    await h.scheduler.refresh();
+
+    expect(h.runs).toEqual([]);
+    expect(h.skips).toEqual([]);
+    expect(h.cursors["a1"]).toBe(reenabledAt);
   });
 
   it("re-reads when a record or a switch changes", async () => {

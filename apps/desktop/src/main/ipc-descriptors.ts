@@ -341,7 +341,12 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
         typeof input["ticketId"] === "string" &&
         isTicketStatus(input["toStatus"]) &&
         typeof input["toIndex"] === "number" &&
-        Number.isInteger(input["toIndex"])
+        Number.isInteger(input["toIndex"]) &&
+        (input["choice"] === undefined ||
+          (isRecord(input["choice"]) &&
+            (input["choice"]["kind"] === "move-only" ||
+              (input["choice"]["kind"] === "automation" &&
+                typeof input["choice"]["automationId"] === "string"))))
       );
     },
     invalidError: "Invalid ticket move",
@@ -1292,6 +1297,20 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",
+  },
+  "volli:automation-pending-armed-runs": {
+    guard: (args): args is IpcArgs<"volli:automation-pending-armed-runs"> => args.length === 0,
+    invalidError: "Invalid pending armed runs request",
+  },
+  "volli:automation-cancel-pending-armed-run": {
+    guard: (args): args is IpcArgs<"volli:automation-cancel-pending-armed-run"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
+    invalidError: "Invalid pending armed run cancellation",
+  },
+  "volli:automation-retry-pending-armed-run": {
+    guard: (args): args is IpcArgs<"volli:automation-retry-pending-armed-run"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["id"] === "string",
+    invalidError: "Invalid pending armed run retry",
   },
   "volli:automation-skips-for-project": {
     guard: (args): args is IpcArgs<"volli:automation-skips-for-project"> =>
