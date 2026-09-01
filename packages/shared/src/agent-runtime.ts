@@ -242,14 +242,20 @@ export interface RuntimeRecoveryRef {
 }
 
 /**
- * Which half of {@link AuthorityFallback} sent the runtime to ask.
+ * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
+ * `budget`, the fact that no denial accrued at all.
  *
- * Worth naming rather than collapsing, because the two mean different things to
- * the person answering: a run of refusals back to back means the policy is in
- * the way of one line of work, while a total across the Session means it is in
- * the way of the Session.
+ * Worth naming rather than collapsing, because the three mean different things
+ * to the person answering: a run of refusals back to back means the policy is
+ * in the way of one line of work, a total across the Session means it is in
+ * the way of the Session, and a budget means nothing was refused yet — an
+ * allowance ran out and the call is waiting on "a little more" (VC-204).
+ * `budget` asks are raised by a verb's own door rather than by the escalation
+ * counter, so they never advance either {@link AuthorityFallback} threshold:
+ * the person already answered, and counting that answer as friction would
+ * escalate twice over one decision.
  */
-export type RuntimeAskTrip = "consecutive" | "session";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget";
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps

@@ -1091,15 +1091,18 @@ app.whenReady().then(async () => {
           // this closure reaches a door composed from the Sessions facade,
           // which is built from this same host. Inference would chase that
           // circle; the annotation cuts it.
-          callVerb: (caller, request, signal): Promise<RuntimeVerbResult> => {
+          callVerb: (caller, request, signal, budgetAsk): Promise<RuntimeVerbResult> => {
             if (agentToolDoor === null) {
               throw new Error("This launch has no Volli verb handlers.");
             }
             signal.throwIfAborted();
             // Forwarded, not just read: `ticket.await` parks on it, and the
             // signal firing is the only notice a suspended wait ever gets
-            // that its turn was interrupted (VC-85).
-            return agentToolDoor(caller, request, signal);
+            // that its turn was interrupted (VC-85). `budgetAsk` rides along
+            // for the one question a verb may raise mid-call — a spent
+            // delegation allowance asking the person driving for one more
+            // (VC-204) — answered through the binding that lent it.
+            return agentToolDoor(caller, request, signal, budgetAsk);
           },
           // The runtime needs the Role a Session runs under and the Ticket it
           // implies, which a directory cannot say. The generated Brief is

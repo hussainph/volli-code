@@ -77,6 +77,8 @@ import {
   askOffer,
   askInteractionId,
   askUserInteractionId,
+  budgetAskInteractionId,
+  isBudgetCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -385,6 +387,15 @@ export interface PiAdapterOptions {
     session: RuntimeSessionIdentity,
     request: RuntimeVerbCall,
     signal: AbortSignal,
+    /**
+     * The attachment's own parked-question machinery, lent to the verb's
+     * handler for the one question a verb may raise mid-call: a spent budget
+     * (VC-204). Bound here rather than resolved by the door so the question
+     * rides the same interaction ledger, withdrawal signal and answer path as
+     * every escalation this binding asks — and so a door reached any other way
+     * simply has no one to ask, which reads as the hard refusal it should.
+     */
+    budgetAsk: (request: RuntimeAskRequest, signal: AbortSignal) => Promise<RuntimeAskChoice>,
   ) => Promise<RuntimeVerbResult>;
   /**
    * The compaction policy every Session is run under — the global automatic
@@ -882,7 +893,9 @@ class PiBinding implements BindingHandle {
         ? {}
         : {
             callVerb: (request: RuntimeVerbCall, signal: AbortSignal) =>
-              callVerb!(sessionIdentity, request, signal),
+              callVerb!(sessionIdentity, request, signal, (ask, askSignal) =>
+                this.#ask(ask, askSignal),
+              ),
           }),
     };
     // `sessionToolIds` is the same derivation `createSessionTools` consumes.
@@ -1174,7 +1187,14 @@ class PiBinding implements BindingHandle {
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
     const offer = askOffer(request);
-    const interactionId = askInteractionId(request.toolCallId);
+    // Two frozen derivations, chosen by cause: a budget question keeps its own
+    // `budget-ask:` segment so that a gate ask and a budget ask about ONE tool
+    // call can never mint one interaction id — under a shared prefix the
+    // second `opened` emit would dedupe against the first and park a question
+    // nobody was shown. See `budgetAskInteractionId` in @volli/shared.
+    const interactionId = isBudgetCause(request.cause)
+      ? budgetAskInteractionId(request.toolCallId)
+      : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",

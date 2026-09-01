@@ -183,8 +183,14 @@ export class TicketSessionDelegationStore
           "SELECT COUNT(*) AS count FROM session_delegation_claims WHERE parent_session_id = ?",
         )
         .get(input.parentSessionId) as { count: number };
-      if (count.count >= parent.max_children) {
-        return { ok: false, reason: "limit", maxChildren: parent.max_children } as const;
+      // The allowance is the born grant plus every slot a person has granted
+      // since (VC-204). Extensions are counted here rather than folded into
+      // `max_children`, because the grant row is immutable by trigger and by
+      // intent — a bound a runtime write could widen would not be a bound —
+      // while an extension row is evidence of one "once" a person answered.
+      const allowed = parent.max_children + this.countExtensions(input.parentSessionId);
+      if (count.count >= allowed) {
+        return { ok: false, reason: "limit", allowed } as const;
       }
       this.db
         .prepare(
@@ -202,6 +208,37 @@ export class TicketSessionDelegationStore
       this.#inFlightClaims.add(key);
       return { ok: true, delegation: claimedDelegation(granted, input) } as const;
     })();
+  }
+
+  recordExtension(input: DelegationClaimRef): void {
+    if (input.toolCallId.length === 0) {
+      throw new Error("A delegation extension needs the tool call id it was granted for");
+    }
+    this.db.transaction(() => {
+      // A parent with no stored start grant has no allowance to extend; being
+      // handed one is a caller that lost track of who asked, refused loudly.
+      if (this.readStartGrant(input.parentSessionId) === null) {
+        throw new Error("A delegation extension needs a Session born with a start grant");
+      }
+      // Idempotent per asking call: a replayed tool call finds its extension
+      // already recorded and does not earn a second slot.
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO session_delegation_extensions
+             (parent_session_id, tool_call_id, created_at)
+           VALUES (?, ?, ?)`,
+        )
+        .run(input.parentSessionId, input.toolCallId, Date.now());
+    })();
+  }
+
+  private countExtensions(parentSessionId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM session_delegation_extensions WHERE parent_session_id = ?",
+      )
+      .get(parentSessionId) as { count: number };
+    return row.count;
   }
 
   releaseIfUnstarted(input: DelegationClaimRef): void {
