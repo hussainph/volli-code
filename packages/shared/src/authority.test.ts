@@ -2,8 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   AUTHORITY_RULE_IDS,
+  BUDGET_CAUSE_IDS,
   BUILTIN_RULE_PACK_HASH,
   hashRulePack,
+  isBudgetCause,
   isOverridableAuthorityRule,
   NON_CODING_TOOL_IDS,
   OVERRIDABLE_AUTHORITY_RULES,
@@ -76,6 +78,14 @@ describe("non-coding tool vocabulary", () => {
     for (const tool of NON_CODING_TOOL_IDS) {
       expect(["read", "edit", "write", "execute"]).not.toContain(tool);
     }
+  });
+});
+
+describe("isBudgetCause", () => {
+  it("recognizes the complete budget vocabulary and rejects rule-pack causes", () => {
+    for (const cause of BUDGET_CAUSE_IDS) expect(isBudgetCause(cause)).toBe(true);
+    expect(isBudgetCause("call.unreadable")).toBe(false);
+    expect(isBudgetCause("command.persistence")).toBe(false);
   });
 });
 
