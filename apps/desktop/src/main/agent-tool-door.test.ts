@@ -18,7 +18,12 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_AUTHORITY_POLICY, NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { AutomationRun, ModelSelection, RuntimeSessionIdentity } from "@volli/shared";
+import type {
+  AutomationRun,
+  AutomationTrigger,
+  ModelSelection,
+  RuntimeSessionIdentity,
+} from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
 
@@ -505,13 +510,17 @@ function automationHarness(options: { host?: "absent" } = {}) {
     supervise: () => null,
   });
 
-  async function save(input: { name: string; projectId: string | null }) {
+  async function save(input: {
+    name: string;
+    projectId: string | null;
+    trigger?: AutomationTrigger;
+  }) {
     const created = await engine.create({
       commandId: randomUUID(),
       projectId: input.projectId,
       name: input.name,
       instructions: "Sweep this Ticket and report.",
-      trigger: NO_AUTOMATION_TRIGGER,
+      trigger: input.trigger ?? NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
     if (!created.ok) throw new Error(created.error);
@@ -587,6 +596,36 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // one back, so a model given one is given an id it cannot use.
     expect(result.text).toContain("abcdef12");
     expect(result.text).not.toContain("abcdef12-3456-7890-abcd-ef1234567890");
+  });
+
+  it("deliberately aims a schedule-trigger Automation at one Ticket", async () => {
+    const h = automationHarness();
+    const automation = await h.save({
+      name: "Nightly sweep",
+      projectId: "project-one",
+      trigger: {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      },
+    });
+
+    const result = await h.call({ automation: "Nightly sweep", ticket: "VC-1" });
+
+    // VC-230's ruled agent-only exception: the record keeps the schedule that
+    // targets its Project through the scheduler and person-facing doors, while
+    // this invocation explicitly retargets its one Run to the named Ticket.
+    expect(automation.trigger.kind).toBe("schedule");
+    expect(h.runInputs[0]).toMatchObject({
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: "ticket-one",
+    });
+    expect(h.creates[0]).toMatchObject({
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: "Nightly sweep",
+    });
+    expect(listRunsForTicket(h.db, "ticket-one")).toHaveLength(1);
+    expect(result.text).toContain('Started "Nightly sweep" on VC-1');
   });
 
   it("records an agent's Run exactly as a Run a person started by hand", async () => {
