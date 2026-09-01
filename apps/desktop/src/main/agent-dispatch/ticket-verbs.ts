@@ -458,22 +458,24 @@ export async function ticketMoveVerb(
       kind: "ticket",
     });
     // An explicit `volli ticket move` is a Deliberate move (CONTEXT.md), with
-    // the same semantics as a drag — so an armed destination column must react
-    // to it identically (VC-128). Announced AFTER the invalidation above, so a
-    // window hears "this ticket moved" only once it has been told to re-read;
-    // and after the interrupt, because a backward move that de-escalates and a
-    // forward move that arms are the same event seen from two ends.
-    //
-    // The columns are named here rather than left to a re-read: the status the
-    // Ticket LEFT is gone the moment the write commits, and "did this arrive?"
-    // cannot be answered without it. Same-column no-ops returned long before
-    // this line, so reaching it means the columns really differ.
-    options.onDeliberateMove?.({
-      projectId: resolved.project.id,
-      ticketId: resolved.ticket.id,
-      from: resolved.ticket.status,
-      to,
-    });
+    // the same semantics as a drag — so it enters main's one pending-arrival
+    // coordinator after the same committed status change (VC-226). No renderer
+    // is involved. The columns travel because the status the Ticket LEFT is
+    // gone the moment the write commits; same-column no-ops returned earlier.
+    try {
+      options.onDeliberateMove?.({
+        projectId: resolved.project.id,
+        ticketId: resolved.ticket.id,
+        from: resolved.ticket.status,
+        to,
+      });
+    } catch (error) {
+      // The Ticket move already committed. A failed pending projection is
+      // operational evidence, not grounds to answer that the move failed.
+      console.error(
+        `[volli] failed to record armed-column arrival after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
+      );
+    }
     return {
       v: 1,
       ok: true,

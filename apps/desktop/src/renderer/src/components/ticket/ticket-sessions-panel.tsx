@@ -12,7 +12,6 @@ import {
   type SessionListingRow,
   type SessionProvenance,
   type SessionRecord,
-  type SkillReference,
 } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -295,8 +294,8 @@ function SessionList({
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
-              // rather than a status beside a "Chat · Live". Most History rows
-              // say only when they last said anything; a stopped chat retains
+              // rather than repeating source metadata. Most History rows say
+              // only when they last said anything; a stopped chat retains
               // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (
@@ -390,8 +389,7 @@ export function TicketSessionsPanel({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
 }: {
@@ -399,10 +397,8 @@ export function TicketSessionsPanel({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
 }) {
@@ -600,9 +596,8 @@ export function TicketSessionsPanel({
             placement="rail"
             align="end"
             shortcuts
-            skills={skills}
             onNewChat={onNewChat}
-            onNewChatWithSkill={onNewChatWithSkill}
+            onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
         </SectionHeadingRow>

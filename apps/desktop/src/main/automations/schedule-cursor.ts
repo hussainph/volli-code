@@ -31,9 +31,11 @@
  * **What a missing cursor means, and why that is the safe direction.** No
  * entry means "never evaluated here", and the scheduler answers by starting the
  * clock now: the next occurrence stands and nothing before it is owed. That is
- * the same non-retroactive rule arming has (VC-128) and it is what stops a
- * newly created schedule, a newly enabled one, or a corrupt row from
- * manufacturing a backlog out of history it never watched.
+ * the safe fallback for a schedule first met on a new machine or an unreadable
+ * row. A local create, enable, or schedule-changing edit does not rely on that
+ * fallback: the command durably rebases its lifecycle to the instant it was
+ * accepted, before the asynchronous scheduler gets a chance to sweep. This is
+ * what keeps a crash in that gap from silently forgiving the first occurrence.
  */
 import type Database from "better-sqlite3";
 
@@ -94,6 +96,28 @@ export function advanceScheduleCursor(
   const cursors = readScheduleCursors(db);
   const current = cursors[input.automationId];
   if (current !== undefined && current >= input.through) return cursors;
+  const next = { ...cursors, [input.automationId]: input.through };
+  setAppState(db, AUTOMATION_SCHEDULE_CURSORS_KEY, JSON.stringify(next), now);
+  return next;
+}
+
+/**
+ * Starts one schedule lifecycle at the command that created or restarted it.
+ *
+ * Unlike {@link advanceScheduleCursor}, this may move an entry backwards: the
+ * old value belongs to a different lifecycle, so carrying it across an enable
+ * or schedule edit would either forgive new occurrences or charge the new
+ * schedule for time that belonged to the old one. The replacement is written
+ * even when the scheduler has never seen this id. A crash before its
+ * fire-and-forget refresh therefore leaves a durable baseline for relaunch.
+ */
+export function rebaseScheduleCursor(
+  db: Database.Database,
+  input: { automationId: string; through: number },
+  now: number,
+): ScheduleCursors {
+  const cursors = readScheduleCursors(db);
+  if (cursors[input.automationId] === input.through) return cursors;
   const next = { ...cursors, [input.automationId]: input.through };
   setAppState(db, AUTOMATION_SCHEDULE_CURSORS_KEY, JSON.stringify(next), now);
   return next;

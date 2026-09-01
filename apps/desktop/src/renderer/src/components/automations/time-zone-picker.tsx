@@ -73,6 +73,7 @@ export function TimeZonePicker({
           variant="outline"
           size="sm"
           aria-label="Time zone"
+          title={value}
           className={cn("max-w-52 shrink-0", className)}
         >
           <GlobeIcon />

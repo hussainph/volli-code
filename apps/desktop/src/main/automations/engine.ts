@@ -20,6 +20,8 @@ import type {
   TicketStatus,
 } from "@volli/shared";
 
+import { sessionCreateCommandId } from "../session-runtime/sessions";
+
 /** A value a durable host may answer synchronously today or asynchronously later. */
 type Awaitable<T> = T | Promise<T>;
 
@@ -308,6 +310,13 @@ export interface AutomationLedgerTransaction {
 
   /** Records one Skipped occurrence, inside the transaction that evented it. */
   insertSkippedOccurrence(skip: AutomationSkippedOccurrence): Awaitable<void>;
+
+  /** Indexes an accepted Run's stable Session-create intent before mint begins. */
+  insertRunSessionMintIntent(input: {
+    automationCommandId: string;
+    sessionCreateCommandId: string;
+    recordedAt: number;
+  }): Awaitable<void>;
 
   getRun(runId: string): Awaitable<AutomationRun | null>;
   insertRun(run: AutomationRun): Awaitable<void>;
@@ -1079,6 +1088,14 @@ export function createAutomationEngine(ports: AutomationEnginePorts): Automation
         await tx.insertCommand(command);
         await tx.appendEvent(event(command.id, "command.recorded", { command }, now));
         await tx.appendEvent(event(command.id, "automation.run.accepted", { plan }, now));
+        // Project Runs have no Ticket event to carry their launch actor. Index
+        // the exact command `sessions.create` will persist, in this same
+        // accepted-plan transaction and before the host can begin minting.
+        await tx.insertRunSessionMintIntent({
+          automationCommandId: command.id,
+          sessionCreateCommandId: sessionCreateCommandId(plan.sessionOperationId),
+          recordedAt: now,
+        });
         const accepted = receipt(
           command.id,
           "accepted",

@@ -69,8 +69,12 @@ interface ResolvedRunScope {
 }
 
 /** What the Session runtime answers after attempting the persistent message intent. */
-export type InstructionDeliveryResult = void | {
-  receipt?: { status: "accepted" | "completed" | "rejected" | "unreconciled" } | null;
+export type InstructionDeliveryResult = {
+  receipt?: {
+    status: "accepted" | "completed" | "rejected" | "unreconciled";
+    code?: string;
+    detail?: string | null;
+  } | null;
 };
 
 export interface AutomationRunnerDeps {
@@ -107,6 +111,15 @@ export interface AutomationRunnerDeps {
     text: string;
     resources: readonly PromptResource[];
   }): Promise<InstructionDeliveryResult>;
+  /**
+   * Records a post-attach first-message failure as Session Attention. The Run
+   * owns the policy decision; the hosted runtime owns the durable write.
+   */
+  reportInstructionDeliveryFailure(input: {
+    sessionId: string;
+    commandId: string;
+    detail: string;
+  }): Promise<void>;
   /** Honest Session activity, or null when its projection cannot be read. */
   readSessionActivity(
     sessionId: string,
@@ -147,11 +160,10 @@ export interface AutomationRunRequest {
    * Whether a person was at the door that asked (VC-133).
    *
    * **Set by the door, never carried on the wire.** The renderer's IPC payload
-   * has no such field: `automations/ipc.ts` fills in `attended` because being
-   * that handler IS the evidence — a person clicked the rail, the palette, the
-   * board card or the armed column's window to get there. The agent verb
-   * (`agent-tool-door.ts`) is the other caller of this door and fills in
-   * `unattended`, because its caller is a Session that has gone on to its own
+   * has no such field: `automations/ipc.ts` fills in `attended` for its hand-Run
+   * controls, and main's pending-arrival coordinator fills in `attended` for an
+   * armed column's Deliberate move. The agent verb (`agent-tool-door.ts`) fills
+   * in `unattended`, because its caller is a Session that has gone on to its own
    * work.
    *
    * Keeping it off the wire is what makes it trustworthy: a fact the renderer
@@ -233,6 +245,33 @@ function attachRefusal(receipt: CommandReceipt | null): string {
   if (receipt === null) return "the attach reported no receipt";
   if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
   return `the attach is ${receipt.status}`;
+}
+
+interface InstructionDeliveryFailure {
+  status: "missing" | "rejected" | "unreconciled";
+  detail: string;
+}
+
+/** The failure state and sentence a non-successful first-message result carries. */
+function instructionDeliveryFailure(
+  result: InstructionDeliveryResult,
+): InstructionDeliveryFailure | null {
+  const receipt = result.receipt;
+  if (receipt === undefined || receipt === null) {
+    return {
+      status: "missing",
+      detail: "The Automation Run's first message reported no delivery receipt.",
+    };
+  }
+  if (receipt.status === "accepted" || receipt.status === "completed") return null;
+  const reason = receipt.detail ?? receipt.code;
+  return {
+    status: receipt.status,
+    detail:
+      receipt.status === "rejected"
+        ? `The Automation Run's first message was rejected${reason ? `: ${reason}` : "."}`
+        : `The Automation Run's first-message delivery could not be reconciled${reason ? `: ${reason}` : "."}`,
+  };
 }
 
 /**
@@ -320,40 +359,63 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     return null;
   }
 
-  async function deliver(delivery: AutomationRunDelivery): Promise<void> {
+  async function reportDeliveryFailure(
+    delivery: AutomationRunDelivery,
+    detail: string,
+  ): Promise<void> {
     try {
-      const result = await deps.deliverInstructions({
+      await deps.reportInstructionDeliveryFailure({
+        sessionId: delivery.sessionId,
+        commandId: delivery.messageCommandId,
+        detail,
+      });
+    } catch (error) {
+      log(
+        `[volli] automation Run ${delivery.runId} could not record its first-message failure: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  async function deliver(delivery: AutomationRunDelivery): Promise<void> {
+    let result: InstructionDeliveryResult;
+    try {
+      result = await deps.deliverInstructions({
         sessionId: delivery.sessionId,
         commandId: delivery.messageCommandId,
         messageId: delivery.messageId,
         text: delivery.text,
         resources: delivery.resources,
       });
-      // Legacy test/host seams return void; a real Session runtime names a
-      // receipt. Only an accepted/completed receipt proves the intent reached
-      // the Session, so a rejected/unreconciled one remains pending for its
-      // existing recovery path rather than being falsely marked delivered.
-      if (
-        result !== undefined &&
-        (result.receipt === undefined ||
-          result.receipt === null ||
-          (result.receipt.status !== "accepted" && result.receipt.status !== "completed"))
-      ) {
-        const status =
-          result.receipt === undefined || result.receipt === null
-            ? "missing"
-            : result.receipt.status;
-        log(
-          `[volli] automation Run ${delivery.runId} first-message receipt is ${status}; retaining its delivery intent`,
-        );
-        return;
-      }
-      await deps.engine.markDeliveryDelivered({ runId: delivery.runId });
     } catch (error) {
       // Do not clear the intent. The same durable Session command id means the
       // next ready attach reconciles/replays safely after a crash or recovery.
+      const detail = `The Automation Run's first message could not be delivered: ${errorMessage(error)}`;
+      await reportDeliveryFailure(delivery, detail);
       log(
         `[volli] automation Run ${delivery.runId} could not deliver its Instructions: ${errorMessage(error)}`,
+      );
+      return;
+    }
+
+    // Only an accepted/completed receipt proves the intent reached the
+    // Session, so a missing/rejected/unreconciled one remains pending for its
+    // existing recovery path rather than being falsely marked delivered.
+    const failure = instructionDeliveryFailure(result);
+    if (failure !== null) {
+      await reportDeliveryFailure(delivery, failure.detail);
+      log(
+        `[volli] automation Run ${delivery.runId} first-message receipt is ${failure.status}; retaining its delivery intent`,
+      );
+      return;
+    }
+
+    try {
+      await deps.engine.markDeliveryDelivered({ runId: delivery.runId });
+    } catch (error) {
+      // The turn itself succeeded. Keep the intent recoverable, but do not turn
+      // a bookkeeping failure after delivery into a false Session Attention.
+      log(
+        `[volli] automation Run ${delivery.runId} could not mark its Instructions delivered: ${errorMessage(error)}`,
       );
     }
   }

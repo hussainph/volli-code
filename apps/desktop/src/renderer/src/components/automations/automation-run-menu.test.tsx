@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { Automation, ColumnArming, Ticket } from "@volli/shared";
 
 import { TicketAutomationMenuItems } from "./automation-run-menu";
-import { runAutomationFromListing } from "./run-automation";
+import { runAutomationOnTicket } from "./run-automation";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -27,7 +27,7 @@ import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
 
 vi.mock("./run-automation", () => ({
-  runAutomationFromListing: vi.fn(() => Promise.resolve()),
+  runAutomationOnTicket: vi.fn(() => Promise.resolve()),
 }));
 
 let root: Root | null = null;
@@ -156,8 +156,8 @@ async function openSubmenu(label: string): Promise<void> {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
-  vi.mocked(runAutomationFromListing).mockReset();
-  vi.mocked(runAutomationFromListing).mockResolvedValue(undefined);
+  vi.mocked(runAutomationOnTicket).mockReset();
+  vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
   doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
   doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
@@ -189,9 +189,9 @@ describe("the board card's Automations submenu", () => {
       menuItem("Review sweep").click();
     });
 
-    // The listing landing: no navigation, a toast whose action is the door.
-    expect(runAutomationFromListing).toHaveBeenCalledWith({
-      automationId: "a1",
+    // VC-234's universal landing: no navigation, a toast whose action is the door.
+    expect(runAutomationOnTicket).toHaveBeenCalledWith({
+      target: { kind: "automation", automationId: "a1" },
       automationName: "Review sweep",
       ticketId: "t1",
       ticketDisplayId: "VC-12",
@@ -207,9 +207,9 @@ describe("the board card's Automations submenu", () => {
       menuItem("claude-opus").click();
     });
 
-    expect(runAutomationFromListing).toHaveBeenCalledWith(
+    expect(runAutomationOnTicket).toHaveBeenCalledWith(
       expect.objectContaining({
-        automationId: "a1",
+        target: { kind: "automation", automationId: "a1" },
         modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
       }),
     );
@@ -258,7 +258,7 @@ describe("the board card's Automations submenu", () => {
 
     expect(text()).toContain("Reading automations…");
     expect(document.querySelectorAll('[data-slot="context-menu-item"]')).toHaveLength(0);
-    expect(runAutomationFromListing).not.toHaveBeenCalled();
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
   });
 
   it("says so plainly when this column offers nothing", async () => {

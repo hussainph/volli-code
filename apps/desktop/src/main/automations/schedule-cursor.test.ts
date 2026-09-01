@@ -6,6 +6,7 @@ import {
   advanceScheduleCursor,
   AUTOMATION_SCHEDULE_CURSORS_KEY,
   readScheduleCursors,
+  rebaseScheduleCursor,
 } from "./schedule-cursor";
 
 let ctx: TestDb;
@@ -77,5 +78,25 @@ describe("advanceScheduleCursor", () => {
     const written = getAppState(ctx.db, AUTOMATION_SCHEDULE_CURSORS_KEY);
     advanceScheduleCursor(ctx.db, { automationId: "a1", through: 3_000 }, 9);
     expect(getAppState(ctx.db, AUTOMATION_SCHEDULE_CURSORS_KEY)).toBe(written);
+  });
+});
+
+describe("rebaseScheduleCursor", () => {
+  it("starts one new lifecycle and leaves every other schedule alone", () => {
+    advanceScheduleCursor(ctx.db, { automationId: "a1", through: 3_000 }, 5);
+    advanceScheduleCursor(ctx.db, { automationId: "a2", through: 2_000 }, 5);
+
+    expect(rebaseScheduleCursor(ctx.db, { automationId: "a1", through: 1_000 }, 6)).toEqual({
+      a1: 1_000,
+      a2: 2_000,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({ a1: 1_000, a2: 2_000 });
+  });
+
+  it("durably establishes the baseline before a scheduler has seen the schedule", () => {
+    expect(rebaseScheduleCursor(ctx.db, { automationId: "a1", through: 1_000 }, 6)).toEqual({
+      a1: 1_000,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({ a1: 1_000 });
   });
 });

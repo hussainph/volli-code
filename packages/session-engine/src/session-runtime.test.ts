@@ -20,6 +20,7 @@ import {
   SessionRuntimeNotFoundError,
   type BindingHandle,
   type HarnessCommand,
+  type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -191,7 +192,7 @@ function composition(
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
   } = {},
-): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
+): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
   const engine =
@@ -1297,6 +1298,62 @@ describe("SessionRuntime native adapter contract", () => {
         command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
+  });
+
+  it("records a host-observed post-attach message failure as Session error Attention", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+    // Recovery can revisit one pending Automation intent repeatedly. Its stable
+    // message command id updates one Attention rather than stacking errors.
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
+  });
+
+  it("records a message failure for a Session with no live executor under the host adapter identity", async () => {
+    // The crash-recovery arm: an Automation delivery sweep can report a refusal
+    // after the binding that refused it is already gone. The Attention then
+    // carries the host executor's own identity and no venue — the intent
+    // outlives the attachment, so the report must not require one.
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "detached-failure-create",
+      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+    });
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId: created.sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message could not be delivered: transport closed",
+    });
+
+    const { projection } = await runtime.projection({ sessionId: created.sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message could not be delivered: transport closed",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
   });
 
   it("retires an unrecoverable attach Attention once an attach succeeds", async () => {

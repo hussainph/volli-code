@@ -9,7 +9,6 @@ import {
   getAutomation,
   getSkippedOccurrence,
   insertSkippedOccurrence,
-  latestRunForTicket,
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
@@ -251,12 +250,10 @@ describe("automation runs repo", () => {
 
     expect(first.id).toMatch(UUID_PATTERN);
     expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([second, first]);
-    expect(latestRunForTicket(ctx.db, ticket.id)).toEqual(second);
   });
 
-  it("answers undefined for a Ticket with no Runs", () => {
+  it("answers an empty list for a Ticket with no Runs", () => {
     const { ticket } = seeded();
-    expect(latestRunForTicket(ctx.db, ticket.id)).toBeUndefined();
     expect(listRunsForTicket(ctx.db, ticket.id)).toEqual([]);
   });
 
@@ -333,7 +330,7 @@ describe("automation runs repo", () => {
     ctx.db
       .prepare("UPDATE automation_runs SET reasoning_level = 'galactic' WHERE id = ?")
       .run(run.id);
-    expect(latestRunForTicket(ctx.db, ticket.id)?.model.reasoningLevel).toBe("galactic");
+    expect(listRunsForTicket(ctx.db, ticket.id)[0]?.model.reasoningLevel).toBe("galactic");
   });
 });
 

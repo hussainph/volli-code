@@ -66,11 +66,7 @@ import {
 } from "./automations-page-model";
 import { AutomationEditorPanel } from "./automation-editor";
 import { AutomationLanes } from "./automation-lanes";
-import {
-  openRunSession,
-  runAutomationFromListing,
-  runAutomationForProject,
-} from "./run-automation";
+import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -557,9 +553,9 @@ function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: R
  * open Ticket); here the person is looking at a list of records, so this is
  * the one place the question is worth a dialog.
  *
- * Starting the Run does NOT navigate — `runAutomationFromListing` toasts with
- * the door instead (VC-13 decision 2). The person was working through a page
- * of Automations, not asking to be taken somewhere.
+ * Starting the Run does NOT navigate. VC-234 makes that universal rather than
+ * a listing-versus-context distinction: `runAutomationOnTicket` toasts with an
+ * "Open session" action and the person decides whether to leave this page.
  */
 function RunOnTicketDialog({
   open,
@@ -630,8 +626,8 @@ function RunOnTicketDialog({
                     onActivate={() => {
                       onOpenChange(false);
                       setQuery("");
-                      void runAutomationFromListing({
-                        automationId: automation.id,
+                      void runAutomationOnTicket({
+                        target: { kind: "automation", automationId: automation.id },
                         automationName: automation.name,
                         ticketId: ticket.id,
                         ticketDisplayId,

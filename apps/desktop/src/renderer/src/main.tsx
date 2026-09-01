@@ -11,7 +11,10 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { toast } from "sonner";
 
 import App from "./App";
-import { noteDeliberateMove } from "./components/automations/armed-run";
+import {
+  announcePendingArmedRunSettlement,
+  receivePendingArmedRuns,
+} from "./components/automations/armed-run";
 import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
@@ -170,30 +173,28 @@ async function main() {
       // A failed boot read leaves the icon unrendered; the next push heals it.
     });
 
-  // A Deliberate move main committed for somebody else (VC-128): an explicit
-  // `volli ticket move`. CONTEXT.md gives it the same semantics as a drag, so
-  // it reaches the same arrival door the board store reports through, and an
-  // armed destination column opens the same 3500 ms window with the same one
-  // Cancel. Subscribed before the invalidation below and never awaiting it: the
-  // door warms whatever caches it needs itself, so an arrival cannot be lost to
-  // whichever of the two pushes a window happens to see first.
-  //
-  // The 3500 ms window and its Cancel exist WHERE A WINDOW IS MOUNTED, and
-  // that bound is stated rather than hidden. Two cases, both honest:
-  //
-  //  - A window is open (the normal one, including a window showing another
-  //    page): the countdown appears, Cancel is reachable for the whole delay,
-  //    and the Run announces itself in a toast whether or not anybody was
-  //    watching it — nothing is swallowed in silence.
-  //  - No window is open at all (macOS keeps the app alive after the last one
-  //    closes, and the CLI still reaches main through its socket): nothing
-  //    hears this, so the move is a pure status change and no Run starts. That
-  //    is the safe direction — an unattended Run nobody could cancel is worse
-  //    than one that did not start — and VC-133 owns notifying a person who
-  //    is not at the screen.
-  window.api.tickets.onMoved((notice) => {
-    noteDeliberateMove(notice);
-  });
+  // Main owns one durable armed-column countdown per move (VC-226). Subscribe
+  // before priming so a window opened mid-countdown cannot miss a replacement
+  // between its read and listener registration. Every window receives the same
+  // whole snapshot; Cancel travels back to main with the exact arrival id.
+  window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
+  window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
+  window.api.automations
+    .pendingArmedRuns()
+    .then((pending) => {
+      if (pending.ok) {
+        receivePendingArmedRuns(pending.pending);
+        // A failed expiry can outlive every renderer and the app process. Its
+        // retained command id stays in main; a newly opened window restores
+        // the retry action from this renderer-safe projection.
+        for (const failure of pending.failures) {
+          announcePendingArmedRunSettlement({ kind: "failed", ...failure });
+        }
+      } else toastError(`Couldn't load pending automations: ${pending.error}`);
+    })
+    .catch((error: unknown) => {
+      toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
+    });
 
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so

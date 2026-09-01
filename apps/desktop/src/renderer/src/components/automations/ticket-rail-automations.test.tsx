@@ -22,6 +22,7 @@ import { openRunSession, runAutomationOnTicket } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
+import { useProjectsStore } from "@renderer/stores/projects";
 
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
@@ -30,6 +31,19 @@ vi.mock("./run-automation", () => ({
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+
+const PROJECT = {
+  id: "p1",
+  name: "Volli Code",
+  path: "/code/volli-code",
+  ticketPrefix: "VC",
+  baseBranch: null,
+  setupCommand: null,
+  colorIndex: 0,
+  sortOrder: 0,
+  createdAt: 1,
+  updatedAt: 1,
+};
 
 const TICKET = {
   id: "t1",
@@ -154,6 +168,12 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
+function hasUiText(needle: string): boolean {
+  return [...document.querySelectorAll(".text-ui")].some((candidate) =>
+    candidate.textContent?.includes(needle),
+  );
+}
+
 function control(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
@@ -216,6 +236,7 @@ beforeEach(() => {
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
+  useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -248,7 +269,9 @@ describe("the split button", () => {
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a1" },
+      automationName: "Review sweep",
       ticketId: "t1",
+      ticketDisplayId: "VC-6",
       modelOverride: null,
     });
   });
@@ -266,7 +289,9 @@ describe("the split button", () => {
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a2" },
+      automationName: "Nightly sweep",
       ticketId: "t1",
+      ticketDisplayId: "VC-6",
       modelOverride: null,
     });
   });
@@ -451,7 +476,9 @@ describe("Run once", () => {
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "unbound", instructions: "/review the diff once" },
+      automationName: "Run once",
       ticketId: "t1",
+      ticketDisplayId: "VC-6",
       modelOverride: null,
     });
     // Nothing was saved on the way: no record write door was touched, so there
@@ -487,7 +514,9 @@ describe("Run once", () => {
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "unbound", instructions: "/sweep this once" },
+      automationName: "Run once",
       ticketId: "t1",
+      ticketDisplayId: "VC-6",
       modelOverride: {
         providerId: "anthropic",
         modelId: "claude-opus",
@@ -508,7 +537,9 @@ describe("the per-invocation override", () => {
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a1" },
+      automationName: "Review sweep",
       ticketId: "t1",
+      ticketDisplayId: "VC-6",
       modelOverride: {
         providerId: "anthropic",
         modelId: "claude-opus",
@@ -528,6 +559,11 @@ describe("this Ticket's Runs", () => {
     });
 
     expect(text()).toContain("claude-opus · high");
+    expect(hasUiText("claude-opus · high")).toBe(true);
+    const runtimeLine = [...document.querySelectorAll(".text-ui")].find((candidate) =>
+      candidate.textContent?.includes("claude-opus · high"),
+    );
+    expect(runtimeLine?.classList.contains("block")).toBe(true);
     expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
   });
 

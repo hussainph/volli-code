@@ -58,7 +58,8 @@ interface SessionsLayerProps {
    */
   rail?: React.ReactNode;
   /**
-   * The File editor, when a Home File tab is in front (VC-121), else null.
+   * The non-Session workbench plane in front: a Home File editor (VC-121) or a
+   * Browser Tab's renderer chrome and native-view anchor, else null.
    *
    * It arrives as a node for the reason {@link SessionsLayerProps.rail} does,
    * and it stands in the SAME column as the Session planes — which is the
@@ -205,9 +206,9 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
   // A chat in front covers the plane, so the terminals under it stand down.
   // They stay mounted — only their visibility flips (see the keep-alive below).
   const activeChatSessionId = parseChatTabId(activeTabId);
-  // A File tab covers the same column, and every Session pane stands down for
-  // it on exactly the same terms: mounted, not visible. The box itself stays on
-  // screen — it is what the File editor and the rail are standing in.
+  // A File or Browser tab covers the same column, and every Session pane stands
+  // down for it on exactly the same terms: mounted, not visible. The box itself
+  // stays on screen — it is what the workbench plane and optional rail stand in.
   const panesVisible = visible && plane === null;
 
   // Terminal focus can land on THIS surface's terminals too, so this surface
@@ -342,8 +343,8 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
 
   return (
     <>
-      {/* The Project Session planes — or the File editor standing in the same
-          column — and, beside them, Home's rail. Flow layout, hidden (not
+      {/* The Project Session planes — or the File/Browser workbench plane
+          standing in the same column — and, beside them, Home's rail. Flow layout, hidden (not
           unmounted) when the Board tab or another page is in front. The row is
           the outer box so the rail narrows what is in the column rather than
           covering it, and it is the ONE place the rail is rendered from: see

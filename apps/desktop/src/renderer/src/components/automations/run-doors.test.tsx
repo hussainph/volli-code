@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * VC-220 — every Run door, driven from the control a person actually presses,
- * as far as the one seam they all have to reach.
+ * VC-220 — every renderer-owned hand-Run door, driven from the control a
+ * person actually presses, as far as the one seam they all have to reach.
  *
  * The report said the kickoff never fired "across ALL Run doors", and the
  * answer to that claim cannot be one call to the shared runner: the whole point
@@ -9,8 +9,8 @@
  * seam — the surface that grew its own call, or stopped making one at all. So
  * each case here starts at the real entry path (a click on the rail's split
  * button, a board card's context-menu row, the page's Ticket chooser, the
- * palette's run-by-name row, the armed column's countdown expiring) with the
- * real `run-automation.ts` glue behind it, and asserts what reached
+ * palette's run-by-name row) with the real `run-automation.ts` glue behind it,
+ * and asserts what reached
  * `window.api.automations.run` — the preload's `volli:automation-run`.
  *
  * That channel is where this file stops, and the rest of the chain is pinned
@@ -22,18 +22,22 @@
  *    FIRST turn under the Run's durable ids, and the loud failure when the
  *    attach that would have carried them is refused:
  *    `main/automations/run.test.ts`.
- *  - the two doors that never touch the renderer — the agent verb and the
- *    schedule timer — reach the same runner in `agent-tool-door.test.ts` and
- *    `automations/scheduler.test.ts`.
+ *  - the doors that never ask the renderer to run — the agent verb, schedule
+ *    timer, and main-owned armed-column expiry — reach the same runner in
+ *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and
+ *    `automations/pending-armed-runs.test.ts`.
  *
- * Nothing here asserts where a started Run LANDS (a tab, a toast, Model
- * Access); that is `run-automation-model.ts`'s decision and each surface's own
- * test. What is asserted is that the door asks, and asks for the right Run.
+ * Most cases stop before asserting where a started Run lands; that is the
+ * shared glue's decision. The rail and palette cases pin VC-234's two changed
+ * doors (toast in place, with "Open session"), and the skipped-row case pins
+ * VC-231's launch-resolved name across a historical row. Every case still
+ * asserts that the door asks, and asks for the right Run.
  */
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { ARMED_RUN_DELAY_MS, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { toast } from "sonner";
 import type {
   Automation,
   AutomationRun,
@@ -42,7 +46,7 @@ import type {
   Ticket,
 } from "@volli/shared";
 
-import { noteDeliberateMove, resetArmedRuns } from "./armed-run";
+import { resetArmedRuns } from "./armed-run";
 import { TicketAutomationMenuItems } from "./automation-run-menu";
 import { AutomationsPage } from "./automations-page";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
@@ -60,8 +64,8 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-// The landing's toasts are noise here, and `sonner` needs a real DOM host it
-// has no reason to get in this file.
+// Most landing toasts are noise here; the skipped-row rename case inspects one.
+// Mocking `sonner` also avoids needing a real DOM host for the rest.
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
 }));
@@ -130,19 +134,37 @@ const NIGHTLY: Automation = {
 
 const ARMING: ColumnArming = { projectId: "p1", status: "doing", automationId: "a1", armedAt: 5 };
 
+/** Main's successful door answer, including the name shared with the Session title. */
+function runSuccess(input: {
+  automationId: string;
+  automationName: string;
+  ticketId: string | null;
+}) {
+  const started: AutomationRun = {
+    id: "run-1",
+    automationId: input.automationId,
+    automationName: input.automationName,
+    ticketId: input.ticketId,
+    sessionId: "s1",
+    model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+    attendance: "attended",
+    createdAt: 1,
+  };
+  return {
+    ok: true as const,
+    run: started,
+    projectId: "p1",
+    receipt: { id: "r", commandId: "c", status: "completed" as const, recordedAt: 1 },
+  };
+}
+
 /** The one Run door every renderer surface has to reach, and its Project twin. */
-const run = vi.fn(async () => ({
-  ok: true as const,
-  run: { sessionId: "s1" },
-  projectId: "p1",
-  receipt: { id: "r", commandId: "c", status: "completed", recordedAt: 0 },
-}));
-const runForProject = vi.fn(async () => ({
-  ok: true as const,
-  run: { sessionId: "s1" },
-  projectId: "p1",
-  receipt: { id: "r", commandId: "c", status: "completed", recordedAt: 0 },
-}));
+const run = vi.fn(async () =>
+  runSuccess({ automationId: "a1", automationName: "Review sweep", ticketId: "t1" }),
+);
+const runForProject = vi.fn(async () =>
+  runSuccess({ automationId: "a3", automationName: "Nightly sweep", ticketId: null }),
+);
 
 /** Every read a mounted surface makes on arrival, answered from the seed. */
 const doors = {
@@ -321,6 +343,7 @@ beforeEach(() => {
   installApi();
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useBoardStore.getState().hydrate({ p1: [TICKET] }, { p1: [] });
+  useWorkspaceStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -346,8 +369,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("every Run door reaches the one Run seam (VC-220)", () => {
-  it("the Ticket rail's split button", async () => {
+describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
+  it("the Ticket rail's split button toasts in place with the Session door", async () => {
+    useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     await act(async () => {
@@ -362,6 +386,13 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
         modelOverride: null,
       }),
     );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Review sweep started on VC-12",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
+    // Adopting the Session keeps it resident, but VC-234 leaves the rail's
+    // current tab alone until the person presses the toast action.
+    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the rail's per-invocation Runtime, spent on this one Run", async () => {
@@ -473,39 +504,17 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
     );
   });
 
-  it("the armed column's window, when nobody takes it back", async () => {
-    // The one door with no control at the end of it: a card is dropped, 3500ms
-    // pass, and the Run starts itself. It is also the door that calls the seam
-    // directly rather than through the shared glue, which is exactly the kind
-    // of bypass a single runner-level test cannot see.
-    vi.useFakeTimers();
-    try {
-      useAutomationsStore.setState({
-        byProject: { p1: [AUTOMATION] },
-        armingByProject: { p1: [ARMING] },
-        orderByProject: { p1: [] },
-        enabledIds: [AUTOMATION.id],
-        enablementRead: true,
-      });
-      noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
-
-      await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
-
-      expect(run).toHaveBeenCalledWith(
-        askedFor({
-          target: { kind: "automation", automationId: "a1" },
-          ticketId: "t1",
-          // Never on the drag path (VC-112).
-          modelOverride: null,
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("the command palette's run-by-name row", async () => {
+  it("the command palette's run-by-name row toasts in place with main's resolved name", async () => {
     // The palette runs on the OPEN Ticket, so the open Ticket is the seed.
+    // Main's launch answer carries a newer name than this palette snapshot;
+    // VC-231 says that answer wins in every success toast.
+    run.mockResolvedValueOnce(
+      runSuccess({
+        automationId: "a1",
+        automationName: "Renamed review sweep",
+        ticketId: "t1",
+      }),
+    );
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<CommandPalette open onOpenChange={() => {}} />);
 
@@ -520,6 +529,11 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
         modelOverride: null,
       }),
     );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Renamed review sweep started on VC-12",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
+    expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs.t1).toBeUndefined();
   });
 
   it("the page's Play on a scheduled record, at the Project", async () => {
@@ -540,9 +554,19 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
     expect(runForProject).toHaveBeenCalledWith(askedFor({ automationId: "a3", projectId: "p1" }));
   });
 
-  it("Run now on a Skipped occurrence", async () => {
+  it("Run now on a Skipped occurrence uses main's launch-time name after a rename", async () => {
+    runForProject.mockResolvedValueOnce(
+      runSuccess({
+        automationId: "a3",
+        automationName: "Renamed nightly sweep",
+        ticketId: null,
+      }),
+    );
     installApi({
-      list: vi.fn(async () => ({ ok: true, automations: [NIGHTLY] })),
+      list: vi.fn(async () => ({
+        ok: true,
+        automations: [{ ...NIGHTLY, name: "Renamed nightly sweep" }],
+      })),
       skipsForProject: vi.fn(
         async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
           ok: true,
@@ -550,6 +574,7 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
             {
               id: "skip-1",
               automationId: "a3",
+              // The historical skip keeps the name from when it was recorded.
               automationName: "Nightly sweep",
               projectId: "p1",
               dueAt: 5,
@@ -573,5 +598,11 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
 
     expect(runForProject).toHaveBeenCalledTimes(1);
     expect(runForProject).toHaveBeenCalledWith(askedFor({ automationId: "a3", projectId: "p1" }));
+    // Main resolved the renamed record into both this answer and the Session
+    // title; the toast must not reuse the skip's historical snapshot.
+    expect(toast.success).toHaveBeenCalledWith(
+      "Renamed nightly sweep started",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
   });
 });

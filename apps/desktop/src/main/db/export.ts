@@ -327,6 +327,13 @@ export interface ExportAutomationRun {
   createdAt: number;
 }
 
+/** An accepted Automation Run's durable pre-mint Session command relation (migration 036). */
+export interface ExportAutomationSessionMintIntent {
+  sessionCreateCommandId: string;
+  automationCommandId: string;
+  recordedAt: number;
+}
+
 export interface ExportDocument {
   format: typeof EXPORT_FORMAT;
   schemaVersion: number;
@@ -350,6 +357,7 @@ export interface ExportDocument {
   appState: ExportAppState[];
   automations: ExportAutomation[];
   automationRuns: ExportAutomationRun[];
+  automationSessionMintIntents: ExportAutomationSessionMintIntent[];
   automationColumnArmings: ExportColumnArming[];
 }
 
@@ -593,6 +601,28 @@ function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
     modelId: row.model_id,
     reasoningLevel: row.reasoning_level,
     createdAt: row.created_at,
+  }));
+}
+
+interface AutomationSessionMintIntentRow {
+  session_create_command_id: string;
+  automation_command_id: string;
+  recorded_at: number;
+}
+
+function exportAutomationSessionMintIntents(
+  db: Database.Database,
+): ExportAutomationSessionMintIntent[] {
+  const rows = prepared<[], AutomationSessionMintIntentRow>(
+    db,
+    `SELECT session_create_command_id, automation_command_id, recorded_at
+       FROM automation_session_mint_intents
+      ORDER BY session_create_command_id`,
+  ).all();
+  return rows.map((row) => ({
+    sessionCreateCommandId: row.session_create_command_id,
+    automationCommandId: row.automation_command_id,
+    recordedAt: row.recorded_at,
   }));
 }
 
@@ -911,6 +941,7 @@ export function buildExportDocument(
     appState: exportAppState(db),
     automations: exportAutomations(db),
     automationRuns: exportAutomationRuns(db),
+    automationSessionMintIntents: exportAutomationSessionMintIntents(db),
     automationColumnArmings: exportColumnArmings(db),
   };
 }

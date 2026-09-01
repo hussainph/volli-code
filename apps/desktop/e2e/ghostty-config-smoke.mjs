@@ -289,7 +289,7 @@ async function main() {
     // control's caret. `.first()` because an empty surface mounts the control
     // twice (tab strip + empty state).
     await page.getByText("Home", { exact: true }).click();
-    await page.getByLabel("Other session kinds").first().click();
+    await page.getByLabel("Other things to open").first().click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await waitForLiveCanvas(page);
     // The color sample reads the canvas's bottom-right corner — the exact

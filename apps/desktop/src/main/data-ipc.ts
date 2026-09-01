@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
   derivePrefix,
@@ -83,6 +83,7 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
+  TicketMovedNotice,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
@@ -399,8 +400,21 @@ export function registerDataIpcHandlers(
      * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+    /**
+     * Reports a renderer move only after its status change committed. Main's
+     * pending-arrival coordinator is the production consumer; absent tests are
+     * a no-op.
+     */
+    onDeliberateMove?: (notice: TicketMovedNotice) => void;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The structured executor bindings this process holds right now. Session
+     * attachments stay durably open across relaunch for lazy rehydration, so a
+     * listing must project `live` from this host fact rather than from the
+     * attachment's durable status. Absent means no executor is currently bound.
+     */
+    listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
     /**
      * The renderer door of model-call titling (VC-81): kicks one refinement
      * off behind a just-written heuristic title. Absent (tests, degraded
@@ -433,6 +447,8 @@ export function registerDataIpcHandlers(
       sessionId: session.session.id,
       ticketId: session.session.ticketId,
     });
+  const liveAttachmentIds = (): ReadonlySet<string> =>
+    new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
@@ -661,6 +677,33 @@ export function registerDataIpcHandlers(
       const tickets = withTicketWake(db, input.ticketId, () =>
         moveTicketCommand(db, input, { now, actor }),
       );
+      // Main owns the armed-column arrival. Report only a real committed
+      // column change; a same-column reorder (or a mismatched project id that
+      // moved nothing) replaces no pending countdown. The Option-drag choice
+      // travels only on this door.
+      const moved = getTicketRow(db, input.ticketId);
+      if (
+        before !== undefined &&
+        moved !== undefined &&
+        before.status !== moved.status &&
+        moved.status === input.toStatus
+      ) {
+        try {
+          options.onDeliberateMove?.({
+            projectId: moved.project_id,
+            ticketId: input.ticketId,
+            from: before.status as TicketStatus,
+            to: input.toStatus,
+            ...(input.choice === undefined ? {} : { choice: input.choice }),
+          });
+        } catch (error) {
+          // The Ticket move already committed. A pending-projection failure is
+          // logged without lying to the renderer that its status change failed.
+          console.error(
+            `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
+          );
+        }
+      }
       // The move committed above (its own transaction); the interrupt is the
       // side effect, fired only for a real backward move (issue #78).
       if (before !== undefined) {
@@ -902,7 +945,10 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -913,7 +959,10 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {

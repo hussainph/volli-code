@@ -50,7 +50,10 @@ import type {
   LegacyProject,
   ManifestError,
   ModelAccessSignInType,
+  DeliberateMoveChoice,
   ModelSelection,
+  PendingArmedRun,
+  PendingArmedRunFailure,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -197,6 +200,8 @@ export interface TicketMoveInput {
   ticketId: string;
   toStatus: TicketStatus;
   toIndex: number;
+  /** The Option-drag target, when that gesture supplied this renderer move. */
+  choice?: DeliberateMoveChoice;
 }
 
 export interface TicketSetPriorityInput {
@@ -1395,6 +1400,120 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- Browser Tabs (VC-110) -------------------------------------------------
+
+/**
+ * Provenance main assigns when it creates a Browser Tab. The two values stay
+ * closed because personal and agent-created tabs have different profile and
+ * future grant policy; an arbitrary renderer label could not be trusted.
+ */
+export type BrowserTabCreatedBy = "user" | "session";
+
+/**
+ * Renderer-safe state for one live Browser Tab. Product identity and bounded
+ * browser chrome facts cross IPC; Chromium ids, Session partitions, page
+ * content, cookies, and history entries never do.
+ */
+export interface BrowserTabState {
+  /** Product-owned opaque id — never a positional Chromium tab index. */
+  tabId: string;
+  projectId: string;
+  /** Null for a project-level tab, whether opened by a person or Project Session. */
+  ticketId: string | null;
+  createdBy: BrowserTabCreatedBy;
+  url: string;
+  title: string;
+  loading: boolean;
+  /** Main-frame load failure, cleared when the next navigation starts. */
+  error: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** Monotonic within this tab; a main-frame navigation advances it. */
+  generation: number;
+}
+
+/**
+ * A person's request to open a Browser Tab in one workspace scope. Provenance
+ * is deliberately absent: renderer-originated tabs are always `user`, while a
+ * Session opens its own tabs through the main-process host port.
+ */
+export interface BrowserTabOpenInput {
+  projectId: string;
+  ticketId?: string;
+  url: string;
+}
+
+/** A scoped registry read; omitting `ticketId` lists the whole project. */
+export interface BrowserTabListInput {
+  projectId: string;
+  ticketId?: string;
+}
+
+/** An opaque Browser Tab target shared by operations that carry no other input. */
+export interface BrowserTabIdInput {
+  tabId: string;
+}
+
+/** One address-bar navigation, separate from history-direction commands. */
+export interface BrowserTabNavigateInput extends BrowserTabIdInput {
+  url: string;
+}
+
+/**
+ * The renderer-measured native host plane in BrowserWindow content coordinates.
+ * Main, not renderer, applies it to the WebContentsView.
+ */
+export interface BrowserTabBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One measured host plane paired with the opaque tab it belongs to. */
+export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
+  bounds: BrowserTabBounds;
+}
+
+/** A Browser Tab mutation/read that answers with the current chrome snapshot. */
+export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
+
+/** The scoped Browser Tab registry, containing no page-derived body data. */
+export type BrowserTabListResult = Result<{ tabs: BrowserTabState[] }>;
+
+/**
+ * The Browser workspace's renderer→main command surface. Every native-surface
+ * operation names Volli's opaque tab id; none accepts a Chromium index,
+ * partition name, preload, or WebContents id.
+ */
+export interface VolliBrowserIpcContract {
+  "volli:browser-open": { args: [input: BrowserTabOpenInput]; result: BrowserTabResult };
+  "volli:browser-close": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-list": { args: [input: BrowserTabListInput]; result: BrowserTabListResult };
+  "volli:browser-navigate": {
+    args: [input: BrowserTabNavigateInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-back": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-forward": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-reload": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-set-bounds": { args: [input: BrowserTabSetBoundsInput]; result: Result };
+  "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+}
+
+/** Every Browser workspace invoke channel, derived from its one contract. */
+export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
+
+/**
+ * A complete Browser Tab chrome snapshot pushed whenever URL, title, loading,
+ * history reachability, or generation changes. A full snapshot avoids merging
+ * partial events from different navigations out of order.
+ */
+export type BrowserTabStateEvent =
+  | { tab: BrowserTabState; closedTabId?: never }
+  | { tab?: never; closedTabId: string };
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
@@ -1611,6 +1730,36 @@ export type AutomationRunStartResult =
       receipt?: AutomationCommandReceipt;
     };
 
+/** Main's complete countdown and retained-failure projection. */
+export type PendingArmedRunsResult = Result<{
+  pending: PendingArmedRun[];
+  failures: PendingArmedRunFailure[];
+}>;
+
+/** Cancel identifies one exact arrival, never whichever later move shares its Ticket. */
+export interface PendingArmedRunCancelInput {
+  id: string;
+}
+
+export type PendingArmedRunCancelResult = Result<{ cancelled: boolean }>;
+
+/** Retry also names the exact move; main supplies its retained command id. */
+export interface PendingArmedRunRetryInput {
+  id: string;
+}
+
+export type PendingArmedRunRetryResult = Result<{ retrying: boolean }>;
+
+/** What main learned after removing an expired countdown from the pending projection. */
+export type PendingArmedRunSettledNotice =
+  | { kind: "attempted"; pending: PendingArmedRun; result: AutomationRunStartResult }
+  | { kind: "failed"; pending: PendingArmedRun; error: string }
+  | {
+      kind: "abandoned";
+      pending: PendingArmedRun;
+      reason: "gone" | "left-column" | "disarmed" | "switched-off";
+    };
+
 /**
  * The Automations planning surface (VC-126): the record's CRUD plus the one
  * Run door. Same stance as the rest of the planning data — typed channels,
@@ -1670,6 +1819,18 @@ export interface VolliAutomationIpcContract {
   "volli:automation-set-enabled": {
     args: [input: AutomationSetEnabledInput];
     result: AutomationSetEnabledResult;
+  };
+  /** Main's whole durable pending-countdown projection, for a new renderer window. */
+  "volli:automation-pending-armed-runs": { args: []; result: PendingArmedRunsResult };
+  /** Cancels one exact pending arrival; idempotent when it already settled or was replaced. */
+  "volli:automation-cancel-pending-armed-run": {
+    args: [input: PendingArmedRunCancelInput];
+    result: PendingArmedRunCancelResult;
+  };
+  /** Retries one expired arrival with the Run command id main retained for it. */
+  "volli:automation-retry-pending-armed-run": {
+    args: [input: PendingArmedRunRetryInput];
+    result: PendingArmedRunRetryResult;
   };
   /**
    * Every due time this project's schedules missed, newest first (VC-130).
@@ -1892,6 +2053,7 @@ export interface VolliInvokeContract
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliBrowserIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
@@ -1912,23 +2074,22 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  | "volli:browser-tab-state"
   | "volli:terminal-data"
   | "volli:terminal-exit"
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   | "volli:data-changed"
+  // Main owns one durable armed-column countdown projection. Every window
+  // receives the same whole snapshot, and settlement is announced separately
+  // so renderer surfaces can react without owning the timer that decided it.
+  | "volli:pending-armed-runs-changed"
+  | "volli:pending-armed-run-settled"
   // Backward-move interrupt announcement (issue #78, CONCEPT #20): fired after
   // a ticket move out of the active columns actually Esc'd live agent sessions,
   // so every window can surface the automated de-escalation where the mover is
   // looking (a toast with a jump-to-ticket action) — never silently.
   | "volli:sessions-interrupted"
-  // An explicit `volli ticket move` COMMITTED a status change (VC-128).
-  // CONTEXT.md defines a Deliberate move as a human drag or an explicit CLI
-  // move, with the same semantics either way — so this is how the second one
-  // reaches the renderer's one arrival door. It announces a durable fact main
-  // already wrote; it is not a mutation channel, and nothing acts on it except
-  // the armed-column window. See {@link TicketMovedNotice}.
-  | "volli:ticket-moved"
   // A Session was retitled by main rather than by a person (VC-81's auto-title
   // model call). Every other retitle originates in the renderer, which moves
   // its own labels optimistically; this one has no such writer, and
@@ -2068,25 +2229,20 @@ export interface DataChangedEvent {
 }
 
 /**
- * A Deliberate move main committed for a caller that is not this renderer — an
- * explicit `volli ticket move` over the agent socket (VC-128).
+ * A committed Deliberate move as main's armed-arrival coordinator receives it.
  *
- * The renderer's own moves never arrive here: they already know their own
- * before/after and report through the board store. This carries what a
- * renderer cannot reconstruct — which column the Ticket LEFT — because
- * `volli:data-changed` only says "re-read", and by the time it has, the old
- * status is gone. Without it an armed column could never tell an arrival from
- * a Ticket that was already there.
- *
- * Same-column moves are never announced: the CLI treats them as an idempotent
- * no-op, and a no-op is not an arrival.
+ * Both move doors report through this one shape after persistence: renderer IPC
+ * may carry the Option-drag choice, while an explicit `volli ticket move`
+ * carries no choice. Same-column no-ops are never reported because they are not
+ * arrivals.
  */
 export interface TicketMovedNotice {
   projectId: string;
   ticketId: string;
-  /** The column it left — the fact a re-read cannot recover. */
+  /** The column it left — the fact a post-commit re-read cannot recover. */
   from: TicketStatus;
   to: TicketStatus;
+  choice?: DeliberateMoveChoice;
 }
 
 /**

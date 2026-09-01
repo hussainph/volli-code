@@ -1,4 +1,5 @@
 import * as React from "react";
+import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
@@ -10,7 +11,7 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
-import { sessionProvenanceHoverLine, type SkillReference } from "@volli/shared";
+import { sessionProvenanceHoverLine } from "@volli/shared";
 
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
@@ -50,14 +51,16 @@ import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
  * A terminal tab carries its whole store record — park state, panes and exit
  * codes are all read off it — while a chat tab carries the two facts a chat has
  * on a strip: its title and its liveness. A File tab carries the Main-checkout
- * path plus preview/dirty presentation. `id` is the identity in the merged
- * strip and in `homeActiveTab`; chat and File ids are prefixed, terminal ids are
- * UUIDs, and the Board is a bare word, so the four spaces never collide.
+ * path plus preview/dirty presentation, and a Browser Tab carries main's opaque
+ * id plus its live title/loading state. `id` is the identity in the merged strip
+ * and in `homeActiveTab`; chat, File, and Browser ids are prefixed, terminal ids
+ * are UUIDs, and the Board is a bare word, so the five spaces never collide.
  */
 export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
   | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
+  | { kind: "browser"; id: string; tabId: string; title: string; loading: boolean }
   | {
       kind: "file";
       id: string;
@@ -97,10 +100,7 @@ interface HomeTabStripProps {
   onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  onNewBrowser(): void;
   /** A Session of either kind is already booting. */
   creating: boolean;
   /** Whether Home's details rail is collapsed — the corner control's state. */
@@ -125,13 +125,13 @@ interface HomeTabStripProps {
  * where it floated above a surface it did not own. It owns this one.)
  *
  * The permanent Board tab leads, then both kinds of Session a project can run
- * without a ticket — terminals first and chats after — then Main-checkout File
- * tabs in their reducer order. That composed order is what the caller hands
- * down; whether the person has since ARRANGED it (VC-189) is decided one level
- * up, in the `tabOrder` overlay, so this strip still just draws the list it is
- * given. A trailing split control starts either Session; every tab but the
- * Board carries a hover-revealed close and a right-click menu. Session tabs
- * rename on double-click; preview File tabs pin.
+ * without a ticket, Main-checkout File tabs, and live Browser Tabs. That
+ * composed order is what the caller hands down; whether the person has since
+ * ARRANGED it (VC-189) is decided one level up, in the `tabOrder` overlay, so
+ * this strip still just draws the list it is given. A trailing split control
+ * starts either Session or opens a Browser Tab; every tab but the Board carries
+ * a hover-revealed close. Session tabs rename on double-click; preview File
+ * tabs pin.
  *
  * The Board tab does not drag and nothing drops before it — it is simply left
  * out of the sortable ids and given no `dragId`, which is the same statement
@@ -153,8 +153,7 @@ export function HomeTabStrip({
   onCloseOtherFiles,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   creating,
   railCollapsed,
   railTogglable,
@@ -181,15 +180,14 @@ export function HomeTabStrip({
               ticketless Sessions — exactly what this control mints, from the Board
               tab as well as from a Session tab. `align="end"` so the menu hangs
               back into the window rather than off its edge. */}
-          <div className="flex items-center">
+          <div className="flex items-center gap-1">
             <NewSessionControl
               disabled={creating}
               placement="strip"
               align="end"
               shortcuts
-              skills={skills}
               onNewChat={onNewChat}
-              onNewChatWithSkill={onNewChatWithSkill}
+              onNewBrowser={onNewBrowser}
               onNewTerminal={onNewSession}
             />
           </div>
@@ -226,6 +224,29 @@ export function HomeTabStrip({
               active={active}
               tabStop={tabStop}
               onSelect={() => onSelect(descriptor)}
+            />
+          );
+        }
+        if (descriptor.kind === "browser") {
+          return (
+            <Tab
+              key={descriptor.id}
+              data-testid="home-browser-tab"
+              label={descriptor.title}
+              title={descriptor.title}
+              active={active}
+              tabStop={tabStop}
+              dragId={descriptor.id}
+              status={descriptor.loading ? "working" : undefined}
+              leading={
+                <BrowserIcon
+                  aria-hidden
+                  weight="bold"
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
+              }
+              onActivate={() => onSelect(descriptor)}
+              onClose={() => onClose(descriptor)}
             />
           );
         }

@@ -22,9 +22,8 @@
  *      no other) and the app's global Session listing (the command palette).
  *      "Everywhere a Session appears" is a claim about all of them at once, so
  *      the probe walks all of them rather than the one that was written first.
- *   5. The board card's ring means LIVE, not finishing: `live` is a lit ring
- *      standing still, `working` is the one that travels, and both are the
- *      same colour so motion is the only thing that separates them.
+ *   5. The board card's ring has two states: `working` travels and `waiting`
+ *      stands still; a retired activity value draws nothing.
  *   6. Reduced motion keeps the signifier and removes only the motion: the
  *      ring is still displayed, still lit, and no longer animating.
  *
@@ -77,9 +76,10 @@ console.log("scratch:", scratch, "\n");
 
 /**
  * The ring's own computed facts, read off a probe element the real stylesheet
- * is applied to. The card that would wear it needs a live Run to light it, so
- * the rule is exercised where it is written rather than where it eventually
- * lands — `board-session-activity.test.ts` owns which word a card gets.
+ * is applied to. The card that would wear it needs current activity to light
+ * it, so the rule is exercised where it is written rather than where it
+ * eventually lands — `board-session-activity.test.ts` owns which word a card
+ * gets.
  */
 async function ringFacts(page, activity) {
   return page.evaluate((state) => {
@@ -102,7 +102,7 @@ async function ringFacts(page, activity) {
       // value and would say nothing about the settled ring.
       display: box.display,
       animationName: arc.animationName,
-      // The lit-but-still states paint the whole perimeter; the travelling one
+      // The lit-but-still state paints the whole perimeter; the travelling one
       // carries a conic gradient with a single bright arc.
       background: arc.backgroundImage === "none" ? "solid" : "gradient",
       arcOpacity: arc.opacity,
@@ -310,8 +310,8 @@ try {
     detail: `rows=${palette.rows} bolts=${palette.marks.bolts} provenance tooltips=${palette.marks.provenanceTooltips}`,
   }));
 
-  // === 4. THE RING MEANS LIVE, NOT FINISHING ===============================
-  const [off, working, waiting, live] = await Promise.all([
+  // === 4. THE RING SAYS WORKING OR WAITING ================================
+  const [off, working, waiting, retired] = await Promise.all([
     ringFacts(page, null),
     ringFacts(page, "working"),
     ringFacts(page, "waiting"),
@@ -325,28 +325,28 @@ try {
     detail: `display=${off.display}`,
   }));
 
-  await attempt(8, "`live` is the ring standing still, in `working`'s own colour", async () => ({
+  await attempt(8, "`working` is the travelling ring", async () => ({
     ok:
-      live.display === "block" &&
-      live.animationName === "none" &&
-      live.background === "solid" &&
-      // Told apart from `working` by motion alone. Amber would send a reader to
-      // a chat that has no question in it.
+      working.display === "block" &&
       working.animationName === "session-ring-sweep" &&
       working.background === "gradient",
-    detail: `live=${live.display}/${live.animationName}/${live.background} working=${working.animationName}/${working.background}`,
+    detail: `working=${working.display}/${working.animationName}/${working.background}`,
   }));
 
-  await attempt(9, "`waiting` keeps its own reading beside the new word", async () => ({
-    ok: waiting.display === "block" && waiting.animationName === "none",
-    detail: `waiting=${waiting.display}/${waiting.animationName}`,
+  await attempt(9, "`waiting` stands still and the retired state draws nothing", async () => ({
+    ok:
+      waiting.display === "block" &&
+      waiting.animationName === "none" &&
+      waiting.background === "solid" &&
+      retired.display === "none",
+    detail: `waiting=${waiting.display}/${waiting.animationName}/${waiting.background} retired=${retired.display}`,
   }));
 
   // === 5. REDUCED MOTION KEEPS THE SIGNIFIER ===============================
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const [reducedWorking, reducedLive] = await Promise.all([
+  const [reducedWorking, reducedWaiting] = await Promise.all([
     ringFacts(page, "working"),
-    ringFacts(page, "live"),
+    ringFacts(page, "waiting"),
   ]);
   await page.emulateMedia({ reducedMotion: null });
 
@@ -363,8 +363,8 @@ try {
       Number(reducedWorking.arcOpacity) < Number(working.arcOpacity) &&
       // And the state that was already still is untouched by the preference:
       // there was no motion in it to take away.
-      reducedLive.animationName === "none" &&
-      reducedLive.background === "solid",
+      reducedWaiting.animationName === "none" &&
+      reducedWaiting.background === "solid",
     detail: `working=${reducedWorking.display}/${reducedWorking.animationName}/${reducedWorking.background}/${reducedWorking.arcOpacity} (full motion ${working.arcOpacity})`,
   }));
 

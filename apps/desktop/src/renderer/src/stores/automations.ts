@@ -669,7 +669,9 @@ export function effectiveArmedIn(
 
 /**
  * The column's Offered list in DIGIT order (VC-132): the authored rank, the
- * effective armed Automation pinned to `1`, capped at nine.
+ * effective armed Automation (armed AND switched on here) pinned to `1`, capped
+ * at nine. An armed-but-switched-off row keeps its authored digit instead; the
+ * lane annotates that no-pin state because a plain drop starts nothing.
  *
  * The one composition of all four slices, so the digit a lane prints and the
  * digit a drag answers can never be two lists. Not memoized — every caller

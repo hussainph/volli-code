@@ -170,6 +170,21 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   const panelLeft = railWidth;
   const floatingInset = pinned ? 0 : SHELL_INSET;
   const panelShown = !terminalFocused && (pinned || reveal.visible);
+  // Native child views composite above every renderer z-index. Keep the marker
+  // through the floating panel's exit transition as well as its open state, or
+  // the Browser plane would jump in front for the final 160ms of withdrawal.
+  const [floatingOverlayExiting, setFloatingOverlayExiting] = React.useState(false);
+  const previousPanelShown = React.useRef(panelShown);
+  React.useLayoutEffect(() => {
+    const wasShown = previousPanelShown.current;
+    previousPanelShown.current = panelShown;
+    if (pinned || terminalFocused || panelShown) {
+      setFloatingOverlayExiting(false);
+    } else if (wasShown) {
+      setFloatingOverlayExiting(true);
+    }
+  }, [panelShown, pinned, terminalFocused]);
+  const nativePlaneOverlay = !pinned && (panelShown || floatingOverlayExiting);
   // The spacer holds ONLY the panel's width. The rail is a flow sibling and
   // already occupies its own 60px; adding it here too would reserve it twice and
   // leave a 60px band of bare canvas between the rail and the card.
@@ -474,8 +489,14 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           <div
             ref={panelRef}
             data-slot="sidebar"
+            data-native-plane-overlay={nativePlaneOverlay ? "" : undefined}
             aria-hidden={!panelShown || undefined}
             inert={!panelShown}
+            onTransitionEnd={(event) => {
+              if (event.target === event.currentTarget && !panelShown) {
+                setFloatingOverlayExiting(false);
+              }
+            }}
             onClick={reveal.onPanelClick}
             onFocus={reveal.onPanelFocus}
             onBlur={reveal.onPanelBlur}
@@ -589,19 +610,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
         />
       </div>
       <Toaster />
-      {/* The armed-column delay window (VC-128). Window-level beside the Toaster
-          rather than inside the board: a Deliberate move can be made from a
-          ticket's own status pill or by an explicit `volli ticket move`, and
-          its countdown must not depend on the board being the surface on
-          screen. It does depend on a WINDOW being open, and that bound is real
-          rather than theoretical — on macOS the app outlives its last window
-          and the CLI still reaches main through its socket, so a `volli ticket
-          move` made with nothing on screen is a pure status change that starts
-          no Run. That is the safe direction, and `main.tsx` states it beside
-          the subscription that hears those moves. What a mounted window still
-          cannot promise is that somebody is LOOKING: the countdown and its
-          Cancel are here for whoever is, and a Run that starts says so in a
-          toast either way (VC-133 owns notifying a person who is not). */}
+      {/* The armed-column delay window (VC-128, main-owned in VC-226).
+          Window-level beside the Toaster rather than inside the board: any
+          mounted renderer projects main's same durable countdown, whatever
+          page it shows, and Cancel from any window deletes that exact arrival.
+          The timer itself is in main, so an explicit `volli ticket move` still
+          fires with no renderer open. */}
       <ArmedRunWindows />
       <NewTicketDialog />
       <HarnessTrustDialog />
