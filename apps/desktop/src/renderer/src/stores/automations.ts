@@ -1,37 +1,185 @@
 /**
  * The renderer's cache of the Automations a project can list (its own plus
- * every global one — `api.automations.list`), keyed by projectId, plus the
- * one piece of app-level view state the feature owns in VC-126: whether the
- * editor dialog is open, and for which project.
+ * every global one — `api.automations.list`), its Run history, the
+ * machine-local enabled set, and the one piece of app-level view state the
+ * feature owns: whether the editor dialog is open, for which project, and on
+ * which record.
  *
- * Read on demand — the command palette refreshes on open, the editor after a
- * save — rather than subscribed: the record changes only through this app's
- * own doors today, and the palette's open IS the moment staleness would show.
+ * Read on demand — the command palette refreshes on open, the page on mount
+ * and after every write — rather than subscribed: the record changes only
+ * through this app's own doors today, and an open IS the moment staleness
+ * would show.
  *
- * A save resolves the refusal STRING rather than toasting it: a rejected
- * name, empty Instructions or an unspellable pin is a correction to what is
- * still on screen in the dialog, not a failure behind the user's back. Only
- * reads toast here, per the surface-every-failure convention.
+ * Two failure conventions, and the split is deliberate:
+ *
+ *  - **A save resolves the refusal STRING.** A rejected name, empty
+ *    Instructions or an unspellable pin is a correction to what is still on
+ *    screen in the dialog, not a failure behind the user's back.
+ *  - **Everything else toasts**, per the surface-every-failure convention:
+ *    a read, a delete, a duplicate and an enable all happen with no form open
+ *    to correct, so the toast is the only place a person could learn.
  */
 import { create } from "zustand";
-import { errorMessage, type Automation } from "@volli/shared";
+import {
+  armedAutomationFor,
+  effectiveArmedAutomationFor,
+  errorMessage,
+  isAutomationRuntimePin,
+  offeredAutomationsForColumn,
+  offeredAutomationsInDigitOrder,
+  type Automation,
+  type AutomationRun,
+  type AutomationSkippedOccurrence,
+  type ColumnArming,
+  type ColumnAutomationOrder,
+  type TicketStatus,
+} from "@volli/shared";
 
-import type { AutomationCreateInput } from "../../../ipc/contract";
+import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/contract";
+import { duplicateName } from "@renderer/components/automations/automations-page-model";
+import { toastError } from "@renderer/lib/toast";
 
 type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
   /** Kept by a caller across a transport retry; generated here when omitted. */
   commandId?: string;
 };
-import { toastError } from "@renderer/lib/toast";
+
+type AutomationUpdateDraftInput = Omit<AutomationUpdateInput, "commandId"> & {
+  commandId?: string;
+};
+
+/**
+ * The open editor. `automation` is the record being edited, or `null` when
+ * this is a create — one field rather than a `mode` discriminant because the
+ * record IS the mode: there is no editing state without a record to edit, and
+ * no create state that has one.
+ */
+export interface AutomationEditorTarget {
+  projectId: string;
+  automation: Automation | null;
+}
 
 interface AutomationsState {
   /** projectId → its listable Automations (own + global), name-ordered by main. */
   byProject: Record<string, readonly Automation[]>;
-  /** The editor dialog: closed, or creating under one project. */
-  editor: { projectId: string } | null;
-  /** Re-fetches one project's list and replaces the cache. Toasts on failure. */
-  refresh(projectId: string): Promise<void>;
+  /**
+   * projectId → its armed columns (VC-128). A separate slice from
+   * {@link AutomationsState.byProject} and a separate read, because arming is a
+   * property of the column and of THIS machine: it is never a field on an
+   * Automation that could be carried along with the record.
+   */
+  armingByProject: Record<string, readonly ColumnArming[]>;
+  /**
+   * projectId → the rank each of its columns gives its Offered list (VC-132).
+   *
+   * A third slice beside the arming and for the same reason: the order is a
+   * property of the COLUMN and of THIS machine, never a field on an Automation
+   * that could travel with the record. It is read beside the arming too — the
+   * digit a lane prints and the digit a drag answers are one list, composed by
+   * {@link offeredInDigitOrder}.
+   */
+  orderByProject: Record<string, readonly ColumnAutomationOrder[]>;
+  /** projectId → every Run on its Tickets, newest first. */
+  runsByProject: Record<string, readonly AutomationRun[]>;
+  /**
+   * projectId → the due times its schedules missed, newest first (VC-130).
+   *
+   * Its own slice beside the Runs rather than merged into them: a skip is a
+   * different record with a different action, and the page interleaves the two
+   * by time through a pure function it can test.
+   */
+  skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
+  /**
+   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
+   *
+   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
+   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
+   * project-wide history would make a Ticket's rail depend on a page nobody
+   * visited. Main answers each question with its own indexed read.
+   */
+  runsByTicket: Record<string, readonly AutomationRun[]>;
+  /**
+   * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
+   * a global Automation is one record with one switch, and the set is a
+   * property of this host rather than of any project it can be listed in.
+   *
+   * Absent means off (VC-112: a machine fires nothing until someone turns
+   * something on there), so an id this set does not name has not been
+   * switched on here — whether or not anyone ever asked.
+   */
+  enabledIds: readonly string[];
+  /**
+   * Whether {@link AutomationsState.enabledIds} has ever been READ, as opposed
+   * to resting at its empty default.
+   *
+   * The two are indistinguishable in the set itself — "nothing switched on
+   * here" and "never asked here" are deliberately one value (VC-112) — and a
+   * caller that must not act on a guess needs to tell them apart. Only
+   * {@link AutomationsState.ensureLoaded} reads this.
+   */
+  enablementRead: boolean;
+  editor: AutomationEditorTarget | null;
+  /**
+   * Re-fetches one project's list and replaces the cache. Toasts on failure.
+   *
+   * Resolves whether the cache now holds THIS read — false when the read
+   * failed, which leaves whatever was cached before untouched. A caller that
+   * refuses to decide from an unwarmed cache (VC-129's rail) needs that
+   * answer: a failed re-read of a cache that HAS landed is invisible in the
+   * slice, since the old value is still sitting there looking read.
+   */
+  refresh(projectId: string): Promise<boolean>;
+  /** Re-fetches one project's Run history, newest first. Toasts on failure. */
+  refreshRuns(projectId: string): Promise<void>;
+  /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
+  refreshSkips(projectId: string): Promise<void>;
+  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
+  refreshTicketRuns(ticketId: string): Promise<void>;
+  /** Re-reads the machine-local enabled set. Resolves whether it landed. */
+  refreshEnablement(): Promise<boolean>;
+  /** Re-fetches one project's armed columns. Resolves whether the read landed. */
+  refreshArming(projectId: string): Promise<boolean>;
+  /** Re-fetches one project's column ranks. Resolves whether the read landed. */
+  refreshOrder(projectId: string): Promise<boolean>;
+  /**
+   * Arranges one column's Offered list — the whole new rank, best first.
+   * Resolves the refusal message, or `null` on success (the answer carries the
+   * project's whole new order set, so nothing is re-fetched afterwards).
+   */
+  setColumnOrder(input: {
+    projectId: string;
+    status: TicketStatus;
+    rankedAutomationIds: readonly string[];
+  }): Promise<string | null>;
+  /**
+   * Arms one column with one offered Automation, or disarms it with
+   * `automationId: null`. Resolves the refusal message, or `null` on success
+   * (the answer carries the project's whole new arming set, so nothing is
+   * re-fetched afterwards).
+   */
+  arm(input: {
+    projectId: string;
+    status: TicketStatus;
+    automationId: string | null;
+  }): Promise<string | null>;
+  /**
+   * Fills whichever of this project's four caches has never landed, and
+   * resolves once they all have (VC-128, VC-132).
+   *
+   * For the one caller that cannot answer from an empty cache: a Deliberate
+   * move arriving before the board's own reads resolved would otherwise be
+   * classified as unarmed and never reconsidered, so a Ticket dropped a
+   * heartbeat after the board mounted — or moved by `volli ticket move` into a
+   * window that never opened this project — would silently miss its Run.
+   *
+   * Only ever FILLS: a cache that has landed is left alone, so this is not a
+   * second refresh policy competing with the board's own read-on-mount. In
+   * flight is shared rather than repeated — a burst of arrivals is one read.
+   */
+  ensureLoaded(projectId: string): Promise<void>;
   openEditor(projectId: string): void;
+  /** Opens the editor on an existing record. The only authoring surface (VC-112). */
+  editAutomation(projectId: string, automation: Automation): void;
   closeEditor(): void;
   /**
    * Creates one Automation through main's validating door. Resolves `null` on
@@ -39,12 +187,41 @@ interface AutomationsState {
    * refusal message for the dialog to show inline.
    */
   save(input: AutomationDraftInput): Promise<string | null>;
+  /** Rewrites one Automation's editable fields, under the same refusal contract. */
+  update(input: AutomationUpdateDraftInput): Promise<string | null>;
+  /**
+   * Copies one Automation under a distinguishable name and opens the editor
+   * on the copy, so "same work, different Trigger" is one click.
+   */
+  duplicate(projectId: string, automation: Automation): Promise<void>;
+  /** Deletes the record. There is no archive — for a Skill, git is the archive. */
+  remove(projectId: string, automation: Automation): Promise<void>;
+  /**
+   * Switches one Automation on or off on this machine, through the same
+   * command door every other write uses — only the projection it lands in is
+   * machine-local.
+   */
+  setEnabled(automationId: string, enabled: boolean): Promise<void>;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
 export function createAutomationsStore() {
+  /**
+   * projectId → the cache-filling read in flight for it, so simultaneous
+   * arrivals share one instead of each starting their own. Module-local to this
+   * instance rather than store state: a promise is not something anything
+   * renders, and it must not survive the factory that made it.
+   */
+  const warming = new Map<string, Promise<void>>();
   return create<AutomationsState>()((set, get) => ({
     byProject: {},
+    armingByProject: {},
+    orderByProject: {},
+    runsByProject: {},
+    skipsByProject: {},
+    runsByTicket: {},
+    enabledIds: [],
+    enablementRead: false,
     editor: null,
 
     async refresh(projectId) {
@@ -52,16 +229,180 @@ export function createAutomationsStore() {
         const result = await window.api.automations.list({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load automations: ${result.error}`);
-          return;
+          return false;
         }
         set((state) => ({ byProject: { ...state.byProject, [projectId]: result.automations } }));
+        return true;
       } catch (error) {
         toastError(`Couldn't load automations: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+
+    async refreshArming(projectId) {
+      try {
+        const result = await window.api.automations.armings({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load armed columns: ${result.error}`);
+          return false;
+        }
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [projectId]: result.armings },
+        }));
+        return true;
+      } catch (error) {
+        toastError(`Couldn't load armed columns: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+
+    async refreshOrder(projectId) {
+      try {
+        const result = await window.api.automations.columnOrders({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load automation order: ${result.error}`);
+          return false;
+        }
+        set((state) => ({
+          orderByProject: { ...state.orderByProject, [projectId]: result.orders },
+        }));
+        return true;
+      } catch (error) {
+        toastError(`Couldn't load automation order: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+
+    async setColumnOrder(input) {
+      try {
+        const result = await window.api.automations.setColumnOrder({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          projectId: input.projectId,
+          status: input.status,
+          rankedAutomationIds: [...input.rankedAutomationIds],
+        });
+        // Resolved rather than toasted, like `arm`'s: the lane that asked is
+        // still on screen and is where a correction belongs.
+        if (!result.ok) return result.error;
+        set((state) => ({
+          orderByProject: { ...state.orderByProject, [input.projectId]: result.orders },
+        }));
+        return null;
+      } catch (error) {
+        return errorMessage(error);
+      }
+    },
+
+    async arm(input) {
+      try {
+        const result = await window.api.automations.arm({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          ...input,
+        });
+        // A refusal is resolved rather than toasted, like a save's: the menu
+        // that asked is still on screen and is where the correction belongs.
+        if (!result.ok) return result.error;
+        set((state) => ({
+          armingByProject: { ...state.armingByProject, [input.projectId]: result.armings },
+        }));
+        return null;
+      } catch (error) {
+        return errorMessage(error);
+      }
+    },
+
+    async refreshRuns(projectId) {
+      try {
+        const result = await window.api.automations.runsForProject({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load run history: ${result.error}`);
+          return;
+        }
+        set((state) => ({ runsByProject: { ...state.runsByProject, [projectId]: result.runs } }));
+      } catch (error) {
+        toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshSkips(projectId) {
+      try {
+        const result = await window.api.automations.skipsForProject({ projectId });
+        if (!result.ok) {
+          toastError(`Couldn't load skipped occurrences: ${result.error}`);
+          return;
+        }
+        set((state) => ({
+          skipsByProject: { ...state.skipsByProject, [projectId]: result.skips },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshTicketRuns(ticketId) {
+      try {
+        const result = await window.api.automations.runsForTicket({ ticketId });
+        if (!result.ok) {
+          toastError(`Couldn't load this ticket's runs: ${result.error}`);
+          return;
+        }
+        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
+      } catch (error) {
+        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshEnablement() {
+      try {
+        const result = await window.api.automations.enablement();
+        if (!result.ok) {
+          toastError(`Couldn't read which automations are on: ${result.error}`);
+          return false;
+        }
+        set({ enabledIds: result.enabledAutomationIds, enablementRead: true });
+        return true;
+      } catch (error) {
+        toastError(`Couldn't read which automations are on: ${errorMessage(error)}`);
+        return false;
+      }
+    },
+
+    async ensureLoaded(projectId) {
+      const inFlight = warming.get(projectId);
+      if (inFlight !== undefined) return inFlight;
+      const state = get();
+      const reads: Promise<boolean>[] = [];
+      if (state.byProject[projectId] === undefined) reads.push(state.refresh(projectId));
+      if (state.armingByProject[projectId] === undefined)
+        reads.push(state.refreshArming(projectId));
+      // The order belongs in the cold-cache door too (VC-132): a drop whose
+      // pick names a digit would otherwise be classified against a rank that
+      // has not landed, which is the same silent miss the arming cache had.
+      if (state.orderByProject[projectId] === undefined) reads.push(state.refreshOrder(projectId));
+      if (!state.enablementRead) reads.push(state.refreshEnablement());
+      if (reads.length === 0) return;
+      const job = Promise.all(reads).then(() => undefined);
+      warming.set(projectId, job);
+      try {
+        await job;
+      } finally {
+        // Cleared whatever happened. Each read toasts its own failure and
+        // leaves its cache empty, so the next arrival tries again rather than
+        // inheriting a refusal nobody can see any more.
+        warming.delete(projectId);
       }
     },
 
     openEditor(projectId) {
-      set({ editor: { projectId } });
+      set({ editor: { projectId, automation: null } });
+    },
+
+    editAutomation(projectId, automation) {
+      set({ editor: { projectId, automation } });
     },
 
     closeEditor() {
@@ -82,14 +423,272 @@ export function createAutomationsStore() {
         // A global Automation is listable everywhere, but the only cached list
         // guaranteed on screen is the project the dialog was opened under —
         // other projects re-read on their next palette open.
-        const homeProjectId = input.projectId ?? get().editor?.projectId;
-        if (homeProjectId !== undefined) await get().refresh(homeProjectId);
+        const refreshProjectId = input.projectId ?? get().editor?.projectId;
+        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
         return null;
       } catch (error) {
         return errorMessage(error);
+      }
+    },
+
+    async update(input) {
+      try {
+        const { commandId, ...draft } = input;
+        const result = await window.api.automations.update({
+          ...draft,
+          commandId: commandId ?? crypto.randomUUID(),
+        });
+        if (!result.ok) return result.error;
+        const refreshProjectId = get().editor?.projectId;
+        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
+        return null;
+      } catch (error) {
+        return errorMessage(error);
+      }
+    },
+
+    async duplicate(projectId, automation) {
+      const listed = get().byProject[projectId] ?? [];
+      try {
+        const result = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
+          // Ownership is copied, never reset: a global Automation duplicated
+          // into a project-owned one would quietly change where it is listed,
+          // which is not what "duplicate" says.
+          projectId: automation.projectId,
+          name: duplicateName(
+            automation.name,
+            listed.map((listing) => listing.name),
+          ),
+          instructions: automation.instructions,
+          // The Trigger is copied like every other field. "Same work, different
+          // Trigger" is the reason Duplicate exists (VC-112's tripwire), and a
+          // copy that silently arrived with no Trigger would answer that by
+          // making the person re-author the half they came here to keep. Note
+          // what is NOT copied with it: Arming belongs to the column, not to
+          // the record, so the copy is offered wherever its Trigger names and
+          // fires nowhere until a column arms it (VC-128).
+          trigger: automation.trigger,
+          // An unreadable stored Runtime is not copied as itself — the copy
+          // inherits instead, which is the only Runtime we can promise is
+          // valid. Its source keeps the corrupt row, visible on the page.
+          runtime: isAutomationRuntimePin(automation.runtime) ? automation.runtime : null,
+        });
+        if (!result.ok) {
+          toastError(`Couldn't duplicate automation: ${result.error}`);
+          return;
+        }
+        await get().refresh(projectId);
+        // Straight into the editor on the copy: the reason to duplicate is to
+        // change something, so landing on the copy's own form is the second
+        // half of the one click.
+        set({ editor: { projectId, automation: result.automation } });
+      } catch (error) {
+        toastError(`Couldn't duplicate automation: ${errorMessage(error)}`);
+      }
+    },
+
+    async remove(projectId, automation) {
+      try {
+        const result = await window.api.automations.delete({
+          commandId: crypto.randomUUID(),
+          automationId: automation.id,
+        });
+        if (!result.ok) {
+          toastError(`Couldn't delete automation: ${result.error}`);
+          return;
+        }
+        await get().refresh(projectId);
+      } catch (error) {
+        toastError(`Couldn't delete automation: ${errorMessage(error)}`);
+      }
+    },
+
+    async setEnabled(automationId, enabled) {
+      try {
+        const result = await window.api.automations.setEnabled({
+          // Durable intent, like every other write here: the projection this
+          // lands in is machine-local, the command is not (BOUNDARIES rule 5).
+          commandId: crypto.randomUUID(),
+          automationId,
+          enabled,
+        });
+        if (!result.ok) {
+          toastError(`Couldn't change that automation: ${result.error}`);
+          return;
+        }
+        set({ enabledIds: result.enabledAutomationIds });
+      } catch (error) {
+        toastError(`Couldn't change that automation: ${errorMessage(error)}`);
       }
     },
   }));
 }
 
 export const useAutomationsStore = createAutomationsStore();
+
+const NO_AUTOMATIONS: readonly Automation[] = [];
+const NO_ARMINGS: readonly ColumnArming[] = [];
+const NO_ORDERS: readonly ColumnAutomationOrder[] = [];
+const NO_RANK: readonly string[] = [];
+const NO_RUNS: readonly AutomationRun[] = [];
+
+/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
+export function selectTicketRuns(
+  state: AutomationsState,
+  ticketId: string,
+): readonly AutomationRun[] {
+  return state.runsByTicket[ticketId] ?? NO_RUNS;
+}
+
+/** One project's listable Automations — a frozen empty array before its first read. */
+export function selectAutomations(
+  state: AutomationsState,
+  projectId: string,
+): readonly Automation[] {
+  return state.byProject[projectId] ?? NO_AUTOMATIONS;
+}
+
+/** One project's armed columns — a frozen empty array before its first read. */
+export function selectArmings(state: AutomationsState, projectId: string): readonly ColumnArming[] {
+  return state.armingByProject[projectId] ?? NO_ARMINGS;
+}
+
+/** One project's arranged columns — a frozen empty array before its first read. */
+export function selectColumnOrders(
+  state: AutomationsState,
+  projectId: string,
+): readonly ColumnAutomationOrder[] {
+  return state.orderByProject[projectId] ?? NO_ORDERS;
+}
+
+/** One column's authored rank — a frozen empty array for a column nobody arranged. */
+export function selectColumnRank(
+  state: AutomationsState,
+  projectId: string,
+  status: TicketStatus,
+): readonly string[] {
+  return rankFor(selectColumnOrders(state, projectId), status);
+}
+
+/** The same lookup for a surface that already holds the order rows. */
+function rankFor(
+  orders: readonly ColumnAutomationOrder[],
+  status: TicketStatus,
+): readonly string[] {
+  return orders.find((order) => order.status === status)?.rankedAutomationIds ?? NO_RANK;
+}
+
+/**
+ * Whether all three planning caches this project's Automations are decided from
+ * — its records, its armed columns, and this machine's switches — have LANDED,
+ * as opposed to resting at their empty defaults.
+ *
+ * The distinction the caches themselves cannot make: "nothing armed here" and
+ * "never asked here" are one value in every slice, deliberately (VC-112), so a
+ * caller that must not act on a guess asks this instead. Two of them do, and
+ * they answer the same question differently on purpose — an arrival mid-drag
+ * DEFERS its classification until this is true (`armed-run.ts`), while the
+ * ticket rail leaves its default press inert until it is (VC-129). Neither may
+ * decide from an empty cache; what they may do about it is theirs.
+ *
+ * What this canNOT answer is whether the value in a landed slice is FRESH: a
+ * re-read that failed leaves the old one sitting there, still landed. A caller
+ * re-reading on arrival asks its refreshes for that (they resolve whether the
+ * read landed) and asks this only for the cold-cache half.
+ */
+export function selectPlanningLoaded(state: AutomationsState, projectId: string): boolean {
+  return (
+    state.byProject[projectId] !== undefined &&
+    state.armingByProject[projectId] !== undefined &&
+    state.enablementRead
+  );
+}
+
+/**
+ * The Automation a column fires on its own, resolved through the shared rule
+ * rather than by reading the arming row directly — a row naming a deleted
+ * Automation, or one whose Trigger no longer offers this column, is inert.
+ * Every surface that asks "is this column armed?" asks here.
+ */
+export function selectArmedAutomation(
+  state: AutomationsState,
+  projectId: string,
+  status: TicketStatus,
+): Automation | null {
+  return armedAutomationFor(
+    selectAutomations(state, projectId),
+    selectArmings(state, projectId),
+    status,
+  );
+}
+
+/**
+ * The four machine-local slices an Offered list is composed from, in the shape
+ * a component can actually hold them.
+ *
+ * Slices rather than the whole state, and that is forced rather than stylistic:
+ * a composition mints an array on every read, so no surface may SUBSCRIBE to
+ * one. Every surface therefore subscribes to these four raw (each is a stable
+ * reference the store swaps only when it changes) and composes inside a memo —
+ * and a memo may only read what it was handed, since anything else is a
+ * dependency the compiler cannot see. Handing the slices in is what lets the
+ * one composition below be the one every surface runs.
+ */
+export interface OfferedListSlices {
+  automations: readonly Automation[];
+  armings: readonly ColumnArming[];
+  orders: readonly ColumnAutomationOrder[];
+  /** The ids switched on THIS machine — {@link AutomationsState.enabledIds}. */
+  enabledAutomationIds: readonly string[];
+}
+
+/**
+ * What a column would fire on a PLAIN drop right now: armed, and switched on
+ * here (VC-132). The pin's own source — see the shared rule.
+ */
+export function effectiveArmedIn(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): Automation | null {
+  return effectiveArmedAutomationFor({
+    automations: slices.automations,
+    armings: slices.armings,
+    enabledAutomationIds: slices.enabledAutomationIds,
+    status,
+  });
+}
+
+/**
+ * The column's Offered list in DIGIT order (VC-132): the authored rank, the
+ * effective armed Automation (armed AND switched on here) pinned to `1`, capped
+ * at nine. An armed-but-switched-off row keeps its authored digit instead; the
+ * lane annotates that no-pin state because a plain drop starts nothing.
+ *
+ * The one composition of all four slices, so the digit a lane prints and the
+ * digit a drag answers can never be two lists. Not memoized — every caller
+ * derives it inside a `useMemo` of its own.
+ */
+export function offeredInDigitOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsInDigitOrder({
+    automations: slices.automations,
+    status,
+    rankedAutomationIds: rankFor(slices.orders, status),
+    effectiveArmedAutomationId: effectiveArmedIn(slices, status)?.id ?? null,
+  });
+}
+
+/**
+ * The same list in AUTHORED rank order — uncapped, unpinned: what a surface
+ * shows when it is choosing a record rather than pressing a digit (the column's
+ * bolt menu, the lane's own arrangement).
+ */
+export function offeredInRankOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsForColumn(slices.automations, status, rankFor(slices.orders, status));
+}

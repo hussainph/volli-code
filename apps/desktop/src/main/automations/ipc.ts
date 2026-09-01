@@ -9,18 +9,30 @@
  * Electron-shaped product API.
  */
 import type {
+  AutomationArmingsResult,
+  AutomationArmResult,
+  AutomationColumnOrdersResult,
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationIpcChannel,
   AutomationResult,
+  AutomationRunForProjectInput,
   AutomationRunInput,
   AutomationRunStartResult,
   AutomationRunsResult,
   AutomationsResult,
+  PendingArmedRunCancelResult,
+  PendingArmedRunRetryResult,
+  PendingArmedRunsResult,
+  AutomationSetColumnOrderResult,
+  AutomationSetEnabledResult,
+  AutomationSkipsResult,
 } from "../../ipc/contract";
 import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
 import type { IpcHandlerTable } from "../ipc-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "../ipc-registry";
+import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
 import type { AutomationRunner } from "./run";
 import type { AutomationService } from "./service";
 
@@ -29,6 +41,8 @@ export interface AutomationIpcDeps {
   service: AutomationService | null;
   /** The Run host, absent when the Session runtime never came up this launch. */
   runner: AutomationRunner | null;
+  /** Main's canonical pending-arrival projection plus its Cancel and retained Retry doors. */
+  pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "failures" | "cancel" | "retry">;
 }
 
 export function registerAutomationIpcHandlers(handle: DbHandle, deps: AutomationIpcDeps): void {
@@ -65,7 +79,18 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
           error: "The Session runtime is not available this launch.",
         };
       }
-      const outcome = await deps.runner.run(input);
+      // ATTENDED, and decided here rather than read off `input` (VC-133).
+      //
+      // Every surface behind this channel is one a person had to act on to
+      // reach: the Ticket rail's split button, the board card's context menu,
+      // or the command palette. Main's armed-column coordinator now calls the
+      // runner directly and stamps its own attendance. VC-112: "a column move
+      // is attended because a person is right there."
+      //
+      // The renderer does not get to say so — `AutomationRunInput` carries no
+      // attendance field and the guard would reject one. Being this handler is
+      // the evidence, so the fact cannot be forged or forgotten upstream.
+      const outcome = await deps.runner.run({ ...input, attendance: "attended" });
       return outcome;
     },
 
@@ -73,6 +98,70 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       ok: true,
       runs: service.runsForTicket(input.ticketId),
     }),
+
+    "volli:automation-arming-list": async (input): Promise<AutomationArmingsResult> =>
+      service.armings(input.projectId),
+
+    "volli:automation-arm": async (input): Promise<AutomationArmResult> => service.arm(input),
+
+    "volli:automation-column-order-list": async (input): Promise<AutomationColumnOrdersResult> =>
+      service.columnOrders(input.projectId),
+
+    "volli:automation-set-column-order": async (input): Promise<AutomationSetColumnOrderResult> =>
+      service.setColumnOrder(input),
+
+    "volli:automation-runs-for-project": (input): AutomationRunsResult =>
+      service.runsForProject(input.projectId),
+
+    "volli:automation-enablement": async (): Promise<AutomationEnablementResult> => ({
+      ok: true,
+      enabledAutomationIds: await service.enabledAutomationIds(),
+    }),
+
+    "volli:automation-set-enabled": async (input): Promise<AutomationSetEnabledResult> =>
+      service.setEnabled(input),
+
+    "volli:automation-pending-armed-runs": (): PendingArmedRunsResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : {
+            ok: true,
+            pending: deps.pendingArmedRuns.list(),
+            failures: deps.pendingArmedRuns.failures(),
+          },
+
+    "volli:automation-cancel-pending-armed-run": (input): PendingArmedRunCancelResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : { ok: true, cancelled: deps.pendingArmedRuns.cancel(input.id) },
+
+    "volli:automation-retry-pending-armed-run": (input): PendingArmedRunRetryResult =>
+      deps.pendingArmedRuns === undefined
+        ? { ok: false, error: "Armed-column countdowns are not available this launch." }
+        : { ok: true, retrying: deps.pendingArmedRuns.retry(input.id) },
+
+    "volli:automation-skips-for-project": (input): AutomationSkipsResult =>
+      service.skipsForProject(input.projectId),
+
+    // The Project-target Run door (VC-130). The same runner and the same
+    // degraded answer as the Ticket one beside it — a Run needs the Session
+    // facade whichever Target it names.
+    "volli:automation-run-for-project": async (
+      input: AutomationRunForProjectInput,
+    ): Promise<AutomationRunStartResult> => {
+      if (deps.runner === null) {
+        return {
+          ok: false,
+          code: "RUN_FAILED",
+          error: "The Session runtime is not available this launch.",
+        };
+      }
+      // ATTENDED for the same reason as the Ticket door above: every IPC caller
+      // is a person — Skipped-occurrence Run now, scheduled-page Play, or the
+      // palette. The schedule timer uses the same runner method inside main,
+      // bypasses IPC, and passes `unattended`.
+      return deps.runner.runForProject({ ...input, attendance: "attended" });
+    },
   };
 
   registerGuardedIpcHandlers(AUTOMATION_IPC, handlers);

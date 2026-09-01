@@ -19,7 +19,9 @@
  * smoke deliberately stops at the refusal arm; `run.test.ts` pins the happy
  * path against the Sessions facade, and the pi-* smokes own live turns.
  *
- * MANUALLY RUN (needs a display + the built app); CI does not run it:
+ * Needs a display and the built app. It DOES run on the desktop smoke lane —
+ * `run-smokes.mjs` globs `*-smoke.mjs` and this name is on neither the
+ * deny-list nor the Pi-credential gate. Locally:
  *
  *   pnpm -w run build
  *   node apps/desktop/e2e/automations-smoke.mjs
@@ -77,6 +79,10 @@ try {
       projectId,
       name: "  Review sweep  ",
       instructions: "/review the change set, then read @docs/DESIGN.md",
+      // Required since VC-128, and carried as the union's explicit member
+      // rather than left off: an optional field says "Nothing else" only on a
+      // transport that survives `undefined` (docs/BOUNDARIES.md rule 3).
+      trigger: { kind: "none" },
       runtime: null,
     });
     return result.ok ? result.automation : { fail: result.error };
@@ -105,6 +111,7 @@ try {
           projectId,
           name: "   ",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: null,
         });
         const pin = await window.api.automations.create({
@@ -112,6 +119,7 @@ try {
           projectId,
           name: "Pinned",
           instructions: "x",
+          trigger: { kind: "none" },
           runtime: { providerId: "nope", modelId: "ghost", reasoningLevel: "high" },
         });
         const listed = await window.api.automations.list({ projectId });
@@ -138,6 +146,7 @@ try {
         projectId: null,
         name: "A global one",
         instructions: "/tdd",
+        trigger: { kind: "none" },
         runtime: null,
       });
       if (!global.ok) return [global.error];
@@ -157,6 +166,7 @@ try {
         automationId,
         name: "Review sweep v2",
         instructions: "/review again",
+        trigger: { kind: "none" },
         runtime: null,
       });
       return result.ok ? result.automation.name : result.error;
@@ -172,8 +182,11 @@ try {
         async ({ automationId, ticketId }) => {
           const run = await window.api.automations.run({
             commandId: crypto.randomUUID(),
-            automationId,
+            // A Run names its target since VC-129: a saved Automation here, or
+            // an Unbound Run's own Instructions.
+            target: { kind: "automation", automationId },
             ticketId,
+            modelOverride: null,
           });
           const runs = await window.api.automations.runsForTicket({ ticketId });
           const sessions = await window.api.sessions.listForTicket({ ticketId });

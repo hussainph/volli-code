@@ -137,7 +137,10 @@ describe("buildBoardSessionActivity", () => {
     expect(build({ chatSessions: [chat({ activity: "waiting" })] }).byTicket).toEqual({
       t1: "waiting",
     });
-    expect(build({ chatSessions: [chat({ activity: "idle" })] }).byTicket).toEqual({});
+    // Executor attachment is not a third card state. Between turns, an
+    // unattended Run and a chat somebody closed are both quiet on the board.
+    expect(build({ chatSessions: [chat({ activity: "idle", live: true })] }).byTicket).toEqual({});
+    expect(build({ chatSessions: [chat({ activity: "idle", live: false })] }).byTicket).toEqual({});
   });
 
   it("lets waiting outrank working whichever order the Sessions arrive in", () => {

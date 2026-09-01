@@ -494,6 +494,136 @@ export interface RuntimeWebSearchResults {
   truncated: boolean;
 }
 
+/** One Browser Tab as the runtime lists it: bounded metadata, never page content. */
+export interface RuntimeBrowserTab {
+  /** Product-owned opaque id — never a positional Chromium tab index. */
+  tabId: string;
+  url: string;
+  title: string;
+  /** Who opened it. A person's tab and an agent's tab render differently and are audited differently. */
+  createdBy: "user" | "session";
+}
+
+/** Every Browser Tab the host let this Session see. */
+export interface RuntimeBrowserTabList {
+  tabs: readonly RuntimeBrowserTab[];
+}
+
+/**
+ * One Browser Tab read as structure: the accessibility tree the page's own
+ * engine computed, printed one `role "name" [ref=eN]` node per line.
+ *
+ * The refs are the interaction contract. Each names an element of THIS
+ * snapshot's {@link generation}; the host refuses a ref presented against a
+ * later generation rather than acting on whatever now occupies the page — a
+ * stale selector must fail, not click.
+ *
+ * Everything in {@link snapshotText} and {@link title} is page-derived and
+ * therefore untrusted third-party content. The runtime wraps it in the same
+ * provenance envelope a fetched web document gets; nothing below the envelope
+ * may treat a line of it as an instruction.
+ */
+export interface RuntimeBrowserSnapshot {
+  tabId: string;
+  url: string;
+  title: string;
+  /** The formatted accessibility snapshot, already bounded by the host. */
+  snapshotText: string;
+  /** Monotonic per-tab counter; refs are valid only against the generation that minted them. */
+  generation: number;
+  /** Whether the host cut the tree at its own bound before the page ended. */
+  truncated: boolean;
+}
+
+/**
+ * How a Browser Tab is steered: somewhere new, or along its own history.
+ * A discriminated shape rather than a URL-or-keyword string, so "back" can
+ * never be misread as a relative address.
+ */
+export type RuntimeBrowserNavigation =
+  | { kind: "url"; url: string }
+  | { kind: "back" }
+  | { kind: "forward" }
+  | { kind: "reload" };
+
+/**
+ * One semantic action against a snapshot ref.
+ *
+ * `generation` travels with every action for {@link RuntimeBrowserSnapshot}'s
+ * reason: the ref names what the model saw, and what the model saw is only
+ * addressable while the page still is that generation. Optional fields belong
+ * to particular kinds — the tool schemas constrain which; the port validates.
+ */
+export interface RuntimeBrowserActRequest {
+  tabId: string;
+  generation: number;
+  kind: "click" | "type" | "press" | "select" | "hover" | "scroll" | "wait";
+  /** The snapshot ref being acted on; absent for page-level kinds (press, scroll, wait). */
+  ref?: string;
+  /** Text for `type`, option value for `select`. */
+  text?: string;
+  /** Key spec for `press`, e.g. `Enter` or `Control+a`. */
+  key?: string;
+  /** Scroll direction, or the wait bound in milliseconds. */
+  direction?: "up" | "down";
+  waitMs?: number;
+}
+
+/** A captured Browser Tab image, bounded by the host before it reaches anyone. */
+export interface RuntimeBrowserScreenshot {
+  tabId: string;
+  url: string;
+  /** PNG bytes, base64. The host owns scale and size bounds. */
+  base64Png: string;
+  width: number;
+  height: number;
+}
+
+/** One console message or page error, already cut to the host's bounds. */
+export interface RuntimeBrowserConsoleMessage {
+  level: "debug" | "info" | "log" | "warn" | "error";
+  text: string;
+}
+
+/** A Browser Tab's recent console output and page errors, bounded. */
+export interface RuntimeBrowserConsole {
+  tabId: string;
+  url: string;
+  messages: readonly RuntimeBrowserConsoleMessage[];
+  truncated: boolean;
+}
+
+/**
+ * The one Browser port: everything a Session can do to a Browser Tab, answered
+ * by the host that owns the native surface.
+ *
+ * One port for six tools, deliberately. Looking and acting are one capability
+ * with one answerer — the desktop's BrowserTabHost — and splitting the port
+ * would invent a grant model this slice does not have; when per-tab grants
+ * arrive they arrive as policy inside the host, not as port shape. Like
+ * {@link SessionRuntimeSpec.webFetch}, every method takes what the model said
+ * and a signal, and decides everything else itself: which tabs are visible,
+ * every bound, every refusal. There is deliberately no raw JavaScript, no
+ * cookie, no header and no CDP surface here — a port that carried them would
+ * be a port the model could aim at the machine hosting it.
+ */
+export interface RuntimeBrowserPort {
+  tabs(input: { signal: AbortSignal }): Promise<RuntimeBrowserTabList>;
+  /** Steer a tab — or open one, when `tabId` is absent and the navigation names a URL. */
+  navigate(input: {
+    tabId?: string;
+    navigation: RuntimeBrowserNavigation;
+    signal: AbortSignal;
+  }): Promise<RuntimeBrowserSnapshot>;
+  snapshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
+  /** Act, then answer with the fresh snapshot the action produced. */
+  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
+  screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
+  console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
+  /** Releases host-private debugger/controller resources when an attachment ends. */
+  dispose?(): void;
+}
+
 /**
  * What the workspace's own package state was when this attachment started —
  * the two {@link SessionEnvReport} facts an agent can act on.
@@ -675,6 +805,15 @@ export interface SessionRuntimeSpec {
    */
   webSearch?: (input: { query: string; signal: AbortSignal }) => Promise<RuntimeWebSearchResults>;
   /**
+   * Reach the Browser Tabs the host owns, through the one {@link RuntimeBrowserPort}.
+   *
+   * Optional on the same terms as {@link webFetch}: absence is what decides
+   * whether the model is offered any browser tool. One port carries all six
+   * names — a Session with somewhere to send a browser action has all of them,
+   * and one with nowhere has none.
+   */
+  browser?: RuntimeBrowserPort;
+  /**
    * Run one product verb the Session's frozen Agent Tool Surface names, in the
    * host's own process (VC-162).
    *
@@ -731,7 +870,7 @@ export interface RuntimeVerbResult {
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "callVerb"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "callVerb"
 >;
 
 /**
@@ -750,6 +889,15 @@ export type SessionToolBinding =
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
+  // Six arms, one port: each browser tool carries the whole RuntimeBrowserPort,
+  // because the port is the capability and the names are only the model-facing
+  // grain — the runtime switches on the name and calls the method it stands for.
+  | { tool: "browser_tabs"; port: RuntimeBrowserPort }
+  | { tool: "browser_navigate"; port: RuntimeBrowserPort }
+  | { tool: "browser_snapshot"; port: RuntimeBrowserPort }
+  | { tool: "browser_act"; port: RuntimeBrowserPort }
+  | { tool: "browser_screenshot"; port: RuntimeBrowserPort }
+  | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -781,10 +929,18 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // here — which is the only place that failure is cheap. A Snapshot recording
   // a tool no Session can be offered would be the same landmine VC-3 defused,
   // re-laid one vocabulary entry at a time.
+  const browser = spec.browser;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
+    browser_tabs: browser === undefined ? null : { tool: "browser_tabs", port: browser },
+    browser_navigate: browser === undefined ? null : { tool: "browser_navigate", port: browser },
+    browser_snapshot: browser === undefined ? null : { tool: "browser_snapshot", port: browser },
+    browser_act: browser === undefined ? null : { tool: "browser_act", port: browser },
+    browser_screenshot:
+      browser === undefined ? null : { tool: "browser_screenshot", port: browser },
+    browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -800,13 +956,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   return [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
-    ...verbs.map(
-      (verb): SessionToolBinding => ({
-        tool: verb,
-        verb,
-        port: callVerb as NonNullable<typeof callVerb>,
-      }),
-    ),
+    ...verbs.map((verb): SessionToolBinding => ({
+      tool: verb,
+      verb,
+      port: callVerb as NonNullable<typeof callVerb>,
+    })),
   ];
 }
 

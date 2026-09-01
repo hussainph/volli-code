@@ -201,6 +201,28 @@ export interface SessionStartInput {
 export interface SessionModelOverride {
   model?: { providerId: string; modelId: string };
   reasoningLevel?: ReasoningLevel;
+  /**
+   * What to do when Model Access cannot run this override right now.
+   *
+   * `"refuse"` (the default, and every human door) throws `MODEL_UNAVAILABLE`
+   * before anything durable exists. A person who just chose a model in a
+   * picker is standing there, and the honest answer is immediate: nothing was
+   * started, and nothing has to be cleaned up.
+   *
+   * `"record"` writes the selection as asked and lets the ATTACH refuse it.
+   * This is VC-112 for Automation Runs: "a pinned model that has since become
+   * unavailable does not silently fall back — let the Session fail through the
+   * existing error path rather than building a second failure surface." The
+   * Run therefore opens its Session, records the Runtime it was actually told
+   * to use, and the runtime's own
+   * `configuration_invalid` Attention (`pi-adapter.ts`) puts it in `error`,
+   * where VC-133's notification rule and the Session's own dot both find it.
+   *
+   * Neither arm falls back to another model; they differ only in WHERE the
+   * refusal is recorded. A door with nobody behind it needs the durable one,
+   * because a refusal returned to a timer is a refusal nobody reads.
+   */
+  whenUnavailable?: "refuse" | "record";
 }
 
 /** The durable identity a create-only call resolves — nothing about an executor. */
@@ -304,6 +326,15 @@ export interface SessionsOptions {
  * against Model Access — availability and the model's reasoning levels, the
  * `assertDefaultModelAvailable` rule — and refused before any Session exists;
  * the plain default path stays exactly the policy `requireDefaultModel` was.
+ *
+ * {@link SessionModelOverride.whenUnavailable} is the one exception, and it
+ * changes only WHERE the refusal lands. `"record"` keeps the merge above and
+ * skips the inspection below, so the Session is minted carrying the selection
+ * it was told to carry and the attach refuses it with the Attention every
+ * other broken configuration raises. Note that the plain default path has
+ * always behaved this way — a stale configured default is never inspected
+ * here either — so this is the pin catching up with the inheritance it was
+ * supposed to be interchangeable with, not a new kind of leniency.
  */
 async function resolveModelSelection(
   options: SessionsOptions,
@@ -323,6 +354,13 @@ async function resolveModelSelection(
     // A reasoning level alone cannot conjure a model to run at it.
     throw new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", DEFAULT_MODEL_REQUIRED);
   }
+  // The level is merged the same way whichever arm follows: no explicit level
+  // falls back to the default's, then to Volli's central "medium" (the
+  // no-default + --model case). Only the validation below differs.
+  const reasoningLevel = override.reasoningLevel ?? base?.reasoningLevel ?? "medium";
+  if (override.whenUnavailable === "record") {
+    return { providerId: model.providerId, modelId: model.modelId, reasoningLevel };
+  }
   if (options.inspectModelAccess === undefined) {
     throw new StructuredSessionsError(
       "MODEL_UNAVAILABLE",
@@ -341,10 +379,8 @@ async function resolveModelSelection(
         : `Model ${model.providerId}/${model.modelId} is not currently available.`,
     );
   }
-  // No explicit level falls back to the default's, then to Volli's central
-  // "medium" (the no-default + --model case); either way the chosen model has
-  // to actually run it, and the refusal names what it can run instead.
-  const reasoningLevel = override.reasoningLevel ?? base?.reasoningLevel ?? "medium";
+  // The chosen model has to actually run the level it was given, and the
+  // refusal names what it can run instead.
   if (!available.reasoningLevels.includes(reasoningLevel)) {
     throw new StructuredSessionsError(
       "MODEL_UNAVAILABLE",

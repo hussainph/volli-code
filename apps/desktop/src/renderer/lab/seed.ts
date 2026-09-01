@@ -13,7 +13,7 @@
  * the thing the lab is supposed to be measuring — and none of it is what a
  * design question is ever about.
  */
-import { EMPTY_SESSION_USAGE_SUMMARY, type SessionListingRow } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, PERSON_STARTED, type SessionListingRow } from "@volli/shared";
 import type {
   AppStateSetResult,
   HarnessPendingResult,
@@ -57,16 +57,21 @@ const sessionRows: SessionListingRow[] = [
   // Unmetered, not free: the lab has no ledger behind it, and an invented
   // dollar figure in a fixture is how a screenshot comes to promise a number
   // the app cannot produce.
-  ...sessions.map(
-    (record): SessionListingRow => ({
-      kind: "terminal",
-      record,
-      usage: EMPTY_SESSION_USAGE_SUMMARY,
-    }),
-  ),
-  ...chatSessions.map(
-    (record): SessionListingRow => ({ kind: "chat", record, usage: EMPTY_SESSION_USAGE_SUMMARY }),
-  ),
+  ...sessions.map((record): SessionListingRow => ({
+    kind: "terminal",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  })),
+  ...chatSessions.map((record): SessionListingRow => ({
+    kind: "chat",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    // A terminal companion is always something a person opened, and the lab's
+    // chats are too. The Run-started marks are drawn against the sidebar
+    // scratch's own fixtures, where the bolt is the thing under the lamp.
+    provenance: PERSON_STARTED,
+  })),
 ];
 
 function retentionState(ticketId: string): TicketRetentionState {

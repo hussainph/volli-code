@@ -21,8 +21,13 @@
  *     column without one is a perfectly good target that says so quietly
  *     rather than running nothing silently. Bare digits `1`–`9`, scoped to whichever
  *     column the pointer is over, still override that default — the same
- *     digit twice clears back to it. Holding ⌥ GROWS that column's list into
- *     large landing targets in place; letting go shrinks it back. The card
+ *     digit twice clears back to it. An ARMED column pins its armed Automation
+ *     to digit `1` (VC-132), so `1` reproduces a plain drop and is safe to
+ *     press while learning; the authored studio rank carries the rest. Holding
+ *     ⌥ GROWS that column's list into large landing targets in place; letting
+ *     go shrinks it back. A three-word toast near bottom-centre — "⌥ to
+ *     choose" — teaches the modifier while the drag is over a column with an
+ *     Offered list and hides once the picker is open. The card
  *     tracks the cursor the whole way and never stops, but it SHRINKS to a
  *     one-line badge over a column, because the payload and the menu cannot
  *     both own the same square inch and the payload is not the thing being
@@ -86,7 +91,13 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
-import { getColumnOrder, offeredForColumn, useColumnOrder } from "../automation/column-order";
+import {
+  getColumnOrder,
+  offeredForColumn,
+  offeredForColumnWithArming,
+  patchColumnOrder,
+  useColumnOrder,
+} from "../automation/column-order";
 import { HarnessMark, HarnessTag, HarnessTrail } from "../automation/harness-identity";
 import { harnessTrail, SEEDED_AUTOMATIONS, type Automation } from "../automation/model";
 import { useDragSim, type AutomationTarget } from "../automation/use-drag-sim";
@@ -95,6 +106,27 @@ import { project, ticketById, tickets } from "../fixtures";
 export const title = "Automation · trigger";
 export const note =
   "Column defaults, in-ticket advance, drag picker — digits follow the studio board order";
+
+/**
+ * First-paint rank for Needs Review, applied once per activation and never
+ * over an order someone has since dragged in the studio (the two scratches
+ * share the session order).
+ *
+ * It exists to make the armed pin VISIBLE: with the seed array's own order the
+ * armed "Two-opinion review" already sits first, and pinning it to `1` is
+ * indistinguishable from not pinning at all. Ranking "Standards sweep" ahead
+ * of it puts the authored rank and the pin in honest disagreement — the drag
+ * picker reads 1 · review (pinned, marked default), 2 · standards, 3 · spec,
+ * while the studio lane still reads standards · review · spec. That gap is the
+ * thing to judge, not an accident.
+ */
+export const seed = () => {
+  patchColumnOrder((current) =>
+    current.needs_review !== undefined
+      ? current
+      : { ...current, needs_review: ["atm-standards", "atm-review", "atm-spec"] },
+  );
+};
 
 /**
  * How long a drop confirmation stays before it starts leaving, and how long the
@@ -220,6 +252,22 @@ function offeredFor(status: TicketStatus): Automation[] {
 }
 
 /**
+ * The DRAG path's read of the same list (VC-132): the studio's authored rank
+ * with the column's armed automation pinned to digit `1`.
+ *
+ * The pin is what makes `1` safe to press while learning — in an armed column
+ * it reproduces exactly what a plain release would do. Only the drag reads
+ * this shape: the bolt menu and the in-ticket dropdown keep the authored rank,
+ * because neither of them has a digit whose meaning the pin exists to protect.
+ */
+function offeredArmedFor(
+  status: TicketStatus,
+  arming: Partial<Record<TicketStatus, string>>,
+): Automation[] {
+  return offeredForColumnWithArming(SEEDED_AUTOMATIONS, status, getColumnOrder(), arming[status]);
+}
+
+/**
  * Which agent(s) an Automation would start.
  *
  * One harness names itself. Two or more only fit as marks — and this component
@@ -265,7 +313,9 @@ function automationById(id: string | undefined): Automation | null {
  * What actually fires for `status`, given the column's own arming and any
  * override chosen this drag. `overrideIndex` is the hook's own tri-state:
  * `undefined` (nothing overrode the default), `null` (explicit "Move only"),
- * or an index into `offeredFor(status)`. This is the one place that tri-state
+ * or an index into `offeredArmedFor(status, arming)` — the PINNED order, since
+ * that is the list every digit and landing target was drawn from. This is the
+ * one place that tri-state
  * turns into a real `Automation | null` — the hook itself never needs to know
  * what an Automation is.
  */
@@ -276,7 +326,7 @@ function resolveAutomation(
 ): Automation | null {
   if (overrideIndex === undefined) return automationById(arming[status]);
   if (overrideIndex === null) return null;
-  return offeredFor(status)[overrideIndex] ?? null;
+  return offeredArmedFor(status, arming)[overrideIndex] ?? null;
 }
 
 /** `VLT-14`. Built from the project rather than stored, exactly as the app does it. */
@@ -885,10 +935,10 @@ function ColumnAutomationList({
   digitSelection: AutomationTarget | null;
   expanded: boolean;
 }) {
-  const offered = offeredFor(status);
+  const offered = offeredArmedFor(status, arming);
   const armed = automationById(arming[status]);
 
-  if (offered.length === 0) {
+  if (offered.length === 0 && !expanded) {
     return (
       /* Not helper text: with no rows there is nothing on screen at all, and a
          blank panel would read as a list that failed to load. */
@@ -897,6 +947,14 @@ function ColumnAutomationList({
       </p>
     );
   }
+
+  /* EXPANDED with nothing offered still renders the panel, and the panel still
+     holds the "Move only" target (below): under ⌥ every release must land on a
+     named target, and a column with an empty Offered list has exactly one —
+     the move itself. Collapsing to the dashed note under ⌥ would put the one
+     column shape with nothing to choose in a DIFFERENT drawing from every
+     other column, right while the modifier is promising large landing
+     targets. */
 
   /**
    * Which row is lit. While ⌥ is open the picker cell owns it; otherwise it is
@@ -930,6 +988,11 @@ function ColumnAutomationList({
         expanded ? "gap-1.5 p-1.5" : "gap-px p-1",
       )}
     >
+      {offered.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border px-2 py-1.5 text-label text-muted-foreground">
+          Nothing to run here
+        </p>
+      ) : null}
       {offered.map((automation, index) => {
         const chosen = activeIndex === index;
         return (
@@ -1078,8 +1141,8 @@ function DragTab({
   onDisarm: (status: TicketStatus) => void;
 }) {
   const automationCountFor = React.useCallback(
-    (status: TicketStatus) => offeredFor(status).length,
-    [],
+    (status: TicketStatus) => offeredArmedFor(status, arming).length,
+    [arming],
   );
 
   /**
@@ -1087,12 +1150,19 @@ function DragTab({
    * in indices, and `arming` lives here. Returns null when the column has no
    * default, which is also "Move only", and correctly so: with no default, a
    * plain release and an immediately-released picker both run nothing.
+   *
+   * With the armed pin this is `0` by construction whenever the column is
+   * armed — the `findIndex` is kept anyway, so the answer stays a READ of the
+   * same list every other consumer renders rather than a second statement of
+   * the pin rule that could drift from it.
    */
   const defaultIndexFor = React.useCallback(
     (status: TicketStatus) => {
       const defaultId = arming[status];
       if (defaultId === undefined) return null;
-      const index = offeredFor(status).findIndex((automation) => automation.id === defaultId);
+      const index = offeredArmedFor(status, arming).findIndex(
+        (automation) => automation.id === defaultId,
+      );
       return index === -1 ? null : index;
     },
     [arming],
@@ -1472,6 +1542,36 @@ function DragTab({
           })}
         </div>
       </div>
+
+      {/* "⌥ to choose" — the mid-drag affordance (VC-132, VC-112). Three
+          words, near bottom-centre, and only while the fact it teaches is
+          actionable: a drag standing over a column that has an Offered list,
+          with no picker open yet. It hides the moment ⌥ goes down — advice to
+          press the key you are pressing is noise — and never appears over a
+          column with nothing to choose, where ⌥ would grow a single "Move
+          only" target nobody needs a hint to find. Bottom-centre rather than
+          at the cursor: the pointer's neighbourhood belongs to the ghost and
+          the rows being aimed at, and a hint that chases the hand becomes
+          part of the drag instead of a caption under it. Appearance-only
+          motion, like everything else on this path. */}
+      {dragActive &&
+      !drag.pickerOpen &&
+      drag.hovered !== null &&
+      offeredArmedFor(drag.hovered, arming).length > 0 ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[150] flex justify-center">
+          <p
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border border-border bg-popover px-3 py-1.5 text-ui text-muted-foreground shadow-overlay",
+              "transition-[opacity,translate] duration-200 ease-out starting:translate-y-1 starting:opacity-0 motion-reduce:starting:translate-y-0",
+            )}
+          >
+            <kbd className="rounded border border-border px-1 font-mono text-label text-foreground">
+              ⌥
+            </kbd>
+            to choose
+          </p>
+        </div>
+      ) : null}
 
       {confirmation !== null ? (
         <div

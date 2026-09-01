@@ -35,10 +35,9 @@
  * It needs no `opencode` install any more, so CI runs it unconditionally.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
-import { createRunner, launch, makeScratch, waitUntil } from "./lib/smoke-kit.mjs";
+import { createRunner, evidenceDir, launch, makeScratch, waitUntil } from "./lib/smoke-kit.mjs";
 
 const { userDataDir, dbPath, cleanup } = await makeScratch("bare-path-env-");
 const { attempt, summarize } = createRunner();
@@ -62,25 +61,12 @@ const LOGIN_PATH_MARKER = /\[volli\] PATH (?:adopted from login shell \([1-9]\d*
 const WAIT_TIMEOUT_MS = 12_000;
 
 /**
- * Where a FAILING run leaves its evidence — screenshot, the main process's own
- * stdout/stderr, the renderer console. Overridable by first argument, the same
- * way every other capturing probe here takes one (`docs-shots.mjs`,
- * `ticket-rail-shots.mjs`, `tab-strip-shots.mjs`), and otherwise derived
- * at runtime. A literal path is the one thing this must never be: pinned to the
- * machine the probe was written on it cannot exist anywhere else, so the single
- * artifact the failure path exists to produce lands nowhere useful — or the
- * `mkdir` throws inside the very handler that was supposed to explain the
- * failure, turning a legible finding about the discovery chain into a stack
- * trace about someone else's home directory.
- *
- * Deliberately NOT the smoke's own scratch tree: `cleanup()` removes that on
- * the way out (it owns it unless VOLLI_SMOKE_DIR says otherwise), so evidence
- * written there would be deleted seconds after capture, before anyone could
- * read it. Deliberately not inside the repo either: this is failure debris
- * rather than a checked-in artifact, and an untracked directory that appears
- * only after a red run is one `git add -A` away from being committed.
+ * Screenshot + main stdout/stderr + renderer console for a FAILING run. The
+ * argument wins (CI names a dir it can upload); otherwise smoke-kit mkdtemp's
+ * one under os.tmpdir() and prints it — see `evidenceDir` there for why it is
+ * neither the scratch tree, nor the repo, nor a predictable name.
  */
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-bare-path-env-evidence");
+const EVIDENCE_DIR = await evidenceDir("bare-path-env");
 
 async function captureFailureEvidence(page, mainOut, mainErr, rendererConsole, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true });

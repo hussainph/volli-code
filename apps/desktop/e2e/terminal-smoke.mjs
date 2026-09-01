@@ -98,7 +98,7 @@ async function visibleCanvasRects(page) {
         const rect = canvas.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })
-      .sort((a, b) => a.y - b.y || a.x - b.x),
+      .toSorted((a, b) => a.y - b.y || a.x - b.x),
   );
 }
 
@@ -202,7 +202,7 @@ async function waitForLiveCanvas(page, timeoutMs = 20000) {
  * create rather than a canvas an earlier tab painted.
  */
 async function startTerminalTab(page, expectedTabs) {
-  await page.getByLabel("Other session kinds").first().click();
+  await page.getByLabel("Other things to open").first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await page.waitForFunction(
     (n) => document.querySelectorAll('[aria-label^="Close Terminal"]').length === n,

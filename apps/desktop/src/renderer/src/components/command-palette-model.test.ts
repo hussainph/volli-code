@@ -1,4 +1,11 @@
-import type { Automation, ChatSessionRecord, Project, Ticket } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, PERSON_STARTED } from "@volli/shared";
+import type {
+  Automation,
+  ChatSessionRecord,
+  Project,
+  SessionProvenance,
+  Ticket,
+} from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -181,6 +188,64 @@ describe("buildCommandPaletteItems", () => {
     );
     expect(result.sessions).toEqual([]);
   });
+
+  // The palette is the app's one GLOBAL Session listing — every project's, in
+  // one list — so it is the surface where a Run's Session is likeliest to be
+  // taken for one a person opened. "Everywhere a Session appears" includes it
+  // (VC-131).
+  describe("who started each listed Session", () => {
+    const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+    const CHILD: SessionProvenance = {
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    };
+
+    it("carries provenance onto both kinds of row from one sparse map", () => {
+      const alpha = project("p1", "Alpha", "ALP");
+      const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
+
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {
+          [linked.id]: container({
+            sessionId: "s1",
+            title: "Nightly sweep",
+            scope: ticketScope(alpha.id, linked.id),
+            layout: { kind: "pane", sessionId: "s1", exitCode: null },
+            activePaneId: "s1",
+          }),
+        },
+        alpha.id,
+        [chat()],
+        {},
+        { s1: RUN, "chat-1": CHILD },
+      );
+
+      // A terminal row reaches this list through the open-tab store, which
+      // carries no provenance of its own — so the two kinds must be answered
+      // from the same map or one of them can never be marked.
+      expect(result.sessions.find((item) => item.sessionId === "s1")?.provenance).toEqual(RUN);
+      expect(result.sessions.find((item) => item.sessionId === "chat-1")?.provenance).toEqual(
+        CHILD,
+      );
+    });
+
+    // The holes ARE the answer, and the resting answer is the one frozen
+    // constant: a palette full of person-started Sessions allocates nothing and
+    // draws nothing.
+    it("reads a Session the map says nothing about as person-started, by identity", () => {
+      const alpha = project("p1", "Alpha", "ALP");
+      const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
+
+      const result = buildCommandPaletteItems([alpha], { [alpha.id]: [linked] }, {}, alpha.id, [
+        chat(),
+      ]);
+
+      expect(result.sessions[0]?.provenance).toBe(PERSON_STARTED);
+    });
+  });
 });
 
 function automation(overrides: Partial<Automation> = {}): Automation {
@@ -189,6 +254,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
     projectId: "p1",
     name: "Review",
     instructions: "/review go",
+    trigger: NO_AUTOMATION_TRIGGER,
     runtime: null,
     createdAt: 0,
     updatedAt: 0,

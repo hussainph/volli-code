@@ -17,10 +17,11 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
+import { DEFAULT_AUTHORITY_POLICY, NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type {
   AuthorityPolicy,
   AutomationRun,
+  AutomationTrigger,
   ModelSelection,
   RuntimeAskRequest,
   RuntimeSessionIdentity,
@@ -33,7 +34,12 @@ import type { AgentToolDoorOptions, VerbBudgetAsk } from "./agent-tool-door";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
-import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
+import {
+  getAutomation,
+  listAutomationsForProject,
+  listProjectRunsForAutomation,
+  listRunsForTicket,
+} from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
@@ -588,7 +594,9 @@ function automationHarness(options: { host?: "absent" } = {}) {
       const found = getTicket(db, ticketId);
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
     },
+    findProject: (projectId) => projectId === "project-one" || projectId === "project-two",
     listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
+    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -607,7 +615,8 @@ function automationHarness(options: { host?: "absent" } = {}) {
       }),
     },
     promptSupply: async () => ({ templates: [], skills: [] }),
-    deliverInstructions: async () => undefined,
+    deliverInstructions: async () => ({ receipt: { status: "accepted" } }),
+    reportInstructionDeliveryFailure: async () => undefined,
     readSessionActivity: async () => activity,
     log: () => undefined,
   });
@@ -638,12 +647,17 @@ function automationHarness(options: { host?: "absent" } = {}) {
     supervise: () => null,
   });
 
-  async function save(input: { name: string; projectId: string | null }) {
+  async function save(input: {
+    name: string;
+    projectId: string | null;
+    trigger?: AutomationTrigger;
+  }) {
     const created = await engine.create({
       commandId: randomUUID(),
       projectId: input.projectId,
       name: input.name,
       instructions: "Sweep this Ticket and report.",
+      trigger: input.trigger ?? NO_AUTOMATION_TRIGGER,
       runtime: null,
     });
     if (!created.ok) throw new Error(created.error);
@@ -680,6 +694,11 @@ function runShape(run: AutomationRun) {
     sessionId: _sessionId,
     ticketId: _ticketId,
     createdAt: _createdAt,
+    // Attendance is compared on its own below rather than folded in here: it is
+    // the ONE field on which an agent's Run and a person's Run are meant to
+    // differ (VC-133), so hiding it inside a shape equality would make this
+    // helper assert the opposite of the rule.
+    attendance: _attendance,
     ...rest
   } = run;
   return rest;
@@ -695,7 +714,17 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     const result = await h.call({ automation: "nightly SWEEP", ticket: "VC-1" });
 
     expect(h.runInputs).toEqual([
-      { commandId: "caller-session:tc-0", automationId: automation.id, ticketId: "ticket-one" },
+      {
+        commandId: "caller-session:tc-0",
+        // A saved record, by name. The verb reaches neither of the deliberate
+        // human surfaces' extras (VC-129): no Unbound Run, no per-invocation
+        // Runtime override.
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: "ticket-one",
+        modelOverride: null,
+        // UNATTENDED (VC-133): the caller is another Session, not a person.
+        attendance: "unattended",
+      },
     ]);
     expect(result.text).toContain("Nightly sweep");
     expect(result.text).toContain("VC-1");
@@ -704,6 +733,36 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // one back, so a model given one is given an id it cannot use.
     expect(result.text).toContain("abcdef12");
     expect(result.text).not.toContain("abcdef12-3456-7890-abcd-ef1234567890");
+  });
+
+  it("deliberately aims a schedule-trigger Automation at one Ticket", async () => {
+    const h = automationHarness();
+    const automation = await h.save({
+      name: "Nightly sweep",
+      projectId: "project-one",
+      trigger: {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      },
+    });
+
+    const result = await h.call({ automation: "Nightly sweep", ticket: "VC-1" });
+
+    // VC-230's ruled agent-only exception: the record keeps the schedule that
+    // targets its Project through the scheduler and person-facing doors, while
+    // this invocation explicitly retargets its one Run to the named Ticket.
+    expect(automation.trigger.kind).toBe("schedule");
+    expect(h.runInputs[0]).toMatchObject({
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: "ticket-one",
+    });
+    expect(h.creates[0]).toMatchObject({
+      projectId: "project-one",
+      ticketId: "ticket-one",
+      title: "Nightly sweep",
+    });
+    expect(listRunsForTicket(h.db, "ticket-one")).toHaveLength(1);
+    expect(result.text).toContain('Started "Nightly sweep" on VC-1');
   });
 
   it("records an agent's Run exactly as a Run a person started by hand", async () => {
@@ -715,8 +774,10 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // call, with an id a person's click would have minted.
     const byHand = await h.runner.run({
       commandId: randomUUID(),
-      automationId: automation.id,
+      target: { kind: "automation", automationId: automation.id },
       ticketId: "ticket-two",
+      modelOverride: null,
+      attendance: "attended",
     });
     await h.runner.settled();
     if (!byHand.ok) throw new Error(byHand.error);
@@ -735,6 +796,12 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     // Runs a person started by hand.
     expect(runShape(agentRun!)).toEqual(runShape(byHand.run));
     expect(agentRun!.model).toEqual(RUN_MODEL);
+    // …except attendance, which is the one field that SHOULD differ (VC-133).
+    // The agent issued this tool call and went back to its own turn, so when
+    // the Run's Session stops to ask, nobody is in front of it. A person's Run
+    // has somebody right there.
+    expect(agentRun!.attendance).toBe("unattended");
+    expect(byHand.run.attendance).toBe("attended");
   });
 
   it("binds the caller instead of believing one", async () => {
@@ -756,13 +823,20 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
     expect(h.creates[0]?.projectId).toBe("project-one");
     expect(h.creates[0]?.actor).toEqual({ kind: "automation" });
     expect(h.creates[0]?.modelOverride).toBeUndefined();
-    // Three fields reach the Run door and no more: there is nothing an agent
-    // can vary here that a person clicking Run cannot.
+    // Four fields reach the Run door and no more, and two of them are fixed by
+    // this door rather than by the caller: there is nothing an agent can vary
+    // here that a person clicking Run cannot.
     expect(Object.keys(h.runInputs[0]!).toSorted()).toEqual([
-      "automationId",
+      "attendance",
       "commandId",
+      "modelOverride",
+      "target",
       "ticketId",
     ]);
+    expect(h.runInputs[0]?.modelOverride).toBeNull();
+    // Fixed by this door, not varied by the caller: an agent cannot ask to be
+    // treated as though a person were watching.
+    expect(h.runInputs[0]?.attendance).toBe("unattended");
   });
 
   it("cannot name a Ticket outside the calling Session's project", async () => {
@@ -801,8 +875,8 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
 
     // The app's own listing rule (`listAutomationsForProject` orders the
     // project's own first), not a rule invented at this door.
-    expect(h.runInputs[0]?.automationId).toBe(own.id);
-    expect(h.runInputs[0]?.automationId).not.toBe(global.id);
+    expect(h.runInputs[0]?.target).toEqual({ kind: "automation", automationId: own.id });
+    expect(h.runInputs[0]?.target).not.toEqual({ kind: "automation", automationId: global.id });
     expect(result.text).toContain("Nightly sweep");
   });
 

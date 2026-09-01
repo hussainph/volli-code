@@ -10,14 +10,8 @@ import { migrate } from "./migrations";
  * (and catches everything this throws) before calling in, since that's also
  * where the open+migrate failure is turned into the degraded IPC story.
  */
-export function openVolliDb(
-  dbPath: string,
-  options: { nativeBinding?: string } = {},
-): Database.Database {
-  const db = new Database(
-    dbPath,
-    options.nativeBinding ? { nativeBinding: options.nativeBinding } : undefined,
-  );
+export function openVolliDb(dbPath: string): Database.Database {
+  const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");

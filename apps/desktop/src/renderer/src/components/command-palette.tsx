@@ -4,11 +4,15 @@ import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
-import type { ChatSessionRecord } from "@volli/shared";
+import {
+  sessionProvenanceHoverLine,
+  type ChatSessionRecord,
+  type SessionListingRow,
+  type SessionProvenance,
+} from "@volli/shared";
 
 import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
 import {
@@ -20,6 +24,7 @@ import {
 } from "@renderer/components/command-palette-model";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { useAutomationsStore } from "@renderer/stores/automations";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -77,6 +82,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }),
   );
   const [chatSessions, setChatSessions] = React.useState<readonly ChatSessionRecord[]>([]);
+  /**
+   * Who started each listed Session, across every tracked project (VC-131).
+   *
+   * Held beside the chat rows rather than folded into them because provenance
+   * rides on the listing ROW — it is a fact about the Session, not about the
+   * record shape the palette keeps — and because the palette's OTHER source of
+   * Sessions is the open-terminal store, which has no row to carry it. One map
+   * keyed by Session id answers for both halves of the list.
+   *
+   * Sparse: only a Session with something to say takes a slot, so the ordinary
+   * palette holds an empty object and adds nothing to any row.
+   */
+  const [sessionProvenance, setSessionProvenance] = React.useState<
+    Readonly<Record<string, SessionProvenance>>
+  >({});
   const [query, setQuery] = React.useState("");
   const openTicketId = useWorkspaceStore((state) =>
     selectedProjectId === null ? null : (state.byProject[selectedProjectId]?.openTicketId ?? null),
@@ -125,6 +145,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             selectedProjectId,
             chatSessions,
             residentChatTitles,
+            sessionProvenance,
           )
         : EMPTY_COMMAND_PALETTE_ITEMS,
     [
@@ -135,6 +156,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       selectedProjectId,
       chatSessions,
       residentChatTitles,
+      sessionProvenance,
     ],
   );
 
@@ -148,6 +170,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   React.useEffect(() => {
     if (!open) {
       setChatSessions([]);
+      setSessionProvenance({});
       return;
     }
     let current = true;
@@ -159,13 +182,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           toastError(`Couldn't load sessions: ${failed.error}`);
           return;
         }
-        setChatSessions(
-          results.flatMap((result) =>
-            result.ok
-              ? result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : []))
-              : [],
-          ),
+        const rows = results.flatMap<SessionListingRow>((result) =>
+          result.ok ? result.sessions : [],
         );
+        setChatSessions(rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])));
+        // Both kinds of row contribute: a terminal Session reaches the list
+        // through the open-tab store, which carries no provenance of its own,
+        // so dropping the terminal rows here would leave exactly those rows
+        // unmarkable.
+        const provenance: Record<string, SessionProvenance> = {};
+        for (const row of rows) {
+          if (row.provenance.kind === "user") continue;
+          provenance[row.kind === "terminal" ? row.record.id : row.record.sessionId] =
+            row.provenance;
+        }
+        setSessionProvenance(provenance);
       })
       .catch((error: unknown) => {
         if (current) {
@@ -226,11 +257,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 value={`run automation ${item.name} ${item.ticketDisplayId}`}
                 keywords={[item.name, item.ticketDisplayId, "run", "automation"]}
                 onSelect={() => {
-                  // The palette closes now; the run navigates to the fresh
-                  // Session itself the moment main answers (run-automation.ts).
+                  // The palette closes now, but VC-234's universal landing
+                  // rule keeps the current workspace in place. Success toasts
+                  // with the fresh Session as an explicit action.
                   void runAutomationOnTicket({
-                    automationId: item.automationId,
+                    target: { kind: "automation", automationId: item.automationId },
+                    automationName: item.name,
                     ticketId: item.ticketId,
+                    ticketDisplayId: item.ticketDisplayId,
+                    // Run by name, on the Automation's own Runtime. The
+                    // per-invocation override lives where a person has already
+                    // stopped to choose (VC-112), not on a name typed in flight.
+                    modelOverride: null,
                   });
                   finishNavigation();
                 }}
@@ -250,20 +288,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ))}
             {selectedProjectId !== null ? (
               <Command.Item
-                key="automation-new"
-                value="new automation create automation"
-                keywords={["new", "create", "automation"]}
+                key="automations-page"
+                value="automations new automation create automation"
+                keywords={["new", "create", "automation", "edit", "page"]}
                 onSelect={() => {
-                  useAutomationsStore.getState().openEditor(selectedProjectId);
+                  // NAVIGATION, not authoring. The palette runs Automations
+                  // (above) and goes to the page that authors them; it does
+                  // not open the form itself, because only that page authors
+                  // (VC-112) and a create summoned from anywhere is a second
+                  // authoring surface wearing a palette row.
+                  useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
                   finishNavigation();
                 }}
                 className={PALETTE_ROW}
               >
-                <PlusIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">New Automation…</span>
+                  <span className="truncate text-ui font-medium">Automations</span>
                   <span className="truncate text-label text-muted-foreground">
-                    Name it, write Instructions, choose a Runtime
+                    New, edit, duplicate
                   </span>
                 </span>
               </Command.Item>
@@ -356,8 +399,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   ) : (
                     <TerminalWindowIcon aria-hidden className={PALETTE_ROW_ICON} />
                   )}
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-ui font-medium">{item.title}</span>
+                  <span
+                    className="flex min-w-0 flex-1 flex-col"
+                    // The whole mark for a Session another Session started, on
+                    // a node this row already had (VC-131).
+                    title={sessionProvenanceHoverLine(item.provenance) ?? undefined}
+                  >
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate text-ui font-medium">{item.title}</span>
+                      {/* After the title rather than before it: this row's
+                          leading slot is the kind glyph, and a bolt wedged
+                          between that glyph and the title would break the
+                          column every other palette row is scanned down. */}
+                      <SessionProvenanceMark provenance={item.provenance} rowTitle={item.title} />
+                    </span>
                     <span className="truncate text-label text-muted-foreground">{context}</span>
                   </span>
                   <span className="shrink-0 text-label text-muted-foreground">Open session</span>

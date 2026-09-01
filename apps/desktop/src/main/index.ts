@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   dialog,
   ipcMain,
   nativeTheme,
@@ -51,7 +52,12 @@ import type {
   SessionToolId,
 } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
-import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
+import type {
+  BrowserTabStateEvent,
+  FirstPaintHint,
+  VolliIpcChannel,
+  VolliIpcEvent,
+} from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
@@ -71,10 +77,40 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { getAutomation, listAutomationsForProject, listRunsForTicket } from "./db/automations-repo";
-import { getTicket, getTicketBrief } from "./db/tickets-repo";
+import {
+  getAutomation,
+  listAllAutomations,
+  listAutomationsForProject,
+  listColumnArmings,
+  listProjectRunsForAutomation,
+  listRunsForProject,
+  listRunsForTicket,
+  listSkippedOccurrencesForProject,
+} from "./db/automations-repo";
+import { getTicket, getTicketBrief, getTicketRow } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
+import { readAutomationRunAttendance } from "./db/automations-repo";
+import {
+  beginPendingArmedRunAttempt,
+  deletePendingArmedRun,
+  deletePendingArmedRunAttempt,
+  deletePendingArmedRunForTicket,
+  getPendingArmedRun,
+  getPendingArmedRunAttempt,
+  listPendingArmedRunAttempts,
+  listPendingArmedRuns,
+  putPendingArmedRun,
+  updatePendingArmedRunAttemptError,
+} from "./db/pending-armed-runs-repo";
+import { enabledAutomationIds } from "./automations/enablement";
+import {
+  createPendingArmedRunCoordinator,
+  type PendingArmedRunCoordinator,
+} from "./automations/pending-armed-runs";
+import { createRunAttentionWatch } from "./automations/run-attention";
+import { readNotificationPreferences } from "./notification-preferences";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -85,6 +121,7 @@ import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
@@ -115,6 +152,13 @@ import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import type { AutomationRunner } from "./automations/run";
 import { createAutomationService } from "./automations/service";
+import { createAutomationScheduler } from "./automations/scheduler";
+import type { AutomationScheduler } from "./automations/scheduler";
+import {
+  advanceScheduleCursor,
+  readScheduleCursors,
+  rebaseScheduleCursor,
+} from "./automations/schedule-cursor";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
@@ -144,6 +188,8 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastPendingArmedRuns,
+  broadcastPendingArmedRunSettled,
   broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionRetitled,
@@ -229,6 +275,9 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
+import { BrowserTabHost } from "./browser/tab-host";
+import { registerBrowserTabIpcHandlers } from "./browser/ipc";
+import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -304,6 +353,10 @@ if (ownsAppProfile) {
 // anything else from the local filesystem.
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
 
+function noOpenNativeBindings(): readonly OpenNativeBinding[] {
+  return [];
+}
+
 // Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
 // and agent-written artifacts now renders real <a href> links, so a click would
 // otherwise navigate the whole BrowserWindow away from the app — or a
@@ -369,6 +422,13 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
+  }
 }
 
 function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
@@ -677,10 +737,45 @@ app.whenReady().then(async () => {
   // every window. Wrapping HERE is what makes that claim true: this is the only
   // construction site, so there is no unwatched engine for a caller to hold.
   // See `session-control/activity-watch.ts`.
+  //
+  // The handle is captured into a const first because `dbHandle` is a `let`
+  // that a later branch may reassign: a narrowing on it does not survive into
+  // the callback below, and this is the one place that callback needs it.
+  const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // The Notification rule (VC-112, VC-133): an unattended Run that enters
+  // `waiting` or `error` says so, and nothing else does. It hangs off the
+  // activity watch below because that is the one place every durable Session
+  // write in this process is already seen — see `automations/run-attention.ts`.
+  const runAttention =
+    watchedDb !== null
+      ? createRunAttentionWatch({
+          attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
+          // Re-read per notification rather than captured at boot, so switching
+          // notifications off takes effect on the next one instead of the next
+          // launch. It is one indexed `app_state` read.
+          preferences: () => readNotificationPreferences(watchedDb),
+          notify: ({ title, body }) => new Notification({ title, body }).show(),
+        })
+      : null;
+  // The runtime is composed from the watched Engine below, so this reader is
+  // installed in two steps: the watch closes over the indirection now, and the
+  // real process-local binding list replaces the empty boot answer once the
+  // runtime exists. Durable attachments alone never enter this list.
+  let listOpenNativeBindings = noOpenNativeBindings;
   const sessionActivityWatch =
-    dbHandle.ok === true
-      ? watchSessionActivity(createDesktopSessionEngine(dbHandle.db), {
+    watchedDb !== null
+      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
           publish: broadcastSessionActivity,
+          // Read on the push path as well as the fetch path, so a Run's bolt
+          // survives its Session's first turn (VC-131): the renderer upserts
+          // the whole row, so a push without provenance would erase the mark.
+          provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          listOpenNativeBindings: () => listOpenNativeBindings(),
+          observe: (projection) => runAttention?.observe(projection),
+          // The baseline for the rule above: a Session minted in this process
+          // began with no need, which is what makes its first fold an edge
+          // rather than a first sighting (VC-133).
+          observeBirth: (sessionId) => runAttention?.observeBirth(sessionId),
         })
       : null;
   const sessionEngine = sessionActivityWatch?.engine ?? null;
@@ -732,23 +827,28 @@ app.whenReady().then(async () => {
    */
   const readSessionEnvironment = async (
     cwd: string | null,
+    projectRoot: string | null,
     pathExists?: (path: string) => boolean,
   ) => {
     const outcome = await loginPathBootstrap.apply();
     const interactiveProvenance = loginPathBootstrap.interactiveProvenance();
-    const report = await buildSessionEnvReport({
+    const reportInput = {
       // Read after apply: the bootstrap is the one writer that puts binDir
       // first even when the login shell could not be reached.
       path: process.env.PATH ?? "",
       provenance: outcome.kind,
       interactiveProvenance,
-      // A host-wide read has no project dependency fact to infer from main's
-      // own cwd, so the report leaves that one field unmeasured.
-      cwd: cwd ?? undefined,
       // A caller with a further workspace question of its own passes its memo
       // in, so the whole read stats each path once (Settings, below).
       ...(pathExists === undefined ? {} : { pathExists }),
-    });
+    };
+    // A host-wide read has no project dependency fact to infer from main's own
+    // cwd. Scoped reads carry both where the caller stands and the outer
+    // project boundary; constructing the two shapes separately keeps that
+    // all-or-nothing contract visible to TypeScript.
+    const report = await buildSessionEnvReport(
+      cwd === null || projectRoot === null ? reportInput : { ...reportInput, cwd, projectRoot },
+    );
     // `SessionEnvReport` also serves a standalone CLI fallback, where those
     // fields can be unknown. Main just ran both passes, so Settings can retain
     // their concrete facts instead of widening them to that fallback shape.
@@ -799,6 +899,10 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  // Assigned once the BrowserTabHost is built inside the ready path below; the
+  // attach-time browser-port resolver reads it lazily, long after boot — the
+  // same bargain ptyManagerRef strikes with the worktree guards.
+  let browserTabsRef: BrowserTabHost | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -819,6 +923,15 @@ app.whenReady().then(async () => {
                   "ask_user",
                   ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
+                  // The desktop always carries the Browser host, so every new
+                  // Session records all six Browser tools. Recorded surfaces
+                  // from older builds keep their shorter list and rebind it.
+                  "browser_tabs",
+                  "browser_navigate",
+                  "browser_snapshot",
+                  "browser_act",
+                  "browser_screenshot",
+                  "browser_console",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -951,6 +1064,21 @@ app.whenReady().then(async () => {
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          // The Session's Browser capability, composed at attach over the one
+          // host: the registry decides which tabs the scope may see, and the
+          // CDP wire is each tab's app-private debugger — never a debug port.
+          resolveBrowserPort: (scope) => {
+            const host = browserTabsRef;
+            if (host === null) {
+              throw new Error("The Browser host is not ready; retry the attachment.");
+            }
+            return createAgentBrowserPort({
+              host,
+              scope,
+              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
+              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+            });
+          },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web
           // ports this decides no membership — the Session's frozen record does
           // — it supplies the one closure every bundled verb is answered
@@ -1096,6 +1224,8 @@ app.whenReady().then(async () => {
           artifacts: transcriptArtifacts,
         })
       : null;
+  listOpenNativeBindings =
+    sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   // Automations own a transport-neutral command/event/projection core. Keep
   // the runner mutable until below: Session RPC's attach door closes over it,
@@ -1117,12 +1247,28 @@ app.whenReady().then(async () => {
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
+          skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
           onMutation: (change) => broadcastDataChanged(change),
+          // Create, enable, and schedule-changing commands establish the new
+          // lifecycle before the scheduler's asynchronous refresh. Relaunch
+          // can therefore still account for a due time missed in that gap.
+          rebaseScheduleCursor: (automationId, through) => {
+            rebaseScheduleCursor(sessionDb, { automationId, through }, Date.now());
+          },
+          // Every record write can add, retime or remove a schedule, and the
+          // enabled switch decides whether one may fire here at all — so the
+          // timer re-reads after each rather than waiting out its own tick.
+          onAutomationsChanged: () => {
+            void automationScheduler?.refresh();
+          },
         });
   let automationRunner: AutomationRunner | null = null;
+  let automationScheduler: AutomationScheduler | null = null;
+  let pendingArmedRuns: PendingArmedRunCoordinator | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1761,11 +1907,15 @@ app.whenReady().then(async () => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
+    listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,
+    // Renderer moves now reach main's one durable armed-column arrival owner,
+    // carrying an Option-drag choice when that gesture supplied one.
+    onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -1811,7 +1961,9 @@ app.whenReady().then(async () => {
           engine: automationEngine,
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           findTicket: (ticketId) => getTicket(sessionDb, ticketId),
+          findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
           listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
+          listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
           sessions,
           promptSupply: async (projectId) => {
             const project = getProjectById(sessionDb, projectId);
@@ -1853,24 +2005,164 @@ app.whenReady().then(async () => {
                 },
               },
             }),
+          reportInstructionDeliveryFailure: (input) =>
+            sessionRuntime.reportMessageDeliveryFailure(input),
           // Projection failures deliberately propagate: the runner fails the
           // single-flight guard closed instead of treating unknown as idle.
           readSessionActivity: async (sessionId) => {
             const snapshot = await sessionRuntime.projection({ sessionId });
             return chatSessionRecord(snapshot.projection).activity;
           },
+          // A Run that names no Ticket (VC-130's schedule Target) OMITS the
+          // property rather than sending `undefined` for it: the Electron
+          // transport would carry that by structured clone, and an HTTP one
+          // would mangle it (docs/BOUNDARIES.md rule 3).
           onRunStarted: ({ projectId, run }) =>
-            broadcastDataChanged({ projectId, ticketId: run.ticketId ?? undefined }),
+            broadcastDataChanged(
+              run.ticketId === null ? { projectId } : { projectId, ticketId: run.ticketId },
+            ),
         })
       : null;
+
+  // The armed-column delay window (VC-226) belongs to main, not to any one
+  // renderer. Its SQLite row survives window count (and a relaunch), one timer
+  // serves that row, and every renderer receives the same full projection.
+  if (sessionDb !== null) {
+    const pendingDb = sessionDb;
+    pendingArmedRuns = createPendingArmedRunCoordinator({
+      now: Date.now,
+      nextId: randomUUID,
+      listPending: () => listPendingArmedRuns(pendingDb),
+      getPending: (id) => getPendingArmedRun(pendingDb, id),
+      putPending: (pending) => putPendingArmedRun(pendingDb, pending),
+      deletePending: (id) => deletePendingArmedRun(pendingDb, id),
+      deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
+      beginAttempt: (id, commandId, fallbackError) =>
+        beginPendingArmedRunAttempt(pendingDb, id, commandId, fallbackError),
+      listAttempts: () => listPendingArmedRunAttempts(pendingDb),
+      getAttempt: (id) => getPendingArmedRunAttempt(pendingDb, id),
+      updateAttemptError: (id, error) => updatePendingArmedRunAttemptError(pendingDb, id, error),
+      deleteAttempt: (id) => deletePendingArmedRunAttempt(pendingDb, id),
+      readTicket: (ticketId) => {
+        const row = getTicketRow(pendingDb, ticketId);
+        if (row === undefined || row.archived_at !== null) return undefined;
+        const ticket = getTicket(pendingDb, ticketId);
+        const project = getProjectById(pendingDb, row.project_id);
+        if (ticket === undefined || project === undefined) return undefined;
+        return {
+          projectId: ticket.projectId,
+          status: ticket.status,
+          displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+        };
+      },
+      readPlanning: (projectId) => ({
+        automations: listAutomationsForProject(pendingDb, projectId),
+        armings: listColumnArmings(pendingDb, projectId),
+        enabledAutomationIds: enabledAutomationIds(pendingDb),
+      }),
+      run: async ({ commandId, automationId, ticketId }) => {
+        const runner = automationRunner;
+        if (runner === null) {
+          return {
+            ok: false,
+            code: "RUN_FAILED",
+            error: "The Session runtime is not available this launch.",
+          };
+        }
+        // A Deliberate column move retains the attended semantics its renderer
+        // expiry door had. Only ownership of the timer moved into main.
+        return runner.run({
+          commandId,
+          target: { kind: "automation", automationId },
+          ticketId,
+          modelOverride: null,
+          attendance: "attended",
+        });
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onPendingChanged: broadcastPendingArmedRuns,
+      onSettled: broadcastPendingArmedRunSettled,
+      log: (message) => console.error(message),
+    });
+    pendingArmedRuns.start();
+    app.on("before-quit", () => pendingArmedRuns?.stop());
+  }
+
   if (automationRunner !== null) {
     void automationRunner.recover().catch((error: unknown) => {
       console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
     });
   }
+  // The schedule timer (VC-130). It is a thin caller of the pure policy in
+  // `@volli/shared` and of the same Run door a person uses, so everything below
+  // is composition: a clock, Node's timers, the projections it reads, and the
+  // durable command it records a Skipped occurrence through.
+  //
+  // It needs the Run door, so it comes up with the runner: a launch where the
+  // Session runtime never started has no scheduler either, which is honest —
+  // nothing could have run, and the missed occurrences are still owed and will
+  // be recorded as skips by the next launch that can.
+  const runnerForSchedule = automationRunner;
+  if (runnerForSchedule !== null && automationEngine !== null && sessionDb !== null) {
+    const scheduleDb = sessionDb;
+    const scheduleEngine = automationEngine;
+    automationScheduler = createAutomationScheduler({
+      now: Date.now,
+      listAutomations: () => Promise.resolve(listAllAutomations(scheduleDb)),
+      enabledAutomationIds: () => scheduleEngine.enabledAutomationIds(),
+      readCursors: () => Promise.resolve(readScheduleCursors(scheduleDb)),
+      advanceCursor: (input) => {
+        advanceScheduleCursor(scheduleDb, input, Date.now());
+        return Promise.resolve();
+      },
+      recordSkip: async (input) => {
+        const outcome = await scheduleEngine.recordSkip(input);
+        if (!outcome.ok) {
+          // Fail the step rather than resolving over it. The scheduler advances
+          // its cursor only after a step settles, so a refused write leaves the
+          // occurrence owed and the next pass records it again under the same
+          // derived command id. Swallowing it here would step past a skip that
+          // never reached the ledger — a skip that looks exactly like a
+          // silence, which is the one outcome VC-112 forbids.
+          throw new Error(outcome.error);
+        }
+        // The Automations page reads its history on arrival and on every
+        // planning change, so a skip recorded while it is open lands without
+        // anyone reloading.
+        broadcastDataChanged({ projectId: input.skip.projectId });
+      },
+      startRun: async (input) => {
+        // UNATTENDED (VC-133), and this is the case VC-112 names outright:
+        // "a column move is attended because a person is right there; a
+        // schedule is not." A timer fired this; the app may not even have a
+        // window open. If its Session stops for a person, this is how they
+        // find out.
+        const outcome = await runnerForSchedule.runForProject({
+          ...input,
+          attendance: "unattended",
+        });
+        return outcome.ok ? { ok: true } : { ok: false, code: outcome.code, error: outcome.error };
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => {
+        clearTimeout(handle);
+      },
+    });
+    const scheduler = automationScheduler;
+    void scheduler.start().catch((error: unknown) => {
+      console.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`);
+    });
+    // Nothing new may become due once the app is on its way out; work already
+    // accepted is durable and recovers on the next launch.
+    app.on("before-quit", () => {
+      scheduler.stop();
+    });
+  }
   registerAutomationIpcHandlers(dbHandle, {
     service: automationService,
     runner: automationRunner,
+    ...(pendingArmedRuns === null ? {} : { pendingArmedRuns }),
   });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
@@ -2029,7 +2321,28 @@ app.whenReady().then(async () => {
 
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
-  const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+  });
+  browserTabsRef = browserTabs;
+  registerBrowserTabIpcHandlers(browserTabs);
+  const createOwnedWindow = (): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint());
+    // Browser Tabs are live machine resources, not durable documents. Once the
+    // app window that can place them closes, keeping invisible remote pages
+    // running would leave network/timers with no reachable owner.
+    window.once("closed", () => browserTabs.closeAll());
+    return window;
+  };
+  const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
@@ -2438,8 +2751,8 @@ app.whenReady().then(async () => {
             // than the tool they were told to have.
             const pathExists = memoizedPathExists(existsSync);
             return {
-              ...(await readSessionEnvironment(cwd, pathExists)),
-              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, pathExists),
+              ...(await readSessionEnvironment(cwd, cwd, pathExists)),
+              installCommand: cwd === null ? null : workspaceInstallCommand(cwd, cwd, pathExists),
             };
           },
           systemPathIssues: () => readSystemPathIssues(),
@@ -2560,6 +2873,10 @@ app.whenReady().then(async () => {
           // down. Read-only commands and no-ops (e.g. a same-column move) never
           // fire it, so a stray broadcast can't slip through.
           onMutation: (change) => broadcastDataChanged(change),
+          // An explicit `volli ticket move` is the other Deliberate-move door.
+          // It reaches the same one main-owned pending arrival as renderer IPC;
+          // no renderer has to exist for the timer to fire.
+          onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
           // The involuntary channel's fan-out (harness-events): every canonical
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.
@@ -2575,7 +2892,7 @@ app.whenReady().then(async () => {
           // the one current pass — boot normally, a fresh pass after repair —
           // so the report never describes a PATH from before adoption finished
           // and is read at CALL time, never captured.
-          sessionEnv: (cwd) => readSessionEnvironment(cwd),
+          sessionEnv: (cwd, projectRoot) => readSessionEnvironment(cwd, projectRoot),
           // What `volli doctor` cannot see from inside the shell it runs in.
           // Read at CALL time, never captured: the wrappers are regenerated
           // after this service is constructed, and again by `--fix`.
@@ -2701,7 +3018,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager, currentFirstPaint());
+      createOwnedWindow();
     }
   });
 });

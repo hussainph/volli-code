@@ -58,14 +58,12 @@ export function resolveGhosttyThemeName(value: string, appearance: ResolvedAppea
   let lightName: string | null = null;
   let darkName: string | null = null;
   for (const rawEntry of value.split(",")) {
-    const entry = rawEntry.trim();
-    const match = /^(light|dark)\s*:\s*(.*)$/.exec(entry);
-    if (!match) continue;
-    const [, variant, name] = match;
-    if (variant === "dark") {
-      darkName = name;
+    const entry = parseVariantEntry(rawEntry);
+    if (entry === null) continue;
+    if (entry.variant === "dark") {
+      darkName = entry.name;
     } else {
-      lightName = name;
+      lightName = entry.name;
     }
   }
 
@@ -73,6 +71,34 @@ export function resolveGhosttyThemeName(value: string, appearance: ResolvedAppea
   const other = appearance === "light" ? darkName : lightName;
   return preferred ?? other ?? value;
 }
+
+/**
+ * Splits one `light:Name` / `dark:Name` entry of a theme pair into its variant
+ * and theme name, or null when it carries no such prefix.
+ *
+ * Split on the first `:` rather than `/^(light|dark)\s*:\s*(.*)$/`, whose `\s*`
+ * and `(.*)` overlap on tabs: `dark:<40k tabs>\nx\ny` took 16 seconds to fail
+ * (CodeQL js/polynomial-redos). A config file is local and the user's own, so
+ * that was a hang-your-own-app risk rather than a remote one, but one `indexOf`
+ * and two trims say the same thing in linear time.
+ *
+ * "The same thing" includes the line terminators `.` refuses: a value reaches
+ * here from ONE line of a config file, so an entry carrying a newline is a
+ * fragment of a mangled file rather than a variant entry, and is skipped the
+ * way the old `(.*)$` skipped it.
+ */
+function parseVariantEntry(rawEntry: string): { variant: "light" | "dark"; name: string } | null {
+  const entry = rawEntry.trim();
+  const colon = entry.indexOf(":");
+  if (colon === -1) return null;
+  const variant = entry.slice(0, colon).trimEnd();
+  if (variant !== "light" && variant !== "dark") return null;
+  const name = entry.slice(colon + 1).trimStart();
+  return LINE_TERMINATOR.test(name) ? null : { variant, name };
+}
+
+/** The line terminators a regex `.` never crosses. One class, so no backtracking. */
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 
 /** Parses `font-size` into a positive finite point size, or null. */
 function parseFontSize(value: string): number | null {

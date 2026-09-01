@@ -1620,6 +1620,13 @@ export const VERB_REGISTRY = [
     // Tickets itself and starts one Run each, so "one Run, one Session" stays
     // true while a scheduled sweep still covers a board.
     //
+    // The agent Target is a ruled exception (VC-230), not an inference from the
+    // saved Trigger. The scheduler and every person-facing Run door keep
+    // VC-112/VC-130's "the Trigger decides the Target": a schedule targets its
+    // Project. This agent-only door may instead aim one invocation of that same
+    // schedule-trigger Automation at one named Ticket. It does not edit the
+    // Trigger; it gives the orchestrator an explicit Ticket target for this Run.
+    //
     // Appended, never inserted. Declaration order is the canonical tool order,
     // and a Session whose surface was frozen before this verb existed must find
     // every tool it already held exactly where it already was.
@@ -1657,6 +1664,7 @@ export const VERB_REGISTRY = [
       // is answered with the names that do.
       description: [
         "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
+        "This includes an Automation whose Trigger is a schedule: although the schedule itself and person-facing Run doors target the Project, this agent-only invocation is a ruled exception that aims its one Run at the named Ticket without changing the Trigger.",
         "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
         "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
         "It does not move the Ticket, and it does not wait for the work to finish.",
@@ -1674,7 +1682,8 @@ export const VERB_REGISTRY = [
           name: "ticket",
           type: "string",
           required: true,
-          description: "The display id of the Ticket to run it on, for example VC-12.",
+          description:
+            "The display id of the Ticket this agent invocation targets, including for a schedule-trigger Automation, for example VC-12.",
         },
       ],
     },

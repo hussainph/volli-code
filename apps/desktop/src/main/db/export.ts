@@ -285,10 +285,32 @@ export interface ExportAutomation {
   projectId: string | null;
   name: string;
   instructions: string;
+  /**
+   * The column Trigger (migration 031), as its STORED JSON string for the same
+   * reason `runtime` is one: a hand-edited row that no longer parses must not
+   * take the rescue document down with it. `null` is "Nothing else".
+   */
+  triggerSpec: string | null;
   runtime: string | null;
   rowVersion: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * One `automation_column_arming` row (migration 031): which Automation a column
+ * fires on its own.
+ *
+ * Exported even though arming never travels with a PROJECT. The two claims do
+ * not conflict: arming is absent from git and from anything a second machine
+ * reads, while this document is one machine's own backup of its own database.
+ * Leaving it out would silently lose real state a person set by hand.
+ */
+export interface ExportColumnArming {
+  projectId: string;
+  status: string;
+  automationId: string;
+  armedAt: number;
 }
 
 /** One `automation_runs` projection row (migration 026): identity snapshot plus resolved model columns. */
@@ -303,6 +325,13 @@ export interface ExportAutomationRun {
   modelId: string;
   reasoningLevel: string;
   createdAt: number;
+}
+
+/** An accepted Automation Run's durable pre-mint Session command relation (migration 036). */
+export interface ExportAutomationSessionMintIntent {
+  sessionCreateCommandId: string;
+  automationCommandId: string;
+  recordedAt: number;
 }
 
 export interface ExportDocument {
@@ -328,6 +357,8 @@ export interface ExportDocument {
   appState: ExportAppState[];
   automations: ExportAutomation[];
   automationRuns: ExportAutomationRun[];
+  automationSessionMintIntents: ExportAutomationSessionMintIntent[];
+  automationColumnArmings: ExportColumnArming[];
 }
 
 export interface BuildExportDocumentOptions {
@@ -501,6 +532,7 @@ interface AutomationRow {
   project_id: string | null;
   name: string;
   instructions: string;
+  trigger_spec: string | null;
   runtime: string | null;
   row_version: number;
   created_at: number;
@@ -514,10 +546,31 @@ function exportAutomations(db: Database.Database): ExportAutomation[] {
     projectId: row.project_id,
     name: row.name,
     instructions: row.instructions,
+    triggerSpec: row.trigger_spec,
     runtime: row.runtime,
     rowVersion: row.row_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }));
+}
+
+interface ColumnArmingRow {
+  project_id: string;
+  status: string;
+  automation_id: string;
+  armed_at: number;
+}
+
+function exportColumnArmings(db: Database.Database): ExportColumnArming[] {
+  const rows = prepared<[], ColumnArmingRow>(
+    db,
+    "SELECT * FROM automation_column_arming ORDER BY project_id, status",
+  ).all();
+  return rows.map((row) => ({
+    projectId: row.project_id,
+    status: row.status,
+    automationId: row.automation_id,
+    armedAt: row.armed_at,
   }));
 }
 
@@ -548,6 +601,28 @@ function exportAutomationRuns(db: Database.Database): ExportAutomationRun[] {
     modelId: row.model_id,
     reasoningLevel: row.reasoning_level,
     createdAt: row.created_at,
+  }));
+}
+
+interface AutomationSessionMintIntentRow {
+  session_create_command_id: string;
+  automation_command_id: string;
+  recorded_at: number;
+}
+
+function exportAutomationSessionMintIntents(
+  db: Database.Database,
+): ExportAutomationSessionMintIntent[] {
+  const rows = prepared<[], AutomationSessionMintIntentRow>(
+    db,
+    `SELECT session_create_command_id, automation_command_id, recorded_at
+       FROM automation_session_mint_intents
+      ORDER BY session_create_command_id`,
+  ).all();
+  return rows.map((row) => ({
+    sessionCreateCommandId: row.session_create_command_id,
+    automationCommandId: row.automation_command_id,
+    recordedAt: row.recorded_at,
   }));
 }
 
@@ -866,6 +941,8 @@ export function buildExportDocument(
     appState: exportAppState(db),
     automations: exportAutomations(db),
     automationRuns: exportAutomationRuns(db),
+    automationSessionMintIntents: exportAutomationSessionMintIntents(db),
+    automationColumnArmings: exportColumnArmings(db),
   };
 }
 

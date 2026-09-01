@@ -98,6 +98,7 @@ import {
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
+  type RuntimeBrowserPort,
   type RuntimeObservation,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
@@ -343,6 +344,22 @@ export interface PiAdapterOptions {
    */
   resolveWebPorts?: () => SessionWebPorts;
   /**
+   * The desktop's Browser capability for one Session, scoped before the model
+   * ever speaks: the adapter states the Session's own project and Ticket from
+   * its resolved context, and the port that comes back answers only within
+   * them. Optional on `resolveWebPorts`'s terms — absent means a Session is
+   * offered no browser tool — and called once per attachment, not per turn.
+   *
+   * Unlike the web resolver this one takes an argument, because scope is the
+   * capability here: the same host answers every Session, and which tabs a
+   * port may see is decided by who is asking — a fact only the adapter's
+   * context can state honestly.
+   */
+  resolveBrowserPort?: (scope: {
+    projectId: string;
+    ticketId: string | null;
+  }) => RuntimeBrowserPort;
+  /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
    *
@@ -570,6 +587,10 @@ function piNativeAdapter(
         recovery,
         now,
         web: options.resolveWebPorts?.() ?? {},
+        browser: options.resolveBrowserPort?.({
+          projectId: context.projectId,
+          ticketId: context.ticketId,
+        }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
@@ -651,6 +672,8 @@ interface PiBindingOptions {
   now: () => number;
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
+  /** The Session's scoped Browser capability; `undefined` is "no browser". */
+  browser: RuntimeBrowserPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -664,6 +687,7 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
+  readonly #browser: RuntimeBrowserPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -696,6 +720,7 @@ class PiBinding implements BindingHandle {
     this.#recovery = options.recovery;
     this.#now = options.now;
     this.#web = options.web;
+    this.#browser = options.browser;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
@@ -763,12 +788,24 @@ class PiBinding implements BindingHandle {
     const wantsAskUser = context.toolSurface.includes("ask_user");
     const wantsWebFetch = context.toolSurface.includes("web_fetch");
     const wantsWebSearch = context.toolSurface.includes("web_search");
+    // One name stands for all six: the browser tools ride one port and one
+    // binding decision, so a recorded surface holds either every browser name
+    // or none — checking the first is checking the capability.
+    const wantsBrowser = context.toolSurface.includes("browser_tabs");
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
     ) {
       throw new Error(
         "This Session's frozen Agent Tool Surface includes Web Access, but the current profile cannot bind it. Restore a working Web Access configuration and retry the attachment.",
+      );
+    }
+    if (wantsBrowser && this.#browser === undefined) {
+      // Refused rather than shrunk, on the web guard's reasoning: the frozen
+      // surface is a promise about the provider tool array, and a build that
+      // cannot keep it must fail the attachment loudly.
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes the Browser, but this build wired no Browser host. Retry the attachment on a build that carries one.",
       );
     }
     // The verb half of the frozen record, read back rather than re-derived from
@@ -844,6 +881,7 @@ class PiBinding implements BindingHandle {
       ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
+      ...(wantsBrowser && this.#browser !== undefined ? { browser: this.#browser } : {}),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1067,6 +1105,7 @@ class PiBinding implements BindingHandle {
     }
     this.#released = true;
     this.#abort.abort();
+    this.#browser?.dispose?.();
     await this.#handle?.close();
   }
 

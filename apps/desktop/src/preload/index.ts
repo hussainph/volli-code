@@ -29,6 +29,7 @@ import type {
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   OverlayEdits,
+  PendingArmedRun,
   ProjectThemeOverride,
   // Imported for `typeof` only — see the Session RPC door below. `import type`
   // of a const is legal and fully erased, which is exactly why these three can
@@ -52,15 +53,40 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  BrowserTabIdInput,
+  BrowserTabListInput,
+  BrowserTabListResult,
+  BrowserTabNavigateInput,
+  BrowserTabOpenInput,
+  BrowserTabResult,
+  BrowserTabSetBoundsInput,
+  BrowserTabStateEvent,
+  AutomationArmInput,
+  AutomationArmingsResult,
+  AutomationArmResult,
+  AutomationColumnOrdersResult,
+  AutomationSetColumnOrderInput,
+  AutomationSetColumnOrderResult,
   AutomationCreateInput,
   AutomationDeleteResult,
+  AutomationEnablementResult,
   AutomationIdInput,
   AutomationResult,
+  AutomationRunForProjectInput,
   AutomationRunInput,
   AutomationRunsResult,
   AutomationRunStartResult,
   AutomationsResult,
+  AutomationSetEnabledInput,
+  AutomationSetEnabledResult,
+  AutomationSkipsResult,
   AutomationUpdateInput,
+  PendingArmedRunCancelInput,
+  PendingArmedRunCancelResult,
+  PendingArmedRunRetryInput,
+  PendingArmedRunRetryResult,
+  PendingArmedRunsResult,
+  PendingArmedRunSettledNotice,
   CliDoctorInput,
   CliDoctorResult,
   CliRepairResult,
@@ -349,6 +375,43 @@ const api = {
   /** Reads the database size or runs one main-owned action without exposing its path. */
   database: (action?: DatabaseAction): Promise<DatabaseResult> =>
     action === undefined ? invoke("volli:database") : invoke("volli:database", action),
+  /**
+   * The Browser Tab door: chrome commands in, chrome snapshots out. Every
+   * operation names Volli's opaque tab id — no Chromium index, partition,
+   * preload, or WebContents id crosses here — and provenance is main's to
+   * stamp: a renderer-opened tab is always a `user` tab. The native surface
+   * itself is painted by main behind the renderer's measured plane; this door
+   * only steers it.
+   */
+  browser: {
+    open: (input: BrowserTabOpenInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-open", input),
+    close: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-close", input),
+    list: (input: BrowserTabListInput): Promise<BrowserTabListResult> =>
+      invoke("volli:browser-list", input),
+    navigate: (input: BrowserTabNavigateInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-navigate", input),
+    back: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-back", input),
+    forward: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-forward", input),
+    reload: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-reload", input),
+    setBounds: (input: BrowserTabSetBoundsInput): Promise<Result> =>
+      invoke("volli:browser-set-bounds", input),
+    show: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-show", input),
+    hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
+    toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-toggle-devtools", input),
+    /** Subscribes to full chrome snapshots; returns the unsubscribe. */
+    onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+    },
+  },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
@@ -717,6 +780,87 @@ const api = {
     /** A Ticket's Runs, newest first. */
     runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
       invoke("volli:automation-runs-for-ticket", input),
+    /**
+     * One project's armed columns (VC-128). Machine-local and deliberately a
+     * separate read from the record's list: arming never travels with a project,
+     * so it is never a field on an Automation that could be carried along.
+     */
+    armings: (input: ProjectIdInput): Promise<AutomationArmingsResult> =>
+      invoke("volli:automation-arming-list", input),
+    /**
+     * Arms one column with one offered Automation, or disarms it with
+     * `automationId: null` (VC-128). A durable command like every other write
+     * here — only the projection it lands in is machine-local.
+     */
+    arm: (input: AutomationArmInput): Promise<AutomationArmResult> =>
+      invoke("volli:automation-arm", input),
+    /**
+     * One project's arranged columns (VC-132): which Offered Automation reads
+     * as digit `1` when a card is dragged over each column. Machine-local and a
+     * separate read for the arming's reason — the rank never travels with a
+     * project, because the digit it prints is pinned by an arming that does not
+     * either.
+     */
+    columnOrders: (input: ProjectIdInput): Promise<AutomationColumnOrdersResult> =>
+      invoke("volli:automation-column-order-list", input),
+    /** Arranges one column's Offered list; answers with the project's whole new set. */
+    setColumnOrder: (
+      input: AutomationSetColumnOrderInput,
+    ): Promise<AutomationSetColumnOrderResult> =>
+      invoke("volli:automation-set-column-order", input),
+    /** Every Run on this project's Tickets, newest first — the page's history. */
+    runsForProject: (input: ProjectIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-project", input),
+    /**
+     * Every due time this project's schedules missed (VC-130). Read beside the
+     * Runs rather than merged into them: a skip is a different record with a
+     * different action — it offers to start the Run that did not happen.
+     */
+    skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-project", input),
+    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
+      invoke("volli:automation-run-for-project", input),
+    /** Which Automations are switched on on this machine (VC-127). */
+    enablement: (): Promise<AutomationEnablementResult> => invoke("volli:automation-enablement"),
+    /** Switches one on or off here; answers with the whole new enabled set. */
+    setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationSetEnabledResult> =>
+      invoke("volli:automation-set-enabled", input),
+    /** Main's whole durable armed-column countdown projection. */
+    pendingArmedRuns: (): Promise<PendingArmedRunsResult> =>
+      invoke("volli:automation-pending-armed-runs"),
+    /** Cancels one exact arrival; a stale id is an idempotent no-op. */
+    cancelPendingArmedRun: (
+      input: PendingArmedRunCancelInput,
+    ): Promise<PendingArmedRunCancelResult> =>
+      invoke("volli:automation-cancel-pending-armed-run", input),
+    /** Retries one expired arrival; main reuses the command id retained for that exact move. */
+    retryPendingArmedRun: (input: PendingArmedRunRetryInput): Promise<PendingArmedRunRetryResult> =>
+      invoke("volli:automation-retry-pending-armed-run", input),
+    /** Every window receives the same whole pending snapshot from main. */
+    onPendingArmedRunsChanged: (callback: (pending: PendingArmedRun[]) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, pending: PendingArmedRun[]) =>
+        callback(pending);
+      ipcRenderer.on("volli:pending-armed-runs-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-runs-changed" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
+    /** Main settled one countdown by attempting or abandoning its Run. */
+    onPendingArmedRunSettled: (
+      callback: (notice: PendingArmedRunSettledNotice) => void,
+    ): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, notice: PendingArmedRunSettledNotice) =>
+        callback(notice);
+      ipcRenderer.on("volli:pending-armed-run-settled" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-run-settled" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
   },
   /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
