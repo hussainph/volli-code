@@ -1,8 +1,10 @@
 import { PERSON_STARTED } from "@volli/shared";
 import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
 
-import { chatSessionRecord } from "./chat-attachment";
+import { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
 import { terminalSessionRecord } from "./terminal-attachment";
+
+const NO_LIVE_ATTACHMENTS: ReadonlySet<string> = new Set();
 
 /**
  * One Session, as the renderer's listings see it.
@@ -27,10 +29,16 @@ import { terminalSessionRecord } from "./terminal-attachment";
  * defaults to {@link PERSON_STARTED} only for callers that have no reader —
  * every caller in the app supplies one, and a caller that did not would mark
  * nothing, which is the quiet failure rather than a wrong bolt.
+ *
+ * `liveAttachmentIds` is the process-local half of the projection. Structured
+ * attachments deliberately remain durably open across relaunch so Pi can lazily
+ * rehydrate them; only an id present in this set has an executor bound now.
  */
 export function sessionListingRow(
   session: SessionProjection,
   provenance: SessionProvenance = PERSON_STARTED,
+  /** Attachment ids with an executor binding in this process right now. */
+  liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
 ): SessionListingRow {
   const terminal = terminalSessionRecord(session);
   // The fold's own total, taken whichever arm the row lands on. A terminal row
@@ -39,9 +47,16 @@ export function sessionListingRow(
   // spend, and reading it off the projection is what keeps the two arms from
   // disagreeing about the same Session.
   const usage = session.usage;
-  return terminal !== null
-    ? { kind: "terminal", record: terminal, usage, provenance }
-    : { kind: "chat", record: chatSessionRecord(session), usage, provenance };
+  if (terminal !== null) return { kind: "terminal", record: terminal, usage, provenance };
+  const structuredAttachment = latestStructuredAttachment(session.attachments);
+  const executorBound =
+    structuredAttachment !== null && liveAttachmentIds.has(structuredAttachment.id);
+  return {
+    kind: "chat",
+    record: chatSessionRecord(session, executorBound),
+    usage,
+    provenance,
+  };
 }
 
 /**
@@ -54,6 +69,9 @@ export function sessionListingRow(
 export function sessionListingRows(
   sessions: readonly SessionProjection[],
   provenanceOf: (session: SessionProjection) => SessionProvenance = () => PERSON_STARTED,
+  liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
 ): SessionListingRow[] {
-  return sessions.map((session) => sessionListingRow(session, provenanceOf(session)));
+  return sessions.map((session) =>
+    sessionListingRow(session, provenanceOf(session), liveAttachmentIds),
+  );
 }

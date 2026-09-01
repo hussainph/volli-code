@@ -880,8 +880,9 @@
  * anything — amber would send a reader to a chat that has no question in it.
  * The two therefore differ by motion alone, which is the same axis `working`
  * and `waiting` already differ on, read the other way round. The whole word
- * means the Session is still ATTACHED; see `board-session-activity.ts` for why
- * the ring must not go out the moment the agent pauses.
+ * means the Session still has an EXECUTOR BOUND; see
+ * `board-session-activity.ts` for why the ring must not go out the moment the
+ * agent pauses.
  *
  * It also lets the loud one stay rare. A board with four blocked agents on it
  * has four still outlines instead of four things crawling, and the one that is

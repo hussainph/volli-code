@@ -163,12 +163,12 @@ describe("buildBoardSessionActivity", () => {
 
   // VC-131's board criterion: "the ring means live, not finishing". A Run is
   // unattended, so the card is the only place its existence is visible, and it
-  // must hold the ring while the Session is ATTACHED rather than dropping it
-  // whenever the agent pauses between turns.
+  // must hold the ring while this process has its executor BOUND rather than
+  // dropping it whenever the agent pauses between turns.
   describe("a Run's Session, which lights a card its own activity would not", () => {
     const RUN = { c1: { kind: "automation" as const, automationName: "Nightly sweep" } };
 
-    it("holds the ring while an idle Run's Session is still attached", () => {
+    it("holds the ring while an idle Run's executor is still bound", () => {
       expect(
         build({ chatSessions: [chat({ activity: "idle" })], provenance: RUN }).byTicket,
       ).toEqual({ t1: "live" });
@@ -187,7 +187,7 @@ describe("buildBoardSessionActivity", () => {
       ).toEqual({ t1: "live" });
     });
 
-    it("drops it when the attachment closes, which is what `live` means", () => {
+    it("drops it when the executor is no longer bound, which is what `live` means", () => {
       expect(
         build({ chatSessions: [chat({ activity: "idle", live: false })], provenance: RUN })
           .byTicket,

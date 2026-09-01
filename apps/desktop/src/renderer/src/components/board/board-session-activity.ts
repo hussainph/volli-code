@@ -11,7 +11,7 @@
  *
  * ── THE THREE WORDS ───────────────────────────────────────────────────────
  * `working` is an agent producing right now; `waiting` is one blocked on a
- * person; `live` is a Run's Session that is still attached between the two.
+ * person; `live` is a Run's Session with an executor bound between the two.
  * Nothing else lights a card: `parked`/`exited` are not running at all, and a
  * plain `idle` Session is one that merely EXISTS, which is true of most cards
  * in Doing and would make the signal mean nothing.
@@ -29,9 +29,11 @@
  * live", and the emphasis is the point: **the ring means live, not finishing.**
  * A Run is unattended by construction — nobody is sitting in that chat — so the
  * card is the only place its existence is visible, and it must hold the ring
- * for as long as the Session is ATTACHED rather than dropping it the moment the
- * agent stops producing between turns. A person watching a card go dark would
- * read a Run that is still holding a worktree as one that had finished.
+ * for as long as this process still holds its EXECUTOR BINDING rather than
+ * dropping it the moment the agent stops producing between turns. A person
+ * watching a card go dark would read a Run whose executor is still holding a
+ * worktree as one that had finished. The durable attachment may remain open
+ * across relaunch for lazy rehydration; without a process binding it is not live.
  *
  * It is scoped to a Run's Session for exactly the reason the paragraph above
  * refuses `idle`: every card in Doing has an idle Session on it, and a ring on
@@ -174,10 +176,10 @@ export function buildBoardSessionActivity(
     // A ticketless chat is a project Project Session; it has no card to light.
     if (record.ticketId === null) continue;
     const word = cardWord(record.activity);
-    // A Run's Session that is attached but between turns. `record.live` is main's
-    // own answer about the ATTACHMENT rather than about the turn, which is what
-    // makes this "live" instead of "still producing"; `activity` is consulted
-    // only to keep a stopped Session out (see the module doc).
+    // A Run's Session whose executor is bound but between turns. `record.live`
+    // is main's process-local answer about the BINDING rather than about the
+    // turn, which makes this "live" instead of "still producing"; `activity`
+    // is consulted only to keep a stopped Session out (see the module doc).
     mark(
       record.ticketId,
       word ??

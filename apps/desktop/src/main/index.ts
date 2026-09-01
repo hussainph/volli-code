@@ -97,6 +97,7 @@ import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
+import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
@@ -323,6 +324,10 @@ if (ownsAppProfile) {
 // below is exact-host and containment checked: it cannot serve project files or
 // anything else from the local filesystem.
 const PACKAGED_RENDERER_ROOT = join(__dirname, "../dist");
+
+function noOpenNativeBindings(): readonly OpenNativeBinding[] {
+  return [];
+}
 
 // Navigation hardening (Electron footgun). Markdown in ticket bodies, comments,
 // and agent-written artifacts now renders real <a href> links, so a click would
@@ -717,6 +722,11 @@ app.whenReady().then(async () => {
           notify: ({ title, body }) => new Notification({ title, body }).show(),
         })
       : null;
+  // The runtime is composed from the watched Engine below, so this reader is
+  // installed in two steps: the watch closes over the indirection now, and the
+  // real process-local binding list replaces the empty boot answer once the
+  // runtime exists. Durable attachments alone never enter this list.
+  let listOpenNativeBindings = noOpenNativeBindings;
   const sessionActivityWatch =
     watchedDb !== null
       ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
@@ -725,6 +735,7 @@ app.whenReady().then(async () => {
           // survives its Session's first turn (VC-131): the renderer upserts
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
+          listOpenNativeBindings: () => listOpenNativeBindings(),
           observe: (projection) => runAttention?.observe(projection),
           // The baseline for the rule above: a Session minted in this process
           // began with no need, which is what makes its first fold an edge
@@ -1142,6 +1153,8 @@ app.whenReady().then(async () => {
           artifacts: transcriptArtifacts,
         })
       : null;
+  listOpenNativeBindings =
+    sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
   // Automations own a transport-neutral command/event/projection core. Keep
   // the runner mutable until below: Session RPC's attach door closes over it,
@@ -1822,6 +1835,7 @@ app.whenReady().then(async () => {
   // Database needs `dbHandle`, which doesn't exist yet at that point.
   registerDataIpcHandlers(dbHandle, {
     sessionEngine: sessionEngine ?? undefined,
+    listOpenNativeBindings,
     busyWorktreeSites,
     releaseAgentSites,
     // Backward-move interrupt (issue #78): a user move that leaves the active

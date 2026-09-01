@@ -1306,6 +1306,70 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     ).toMatchObject({ kind: "terminal", usage: EMPTY_SESSION_USAGE_SUMMARY });
   });
 
+  it("projects live from this process's executor bindings, not durable attachment openness", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    const created = await sessionEngine.createSession({
+      commandId: "structured-create",
+      projectId,
+      ticketId: ticket.id,
+      title: "Reattachable Run",
+      provenance,
+    });
+    const start = await sessionEngine.submit({
+      commandId: "structured-start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "structured-opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 501,
+      provenance,
+      attachment: {
+        id: "attachment-1",
+        sessionId: created.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+
+    let openBindings: { attachmentId: string }[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, listOpenNativeBindings: () => openBindings },
+    );
+
+    const relaunched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      relaunched.ok && relaunched.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ adapterId: "pi", live: false, activity: "idle" });
+    expect(
+      (await sessionEngine.getSession({ sessionId: created.session.id }))?.liveExecutor,
+    ).toMatchObject({
+      id: "attachment-1",
+      status: "open",
+    });
+
+    openBindings = [{ attachmentId: "attachment-1" }];
+    const rebound = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      rebound.ok && rebound.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ live: true, activity: "idle" });
+  });
+
   it("rejects invalid input", () => {
     expect(invoke<SessionsResult>("volli:session-list", 42)).toEqual({
       ok: false,
