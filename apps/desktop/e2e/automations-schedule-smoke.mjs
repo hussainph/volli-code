@@ -135,7 +135,7 @@ try {
       // CONTROL — there is no text field that takes an expression, which is
       // what "no cron expression is accepted anywhere in the UI" means at the
       // only surface that authors one.
-      await form.getByRole("button", { name: "On a schedule" }).click();
+      await form.getByRole("radio", { name: "On a schedule" }).click();
       const preset = form.getByLabel("Schedule");
       await preset.waitFor({ timeout: 10000 });
       // Through the preset control both ways, so this asserts the control
