@@ -193,6 +193,11 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
+        // to, where it truncates behind "Show all", and the Ticket-priority
+        // score wrapped around cmdk's matcher. One shared filter scores both
+        // the slice and mounted rows so the two passes cannot drift.
+        "src/components/command-palette-search.ts",
         // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
         // what a query matches, and whether an invocation previews or pins.
         // Pure `.ts` beside the overlay for the gate's sake — a scope that
