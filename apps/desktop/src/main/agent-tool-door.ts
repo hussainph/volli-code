@@ -497,6 +497,12 @@ function resolveAutomation(
  * the Run door does the rest. Nothing about the Run is parameterised from here
  * — no Instructions, no model, no title, no actor — because anything an agent
  * could vary would be a way for its Run to differ from a person's.
+ *
+ * The Ticket remains explicit even when the saved record carries a schedule
+ * Trigger. VC-230 rules this agent-only door an exception to VC-112/VC-130's
+ * "the Trigger decides the Target": the scheduler and person-facing doors aim
+ * that Trigger at its Project, while an orchestrator may aim this one Run at a
+ * named Ticket. Resolution therefore deliberately does not branch on Trigger.
  */
 async function runAutomationTool(
   options: AgentToolDoorOptions,
@@ -550,7 +556,9 @@ async function runAutomationTool(
     // The verb runs a SAVED Automation by name (VC-134). Unbound Runs and
     // per-invocation overrides are deliberate human surfaces (VC-112) and are
     // not part of this bundle's authority, so the target is always a record and
-    // the Runtime is always the one that record resolves.
+    // the Runtime is always the one that record resolves. Under VC-230 that
+    // record may have a schedule Trigger: unlike the scheduler and person-facing
+    // doors, this ruled agent invocation still supplies its explicit Ticket.
     target: { kind: "automation", automationId: found.automation.id },
     ticketId: resolvedTicket.ticket.id,
     modelOverride: null,
