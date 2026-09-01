@@ -69,8 +69,8 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       host.hide(input.tabId);
       return { ok: true };
     },
-    "volli:browser-open-devtools": (input: BrowserTabIdInput): Result => {
-      host.openDevTools(input.tabId);
+    "volli:browser-toggle-devtools": (input: BrowserTabIdInput): Result => {
+      host.toggleDevTools(input.tabId);
       return { ok: true };
     },
   };

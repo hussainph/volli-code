@@ -41,7 +41,7 @@ export interface BrowserChromeProps {
   onBack(): void;
   onForward(): void;
   onReload(): void;
-  onOpenDevTools(): void;
+  onToggleDevTools(): void;
 }
 
 /** Renderer-owned controls for a main-owned Browser Tab native surface. */
@@ -55,7 +55,7 @@ export function BrowserChrome({
   onBack,
   onForward,
   onReload,
-  onOpenDevTools,
+  onToggleDevTools,
 }: BrowserChromeProps) {
   const displayTitle = browserTabDisplayTitle(tab);
   return (
@@ -109,9 +109,9 @@ export function BrowserChrome({
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label="Open DevTools"
-          title="Open DevTools"
-          onClick={onOpenDevTools}
+          aria-label="Toggle DevTools"
+          title="Toggle DevTools"
+          onClick={onToggleDevTools}
         >
           <CodeIcon />
         </Button>

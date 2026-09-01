@@ -6,7 +6,7 @@
  * because remote bytes do not belong in the app renderer: the pushed chrome
  * state must prove there is no `window.api`, no Node global, and no usable
  * denied `window.open`. The smoke then exercises managed HTTP popup handling,
- * address/history/reload chrome, detached DevTools, tab destruction, and clean
+ * address/history/reload chrome, in-pane DevTools, tab destruction, and clean
  * app/server teardown. It starts no Session and takes no model turn, so it costs
  * $0 and needs no provider credentials.
  *
@@ -260,17 +260,46 @@ async function osWindowCount(app) {
   );
 }
 
-async function remoteDevToolsOpened(app, targetUrl) {
-  return app.evaluate(
-    ({ webContents }, url) =>
-      webContents
-        .getAllWebContents()
-        .some(
-          (candidate) =>
-            !candidate.isDestroyed() && candidate.getURL() === url && candidate.isDevToolsOpened(),
-        ),
-    targetUrl,
-  );
+async function remoteViewAttached(app, targetUrl) {
+  return app.evaluate(({ BrowserWindow }, url) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    return (
+      window?.contentView.children.some((view) => {
+        const child = view;
+        return (
+          "webContents" in child &&
+          !child.webContents.isDestroyed() &&
+          child.webContents.getURL() === url
+        );
+      }) ?? false
+    );
+  }, targetUrl);
+}
+
+async function dockedDevToolsState(app, targetUrl) {
+  return app.evaluate(({ BrowserWindow, webContents }, url) => {
+    const all = webContents.getAllWebContents().filter((candidate) => !candidate.isDestroyed());
+    const inspected = all.find((candidate) => candidate.getURL() === url);
+    const tools = all.find((candidate) => candidate.getURL().startsWith("devtools://"));
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    const children =
+      window?.contentView.children.flatMap((view) => {
+        const child = view;
+        return "webContents" in child
+          ? [{ id: child.webContents.id, bounds: child.getBounds() }]
+          : [];
+      }) ?? [];
+    const inspectedView = children.find((child) => child.id === inspected?.id);
+    const toolsView = children.find((child) => child.id === tools?.id);
+    return {
+      docked:
+        inspectedView !== undefined &&
+        toolsView !== undefined &&
+        toolsView.bounds.y >= inspectedView.bounds.y + inspectedView.bounds.height,
+      inspectedView,
+      toolsView,
+    };
+  }, targetUrl);
 }
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-browser-tab-smoke-");
@@ -361,6 +390,51 @@ async function main() {
       return {
         ok: label === START_TITLE && chromeTitle >= 1,
         detail: `title=${JSON.stringify(label)} chromeCopies=${chromeTitle}`,
+      };
+    },
+  );
+
+  await must(
+    "2b",
+    "the floating navigation sidebar hides the native Browser plane until it leaves",
+    async () => {
+      const trigger = page.getByRole("button", {
+        name: "Toggle navigation sidebar",
+        exact: true,
+      });
+      const shell = page.locator("[data-volli-shell]");
+      if ((await shell.getAttribute("data-volli-shell")) === "framed") await trigger.click();
+      await waitUntil(
+        "the Browser plane to settle after unpinning the sidebar",
+        async () =>
+          (await shell.getAttribute("data-volli-shell")) === "ephemeral" &&
+          (await remoteViewAttached(app, startUrl)),
+      );
+      await page.mouse.move(700, 70);
+      await trigger.hover();
+      await waitUntil(
+        "the floating sidebar to take the renderer overlay tier",
+        async () =>
+          (await page.locator("[data-native-plane-overlay]").count()) === 1 &&
+          !(await remoteViewAttached(app, startUrl)),
+      );
+      await page.mouse.move(700, 70);
+      await waitUntil(
+        "the floating sidebar to leave before restoring the Browser plane",
+        async () =>
+          (await page.locator("[data-native-plane-overlay]").count()) === 0 &&
+          (await remoteViewAttached(app, startUrl)),
+      );
+      await trigger.click();
+      await waitUntil(
+        "pinning the sidebar to preserve the restored Browser plane",
+        async () =>
+          (await shell.getAttribute("data-volli-shell")) === "framed" &&
+          (await remoteViewAttached(app, startUrl)),
+      );
+      return {
+        ok: true,
+        detail: "floating=renderer plane=hidden withdrawn/pinned=browser plane=restored",
       };
     },
   );
@@ -510,17 +584,34 @@ async function main() {
 
   await must(
     7,
-    "Open DevTools opens for the active tab without surfacing a renderer error",
+    "DevTools toggles inside the active Browser pane without opening another window",
     async () => {
-      await chromeButton(page, "Open DevTools").click();
-      await waitUntil("detached DevTools for the fixture tab", () =>
-        remoteDevToolsOpened(app, secondUrl),
-      );
+      const windowsBefore = await osWindowCount(app);
+      const before = await dockedDevToolsState(app, secondUrl);
+      await chromeButton(page, "Toggle DevTools").click();
+      const dock = await waitUntil("docked DevTools for the fixture tab", async () => {
+        const state = await dockedDevToolsState(app, secondUrl);
+        return state.docked ? state : null;
+      }).catch(() => null);
+      await chromeButton(page, "Toggle DevTools").click();
+      const closed = await waitUntil("DevTools to leave the Browser pane", async () => {
+        const state = await dockedDevToolsState(app, secondUrl);
+        return !state.docked && state.toolsView === undefined ? state : null;
+      }).catch(() => null);
+      const windowsAfter = await osWindowCount(app);
       const browserAlert = await page.getByRole("alert").count();
-      const toastError = await page.getByText(/Could not open DevTools/i).count();
+      const toastError = await page.getByText(/Could not toggle DevTools/i).count();
       return {
-        ok: browserAlert === 0 && toastError === 0 && pageErrors.length === 0,
-        detail: `devtools=open alerts=${browserAlert} errorToasts=${toastError} pageErrors=${JSON.stringify(pageErrors)}`,
+        ok:
+          dock !== null &&
+          closed !== null &&
+          JSON.stringify(closed.inspectedView?.bounds) ===
+            JSON.stringify(before.inspectedView?.bounds) &&
+          windowsAfter === windowsBefore &&
+          browserAlert === 0 &&
+          toastError === 0 &&
+          pageErrors.length === 0,
+        detail: `devtools=${dock === null ? "not-docked" : JSON.stringify(dock)} closed=${JSON.stringify(closed)} windows=${windowsBefore}→${windowsAfter} alerts=${browserAlert} errorToasts=${toastError} pageErrors=${JSON.stringify(pageErrors)}`,
       };
     },
   );

@@ -1266,7 +1266,7 @@ export interface BrowserTabState {
   /** Product-owned opaque id — never a positional Chromium tab index. */
   tabId: string;
   projectId: string;
-  /** Null for a project-level personal tab. Session-created tabs are Ticket-scoped. */
+  /** Null for a project-level tab, whether opened by a person or Project Session. */
   ticketId: string | null;
   createdBy: BrowserTabCreatedBy;
   url: string;
@@ -1348,7 +1348,7 @@ export interface VolliBrowserIpcContract {
   "volli:browser-set-bounds": { args: [input: BrowserTabSetBoundsInput]; result: Result };
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
-  "volli:browser-open-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
 }
 
 /** Every Browser workspace invoke channel, derived from its one contract. */

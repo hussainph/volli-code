@@ -27,6 +27,6 @@ export interface BrowserApi {
   setBounds(input: BrowserTabSetBoundsInput): Promise<Result>;
   show(input: BrowserTabIdInput): Promise<Result>;
   hide(input: BrowserTabIdInput): Promise<Result>;
-  openDevTools(input: BrowserTabIdInput): Promise<Result>;
+  toggleDevTools(input: BrowserTabIdInput): Promise<Result>;
   onTabState(callback: (event: BrowserTabStateEvent) => void): () => void;
 }

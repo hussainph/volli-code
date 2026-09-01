@@ -9,10 +9,11 @@ implementation control:
   browser, or remote debugging port);
 - visible Browser Tabs ship in both Home and Ticket workspaces;
 - user-created tabs use a persistent browser-only profile and may browse public
-  HTTP(S); Session-created tabs use credentialless per-Ticket partitions;
+  HTTP(S); Session-created tabs use credentialless per-Ticket or per-Project partitions;
 - a Session receives full inspect/interact capability over visible user tabs and
-  its own Ticket's agent tabs in this slice. Explicit references, per-tab grants,
-  and takeover UI are downstream rather than prerequisites here;
+  agent tabs in its own narrowest scope (Ticket, otherwise Project) in this slice.
+  Explicit references, per-tab grants, and takeover UI are downstream rather
+  than prerequisites here;
 - **Playwright (npm) replaces `agent-browser` as the leading Phase 4 QA-runner
   candidate** — the latter's CLI/daemon advantages do not survive an in-process
   host.

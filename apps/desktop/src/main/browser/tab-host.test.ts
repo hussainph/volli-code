@@ -16,6 +16,7 @@ import {
   BrowserTabHost,
   browserRemoteWebPreferences,
   browserSessionPartition,
+  browserSurfaceBounds,
   isAllowedBrowserTarget,
   isAllowedBrowserUrl,
 } from "./tab-host";
@@ -53,7 +54,22 @@ class FakeWebContents {
   });
   close = vi.fn();
   reload = vi.fn();
-  openDevTools = vi.fn();
+  devToolsOpened = false;
+  openDevTools = vi.fn((_options?: { mode?: string; activate?: boolean }) => {
+    this.devToolsOpened = true;
+    this.emit("devtools-opened");
+  });
+  closeDevTools = vi.fn(() => {
+    this.devToolsOpened = false;
+    this.emit("devtools-closed");
+  });
+  setDevToolsWebContents = vi.fn();
+  isDevToolsOpened(): boolean {
+    return this.devToolsOpened;
+  }
+  isDestroyed(): boolean {
+    return false;
+  }
   navigationHistory = {
     canGoBack: vi.fn(() => false),
     canGoForward: vi.fn(() => false),
@@ -147,7 +163,7 @@ describe("browserSessionPartition", () => {
     ).toBe("persist:volli-browser:user");
   });
 
-  it("isolates session-created tabs in a credentialless per-Ticket partition", () => {
+  it("isolates session-created tabs in credentialless per-Ticket or per-Project partitions", () => {
     expect(
       browserSessionPartition({
         createdBy: "session",
@@ -155,6 +171,13 @@ describe("browserSessionPartition", () => {
         ticketId: "ticket:42",
       }),
     ).toBe("volli-browser:ticket:project%2Fone:ticket%3A42");
+    expect(
+      browserSessionPartition({
+        createdBy: "session",
+        projectId: "project/one",
+        ticketId: null,
+      }),
+    ).toBe("volli-browser:project:project%2Fone");
   });
 });
 
@@ -462,8 +485,24 @@ describe("BrowserTabHost state", () => {
   });
 });
 
+describe("browserSurfaceBounds", () => {
+  it("keeps the page whole when tools are closed and docks them below it when open", () => {
+    const bounds = { x: 12, y: 48, width: 800, height: 600 };
+
+    expect(browserSurfaceBounds(bounds, false)).toEqual({ page: bounds, devTools: null });
+    expect(browserSurfaceBounds(bounds, true)).toEqual({
+      page: { x: 12, y: 48, width: 800, height: 347 },
+      devTools: { x: 12, y: 396, width: 800, height: 252 },
+    });
+    expect(browserSurfaceBounds({ ...bounds, height: 1 }, true)).toEqual({
+      page: { ...bounds, height: 1 },
+      devTools: null,
+    });
+  });
+});
+
 describe("BrowserTabHost navigation controls", () => {
-  it("drives history, reload, and per-tab DevTools through the opaque tab id", () => {
+  it("drives history and reload through the opaque tab id", () => {
     const tab = host.open({
       url: "https://example.com",
       projectId: "project-1",
@@ -477,12 +516,41 @@ describe("BrowserTabHost navigation controls", () => {
     host.back(tab.tabId);
     host.forward(tab.tabId);
     host.reload(tab.tabId);
-    host.openDevTools(tab.tabId);
 
     expect(contents?.navigationHistory.goBack).toHaveBeenCalledOnce();
     expect(contents?.navigationHistory.goForward).toHaveBeenCalledOnce();
     expect(contents?.reload).toHaveBeenCalledOnce();
-    expect(contents?.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
+  });
+
+  it("toggles custom DevTools inside the selected Browser plane", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const page = views[0];
+    if (page === undefined) throw new Error("expected page view");
+    host.show(tab.tabId);
+
+    host.toggleDevTools(tab.tabId);
+
+    const tools = views[1];
+    if (tools === undefined) throw new Error("expected DevTools view");
+    expect(page.webContents.setDevToolsWebContents).toHaveBeenCalledWith(tools.webContents);
+    expect(page.webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach", activate: true });
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(tools);
+    expect(page.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1280, height: 417 });
+    expect(tools.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 418, width: 1280, height: 302 });
+
+    host.toggleDevTools(tab.tabId);
+
+    expect(page.webContents.closeDevTools).toHaveBeenCalledOnce();
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(tools);
+    expect(page.setBounds).toHaveBeenLastCalledWith(BROWSER_DEFAULT_BOUNDS);
+
+    host.close(tab.tabId);
+    expect(tools.webContents.close).toHaveBeenCalledWith({ waitForBeforeUnload: false });
   });
 });
 

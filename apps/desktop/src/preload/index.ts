@@ -366,8 +366,8 @@ const api = {
       invoke("volli:browser-set-bounds", input),
     show: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-show", input),
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
-    openDevTools: (input: BrowserTabIdInput): Promise<Result> =>
-      invoke("volli:browser-open-devtools", input),
+    toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-toggle-devtools", input),
     /** Subscribes to full chrome snapshots; returns the unsubscribe. */
     onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>

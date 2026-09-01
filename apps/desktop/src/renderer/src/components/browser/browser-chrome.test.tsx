@@ -51,7 +51,7 @@ function props(overrides: Partial<BrowserChromeProps> = {}): BrowserChromeProps 
     onBack: () => undefined,
     onForward: () => undefined,
     onReload: () => undefined,
-    onOpenDevTools: () => undefined,
+    onToggleDevTools: () => undefined,
     ...overrides,
   };
 }
@@ -144,6 +144,6 @@ describe("BrowserChrome", () => {
     expect(html).toContain('value=" https://example.com/next "');
     expect(html).toContain('aria-label="Loading"');
     expect(html).toContain("Navigation failed");
-    expect(html).toContain('aria-label="Open DevTools"');
+    expect(html).toContain('aria-label="Toggle DevTools"');
   });
 });

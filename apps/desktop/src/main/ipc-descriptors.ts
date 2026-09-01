@@ -240,7 +240,7 @@ export const BROWSER_IPC: {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },
-  "volli:browser-open-devtools": {
+  "volli:browser-toggle-devtools": {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },

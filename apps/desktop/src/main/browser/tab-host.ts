@@ -40,6 +40,10 @@ export interface BrowserTabHostDependencies {
 interface BrowserTabEntry {
   state: BrowserTabState;
   view: WebContentsView;
+  bounds: Rectangle;
+  devToolsView: WebContentsView | null;
+  devToolsOpen: boolean;
+  devToolsAttached: boolean;
   console: RuntimeBrowserConsoleMessage[];
   consoleTruncated: boolean;
 }
@@ -76,6 +80,28 @@ export const BROWSER_MAX_TABS_PER_PROJECT = 32;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
+const BROWSER_DEVTOOLS_RATIO = 0.42;
+const BROWSER_DEVTOOLS_DIVIDER_PX = 1;
+
+/** Splits the renderer-measured plane without letting DevTools escape into a window. */
+export function browserSurfaceBounds(
+  bounds: Rectangle,
+  devToolsOpen: boolean,
+): { page: Rectangle; devTools: Rectangle | null } {
+  if (!devToolsOpen || bounds.height < 2) return { page: { ...bounds }, devTools: null };
+  const available = bounds.height - BROWSER_DEVTOOLS_DIVIDER_PX;
+  const devToolsHeight = Math.max(1, Math.round(available * BROWSER_DEVTOOLS_RATIO));
+  const pageHeight = available - devToolsHeight;
+  return {
+    page: { ...bounds, height: pageHeight },
+    devTools: {
+      x: bounds.x,
+      y: bounds.y + pageHeight + BROWSER_DEVTOOLS_DIVIDER_PX,
+      width: bounds.width,
+      height: devToolsHeight,
+    },
+  };
+}
 
 export class BrowserTabLimitError extends Error {
   constructor() {
@@ -128,9 +154,10 @@ export function isAllowedBrowserTarget(target: string): boolean {
  *
  * Personal tabs share one durable browser-only profile so sign-in survives an
  * app restart without ever touching the app renderer's default session.
- * Session-created tabs share only their Ticket's in-memory partition: no
- * `persist:` prefix means Chromium discards its credentials with this launch,
- * while the Ticket key prevents one Ticket from inheriting another's state.
+ * Session-created tabs share only their narrowest product scope's in-memory
+ * partition: a Ticket when there is one, otherwise the Project. No `persist:`
+ * prefix means Chromium discards agent credentials with this launch, while the
+ * scope key prevents unrelated work from inheriting them.
  */
 export function browserSessionPartition(input: {
   createdBy: BrowserTabCreatedBy;
@@ -138,10 +165,10 @@ export function browserSessionPartition(input: {
   ticketId: string | null;
 }): string {
   if (input.createdBy === "user") return "persist:volli-browser:user";
-  if (input.ticketId === null) {
-    throw new Error("Session-created Browser Tabs require a Ticket scope");
-  }
-  return `volli-browser:ticket:${encodeURIComponent(input.projectId)}:${encodeURIComponent(input.ticketId)}`;
+  const project = encodeURIComponent(input.projectId);
+  return input.ticketId === null
+    ? `volli-browser:project:${project}`
+    : `volli-browser:ticket:${project}:${encodeURIComponent(input.ticketId)}`;
 }
 
 /**
@@ -161,6 +188,41 @@ export class BrowserTabHost {
     const entry = this.tabs.get(tabId);
     if (entry === undefined) throw new Error("Unknown Browser Tab");
     return entry;
+  }
+
+  private layout(entry: BrowserTabEntry, devToolsOpen = entry.devToolsOpen): void {
+    const split = browserSurfaceBounds(entry.bounds, devToolsOpen && entry.devToolsView !== null);
+    entry.view.setBounds(split.page);
+    if (split.devTools !== null) entry.devToolsView?.setBounds(split.devTools);
+  }
+
+  private attachDevTools(entry: BrowserTabEntry, window: BrowserWindow): void {
+    if (entry.devToolsView === null || entry.devToolsAttached) return;
+    window.contentView.addChildView(entry.devToolsView);
+    entry.devToolsAttached = true;
+  }
+
+  private detachDevTools(entry: BrowserTabEntry, window: BrowserWindow): void {
+    if (entry.devToolsView === null || !entry.devToolsAttached) return;
+    if (!window.isDestroyed()) window.contentView.removeChildView(entry.devToolsView);
+    entry.devToolsAttached = false;
+  }
+
+  private detachEntry(entry: BrowserTabEntry, window: BrowserWindow): void {
+    this.detachDevTools(entry, window);
+    if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
+  }
+
+  private destroyDevTools(entry: BrowserTabEntry): void {
+    const tools = entry.devToolsView;
+    if (tools === null) return;
+    if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+    const inspected = entry.view.webContents;
+    if (!inspected.isDestroyed() && entry.devToolsOpen) inspected.closeDevTools();
+    if (!tools.webContents.isDestroyed()) tools.webContents.close({ waitForBeforeUnload: false });
+    entry.devToolsView = null;
+    entry.devToolsOpen = false;
+    entry.devToolsAttached = false;
   }
 
   private hasCapacity(projectId: string): boolean {
@@ -272,6 +334,10 @@ export class BrowserTabHost {
     const entry: BrowserTabEntry = {
       state,
       view,
+      bounds: { ...BROWSER_DEFAULT_BOUNDS },
+      devToolsView: null,
+      devToolsOpen: false,
+      devToolsAttached: false,
       console: [],
       consoleTruncated: false,
     };
@@ -326,6 +392,16 @@ export class BrowserTabHost {
     view.webContents.on("page-title-updated", (_event, title) => {
       this.publish(entry, { title });
     });
+    view.webContents.on("devtools-opened", () => {
+      entry.devToolsOpen = true;
+      if (this.attached?.entry === entry) this.attachDevTools(entry, this.attached.window);
+      this.layout(entry);
+    });
+    view.webContents.on("devtools-closed", () => {
+      entry.devToolsOpen = false;
+      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      this.layout(entry);
+    });
     view.webContents.on("render-process-gone", (_event, details) => {
       this.recordConsole(entry, {
         level: "error",
@@ -339,11 +415,10 @@ export class BrowserTabHost {
     view.webContents.on("destroyed", () => {
       if (this.tabs.get(tabId) !== entry) return;
       if (this.attached?.entry === entry) {
-        if (!this.attached.window.isDestroyed()) {
-          this.attached.window.contentView.removeChildView(entry.view);
-        }
+        this.detachEntry(entry, this.attached.window);
         this.attached = null;
       }
+      this.destroyDevTools(entry);
       this.tabs.delete(tabId);
       this.deps.publishClosed(tabId);
     });
@@ -356,6 +431,7 @@ export class BrowserTabHost {
   close(tabId: string): void {
     const entry = this.requireTab(tabId);
     if (this.attached?.entry === entry) this.hide(tabId);
+    this.destroyDevTools(entry);
     this.tabs.delete(tabId);
     this.deps.publishClosed(tabId);
     entry.view.webContents.close({ waitForBeforeUnload: false });
@@ -404,36 +480,65 @@ export class BrowserTabHost {
     return { ...entry.state };
   }
 
-  /** Opens Chromium DevTools for exactly the named tab in its own detached window. */
-  openDevTools(tabId: string): void {
-    this.requireTab(tabId).view.webContents.openDevTools({ mode: "detach" });
+  /** Toggles Chromium DevTools inside this tab's measured plane. */
+  toggleDevTools(tabId: string): void {
+    const entry = this.requireTab(tabId);
+    const contents = entry.view.webContents;
+    if (entry.devToolsOpen) {
+      entry.devToolsOpen = false;
+      contents.closeDevTools();
+      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      this.layout(entry);
+      return;
+    }
+
+    let tools = entry.devToolsView;
+    if (tools === null || tools.webContents.isDestroyed()) {
+      tools = this.deps.createView({});
+      entry.devToolsView = tools;
+      contents.setDevToolsWebContents(tools.webContents);
+    }
+    entry.devToolsOpen = true;
+    if (this.attached?.entry === entry) this.attachDevTools(entry, this.attached.window);
+    this.layout(entry);
+    try {
+      // Electron still wants a mode even with custom DevTools contents. `detach`
+      // means "do not dock into the inspected WebContents" here; the explicit
+      // setDevToolsWebContents target above keeps it inside Volli's own view.
+      contents.openDevTools({ mode: "detach", activate: true });
+    } catch (error) {
+      entry.devToolsOpen = false;
+      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      this.layout(entry);
+      throw error;
+    }
   }
 
-  /** Applies the renderer-measured host plane to the native child view. */
+  /** Applies the renderer-measured host plane to the page and its docked DevTools. */
   setBounds(tabId: string, bounds: Rectangle): void {
-    this.requireTab(tabId).view.setBounds(bounds);
+    const entry = this.requireTab(tabId);
+    entry.bounds = { ...bounds };
+    this.layout(entry);
   }
 
-  /** Attaches exactly one selected native view to the live app window. */
+  /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
     if (this.attached?.entry === entry) return;
-    if (this.attached !== null && !this.attached.window.isDestroyed()) {
-      this.attached.window.contentView.removeChildView(this.attached.entry.view);
-    }
+    if (this.attached !== null) this.detachEntry(this.attached.entry, this.attached.window);
     const window = this.deps.getWindow();
     if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");
     window.contentView.addChildView(entry.view);
     this.attached = { entry, window };
+    if (entry.devToolsOpen) this.attachDevTools(entry, window);
+    this.layout(entry);
   }
 
-  /** Detaches the named view when its workspace surface is no longer visible. */
+  /** Detaches the named page and DevTools when its workspace surface is no longer visible. */
   hide(tabId: string): void {
     const entry = this.requireTab(tabId);
     if (this.attached?.entry !== entry) return;
-    if (!this.attached.window.isDestroyed()) {
-      this.attached.window.contentView.removeChildView(entry.view);
-    }
+    this.detachEntry(entry, this.attached.window);
     this.attached = null;
   }
 

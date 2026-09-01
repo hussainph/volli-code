@@ -151,15 +151,20 @@ describe("createAgentBrowserPort", () => {
     expect(listing.tabs.map((tab) => tab.tabId).toSorted()).toEqual(["mine", "user-1"]);
   });
 
-  it("opens a new tab as the Session's own, scoped to its Ticket, when navigate names no tab", async () => {
-    const { port: opened, opened: opens } = portWithHost({ ticketId: "t1" });
+  it("opens a new tab as the Session's own in either Ticket or Project scope", async () => {
+    const ticket = portWithHost({ ticketId: "t1" });
+    const project = portWithHost({ ticketId: null });
 
-    const snapshot = await opened.navigate({
+    const ticketSnapshot = await ticket.port.navigate({
       navigation: { kind: "url", url: "http://localhost:5173/" },
       signal,
     });
+    const projectSnapshot = await project.port.navigate({
+      navigation: { kind: "url", url: "https://example.com/research" },
+      signal,
+    });
 
-    expect(opens).toEqual([
+    expect(ticket.opened).toEqual([
       {
         url: "http://localhost:5173/",
         projectId: "p1",
@@ -167,8 +172,17 @@ describe("createAgentBrowserPort", () => {
         createdBy: "session",
       },
     ]);
+    expect(project.opened).toEqual([
+      {
+        url: "https://example.com/research",
+        projectId: "p1",
+        ticketId: null,
+        createdBy: "session",
+      },
+    ]);
     // The answer is already the page as structure — the settled act loop.
-    expect(snapshot.snapshotText).toBe('- button "Save" [ref=e1]');
+    expect(ticketSnapshot.snapshotText).toBe('- button "Save" [ref=e1]');
+    expect(projectSnapshot.snapshotText).toBe('- button "Save" [ref=e1]');
   });
 
   it("refuses a target outside HTTP(S) before the host ever sees it", async () => {

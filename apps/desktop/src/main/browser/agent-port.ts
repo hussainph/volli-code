@@ -16,8 +16,8 @@
  * deliberate grant and a knowingly accepted risk, so it is written down here
  * rather than left to be rediscovered. Personal tabs share one PERSISTENT
  * profile (`persist:volli-browser:user`), so they carry real cookies and real
- * sign-ins, while Session tabs get a credentialless per-Ticket partition. The
- * consequence to hold in view: page content this port returns is untrusted,
+ * sign-ins, while Session tabs get a credentialless per-Ticket or per-Project
+ * partition. The consequence to hold in view: page content this port returns is untrusted,
  * and a prompt injection that survives the tools' envelope could ask the model
  * to steer an authenticated tab and read the result back. Volli takes that
  * trade for now because duosync is the feature — "drive the thing I am looking
@@ -248,12 +248,6 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
         throw new BrowserRefusal(
           "browser.unknown-tab",
           "History moves need a tabId: back, forward and reload belong to one tab.",
-        );
-      }
-      if (options.scope.ticketId === null) {
-        throw new BrowserRefusal(
-          "browser.no-ticket-scope",
-          "Only a Ticket Session can open its own Browser Tab; ask the person to open one and reference it.",
         );
       }
       try {

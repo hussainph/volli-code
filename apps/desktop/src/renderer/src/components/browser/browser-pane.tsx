@@ -21,14 +21,18 @@ function addressOf(url: string): string {
 }
 
 const NATIVE_PLANE_OVERLAY_SELECTOR =
-  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast]';
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast], [data-native-plane-overlay]';
 
-/** Native child views always composite above renderer portals, so portals hide the plane. */
+/** Whether renderer chrome currently needs to paint above every native child view. */
+export function hasNativePlaneOverlay(root: ParentNode): boolean {
+  return root.querySelector(NATIVE_PLANE_OVERLAY_SELECTOR) !== null;
+}
+
+/** Native child views always composite above renderer portals, so overlays hide the plane. */
 function useRendererOverlayActive(): boolean {
   const [active, setActive] = React.useState(false);
   React.useEffect(() => {
-    const read = (): void =>
-      setActive(document.querySelector(NATIVE_PLANE_OVERLAY_SELECTOR) !== null);
+    const read = (): void => setActive(hasNativePlaneOverlay(document));
     read();
     const observer = new MutationObserver(read);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
@@ -161,8 +165,8 @@ export function BrowserPane({
         onBack={() => void runTabCommand(api.back({ tabId: tab.tabId }), "go back")}
         onForward={() => void runTabCommand(api.forward({ tabId: tab.tabId }), "go forward")}
         onReload={() => void runTabCommand(api.reload({ tabId: tab.tabId }), "reload Browser Tab")}
-        onOpenDevTools={() =>
-          void runCommand(api.openDevTools({ tabId: tab.tabId }), "open DevTools")
+        onToggleDevTools={() =>
+          void runCommand(api.toggleDevTools({ tabId: tab.tabId }), "toggle DevTools")
         }
       />
       <div ref={anchorRef} data-browser-plane={tab.tabId} className="relative min-h-0 flex-1" />
