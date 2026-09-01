@@ -21,8 +21,19 @@ import type {
  * seam (`data-ipc.ts`), not here: this function has no opinion about terminal
  * attachments at all, so that precedence has exactly one place to live.
  */
-export function chatSessionRecord(projection: SessionProjection): ChatSessionRecord {
+export function chatSessionRecord(
+  projection: SessionProjection,
+  /**
+   * Whether this process currently holds the attachment's executor binding.
+   * Listing callers must supply this host fact: durable attachment openness is
+   * intentionally reattachable across relaunch and therefore cannot answer it.
+   * Omitted only by activity-only legacy callers, preserving their durable
+   * interpretation until they gain a runtime port of their own.
+   */
+  executorBound = true,
+): ChatSessionRecord {
   const attachment = latestStructuredAttachment(projection.attachments);
+  const live = attachment?.status === "open" && executorBound;
   return {
     sessionId: projection.session.id,
     // A structured Session that has not yet exchanged a message is simply a
@@ -33,8 +44,8 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
     ticketId: projection.session.ticketId,
     createdAt: projection.session.createdAt,
     adapterId: attachment?.adapterId ?? null,
-    live: attachment?.status === "open",
-    activity: chatActivity(projection, attachment),
+    live,
+    activity: chatActivity(projection, live),
     waitingOn: chatWaitingOn(projection),
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
@@ -51,17 +62,17 @@ export function chatSessionRecord(projection: SessionProjection): ChatSessionRec
  * inside an open turn: a row that said "working" there would hide the one thing
  * the user could actually do about it.
  *
- * Working then needs the attachment open as well as the turn, so a durable turn
- * that outlived its executor reads as what it is — nothing running — instead of
- * a Session that spins forever.
+ * Working then needs a process-local executor binding as well as the turn, so
+ * a durable turn and open attachment that survived relaunch read as what they
+ * are — nothing running — instead of a Session that spins forever.
  */
 function chatActivity(
   projection: SessionProjection,
-  attachment: SessionAttachmentProjection | null,
+  executorBound: boolean,
 ): ChatSessionRecord["activity"] {
   if (projection.stopped !== null) return "stopped";
   if (sessionAwaitsUser(projection)) return "waiting";
-  if (projection.turnActive && attachment?.status === "open") return "working";
+  if (projection.turnActive && executorBound) return "working";
   return "idle";
 }
 

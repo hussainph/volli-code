@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
   derivePrefix,
@@ -409,6 +409,13 @@ export function registerDataIpcHandlers(
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
     /**
+     * The structured executor bindings this process holds right now. Session
+     * attachments stay durably open across relaunch for lazy rehydration, so a
+     * listing must project `live` from this host fact rather than from the
+     * attachment's durable status. Absent means no executor is currently bound.
+     */
+    listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
+    /**
      * The renderer door of model-call titling (VC-81): kicks one refinement
      * off behind a just-written heuristic title. Absent (tests, degraded
      * boot) means the rename succeeds and nothing is refined.
@@ -440,6 +447,8 @@ export function registerDataIpcHandlers(
       sessionId: session.session.id,
       ticketId: session.session.ticketId,
     });
+  const liveAttachmentIds = (): ReadonlySet<string> =>
+    new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
@@ -936,7 +945,10 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -947,7 +959,10 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessionListingRows(sessions, provenanceOfSession) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
