@@ -283,9 +283,21 @@ describe("paletteRunContext", () => {
 });
 
 describe("buildAutomationRunItems", () => {
-  it("offers every listed Automation against the open Ticket, keeping main's order", () => {
+  it("keeps main's order while the Trigger chooses each row's Target", () => {
     const rows = buildAutomationRunItems(
-      [automation(), automation({ id: "automation-2", projectId: null, name: "Global TDD" })],
+      [
+        automation(),
+        automation({
+          id: "automation-2",
+          name: "Nightly sweep",
+          trigger: {
+            kind: "schedule",
+            schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+          },
+        }),
+        automation({ id: "automation-3", projectId: null, name: "Global TDD" }),
+      ],
+      "p1",
       { ticketId: "t1", displayId: "ALP-12" },
     );
     expect(rows).toEqual([
@@ -294,22 +306,55 @@ describe("buildAutomationRunItems", () => {
         automationId: "automation-1",
         name: "Review",
         ownership: "project",
+        runTarget: "ticket",
         ticketId: "t1",
         ticketDisplayId: "ALP-12",
       },
       {
         kind: "automation-run",
         automationId: "automation-2",
+        name: "Nightly sweep",
+        ownership: "project",
+        runTarget: "project",
+        projectId: "p1",
+      },
+      {
+        kind: "automation-run",
+        automationId: "automation-3",
         name: "Global TDD",
         ownership: "global",
+        runTarget: "ticket",
         ticketId: "t1",
         ticketDisplayId: "ALP-12",
       },
     ]);
   });
 
-  it("offers no run rows without a target Ticket", () => {
-    expect(buildAutomationRunItems([automation()], null)).toEqual([]);
+  it("keeps Project-target schedules available without an open Ticket", () => {
+    const scheduled = automation({
+      id: "automation-2",
+      trigger: {
+        kind: "schedule",
+        schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+      },
+    });
+
+    expect(buildAutomationRunItems([automation(), scheduled], "p1", null)).toEqual([
+      {
+        kind: "automation-run",
+        automationId: "automation-2",
+        name: "Review",
+        ownership: "project",
+        runTarget: "project",
+        projectId: "p1",
+      },
+    ]);
+  });
+
+  it("offers no run rows without a selected Project", () => {
+    expect(
+      buildAutomationRunItems([automation()], null, { ticketId: "t1", displayId: "ALP-12" }),
+    ).toEqual([]);
   });
 });
 
