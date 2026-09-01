@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   dialog,
   ipcMain,
   nativeTheme,
@@ -51,7 +52,12 @@ import type {
   SessionToolId,
 } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
-import type { FirstPaintHint, VolliIpcChannel, VolliIpcEvent } from "../ipc/contract";
+import type {
+  BrowserTabStateEvent,
+  FirstPaintHint,
+  VolliIpcChannel,
+  VolliIpcEvent,
+} from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import {
   abandonAcceptedUpdateInstall,
@@ -269,6 +275,9 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
+import { BrowserTabHost } from "./browser/tab-host";
+import { registerBrowserTabIpcHandlers } from "./browser/ipc";
+import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -413,6 +422,13 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("volli:browser-tab-state" satisfies VolliIpcEvent, event);
+  }
 }
 
 function toolSurfaceTools(input: SessionInput): readonly SessionToolId[] {
@@ -878,6 +894,10 @@ app.whenReady().then(async () => {
         },
       })
     : null;
+  // Assigned once the BrowserTabHost is built inside the ready path below; the
+  // attach-time browser-port resolver reads it lazily, long after boot — the
+  // same bargain ptyManagerRef strikes with the worktree guards.
+  let browserTabsRef: BrowserTabHost | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -898,6 +918,15 @@ app.whenReady().then(async () => {
                   "ask_user",
                   ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
+                  // The desktop always carries the Browser host, so every new
+                  // Session records all six Browser tools. Recorded surfaces
+                  // from older builds keep their shorter list and rebind it.
+                  "browser_tabs",
+                  "browser_navigate",
+                  "browser_snapshot",
+                  "browser_act",
+                  "browser_screenshot",
+                  "browser_console",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1030,6 +1059,21 @@ app.whenReady().then(async () => {
           // ignored. This is the only attach path that reads the stored key,
           // and it hands it straight to the provider constructor.
           resolveWebPorts: webAccess === null ? undefined : () => webPortsFor(webAccess.resolve()),
+          // The Session's Browser capability, composed at attach over the one
+          // host: the registry decides which tabs the scope may see, and the
+          // CDP wire is each tab's app-private debugger — never a debug port.
+          resolveBrowserPort: (scope) => {
+            const host = browserTabsRef;
+            if (host === null) {
+              throw new Error("The Browser host is not ready; retry the attachment.");
+            }
+            return createAgentBrowserPort({
+              host,
+              scope,
+              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
+              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+            });
+          },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web
           // ports this decides no membership — the Session's frozen record does
           // — it supplies the one closure every bundled verb is answered
@@ -2269,7 +2313,28 @@ app.whenReady().then(async () => {
 
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
-  const mainWindow = createWindow(ptyManager, currentFirstPaint());
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+  });
+  browserTabsRef = browserTabs;
+  registerBrowserTabIpcHandlers(browserTabs);
+  const createOwnedWindow = (): BrowserWindow => {
+    const window = createWindow(ptyManager, currentFirstPaint());
+    // Browser Tabs are live machine resources, not durable documents. Once the
+    // app window that can place them closes, keeping invisible remote pages
+    // running would leave network/timers with no reachable owner.
+    window.once("closed", () => browserTabs.closeAll());
+    return window;
+  };
+  const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
@@ -2945,7 +3010,7 @@ app.whenReady().then(async () => {
     // On macOS it's common to re-create a window when the dock icon is
     // clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(ptyManager, currentFirstPaint());
+      createOwnedWindow();
     }
   });
 });

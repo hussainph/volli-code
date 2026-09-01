@@ -85,6 +85,7 @@ async function mount(tabs: readonly TicketTabDescriptor[]): Promise<string> {
         onRenameSessionTab={noop}
         onNewSession={noop}
         onNewChat={noop}
+        onNewBrowser={noop}
         railCollapsed={false}
         onToggleRail={noop}
       />,

@@ -1400,6 +1400,120 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- Browser Tabs (VC-110) -------------------------------------------------
+
+/**
+ * Provenance main assigns when it creates a Browser Tab. The two values stay
+ * closed because personal and agent-created tabs have different profile and
+ * future grant policy; an arbitrary renderer label could not be trusted.
+ */
+export type BrowserTabCreatedBy = "user" | "session";
+
+/**
+ * Renderer-safe state for one live Browser Tab. Product identity and bounded
+ * browser chrome facts cross IPC; Chromium ids, Session partitions, page
+ * content, cookies, and history entries never do.
+ */
+export interface BrowserTabState {
+  /** Product-owned opaque id — never a positional Chromium tab index. */
+  tabId: string;
+  projectId: string;
+  /** Null for a project-level tab, whether opened by a person or Project Session. */
+  ticketId: string | null;
+  createdBy: BrowserTabCreatedBy;
+  url: string;
+  title: string;
+  loading: boolean;
+  /** Main-frame load failure, cleared when the next navigation starts. */
+  error: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** Monotonic within this tab; a main-frame navigation advances it. */
+  generation: number;
+}
+
+/**
+ * A person's request to open a Browser Tab in one workspace scope. Provenance
+ * is deliberately absent: renderer-originated tabs are always `user`, while a
+ * Session opens its own tabs through the main-process host port.
+ */
+export interface BrowserTabOpenInput {
+  projectId: string;
+  ticketId?: string;
+  url: string;
+}
+
+/** A scoped registry read; omitting `ticketId` lists the whole project. */
+export interface BrowserTabListInput {
+  projectId: string;
+  ticketId?: string;
+}
+
+/** An opaque Browser Tab target shared by operations that carry no other input. */
+export interface BrowserTabIdInput {
+  tabId: string;
+}
+
+/** One address-bar navigation, separate from history-direction commands. */
+export interface BrowserTabNavigateInput extends BrowserTabIdInput {
+  url: string;
+}
+
+/**
+ * The renderer-measured native host plane in BrowserWindow content coordinates.
+ * Main, not renderer, applies it to the WebContentsView.
+ */
+export interface BrowserTabBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One measured host plane paired with the opaque tab it belongs to. */
+export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
+  bounds: BrowserTabBounds;
+}
+
+/** A Browser Tab mutation/read that answers with the current chrome snapshot. */
+export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
+
+/** The scoped Browser Tab registry, containing no page-derived body data. */
+export type BrowserTabListResult = Result<{ tabs: BrowserTabState[] }>;
+
+/**
+ * The Browser workspace's renderer→main command surface. Every native-surface
+ * operation names Volli's opaque tab id; none accepts a Chromium index,
+ * partition name, preload, or WebContents id.
+ */
+export interface VolliBrowserIpcContract {
+  "volli:browser-open": { args: [input: BrowserTabOpenInput]; result: BrowserTabResult };
+  "volli:browser-close": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-list": { args: [input: BrowserTabListInput]; result: BrowserTabListResult };
+  "volli:browser-navigate": {
+    args: [input: BrowserTabNavigateInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-back": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-forward": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-reload": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-set-bounds": { args: [input: BrowserTabSetBoundsInput]; result: Result };
+  "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+}
+
+/** Every Browser workspace invoke channel, derived from its one contract. */
+export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
+
+/**
+ * A complete Browser Tab chrome snapshot pushed whenever URL, title, loading,
+ * history reachability, or generation changes. A full snapshot avoids merging
+ * partial events from different navigations out of order.
+ */
+export type BrowserTabStateEvent =
+  | { tab: BrowserTabState; closedTabId?: never }
+  | { tab?: never; closedTabId: string };
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
@@ -1939,6 +2053,7 @@ export interface VolliInvokeContract
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliBrowserIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
@@ -1959,6 +2074,7 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  | "volli:browser-tab-state"
   | "volli:terminal-data"
   | "volli:terminal-exit"
   | "volli:terminal-park-state"
