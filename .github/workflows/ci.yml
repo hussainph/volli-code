@@ -1,43 +1,111 @@
 name: CI
 
-# Minutes-rationed CI (private repo, free-tier Actions pool).
+# This repository is PUBLIC, so standard GitHub-hosted runners — Linux AND
+# macOS — are free. The previous version of this file was written for a private
+# repo on the free-tier minutes pool, and every decision in it optimised for
+# billed minutes: the desktop smoke lane was manual-only because it cost ~40
+# billed minutes, the push-to-main lane was deleted as a duplicate bill, and
+# Dependabot was throttled to monthly. None of that is true any more.
 #
-# macOS runners bill at a 10x multiplier, so the desktop smoke lane alone was
-# ~40 billed minutes per run — ~85% of the old pipeline's cost — and it fired
-# on every PR push AND again on every merge to main. The full application smoke
-# suite runs locally for free (apps/desktop/e2e/*.mjs on the dev Mac), so CI
-# keeps only the cheap cross-check: one Linux job on PRs.
+# The budget that replaced it is WALL CLOCK, plus GitHub's cap on concurrent
+# macOS jobs (5 on Free/Pro/Team). So this file spends minutes freely and
+# guards latency instead:
 #
-# Deliberately removed (run them locally or on demand instead):
-#   - push-to-main lane: PRs gate every merge; a duplicate post-merge run
-#     doubled the bill for no new signal.
-#   - weekly cron + extended macOS smokes: silent background burn.
-#   - advisory coverage reports: re-ran the whole test suite twice per run.
-#   - dependency-audit job: Dependabot already opens update PRs; `vp pm audit`
-#     works locally.
-#   - macOS desktop smoke on PRs: now manual-only via workflow_dispatch below
-#     (`gh workflow run ci.yml -f desktop-smoke=true`). One invocation bills
-#     ~40 minutes — save it for release-candidate checks.
+#   - Smokes run CONCURRENTLY rather than serially. Each one boots the built
+#     Electron app and then mostly waits on it (measured on an M-series Mac:
+#     12–44% of one core, ~55s wall each), so a runner can carry several at
+#     once. They are safely parallel because lib/smoke-kit.mjs mkdtemp's a
+#     fresh scratch dir, database and --user-data-dir per run, and the agent
+#     socket resolves under that user-data dir.
+#   - A BOOT TIER runs first. If the app cannot start, that is known in about a
+#     minute instead of after a full matrix proves it three more times.
+#   - A COARSE path gate skips the desktop lanes entirely for changes that
+#     provably cannot reach the Electron app (website, docs site, prose).
+#
+# Deliberately NOT done: per-smoke path mapping ("only run the smokes near the
+# diff"). Integration probes exist to catch NON-LOCAL breakage, so selecting
+# them by locality of the diff defeats them. The precedent is already in this
+# repo's history: a jsdom bundling bug crashed the Electron main process at
+# module load on EVERY launch path, and a filter keyed on renderer paths would
+# have skipped the board smoke on that lockfile-shaped change. A path map is
+# also the same failure class as the allow-list this file used to carry —
+# silent, and green while wrong.
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      desktop-smoke:
-        description: "Also run the macOS desktop smoke lane (bills ~45 min)"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
-# Agents push frequently; cancel superseded runs for the same PR so only the
-# latest head ever finishes.
+# Supersede in-flight PR runs (agents push often), but never cancel a main run:
+# a post-merge result nobody sees is worse than a duplicate one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Coarse, provable gate: are the desktop lanes relevant to this change at all?
+  # It answers "did anything OUTSIDE the prose/website set change", defaulting
+  # to YES on anything it cannot classify — including workflow edits, so a
+  # change to this file is validated by the lanes it defines.
+  changes:
+    name: Scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths
+        id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Anything not a PR (push to main, manual dispatch) runs the lanes.
+          if [[ "$EVENT" != "pull_request" ]]; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            echo "event is $EVENT — running desktop lanes"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          if [[ -z "$changed" ]]; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            echo "no diff resolved — running desktop lanes (fail safe)"
+            exit 0
+          fi
+
+          echo "changed files:"
+          echo "$changed" | sed 's/^/  /'
+
+          # Paths that CANNOT affect the Electron app. Everything else — source,
+          # packages, lockfile, patches, vite config, workflows — implies the
+          # desktop lanes. The list is an exclusion, so a new top-level
+          # directory is treated as desktop-affecting until someone says
+          # otherwise, which is the safe direction to be wrong in.
+          inert='^(docs/|reference/|lessons/|assets/|apps/website/|apps/docs/|\.github/ISSUE_TEMPLATE/|[^/]*\.md$|LICENSE$)'
+
+          if echo "$changed" | grep -qvE "$inert"; then
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            echo "-> desktop-affecting changes present"
+          else
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+            echo "-> prose/website only; skipping desktop smoke lanes"
+          fi
+
   core:
     name: Check + Test
     runs-on: ubuntu-24.04
@@ -49,7 +117,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
         with:
           node-version-file: package.json
           cache: true
@@ -61,8 +129,7 @@ jobs:
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
       # these is expressible as a lint rule, so this step is the only thing that
-      # runs them — the theme generator's staleness gate had carried a "CI-able"
-      # comment since it was written and was wired nowhere.
+      # runs them.
       #   check:theme-css      — globals.css / terminal fallbacks vs the canvas
       #                          pipeline's current output.
       #   check:design-tokens  — self-tests its matcher, then fails on any
@@ -104,13 +171,15 @@ jobs:
       - name: Test protected coverage surface
         run: vp run -r test:coverage
 
-  # Manual-only macOS lane (10x billing multiplier — ~40 minutes per run).
-  # Trigger deliberately: gh workflow run ci.yml -f desktop-smoke=true
-  desktop-smoke:
-    name: Desktop smoke (manual)
-    if: github.event_name == 'workflow_dispatch' && inputs.desktop-smoke
+  # Fail fast: five probes that each boot the app through a different door
+  # (board, composer, terminal, worktree, agent socket). If the app does not
+  # start, this says so in ~1 minute and the shard matrix never runs.
+  smoke-boot:
+    name: Smoke (boot tier)
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -118,7 +187,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
         with:
           node-version-file: package.json
           cache: true
@@ -129,94 +198,45 @@ jobs:
           vp run --filter @volli/desktop build
           vp run --filter @volli/desktop ensure:electron
 
-      - name: Run stable application smokes
-        shell: bash
+      - name: Run boot tier
+        run: node apps/desktop/scripts/run-smokes.mjs --tier boot --jobs 4
+
+  # Everything else, sharded three ways and run four-at-a-time inside each
+  # shard. The runner script globs apps/desktop/e2e/*-smoke.mjs and subtracts a
+  # commented deny-list, so a smoke added in a PR runs in that same PR — no
+  # registration step to forget.
+  #
+  # Only on pull_request: a push to main has already been gated by its PR, and
+  # holding four more macOS jobs against the 5-job concurrency cap would queue
+  # the next PR behind a run whose answer is already known. The boot tier still
+  # runs on main to catch semantic merge breakage.
+  smoke-rest:
+    name: Smoke (shard ${{ matrix.shard }}/3)
+    needs: [changes, smoke-boot]
+    if: needs.changes.outputs.desktop == 'true' && github.event_name == 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build and fetch Electron
         run: |
-          failures=0
-          # This list is an allow-list, not a glob, so a probe that is not
-          # named here simply never runs — the failure mode that left a whole
-          # stack's three new probes unreachable, written to prove that stack
-          # and never once executed. Add new smokes here as they land, or they
-          # prove nothing on this lane no matter how deliberately it is fired.
-          #
-          # Audited 2026-08 by running all 43 apps/desktop/e2e/*-smoke.mjs
-          # locally: the list below had covered 14 of them. That gap is not
-          # theoretical — a jsdom bundling bug crashed the Electron main process
-          # at module load on every launch path, and every app-booting smoke
-          # here would have caught it, but the lane is manual-only and was not
-          # fired. Everything that passes and needs no developer credentials is
-          # now listed.
-          #
-          # The four pi-*-smoke.mjs probes are deliberately NOT here: they drive
-          # a live model turn and need a real ~/.pi/agent/auth.json, which this
-          # runner has no way to hold. They stay local-only (`pnpm smoke:pi`).
-          #
-          # session-rpc-transport-smoke no longer opens any settings pane: the
-          # Runtime Catalog surface it used to drive is gone, and what remains
-          # is the thing it exists for — that the preload door, the IPC channel,
-          # and the router agree on every routed procedure name. Nothing about
-          # it depends on a runtime being installed.
-          smokes=(
-            # board / ticket surfaces
-            board-smoke.mjs
-            ticket-detail-smoke.mjs
-            home-taxonomy-smoke.mjs
-            global-artifacts-smoke.mjs
-            park-smoke.mjs
-            # composer
-            composer-basics-smoke.mjs
-            composer-draft-smoke.mjs
-            composer-kickoff-smoke.mjs
-            # agent / CLI plumbing
-            agent-socket-smoke.mjs
-            agent-cli-roundtrip-smoke.mjs
-            agent-cli-relaunch-smoke.mjs
-            agent-cli-token-bench.mjs
-            agent-pty-env-smoke.mjs
-            agent-installer-smoke.mjs
-            agent-background-install-smoke.mjs
-            agent-board-live-move-smoke.mjs
-            session-rpc-transport-smoke.mjs
-            bare-path-env-smoke.mjs
-            harness-doctor-smoke.mjs
-            harness-wrapper-smoke.mjs
-            ghostty-config-smoke.mjs
-            # worktree lifecycle
-            worktree-smoke.mjs
-            worktree-cli-smoke.mjs
-            retention-smoke.mjs
-            done-flow-smoke.mjs
-            # terminal / session lifecycle
-            terminal-smoke.mjs
-            interrupt-resume-smoke.mjs
-            sigstop-smoke.mjs
-            quit-window-lifecycle-smoke.mjs
-            memory-smoke.mjs
-            # editor / rendering
-            monaco-reconciliation-smoke.mjs
-            editor-theme-smoke.mjs
-            canvas-theming-smoke.mjs
-            changeset-diff-tabs-smoke.mjs
-            changeset-navigators-smoke.mjs
-          )
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
 
-          # This lane used to gate two probes behind `command -v opencode`,
-          # because both needed a real binary off the LOGIN shell's PATH and the
-          # macos-15 image ships none. Both are gone: harness-settings-
-          # persistence drove the Runtime Catalog settings pane, which no longer
-          # exists, and opencode-env is now bare-path-env-smoke, which asserts
-          # the launchd-PATH boot and terminal harness-wrapper generation and
-          # needs no runtime installed. Nothing here is conditional any more —
-          # which is strictly better, since a gated probe reports coverage that
-          # never ran.
-
-          for smoke in "${smokes[@]}"; do
-            echo "::group::$smoke"
-            node "apps/desktop/e2e/$smoke" || failures=$((failures + 1))
-            echo "::endgroup::"
-          done
-
-          if (( failures > 0 )); then
-            echo "$failures desktop smoke suite(s) failed" >&2
-            exit 1
-          fi
+      - name: Run shard ${{ matrix.shard }} of 3
+        run: node apps/desktop/scripts/run-smokes.mjs --tier rest --shard ${{ matrix.shard }}/3 --jobs 4

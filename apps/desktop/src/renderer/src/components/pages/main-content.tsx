@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { FolderPlusIcon } from "@phosphor-icons/react/dist/csr/FolderPlus";
 
+import { AutomationsPage } from "@renderer/components/automations/automations-page";
 import { HomeSurface } from "@renderer/components/home/home-surface";
 import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
@@ -61,6 +62,10 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
           </div>
         ) : activeNav === "configure" ? (
           <ConfigurePage />
+        ) : activeNav === "automations" ? (
+          // Stateless like Configure, so plain conditional rendering: nothing
+          // on this page owns a live PTY, and it re-reads its record on mount.
+          <AutomationsPage />
         ) : null /* home: rendered by the always-mounted HomeSurface above */
       }
     </div>

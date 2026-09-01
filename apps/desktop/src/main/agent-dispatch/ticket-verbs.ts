@@ -457,6 +457,25 @@ export async function ticketMoveVerb(
       projectId: resolved.project.id,
       kind: "ticket",
     });
+    // An explicit `volli ticket move` is a Deliberate move (CONTEXT.md), with
+    // the same semantics as a drag — so it enters main's one pending-arrival
+    // coordinator after the same committed status change (VC-226). No renderer
+    // is involved. The columns travel because the status the Ticket LEFT is
+    // gone the moment the write commits; same-column no-ops returned earlier.
+    try {
+      options.onDeliberateMove?.({
+        projectId: resolved.project.id,
+        ticketId: resolved.ticket.id,
+        from: resolved.ticket.status,
+        to,
+      });
+    } catch (error) {
+      // The Ticket move already committed. A failed pending projection is
+      // operational evidence, not grounds to answer that the move failed.
+      console.error(
+        `[volli] failed to record armed-column arrival after moving ${resolved.ticket.id}: ${errorMessage(error)}`,
+      );
+    }
     return {
       v: 1,
       ok: true,

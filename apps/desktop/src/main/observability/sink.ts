@@ -105,12 +105,10 @@ export class BoundedEventQueue {
    * `sink-error` rather than double-counting the original reason.
    */
   drain(recordedAt: number): readonly RecordedObservabilityEvent[] {
-    const reports = [...this.#dropped].map(
-      ([reason, count]): RecordedObservabilityEvent => ({
-        event: { kind: "dropped", reason, count },
-        recordedAt,
-      }),
-    );
+    const reports = [...this.#dropped].map(([reason, count]): RecordedObservabilityEvent => ({
+      event: { kind: "dropped", reason, count },
+      recordedAt,
+    }));
     this.#dropped = new Map();
     const entries = this.#entries;
     this.#entries = [];

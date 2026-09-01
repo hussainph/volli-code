@@ -63,7 +63,10 @@ export const UsageBar = React.memo(function UsageBar({
     .join(", ");
 
   return (
-    <div
+    // A `span`, not a `div`: the usage card's face is a `<button>` and a button
+    // may only contain phrasing content. `display:flex` does the rest, so the
+    // drawing is unchanged everywhere else it is mounted.
+    <span
       role="img"
       aria-label={`Token classes: ${label}`}
       className={cn("flex h-2 w-full gap-px overflow-hidden rounded-full", className)}
@@ -83,7 +86,7 @@ export const UsageBar = React.memo(function UsageBar({
           title={`${segment.label} · ${formatTokens(segment.tokens)}`}
         />
       ))}
-    </div>
+    </span>
   );
 });
 

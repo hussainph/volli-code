@@ -33,11 +33,13 @@
 import {
   HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
+  sessionProvenanceOf,
   type ChatSessionRecord,
   type ChatWaitingReason,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
+  type SessionProvenance,
   type SessionRecord,
   type Ticket,
   type LatestSessionSignal,
@@ -88,8 +90,20 @@ export type ActiveSessionTarget =
   | { kind: "terminal"; tabId: string; paneId: string }
   | { kind: "chat"; tabId: string; sessionId: string };
 
-/** Which execution surface a row speaks for — the axis the Previous band filters on. */
+/** Which execution surface a row speaks for — one of the two axes the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
+
+/** Whose work a row is — the Previous band's second filter axis (VC-196). */
+export type SessionRowScope = "project" | "ticket";
+
+/**
+ * Which scope a Session was created in. The immutable creation fact matters:
+ * an archived ticket can leave its Session without a current `ticketId`, but
+ * that does not turn the Ticket Session into a Project Session.
+ */
+export function sessionRowScope(session: { readonly bornTicketless: boolean }): SessionRowScope {
+  return session.bornTicketless ? "project" : "ticket";
+}
 
 /**
  * Why this row needs a human. `blocked` is the agent's own voluntary `volli
@@ -145,6 +159,21 @@ export interface ActiveSessionRow {
    * how to ask a person for a decision.
    */
   waitingOn: ChatWaitingReason | null;
+  /**
+   * The newest activity this row can honestly date. Terminal output wins while
+   * live; a durable Session fact is the fallback after relaunch. `null` means
+   * neither source can name an age.
+   */
+  lastActivityAt: number | null;
+  /**
+   * Who started this Session (VC-131). Carried on every row of both bands — the
+   * rule is that a Run-started Session is distinguishable *everywhere* a
+   * Session appears, and a band that carried it on the loud rows only would
+   * have made the quiet band the place a Run could hide.
+   *
+   * {@link PERSON_STARTED} is the overwhelming majority, and it draws nothing.
+   */
+  provenance: SessionProvenance;
   target: ActiveSessionTarget | null;
 }
 
@@ -250,6 +279,8 @@ export interface PreviousSessionRow {
   kind: SessionRowKind;
   /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
   endedOrQuietAt: number;
+  /** See {@link ActiveSessionRow.provenance} — both bands carry it, for one reason. */
+  provenance: SessionProvenance;
   target: ActiveSessionTarget | null;
   /**
    * Whether a cleanup rule matched this row and it is here only because
@@ -377,6 +408,12 @@ export interface ActiveSessionListing {
 export interface SessionListingFilter {
   /** Which kinds to show; `null` is every kind. */
   kinds: ReadonlySet<SessionRowKind> | null;
+  /**
+   * Which scopes to show; `null` is every scope. Independent of
+   * {@link SessionListingFilter.kinds} — the two narrow different questions
+   * (what a Session runs on, whose work it is) and a row must satisfy both.
+   */
+  scopes: ReadonlySet<SessionRowScope> | null;
   /** Whether cleaned-away rows come back, marked {@link PreviousSessionRow.cleaned}. */
   showCleaned: boolean;
 }
@@ -410,6 +447,13 @@ export interface BuildActiveSessionListingInput {
   /** Per-session harness reporting state; a missing entry means nothing reports here. */
   harness: Readonly<Record<string, SessionHarnessState>>;
   /**
+   * Who started each Session, keyed by Session id and **sparse** — a miss is
+   * the resting case (`stores/project-sessions.ts`). A listing built with this
+   * absent marks nothing, which is the right failure: a band that cannot read
+   * provenance should be quiet rather than guessing at a bolt.
+   */
+  provenance?: Readonly<Record<string, SessionProvenance>>;
+  /**
    * ticketId → epoch ms it entered its CURRENT status. Two cleanup rules need
    * it and neither guesses without it: a ticket missing from this map is one
    * whose column history we do not have, so those rules stay silent for its
@@ -422,7 +466,8 @@ export interface BuildActiveSessionListingInput {
 }
 
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
-const DEFAULT_FILTER: SessionListingFilter = { kinds: null, showCleaned: false };
+const NO_PROVENANCE: Readonly<Record<string, SessionProvenance>> = {};
+const DEFAULT_FILTER: SessionListingFilter = { kinds: null, scopes: null, showCleaned: false };
 
 function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
@@ -459,6 +504,9 @@ const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
   idle: 2,
   parked: 3,
   exited: 4,
+  // A pane never produces it (the stop fact is chat-side, VC-86); ranked last
+  // so the map stays total without ever outranking a live state.
+  stopped: 5,
 };
 
 /**
@@ -511,6 +559,7 @@ function sessionRow(
   attention: SessionAttention | null,
   input: ActivityInput,
   recordsById: ReadonlyMap<string, SessionRecord>,
+  provenance: SessionProvenance,
 ): ActiveSessionRow {
   return {
     id: `session:${tab.sessionId}`,
@@ -521,12 +570,19 @@ function sessionRow(
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
     waitingOn: null,
+    lastActivityAt:
+      input.lastOutputAt[subject.paneId] ?? recordsById.get(subject.paneId)?.lastActivityAt ?? null,
+    provenance,
     target: { kind: "terminal", tabId: tab.sessionId, paneId: subject.paneId },
   };
 }
 
 /** A chat Session's row. Its activity is the adapter's own word, never a PTY heuristic. */
-function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessionRow {
+function chatRow(
+  record: ChatSessionRecord,
+  ticket: Ticket | null,
+  provenance: SessionProvenance,
+): ActiveSessionRow {
   return {
     id: `chat:${record.sessionId}`,
     ticket,
@@ -538,6 +594,8 @@ function chatRow(record: ChatSessionRecord, ticket: Ticket | null): ActiveSessio
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
+    lastActivityAt: record.lastActivityAt,
+    provenance,
     // A chat Session's tab id is derivable from the Session, whether or not a
     // tab is open. For a ticket-owned Session this names its ticket-tab
     // destination; ticket-independent chat hosting belongs to Session 5.
@@ -669,6 +727,14 @@ export function buildActiveSessionListing(
   const chatSessions = input.chatSessions ?? [];
   const recordsById = new Map(input.records.map((record) => [record.id, record]));
   const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
+  /**
+   * Who started one Session. The map is sparse and its holes ARE the resting
+   * case, so a miss is the person-started answer rather than an unknown — the
+   * resting answer is the shared frozen constant, so the memoised rows are not
+   * defeated by a new object per rebuild.
+   */
+  const provenanceOf = (sessionId: string): SessionProvenance =>
+    sessionProvenanceOf(input.provenance ?? NO_PROVENANCE, sessionId);
 
   const activeEntries: ActiveEntry[] = [];
   const previousById = new Map<string, PreviousCandidate>();
@@ -719,6 +785,10 @@ export function buildActiveSessionListing(
         title: row.title,
         kind: "terminal",
         endedOrQuietAt: recency,
+        // Taken off the Active row rather than looked up again: the two bands
+        // are one Session seen at two ages, so a second read is a second
+        // chance for them to disagree.
+        provenance: row.provenance,
         target: row.target,
         cleaned: false,
       },
@@ -742,6 +812,7 @@ export function buildActiveSessionListing(
         title: tab.title,
         kind: "terminal",
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
+        provenance: provenanceOf(tab.sessionId),
         target: { kind: "terminal", tabId: tab.sessionId, paneId: tab.activePaneId },
         cleaned: false,
       },
@@ -802,7 +873,15 @@ export function buildActiveSessionListing(
               ? { signal: "waiting", reason: null }
               : null;
         fileTab(
-          sessionRow(ticket, attentionTab, subject, attention, input, recordsById),
+          sessionRow(
+            ticket,
+            attentionTab,
+            subject,
+            attention,
+            input,
+            recordsById,
+            provenanceOf(attentionTab.sessionId),
+          ),
           ticket,
           subject,
         );
@@ -819,6 +898,7 @@ export function buildActiveSessionListing(
         subject.activity === "waiting" ? { signal: "waiting", reason: null } : null,
         input,
         recordsById,
+        provenanceOf(tab.sessionId),
       );
       fileTab(row, ticket, subject);
     }
@@ -854,6 +934,7 @@ export function buildActiveSessionListing(
         subject.activity === "waiting" ? { signal: "waiting", reason: null } : null,
         input,
         recordsById,
+        provenanceOf(tab.sessionId),
       ),
       null,
       subject,
@@ -874,6 +955,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "terminal",
         endedOrQuietAt: record.endedAt,
+        provenance: provenanceOf(record.id),
         target: null,
         cleaned: false,
       },
@@ -887,7 +969,7 @@ export function buildActiveSessionListing(
   // 2b. Chat Sessions, which carry their own activity and recency.
   for (const record of chatSessions) {
     const ticket = record.ticketId === null ? null : (ticketsById.get(record.ticketId) ?? null);
-    const row = chatRow(record, ticket);
+    const row = chatRow(record, ticket, provenanceOf(record.sessionId));
     const group = activeGroup(row, record.lastActivityAt, record.live, now);
     if (group !== null) {
       activeEntries.push({
@@ -905,6 +987,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "chat",
         endedOrQuietAt: record.lastActivityAt,
+        provenance: row.provenance,
         target: row.target,
         cleaned: false,
       },
@@ -957,6 +1040,10 @@ export function buildActiveSessionListing(
   const previous: PreviousSessionRow[] = [];
   for (const candidate of previousById.values()) {
     if (filter.kinds !== null && !filter.kinds.has(candidate.row.kind)) continue;
+    // Before cleanup rather than after: a row the reader has narrowed away is
+    // not a row whose cleanup boundary anyone is waiting on, so skipping here
+    // keeps `nextBoundaryAt` about the list actually on screen.
+    if (filter.scopes !== null && !filter.scopes.has(sessionRowScope(candidate))) continue;
     const cleaned = isConcludedBusiness({
       ticketId: candidate.ticketId,
       ticket: candidate.row.ticket,

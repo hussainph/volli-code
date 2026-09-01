@@ -90,16 +90,16 @@ function boardOutputStamps(
 export function useBoardSessionActivity(
   projectId: string,
   ticketIds: ReadonlySet<string>,
-): Readonly<Record<string, "working" | "waiting">> {
+): Readonly<Record<string, TicketSessionActivity>> {
   const containers = useSessionsStore((state) => state.byOwner);
   const parkState = useSessionsStore((state) => state.parkState);
   const harness = useSessionsStore((state) => state.harness);
   const lastOutputAt = useSessionsStore(
     useShallow((state) => boardOutputStamps(state.lastOutputAt, state.byOwner, ticketIds)),
   );
-  const chatSessions = (
-    useProjectSessionsStore((state) => state.byProject[projectId]) ?? EMPTY_PROJECT_SESSION_ROWS
-  ).chat;
+  const projectRows =
+    useProjectSessionsStore((state) => state.byProject[projectId]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  const chatSessions = projectRows.chat;
 
   // The baseline the pushes are folded onto. `ensure` is at-most-once per
   // project across every surface, so the board asking for it costs nothing when

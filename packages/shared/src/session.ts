@@ -40,6 +40,7 @@
 
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
+import type { SessionProvenance } from "./session-provenance";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
@@ -171,9 +172,10 @@ export interface ChatSessionRecord {
    * What is happening in this Session right now, in the honest subset of
    * {@link SessionActivityState} a chat row can be in: there is no PTY to
    * SIGSTOP, so never "parked", and a Session outlives every attachment it has
-   * ever had, so never "exited" — a chat row that stops is "idle".
+   * ever had, so never "exited" — a chat row that goes quiet is "idle", and
+   * one whose work was deliberately ended is "stopped" (VC-86).
    */
-  activity: Extract<SessionActivityState, "working" | "waiting" | "idle">;
+  activity: Extract<SessionActivityState, "working" | "waiting" | "idle" | "stopped">;
   /**
    * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
    * every other state. The two move together by construction — a waiting row
@@ -207,8 +209,17 @@ export interface ChatSessionRecord {
  * {@link EMPTY_SESSION_USAGE_SUMMARY}, which reads as unmeasured rather than as
  * free, and that distinction is the reason it is a summary here and not a
  * nullable dollar amount.
+ *
+ * `provenance` rides here for exactly the same reason, and VC-112 states it as
+ * a rule rather than a preference: who started a Session is a property of the
+ * SESSION, so it cannot live inside one attachment's record and be invisible
+ * from the other. Every row carries one; {@link PERSON_STARTED} is the resting
+ * answer and draws nothing.
  */
-export type SessionListingRow = SessionListingIdentity & { usage: SessionUsageSummary };
+export type SessionListingRow = SessionListingIdentity & {
+  usage: SessionUsageSummary;
+  provenance: SessionProvenance;
+};
 
 /**
  * The identity half of a listing row: which kind of Session, and its record.
@@ -257,8 +268,21 @@ export function shortSessionId(sessionId: string): string {
  * it as "idle", which is exactly backwards. It is only ever *declared*, by a
  * harness hook event (`input.needed`), and so exists only for the sessions
  * whose harness reports one.
+ *
+ * "stopped" (VC-86) is the chat-side sibling of "waiting": derivable from no
+ * PTY and no recency, only from the durable stop fact — a supervisor, the
+ * person, or the watchdog ended the Session's work. Without it a stopped
+ * Session reads "idle", which hides exactly the who-ended-this a triaging
+ * orchestrator is asking about. A PTY never produces it.
  */
-export const SESSION_ACTIVITY_STATES = ["working", "waiting", "idle", "parked", "exited"] as const;
+export const SESSION_ACTIVITY_STATES = [
+  "working",
+  "waiting",
+  "idle",
+  "parked",
+  "exited",
+  "stopped",
+] as const;
 
 export type SessionActivityState = (typeof SESSION_ACTIVITY_STATES)[number];
 

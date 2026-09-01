@@ -7,9 +7,11 @@ import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   errorMessage,
+  sessionProvenanceHoverLine,
+  sessionProvenanceOf,
   type SessionListingRow,
+  type SessionProvenance,
   type SessionRecord,
-  type SkillReference,
 } from "@volli/shared";
 
 import { renameChatSession } from "@renderer/chat/rename";
@@ -28,6 +30,7 @@ import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -41,6 +44,7 @@ import {
   nextTicketSessionStatusChangeAt,
   sessionRailRowStampAt,
   ticketOutputStamps,
+  ticketSessionProvenance,
   type SessionRailRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
@@ -68,6 +72,7 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   idle: "Idle",
   parked: "Parked",
   exited: "Exited",
+  stopped: "Stopped",
   setup: "Setup",
 };
 
@@ -107,8 +112,8 @@ function SectionHeadingRow({ label, children }: { label: string; children?: Reac
  * The dot takes the STATE, not a colour. This panel used to hold its own
  * status→tone map and the tab strip held a second one that disagreed with it
  * about the same Session — `ui/status-dot.tsx` is now the only place either
- * question is answered. A history row is `exited` by definition, which is why
- * the old `PAST_TONE` constant is gone rather than replaced.
+ * question is answered. Terminal history is `exited`; a stopped chat keeps
+ * `stopped` so the deliberate end does not disappear into generic history.
  */
 function RowStatus({ state, children }: { state: StatusDotState; children: React.ReactNode }) {
   return (
@@ -142,6 +147,7 @@ function RowStatus({ state, children }: { state: StatusDotState; children: React
 function SessionRow({
   kind,
   title,
+  provenance,
   trailing,
   editing,
   onActivate,
@@ -153,6 +159,14 @@ function SessionRow({
   kind: "chat" | "terminal";
   /** The live tab title when open (so optimistic renames show), else the durable record title. */
   title: string;
+  /**
+   * Who started this Session (VC-131). The rail is a listing like any other, so
+   * it draws the same mark the sidebar's bands do, from the same component —
+   * the rule is that a Run's Session is distinguishable everywhere a Session
+   * appears, and a rail with its own idea of that would be the second place to
+   * fix when the mark changes.
+   */
+  provenance: SessionProvenance;
   /** Right-edge metadata: live status for current rows, relative end time for history rows. */
   trailing: React.ReactNode;
   editing: boolean;
@@ -187,8 +201,22 @@ function SessionRow({
             onCancel={onCancelRename}
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
-            {title}
+          <span
+            // `gap-1` is the ladder's icon↔label rung (docs/DESIGN.md), and the
+            // same gap the mark sits at in the sidebar's rows.
+            className="flex min-w-0 flex-1 items-center gap-1"
+            // The provenance line is the whole mark for a Session another
+            // Session started, and it rides on a node the row already had.
+            title={sessionProvenanceHoverLine(provenance) ?? undefined}
+          >
+            {/* Left of the title rather than after it: this row's right edge is
+                the status column, and a mark that drifted between the title and
+                that column depending on title length would stop being scannable
+                down the list. */}
+            <SessionProvenanceMark provenance={provenance} rowTitle={title} />
+            <span className="min-w-0 flex-1 truncate text-ui" onDoubleClick={onStartRename}>
+              {title}
+            </span>
           </span>
         )
       }
@@ -218,6 +246,7 @@ function SessionRow({
 function SessionList({
   rows,
   variant,
+  provenance,
   now,
   ticketId,
   editingId,
@@ -232,6 +261,8 @@ function SessionList({
   rows: readonly SessionRailRow[];
   /** Current rows trail with live status; history rows trail with when they ended. */
   variant: "current" | "history";
+  /** Sparse, keyed by Session id — a miss is the resting case (VC-131). */
+  provenance: Readonly<Record<string, SessionProvenance>>;
   /**
    * The clock the History variant's relative stamps are read against. A current
    * row prints no stamp, so for that variant this is unread — the panel hands
@@ -259,18 +290,21 @@ function SessionList({
               key={sessionId}
               kind="chat"
               title={title}
+              provenance={sessionProvenanceOf(provenance, sessionId)}
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
-              // rather than a status beside a "Chat · Live". A row in History
-              // has no live state left to report, only when it last said
-              // anything.
+              // rather than repeating source metadata. Most History rows say
+              // only when they last said anything; a stopped chat retains
+              // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (
                   <RowStatus state={record.activity}>{STATUS_LABEL[record.activity]}</RowStatus>
                 ) : (
-                  <RowStatus state="exited">
-                    {relativeTime(sessionRailRowStampAt(entry), now)}
+                  <RowStatus state={record.activity === "stopped" ? "stopped" : "exited"}>
+                    {record.activity === "stopped"
+                      ? `Stopped · ${relativeTime(sessionRailRowStampAt(entry), now)}`
+                      : relativeTime(sessionRailRowStampAt(entry), now)}
                   </RowStatus>
                 )
               }
@@ -291,6 +325,7 @@ function SessionList({
             key={record.id}
             kind="terminal"
             title={title}
+            provenance={sessionProvenanceOf(provenance, record.id)}
             trailing={
               variant === "current" ? (
                 <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
@@ -354,8 +389,7 @@ export function TicketSessionsPanel({
   creating,
   onNewSession,
   onNewChat,
-  skills,
-  onNewChatWithSkill,
+  onNewBrowser,
   onActivateSession,
   onActivateChat,
 }: {
@@ -363,10 +397,8 @@ export function TicketSessionsPanel({
   creating: boolean;
   onNewSession(): void;
   onNewChat(): void;
-  /** The project's skills — the "Chat with skill" submenu's rows. */
-  skills?: readonly SkillReference[];
-  /** Mints a chat Session with one named skill injected at attach time. */
-  onNewChatWithSkill?(name: string): void;
+  /** Opens a blank Browser Tab in the main strip, in this ticket's scope. */
+  onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
 }) {
@@ -534,6 +566,9 @@ export function TicketSessionsPanel({
   }, [ageBoundaryAt, ageNow]);
 
   const listProps = {
+    // Read off the listing rows before the panel splits them into two record
+    // arrays, which is where the row wrapper carrying it is lost (VC-131).
+    provenance: ticketSessionProvenance(rows),
     ticketId,
     editingId,
     setEditingId,
@@ -561,9 +596,8 @@ export function TicketSessionsPanel({
             placement="rail"
             align="end"
             shortcuts
-            skills={skills}
             onNewChat={onNewChat}
-            onNewChatWithSkill={onNewChatWithSkill}
+            onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
         </SectionHeadingRow>

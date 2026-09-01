@@ -38,6 +38,7 @@ function fakeRuntime(sessions: Record<string, FakeSession>): FakeRuntime {
         sessionId,
         directory: session.directory,
         attachmentId: session.attachmentId,
+        lastProgressAt: 0,
       }));
     },
     async projection({ sessionId }) {

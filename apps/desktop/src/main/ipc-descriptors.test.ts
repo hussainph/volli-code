@@ -19,7 +19,98 @@ import {
   AGENT_OBSERVABILITY_IPC,
   WEB_ACCESS_CHANNELS,
   WEB_ACCESS_IPC,
+  BROWSER_CHANNELS,
+  BROWSER_IPC,
 } from "./ipc-descriptors";
+
+describe("BROWSER_IPC descriptor table", () => {
+  it("derives the complete Browser Tab command surface from its descriptors", () => {
+    expect(BROWSER_CHANNELS).toEqual(Object.keys(BROWSER_IPC));
+    expect(BROWSER_CHANNELS).toEqual([
+      "volli:browser-open",
+      "volli:browser-close",
+      "volli:browser-list",
+      "volli:browser-navigate",
+      "volli:browser-back",
+      "volli:browser-forward",
+      "volli:browser-reload",
+      "volli:browser-set-bounds",
+      "volli:browser-show",
+      "volli:browser-hide",
+      "volli:browser-toggle-devtools",
+    ]);
+  });
+
+  it("accepts a scoped HTTP(S)-shaped open request and rejects malformed fields", () => {
+    const { guard, invalidError } = BROWSER_IPC["volli:browser-open"];
+    expect(
+      guard([{ projectId: "project-1", ticketId: "ticket-1", url: "http://localhost:3000" }]),
+    ).toBe(true);
+    expect(guard([{ projectId: "project-1", url: "https://example.com" }])).toBe(true);
+    expect(guard([{ projectId: 7, url: "https://example.com" }])).toBe(false);
+    expect(guard([{ projectId: "project-1", ticketId: 7, url: "https://example.com" }])).toBe(
+      false,
+    );
+    expect(guard([{ projectId: "project-1", url: 7 }])).toBe(false);
+    expect(guard([])).toBe(false);
+    expect(invalidError).toBe("Invalid Browser Tab request");
+  });
+
+  it("accepts project and optional Ticket list scopes, rejecting an ambient list", () => {
+    const { guard } = BROWSER_IPC["volli:browser-list"];
+    expect(guard([{ projectId: "project-1" }])).toBe(true);
+    expect(guard([{ projectId: "project-1", ticketId: "ticket-1" }])).toBe(true);
+    expect(guard([{}])).toBe(false);
+    expect(guard([{ projectId: "project-1", ticketId: null }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one opaque string id for close, history, visibility, reload, and DevTools", () => {
+    const channels = [
+      "volli:browser-close",
+      "volli:browser-back",
+      "volli:browser-forward",
+      "volli:browser-reload",
+      "volli:browser-show",
+      "volli:browser-hide",
+      "volli:browser-toggle-devtools",
+    ] as const;
+    for (const channel of channels) {
+      const { guard } = BROWSER_IPC[channel];
+      expect(guard([{ tabId: "opaque-1" }])).toBe(true);
+      expect(guard([{ tabId: 1 }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ tabId: "opaque-1" }, {}])).toBe(false);
+    }
+  });
+
+  it("requires both opaque id and URL string for address navigation", () => {
+    const { guard } = BROWSER_IPC["volli:browser-navigate"];
+    expect(guard([{ tabId: "opaque-1", url: "http://localhost:3000" }])).toBe(true);
+    expect(guard([{ tabId: "opaque-1" }])).toBe(false);
+    expect(guard([{ tabId: 1, url: "https://example.com" }])).toBe(false);
+    expect(guard([{ tabId: "opaque-1", url: 7 }])).toBe(false);
+  });
+
+  it("accepts one finite, non-negative renderer-measured host rectangle", () => {
+    const { guard } = BROWSER_IPC["volli:browser-set-bounds"];
+    expect(
+      guard([
+        {
+          tabId: "opaque-1",
+          bounds: { x: 12.5, y: 48.25, width: 800.5, height: 600.5 },
+        },
+      ]),
+    ).toBe(true);
+    expect(guard([{ tabId: "opaque-1", bounds: { x: 0, y: 0, width: -1, height: 600 } }])).toBe(
+      false,
+    );
+    expect(
+      guard([{ tabId: "opaque-1", bounds: { x: 0, y: 0, width: Infinity, height: 600 } }]),
+    ).toBe(false);
+    expect(guard([{ tabId: "opaque-1", bounds: null }])).toBe(false);
+  });
+});
 
 describe("UPDATE_IPC descriptor table", () => {
   /**
@@ -2730,6 +2821,9 @@ describe("AUTOMATION_IPC descriptor table", () => {
     commandId: COMMAND_ID,
     name: "Review",
     instructions: "/review go",
+    // Carried as a value, never omitted: "Nothing else" is a union member so a
+    // JSON transport can spell the default (docs/BOUNDARIES.md rule 3).
+    trigger: { kind: "none" },
     runtime: null,
   };
 
@@ -2782,6 +2876,64 @@ describe("AUTOMATION_IPC descriptor table", () => {
       ).toBe(false);
     });
 
+    it("judges the Trigger's wire GRAMMAR, and leaves its meaning to the parser", () => {
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "none" } }])).toBe(true);
+      // OMITTED is refused. "Only when I run it" is a complete answer with a
+      // union member of its own, so absence is a second spelling of it that a
+      // JSON transport could not carry — the door takes the value instead.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: undefined }])).toBe(false);
+      const { trigger: _dropped, ...withoutTrigger } = DRAFT;
+      expect(guard([{ projectId: "p1", ...withoutTrigger }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["doing"] } }]),
+      ).toBe(true);
+      // Which column names are real, and whether the list collapses, is the
+      // shared parser's job on the way in — so an unknown name passes HERE.
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: ["shipped"] } }]),
+      ).toBe(true);
+      // Not a record at all: a string, a number, null, an array. This is the
+      // shape the parser cannot be asked to rescue, so the door refuses it.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: "columns" }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: 7 }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: null }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: ["doing"] }])).toBe(false);
+      // A schedule (VC-130) passes as a SHAPE; whether its zone is one this
+      // build's ICU knows, and whether its hour is on the clock, is the shared
+      // parser's job on the way in — the same division the columns get above.
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: {
+              kind: "schedule",
+              schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+            },
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            projectId: "p1",
+            ...DRAFT,
+            trigger: { kind: "schedule", schedule: { preset: "daily", timeZone: "Mars/Olympus" } },
+          },
+        ]),
+      ).toBe(true);
+      // A record, but not a Trigger this build can read.
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: {} }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "schedule", schedule: "daily" } }]),
+      ).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns" } }])).toBe(false);
+      expect(
+        guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "columns", columns: "doing" } }]),
+      ).toBe(false);
+    });
+
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid automation");
     });
@@ -2826,13 +2978,99 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("volli:automation-run", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-run"];
 
-    it("requires a UUID command plus both target halves — the Automation and the Ticket", () => {
-      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1" }])).toBe(true);
-      expect(guard([{ automationId: "a1" }])).toBe(false);
-      expect(guard([{ commandId: "counter-1", automationId: "a1", ticketId: "t1" }])).toBe(false);
-      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1" }])).toBe(false);
+    const bound = { kind: "automation", automationId: "a1" };
+
+    it("requires a UUID command, a whole target and the Ticket", () => {
+      expect(
+        guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(true);
+      expect(guard([{ target: bound, ticketId: "t1", modelOverride: null }])).toBe(false);
+      expect(
+        guard([{ commandId: "counter-1", target: bound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, ticketId: "t1", modelOverride: null }])).toBe(false);
+      // The pre-VC-129 spelling, which named the Automation beside the Ticket:
+      // a target is a union now, and a bare id is not one of its members.
+      expect(
+        guard([{ commandId: COMMAND_ID, automationId: "a1", ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
+    });
+
+    it("takes an Unbound Run's own Instructions, and no other target kind", () => {
+      const unbound = { kind: "unbound", instructions: "/sweep" };
+      expect(
+        guard([{ commandId: COMMAND_ID, target: unbound, ticketId: "t1", modelOverride: null }]),
+      ).toBe(true);
+      // An Unbound Run with nothing to say passes the SHAPE and is refused by
+      // the domain rule instead (`unboundRunProblem`) — the door judges wire
+      // shape only, as it does for every other automation write.
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "unbound", instructions: "" },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "unbound", instructions: 7 },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: { kind: "schedule" },
+            ticketId: "t1",
+            modelOverride: null,
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([{ commandId: COMMAND_ID, target: null, ticketId: "t1", modelOverride: null }]),
+      ).toBe(false);
+    });
+
+    it("takes a whole per-invocation model override, or none", () => {
+      const modelOverride = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
+      expect(guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1", modelOverride }])).toBe(
+        true,
+      );
+      // Half a pair is not an override: a reasoning level is a property of the
+      // model that offers it (VC-112), so neither half travels alone.
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: bound,
+            ticketId: "t1",
+            modelOverride: { providerId: "anthropic", modelId: "opus" },
+          },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            target: bound,
+            ticketId: "t1",
+            modelOverride: { ...modelOverride, reasoningLevel: "turbo" },
+          },
+        ]),
+      ).toBe(false);
+      // Absent is not null: an optional property would admit `undefined`, which
+      // an HTTP transport would mangle (docs/BOUNDARIES.md rule 3).
+      expect(guard([{ commandId: COMMAND_ID, target: bound, ticketId: "t1" }])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {
@@ -2855,10 +3093,195 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-arming-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arming-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arming request");
+    });
+  });
+
+  describe("volli:automation-arm", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arm"];
+
+    it("takes a project, a real column and an Automation — or null to disarm", () => {
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing", automationId: "a1" }]),
+      ).toBe(true);
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing", automationId: null }]),
+      ).toBe(true);
+      expect(
+        guard([{ commandId: COMMAND_ID, projectId: "p1", status: "shipped", automationId: "a1" }]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, projectId: "p1", automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, status: "doing", automationId: "a1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation arm request");
+    });
+  });
+
+  describe("volli:automation-runs-for-project", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-project"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation runs request");
+    });
+  });
+
+  describe("volli:automation-enablement", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-enablement"];
+
+    it("takes no arguments at all", () => {
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation enablement request");
+    });
+  });
+
+  describe("volli:automation-set-enabled", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-set-enabled"];
+
+    it("needs the target and a BOOLEAN, so a request is a value rather than a toggle", () => {
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: true }])).toBe(true);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: false }])).toBe(true);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, automationId: "a1", enabled: "yes" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, enabled: true }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries a UUID commandId like every other write — the switch is a command", () => {
+      // The PROJECTION is machine-local (`automations/enablement.ts`); the
+      // intent is durable, so a lost reply is retried rather than re-decided.
+      // A durable retry identity is a UUID the renderer minted, so a
+      // machine-local counter is refused here exactly as create/update/delete
+      // refuse it — otherwise two hosts could collide on "c1".
+      expect(guard([{ automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: 7, automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: "counter-1", automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: "", automationId: "a1", enabled: true }])).toBe(false);
+      expect(guard([{ commandId: `${COMMAND_ID}-extra`, automationId: "a1", enabled: true }])).toBe(
+        false,
+      );
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation enablement request");
+    });
+  });
+
+  describe("volli:automation-column-order-list", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-column-order-list"];
+
+    it("accepts a projectId record and refuses everything else", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ projectId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation order request");
+    });
+  });
+
+  describe("volli:automation-set-column-order", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-set-column-order"];
+
+    it("takes a project, a real column and a list of ids — empty meaning never arranged", () => {
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            projectId: "p1",
+            status: "doing",
+            rankedAutomationIds: ["a1", "a2"],
+          },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: [] },
+        ]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            commandId: COMMAND_ID,
+            projectId: "p1",
+            status: "shipped",
+            rankedAutomationIds: ["a1"],
+          },
+        ]),
+      ).toBe(false);
+      // Every element is an id, checked here because this is the last place a
+      // non-id can be turned away before it is stored as somebody's digit.
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: [7] },
+        ]),
+      ).toBe(false);
+      expect(
+        guard([
+          { commandId: COMMAND_ID, projectId: "p1", status: "doing", rankedAutomationIds: "a1" },
+        ]),
+      ).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, projectId: "p1", status: "doing" }])).toBe(false);
+      expect(guard([{ commandId: COMMAND_ID, status: "doing", rankedAutomationIds: [] }])).toBe(
+        false,
+      );
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries a UUID commandId like every other write — the rank is a command", () => {
+      // The PROJECTION is machine-local (`automation_column_order`); the intent
+      // is durable, so a lost reply is retried rather than re-decided.
+      expect(guard([{ projectId: "p1", status: "doing", rankedAutomationIds: ["a1"] }])).toBe(
+        false,
+      );
+      expect(
+        guard([
+          { commandId: "counter-1", projectId: "p1", status: "doing", rankedAutomationIds: ["a1"] },
+        ]),
+      ).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation order request");
+    });
+  });
+
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      expect(AUTOMATION_CHANNELS).toHaveLength(6);
+      // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel and
+      // VC-228's retained-command Retry doors. Derived above; the count catches
+      // an accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(18);
     });
   });
 });

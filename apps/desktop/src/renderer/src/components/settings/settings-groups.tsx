@@ -115,6 +115,16 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "primary",
             "swatch",
             "swatches",
+            // DisplaySection's cost row. VC-87 mounted the row in this
+            // category and did not extend these keywords, so the setting was
+            // unreachable from rail search until settings-search-smoke finally
+            // ran in CI and said so.
+            "show cost and token usage",
+            "cost",
+            "token",
+            "tokens",
+            "usage",
+            "spend",
           ],
           content: (
             <>

@@ -10,31 +10,31 @@
  *    the door carries one);
  *  - every other refusal toasts, because a person asked for a Run and did not
  *    get one (surface-every-failure, CLAUDE.md);
- *  - success navigates to the fresh Session — the adopt + open pair every
- *    other externally-minted Session already uses.
+ *  - success exposes the fresh Session and the launch-time Automation name so
+ *    every Run door can announce it without navigating (VC-234). The toast's
+ *    "Open session" action is the only route into the fresh Session.
  */
 import type { AutomationRunStartResult } from "../../../../ipc/contract";
-
-import { isTicketDragData } from "@renderer/components/board/board-dnd";
 
 export type RunAutomationAction =
   | { kind: "open-model-access" }
   | { kind: "toast"; message: string }
-  | { kind: "open-session"; sessionId: string; projectId: string };
-
-/**
- * Normalizes the board payload an Automation drop target accepts. The durable
- * Run door stays one-command-per-ticket; the renderer fans this list out in
- * parallel so each Session keeps its own retry identity and receipt.
- */
-export function automationTicketIdsFromDrop(value: unknown): string[] | null {
-  if (!isTicketDragData(value)) return null;
-  return [...new Set(value.ticketIds)];
-}
+  | {
+      kind: "session-started";
+      sessionId: string;
+      projectId: string;
+      /** The name main resolved into both the Run record and Session title. */
+      automationName: string | null;
+    };
 
 export function runAutomationAction(result: AutomationRunStartResult): RunAutomationAction {
   if (result.ok) {
-    return { kind: "open-session", sessionId: result.run.sessionId, projectId: result.projectId };
+    return {
+      kind: "session-started",
+      sessionId: result.run.sessionId,
+      projectId: result.projectId,
+      automationName: result.run.automationName,
+    };
   }
   if (result.code === "MODEL_REQUIRED") return { kind: "open-model-access" };
   return { kind: "toast", message: `Couldn't run automation: ${result.error}` };

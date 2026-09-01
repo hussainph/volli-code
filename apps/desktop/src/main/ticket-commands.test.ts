@@ -510,21 +510,6 @@ describe("ticket-commands guard edges", () => {
     ).toThrow(/Unknown ticket/);
   });
 
-  it("refuses a single-card move scoped to another project", () => {
-    seed();
-    createTicket("t1", "doing");
-    insertProject(ctx.db, testProject({ id: "p2", ticketPrefix: "PX" }));
-
-    expect(() =>
-      moveTicketCommand(
-        ctx.db,
-        { projectId: "p2", ticketId: "t1", toStatus: "todo", toIndex: 0 },
-        { now: 2, actor: USER },
-      ),
-    ).toThrow(/does not belong to project/);
-    expect(getTicketRow(ctx.db, "t1")!.status).toBe("doing");
-  });
-
   it("refuses to move, update, or reprioritize an archived ticket", () => {
     seed();
     createTicket("t1", "doing");

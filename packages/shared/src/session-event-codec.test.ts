@@ -142,6 +142,10 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
     },
     { kind: "session.signaled", signal: "done", reason: null },
     { kind: "session.signaled", signal: "blocked", reason: "stuck" },
+    // The stop fact (VC-86): each actor arm crosses whole.
+    { kind: "session.stopped", reason: "Wedged for 3h", by: { kind: "session", sessionId: "s-1" } },
+    { kind: "session.stopped", reason: null, by: { kind: "user" } },
+    { kind: "session.stopped", reason: "Silent 10m mid-turn", by: { kind: "watchdog" } },
     { kind: "attachment.opened", attachment },
     { kind: "attachment.opened", attachment: { ...attachment, native: null } },
     {
@@ -398,6 +402,8 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       { kind: "session.archive" },
       { kind: "session.retitle", title: null },
       { kind: "session.signal", signal: "done", reason: null },
+      { kind: "session.stop", reason: "Wedged", by: { kind: "session", sessionId: "s-1" } },
+      { kind: "session.stop", reason: null, by: { kind: "watchdog" } },
       {
         kind: "model.select",
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
@@ -536,6 +542,20 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.signal has an unsupported value");
+    // An actor kind this build does not know is malformed, not tolerated —
+    // the same discipline as the signal value above (VC-86).
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.stopped", reason: null, by: { kind: "scheduler" } },
+        "payload",
+      ),
+    ).toThrow("payload.by.kind has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        { kind: "session.stopped", reason: null, by: { kind: "session" } },
+        "payload",
+      ),
+    ).toThrow("payload.by.sessionId must be a string");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },
@@ -1167,6 +1187,17 @@ describe("the renderer-safe scrub", () => {
         costUsd: 0.418_23,
         costBasis: "catalog-estimate",
       },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(payload);
+  });
+
+  // The stop fact is Volli's own vocabulary end to end — reason and actor
+  // cross the product edge whole (VC-86).
+  it("lets a stop cross the product edge whole", () => {
+    const payload: SessionEventPayload = {
+      kind: "session.stopped",
+      reason: "Wedged for 3h",
+      by: { kind: "session", sessionId: "supervisor-1" },
     };
     expect(scrubSessionEventPayload(payload)).toEqual(payload);
   });

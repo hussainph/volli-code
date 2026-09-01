@@ -100,7 +100,7 @@ const terminalCanvasCount = (page) =>
 
 async function startTerminalTab(page) {
   const before = await strip(page).getByRole("tab").count();
-  await page.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  await page.getByRole("button", { name: "Other things to open", exact: true }).first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await waitUntil(
     "a Project Session terminal tab to appear",
@@ -371,7 +371,13 @@ try {
       6,
       "relaunch: the dead terminal tab is gone and Home falls back to the Board tab",
       async () => {
-        await waitUntil("Home's strip to mount", async () => (await strip(page).count()) > 0);
+        // This is the SECOND Electron boot of the run, and a cold second launch
+        // on a CI runner does not mount Home inside waitUntil's 12s default —
+        // it timed out here with last value false. Check 1 uses the default
+        // because it runs against an already-warm first launch.
+        await waitUntil("Home's strip to mount", async () => (await strip(page).count()) > 0, {
+          timeout: 30_000,
+        });
         const labels = await stripTabLabels(page);
         const active = await strip(page)
           .locator('[role="tab"][aria-selected="true"]')

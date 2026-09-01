@@ -70,6 +70,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionStopActor,
   SessionUsageAttribution,
   TranscriptReference,
 } from "./session-ledger";
@@ -190,6 +191,16 @@ const codecs = {
       kind: "session.signaled",
       signal: enumValue(record.signal, ["done", "blocked"], `${context}.signal`),
       reason: readNullableString(record.reason, `${context}.reason`),
+    }),
+    scrub: (payload) => payload,
+  },
+  // The stop fact (VC-86). Reason and actor are Volli's own vocabulary and
+  // cross whole, exactly as the signal's reason does.
+  "session.stopped": {
+    decode: (record, context) => ({
+      kind: "session.stopped",
+      reason: readNullableString(record.reason, `${context}.reason`),
+      by: decodeSessionStopActor(record.by, `${context}.by`),
     }),
     scrub: (payload) => payload,
   },
@@ -830,6 +841,12 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         signal: enumValue(row.signal, ["done", "blocked"], `${context}.signal`),
         reason: readNullableString(row.reason, `${context}.reason`),
       };
+    case "session.stop":
+      return {
+        kind,
+        reason: readNullableString(row.reason, `${context}.reason`),
+        by: decodeSessionStopActor(row.by, `${context}.by`),
+      };
     case "model.select":
       return {
         kind,
@@ -989,6 +1006,19 @@ function assertCommandShape(value: SessionCommand, context: string): void {
   }
 }
 
+/**
+ * Who stopped a Session (VC-86). The union is closed and each arm's shape is
+ * validated, so a payload claiming an actor kind this build does not know
+ * fails the way any malformed known-kind field does — loudly.
+ */
+function decodeSessionStopActor(value: unknown, context: string): SessionStopActor {
+  const row = asRecord(value, context);
+  const kind = enumValue(row.kind, ["session", "user", "watchdog"], `${context}.kind`);
+  return kind === "session"
+    ? { kind, sessionId: readString(row.sessionId, `${context}.sessionId`) }
+    : { kind };
+}
+
 function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
   const row = asRecord(value, context);
   const kind = enumValue(
@@ -998,6 +1028,7 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "session.archived",
       "session.retitled",
       "session.signaled",
+      "session.stopped",
       "model.selected",
       "executor.start.requested",
       "executor.stop.requested",

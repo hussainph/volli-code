@@ -41,6 +41,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
+    stopped: null,
     turnActive: false,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -106,15 +107,49 @@ describe("watchSessionActivity", () => {
       ticketId: "ticket-1",
       row: { kind: "chat", record: { sessionId: "session-1", activity: "idle" } },
     });
+    // No provenance port, so the row reads as person-started — the quiet answer
+    // a caller that cannot ask gets, never a mark it did not earn.
+    expect(publish.mock.calls[0]![0].row.provenance).toEqual({ kind: "user" });
+    watch.stop();
+  });
+
+  // A pushed row is applied by the renderer as a whole-row upsert, so a push
+  // that dropped provenance would take a Run's bolt off the row the first time
+  // that Run did anything (VC-131). The port is asked for the SAME Session the
+  // fold is about, which is what lets a Run started after this window opened
+  // arrive marked without a second fetch.
+  it("carries who started the Session on the pushed row", async () => {
+    const publish = vi.fn();
+    const provenanceOf = vi.fn(() => ({
+      kind: "automation" as const,
+      automationName: "Nightly sweep",
+    }));
+    const watch = watchSessionActivity(
+      stubEngine(() => projection()),
+      { publish, provenanceOf },
+    );
+
+    await watch.engine.observe({} as never);
+    await watch.flush();
+
+    expect(provenanceOf).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      ticketId: "ticket-1",
+    });
+    expect(publish.mock.calls[0]![0].row.provenance).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
     watch.stop();
   });
 
   it("republishes only when the row actually changed", async () => {
     const publish = vi.fn();
     let live = projection();
+    let liveBindings: { attachmentId: string }[] = [];
     const watch = watchSessionActivity(
       stubEngine(() => live),
-      { publish },
+      { publish, listOpenNativeBindings: () => liveBindings },
     );
     const write = async () => {
       await watch.engine.observe({} as never);
@@ -131,10 +166,25 @@ describe("watchSessionActivity", () => {
     await write();
     expect(publish).toHaveBeenCalledTimes(1); // no OPEN attachment yet — still idle
 
-    live = projection({ turnActive: true, attachments: [openAttachment()] });
+    const attachment = openAttachment();
+    live = projection({ turnActive: true, attachments: [attachment], liveExecutor: attachment });
     await write();
+    // The adapter identity is newly visible, so the row republishes, but a
+    // relaunch with no executor binding stays honestly non-live and idle.
     expect(publish).toHaveBeenCalledTimes(2);
-    expect(publish.mock.calls[1]![0].row.record.activity).toBe("working");
+    expect(publish.mock.calls[1]![0].row.record).toMatchObject({
+      adapterId: "pi",
+      live: false,
+      activity: "idle",
+    });
+
+    liveBindings = [{ attachmentId: attachment.id }];
+    await write();
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(publish.mock.calls[2]![0].row.record).toMatchObject({
+      live: true,
+      activity: "working",
+    });
 
     watch.stop();
   });
@@ -294,6 +344,86 @@ describe("watchSessionActivity", () => {
     await watch.engine.reportUsage({ scope: { kind: "all" } });
 
     for (const read of Object.values(reads)) expect(read).toHaveBeenCalledTimes(1);
+    watch.stop();
+  });
+
+  it("hands every folded projection to the observer, before the row gate (VC-133)", async () => {
+    // The notification rule hangs off this port. It must see the projection —
+    // the listing row cannot spell `error` at all — and it must see every fold,
+    // because "did this LISTING change" is a different question from "did this
+    // Session change".
+    let state = projection();
+    const engine = stubEngine(() => state);
+    const observe = vi.fn();
+    const publish = vi.fn();
+    const watch = watchSessionActivity(engine, { publish, observe, coalesceMs: 0 });
+
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(observe.mock.calls[0]?.[0]).toBe(state);
+
+    // A second fold that leaves the row byte-identical still reaches the
+    // observer, though the publish gate correctly swallows it.
+    const publishes = publish.mock.calls.length;
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls.length).toBe(publishes);
+
+    watch.stop();
+  });
+
+  it("does not require an observer", async () => {
+    // Optional for the reason `provenanceOf` is: a test that only asks whether
+    // a write was noticed has no notification channel to hand in.
+    const engine = stubEngine(() => projection());
+    const watch = watchSessionActivity(engine, { publish: vi.fn(), coalesceMs: 0 });
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.engine.createSession({} as never);
+    await expect(watch.flush()).resolves.toBeUndefined();
+    watch.stop();
+  });
+
+  it("announces a Session it just minted, before any fold can read it (VC-133)", async () => {
+    // The notification rule speaks on ENTERING a need, which means it needs a
+    // baseline. A create is the one moment the baseline is knowable outright,
+    // and it has to be told synchronously: the coalescing timer can merge the
+    // create with the write that puts the Session in `error`, and by then a
+    // first fold cannot tell "it just broke" from "it was already broken".
+    const engine = stubEngine(() => projection());
+    const observeBirth = vi.fn();
+    const observe = vi.fn(() => {
+      expect(observeBirth).toHaveBeenCalledWith("session-1");
+    });
+    const watch = watchSessionActivity(engine, {
+      publish: vi.fn(),
+      observe,
+      observeBirth,
+      coalesceMs: 0,
+    });
+
+    await watch.engine.createSession({} as never);
+    expect(observeBirth).toHaveBeenCalledTimes(1);
+    await watch.flush();
+    expect(observe).toHaveBeenCalledTimes(1);
+    watch.stop();
+  });
+
+  it("announces no birth for a write to a Session that already existed", async () => {
+    // Every other mutating method reaches a Session this process did not
+    // necessarily create, so none of them may claim a baseline.
+    const engine = stubEngine(() => projection());
+    const observeBirth = vi.fn();
+    const watch = watchSessionActivity(engine, { publish: vi.fn(), observeBirth, coalesceMs: 0 });
+
+    await watch.engine.submit({ sessionId: "session-1" } as never);
+    await watch.engine.observe({} as never);
+    await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
+    await watch.engine.completeModelSelection({ sessionId: "session-1" } as never);
+    await watch.flush();
+
+    expect(observeBirth).not.toHaveBeenCalled();
     watch.stop();
   });
 });

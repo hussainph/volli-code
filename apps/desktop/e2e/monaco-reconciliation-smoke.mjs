@@ -149,7 +149,14 @@ async function waitFileText(page, needle, dirty = null) {
       if (dirty !== null && state.dirty !== String(dirty)) return null;
       return state;
     },
-    { timeout: 20000 },
+    // Several callers wait on an EXTERNAL write being adopted, which means
+    // waiting on filesystem-watch latency. 20s encodes an assumption about how
+    // fast fsevents delivers, and that assumption holds on a local SSD and not
+    // on a CI runner's shared storage, where check 1 timed out with the editor
+    // never showing the adopted text. Raising the bound does not weaken the
+    // assertion — the content must still be adopted — only how long the probe
+    // is willing to wait for a notification it does not control.
+    { timeout: 45_000 },
   );
 }
 
@@ -520,8 +527,10 @@ async function main() {
         await waitFileText(page, 'export const cleanAgent = "adopted";', false);
         const after = await waitStableFileViewState(page, "cursor to settle after external write");
         const tabsAfter = await readTicketTabs(page, ticketId);
-        const updated = await waitUntil("Updated marker after inspected external write", async () =>
-          (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
+        const updated = await waitUntil(
+          "Updated marker after inspected external write",
+          async () =>
+            (await changeRow.getByTestId("ticket-changes-updated").count()) === 1 ? true : null,
         );
 
         const sameTabs = JSON.stringify(tabsBefore) === JSON.stringify(tabsAfter);

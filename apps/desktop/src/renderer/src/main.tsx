@@ -11,6 +11,10 @@ import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle"
 import { toast } from "sonner";
 
 import App from "./App";
+import {
+  announcePendingArmedRunSettlement,
+  receivePendingArmedRuns,
+} from "./components/automations/armed-run";
 import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
@@ -167,6 +171,29 @@ async function main() {
     })
     .catch(() => {
       // A failed boot read leaves the icon unrendered; the next push heals it.
+    });
+
+  // Main owns one durable armed-column countdown per move (VC-226). Subscribe
+  // before priming so a window opened mid-countdown cannot miss a replacement
+  // between its read and listener registration. Every window receives the same
+  // whole snapshot; Cancel travels back to main with the exact arrival id.
+  window.api.automations.onPendingArmedRunsChanged(receivePendingArmedRuns);
+  window.api.automations.onPendingArmedRunSettled(announcePendingArmedRunSettlement);
+  window.api.automations
+    .pendingArmedRuns()
+    .then((pending) => {
+      if (pending.ok) {
+        receivePendingArmedRuns(pending.pending);
+        // A failed expiry can outlive every renderer and the app process. Its
+        // retained command id stays in main; a newly opened window restores
+        // the retry action from this renderer-safe projection.
+        for (const failure of pending.failures) {
+          announcePendingArmedRunSettlement({ kind: "failed", ...failure });
+        }
+      } else toastError(`Couldn't load pending automations: ${pending.error}`);
+    })
+    .catch((error: unknown) => {
+      toastError(`Couldn't load pending automations: ${errorMessage(error)}`);
     });
 
   window.api.data.onChanged((event) => {

@@ -1,28 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { automationTicketIdsFromDrop, runAutomationAction } from "./run-automation-model";
-
-describe("automationTicketIdsFromDrop", () => {
-  it("accepts and de-duplicates a multi-ticket board payload", () => {
-    expect(
-      automationTicketIdsFromDrop({
-        kind: "tickets",
-        projectId: "p1",
-        ticketIds: ["ticket-a", "ticket-b", "ticket-a"],
-      }),
-    ).toEqual(["ticket-a", "ticket-b"]);
-  });
-
-  it("rejects empty or unrelated drag payloads", () => {
-    expect(
-      automationTicketIdsFromDrop({ kind: "tickets", projectId: "p1", ticketIds: [] }),
-    ).toBeNull();
-    expect(automationTicketIdsFromDrop({ kind: "file", path: "a.ts" })).toBeNull();
-  });
-});
+import { runAutomationAction } from "./run-automation-model";
 
 describe("runAutomationAction", () => {
-  it("navigates to the fresh Session on success", () => {
+  it("exposes the fresh Session for the success toast without choosing navigation", () => {
     expect(
       runAutomationAction({
         ok: true,
@@ -33,6 +14,7 @@ describe("runAutomationAction", () => {
           ticketId: "t1",
           sessionId: "session-1",
           model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+          attendance: "attended",
           createdAt: 1,
         },
         projectId: "p1",
@@ -43,7 +25,12 @@ describe("runAutomationAction", () => {
           recordedAt: 1,
         },
       }),
-    ).toEqual({ kind: "open-session", sessionId: "session-1", projectId: "p1" });
+    ).toEqual({
+      kind: "session-started",
+      sessionId: "session-1",
+      projectId: "p1",
+      automationName: "Review",
+    });
   });
 
   it("opens Model Access for the missing-default refusal — recovery, not an error", () => {

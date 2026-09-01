@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
-import type { SessionEngine } from "@volli/session-engine";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
   parseSkillModes,
   derivePrefix,
@@ -18,9 +18,18 @@ import {
 } from "@volli/shared";
 import { attachBlob } from "./blob-attach";
 import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import type {
+  AuthorityPolicyOverride,
+  Label,
+  Project,
+  SessionProjection,
+  SessionProvenance,
+  Ticket,
+  TicketStatus,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -74,6 +83,7 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
+  TicketMovedNotice,
   TicketMoveRequest,
   TicketResult,
   TicketSetLabelsInput,
@@ -193,6 +203,12 @@ function databaseStorageBytes(dbPath: string): number {
     sizeBytes += statSync(`${dbPath}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
   }
   return sizeBytes;
+}
+
+function recordInterruptFailure(error: unknown): void {
+  console.error(
+    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
+  );
 }
 
 // ---- bootstrap payload --------------------------------------------------
@@ -391,8 +407,21 @@ export function registerDataIpcHandlers(
      * lifecycle event. Absent (tests, degraded boot) means a no-op.
      */
     interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+    /**
+     * Reports a renderer move only after its status change committed. Main's
+     * pending-arrival coordinator is the production consumer; absent tests are
+     * a no-op.
+     */
+    onDeliberateMove?: (notice: TicketMovedNotice) => void;
     /** The app's single durable Session Engine. */
     sessionEngine?: SessionEngine;
+    /**
+     * The structured executor bindings this process holds right now. Session
+     * attachments stay durably open across relaunch for lazy rehydration, so a
+     * listing must project `live` from this host fact rather than from the
+     * attachment's durable status. Absent means no executor is currently bound.
+     */
+    listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
     /**
      * The renderer door of model-call titling (VC-81): kicks one refinement
      * off behind a just-written heuristic title. Absent (tests, degraded
@@ -414,6 +443,19 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  /**
+   * Who started each Session in a listing (VC-131). Bound here rather than at
+   * each call site so both listing channels ask the same question the push
+   * channel asks (`activity-watch.ts`) — a fetch and a push that disagreed
+   * would make a Run's bolt flicker as its Session worked.
+   */
+  const provenanceOfSession = (session: SessionProjection): SessionProvenance =>
+    readSessionProvenance(db, {
+      sessionId: session.session.id,
+      ticketId: session.session.ticketId,
+    });
+  const liveAttachmentIds = (): ReadonlySet<string> =>
+    new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
@@ -636,8 +678,9 @@ export function registerDataIpcHandlers(
       const now = Date.now();
       const actor = { kind: "user" } as const;
       const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
-      // Snapshot every pre-move status BEFORE the atomic move so each
-      // backward-move interrupt decides from durable truth, never renderer data.
+      // Snapshot every pre-move row BEFORE the atomic move. Both the armed
+      // arrival and backward interrupt are derived from durable truth, never
+      // renderer state.
       const before = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
 
       // One post-commit wake scope per selected ticket. Nesting is intentional:
@@ -652,30 +695,54 @@ export function registerDataIpcHandlers(
         runMove,
       )();
 
-      // The move committed above; interrupt all affected Sessions in parallel.
-      // A delivery failure cannot roll durable board state back, but the person
-      // still needs to know some agents may be running in the old lifecycle.
+      const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+      // Main owns armed-column arrivals. A group drop is one deliberate move
+      // per selected Ticket, so every real column change reports independently
+      // with the same Option-drag choice.
+      for (const ticketId of ticketIds) {
+        const prior = before.get(ticketId);
+        const moved = after.get(ticketId);
+        if (
+          prior === undefined ||
+          moved === undefined ||
+          prior.status === moved.status ||
+          moved.status !== input.toStatus
+        ) {
+          continue;
+        }
+        try {
+          options.onDeliberateMove?.({
+            projectId: moved.project_id,
+            ticketId,
+            from: prior.status as TicketStatus,
+            to: input.toStatus,
+            ...(input.choice === undefined ? {} : { choice: input.choice }),
+          });
+        } catch (error) {
+          // The board transaction already committed. A pending-projection
+          // failure is evidence to log, not grounds to roll the move back.
+          console.error(
+            `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
+          );
+        }
+      }
+
+      // Interrupt all affected Sessions in parallel. A delivery failure cannot
+      // roll the already-committed board transaction back; it remains
+      // operational evidence rather than turning a successful move into a lie.
       const pending: Promise<string[]>[] = [];
-      let interruptFailed = false;
-      const recordInterruptFailure = (error: unknown): void => {
-        interruptFailed = true;
-        console.error(
-          `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-        );
-      };
-      const moveResult = (): TicketsResult => ({
-        ok: true,
-        tickets,
-        ...(interruptFailed
-          ? {
-              warning:
-                "The move completed, but some active sessions could not be interrupted. Stop them manually.",
-            }
-          : {}),
-      });
       for (const ticketId of ticketIds) {
         const row = before.get(ticketId);
-        if (row === undefined) continue;
+        const moved = after.get(ticketId);
+        if (
+          row === undefined ||
+          moved === undefined ||
+          moved.project_id !== input.projectId ||
+          row.status === moved.status ||
+          moved.status !== input.toStatus
+        ) {
+          continue;
+        }
         try {
           const interrupt = interruptOnBackwardMove(
             {
@@ -690,12 +757,12 @@ export function registerDataIpcHandlers(
           recordInterruptFailure(error);
         }
       }
-      if (pending.length === 0) return moveResult();
+      if (pending.length === 0) return { ok: true, tickets };
       return Promise.allSettled(pending).then((results) => {
         for (const result of results) {
           if (result.status === "rejected") recordInterruptFailure(result.reason);
         }
-        return moveResult();
+        return { ok: true, tickets };
       });
     },
 
@@ -911,7 +978,10 @@ export function registerDataIpcHandlers(
         projectId: input.projectId,
         scope: "all",
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
@@ -922,7 +992,10 @@ export function registerDataIpcHandlers(
         scope: "ticket",
         ticketId: input.ticketId,
       });
-      return { ok: true, sessions: sessionListingRows(sessions) };
+      return {
+        ok: true,
+        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+      };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {

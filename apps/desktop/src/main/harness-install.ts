@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 
 import {
   fencedBlockPattern,
-  fencedBodyPattern,
+  fencedBody,
   managedWriteDecision,
   mergeFencedSection,
   type FenceComment,
@@ -200,15 +200,15 @@ function writeManagedSymlink(
   );
 }
 
-function fencedBody(content: string, comment: FenceComment): string | null {
+function hashableFencedBody(content: string, comment: FenceComment): string | null {
   // Tolerance for CRLF and a missing newline adjacent to either marker lives in
-  // the shared pattern (`fencedBodyPattern`): a strict `\n` requirement makes
-  // the body null on Windows-edited or trailing-newline-stripped files, which
+  // the shared extractor (`fencedBody`): a strict `\n` requirement makes the
+  // body null on Windows-edited or trailing-newline-stripped files, which
   // fails the guard open (null → "write" → silent overwrite of user edits).
   // Normalize CRLF→LF so the same logical body hashes identically regardless of
   // the file's line-ending convention.
-  const match = content.match(fencedBodyPattern(comment));
-  return match ? match[1].replace(/\r\n/g, "\n") : null;
+  const body = fencedBody(content, comment);
+  return body === null ? null : body.replace(/\r\n/g, "\n");
 }
 
 async function writeManagedFence(
@@ -218,7 +218,7 @@ async function writeManagedFence(
 ): Promise<void> {
   const comment = action.comment ?? "html";
   const current = (await textAt(action.path)) ?? "";
-  const currentBody = fencedBody(current, comment);
+  const currentBody = hashableFencedBody(current, comment);
   const merged = mergeFencedSection(current, action.content, action.version, comment);
   await applyManagedAction(
     action.path,

@@ -1026,11 +1026,14 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 23,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
-    notes: ["Prints each session's title and short id; session peek takes either type."],
+    notes: [
+      "Prints each session's title and short id; session peek takes either type.",
+      "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+    ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
       { name: "--ticket", kind: "value", placeholder: "<id>", help: "Filter by ticket." },
@@ -1044,7 +1047,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 24,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -1227,7 +1230,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 25,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -1262,7 +1265,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 26,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -1293,7 +1296,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 27,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1353,7 +1356,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 28,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1412,7 +1415,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 29,
+    referenceOrder: 31,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1457,7 +1460,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 28,
+    referenceOrder: 30,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1494,7 +1497,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 29,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1519,7 +1522,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 30,
+    referenceOrder: 32,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -1617,6 +1620,13 @@ export const VERB_REGISTRY = [
     // Tickets itself and starts one Run each, so "one Run, one Session" stays
     // true while a scheduled sweep still covers a board.
     //
+    // The agent Target is a ruled exception (VC-230), not an inference from the
+    // saved Trigger. The scheduler and every person-facing Run door keep
+    // VC-112/VC-130's "the Trigger decides the Target": a schedule targets its
+    // Project. This agent-only door may instead aim one invocation of that same
+    // schedule-trigger Automation at one named Ticket. It does not edit the
+    // Trigger; it gives the orchestrator an explicit Ticket target for this Run.
+    //
     // Appended, never inserted. Declaration order is the canonical tool order,
     // and a Session whose surface was frozen before this verb existed must find
     // every tool it already held exactly where it already was.
@@ -1654,6 +1664,7 @@ export const VERB_REGISTRY = [
       // is answered with the names that do.
       description: [
         "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
+        "This includes an Automation whose Trigger is a schedule: although the schedule itself and person-facing Run doors target the Project, this agent-only invocation is a ruled exception that aims its one Run at the named Ticket without changing the Trigger.",
         "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
         "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
         "It does not move the Ticket, and it does not wait for the work to finish.",
@@ -1671,10 +1682,147 @@ export const VERB_REGISTRY = [
           name: "ticket",
           type: "string",
           required: true,
-          description: "The display id of the Ticket to run it on, for example VC-12.",
+          description:
+            "The display id of the Ticket this agent invocation targets, including for a schedule-trigger Automation, for example VC-12.",
         },
       ],
     },
+    options: [],
+  },
+  {
+    // Supervision half one (VC-86): end another Session's work. Control tier
+    // by the same structural argument as `session.start` — control over other
+    // agents is only safe where the caller's identity is unspoofable, so the
+    // verb is ABSENT from the socket rather than gated on it, and the shell
+    // answers WRONG_DOOR. Appended after `automation.run`, because registry
+    // declaration order is the frozen tool order and inserting earlier would
+    // shift `ticket.await` and `automation.run` inside every already-frozen
+    // surface record.
+    //
+    // `listed: true` is load-bearing exactly as it is for `ticket.archive`:
+    // `volli session stop a1b2c3` must teach its real door, never answer
+    // UNSUPPORTED_COMMAND and send the agent hunting for a workaround.
+    key: "session.stop",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.stop" },
+    listed: true,
+    referenceOrder: 21,
+    group: "Session",
+    summary: "Stop another agent session's work, recording who stopped it.",
+    example: "volli session stop a1b2c3d4",
+    notes: [
+      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.",
+      "The Session identity survives: its history stays openable, and a person can reattach it.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a session.stop command and its stopped event, naming the calling Session as the actor, to the target Session's ledger.",
+        },
+      ],
+      humanVisible: [
+        "The target Session shows Stopped wherever sessions list, with the stop and its actor in its durable history.",
+      ],
+      nonEffects: [
+        "The Session is not archived or deleted, its worktree is untouched, and no Ticket moves.",
+        "No new Session starts, and the stopped Session can be reattached by a person.",
+      ],
+    },
+    tool: {
+      name: "session_stop",
+      // Written for the model, and mostly about restraint: a stop is for work
+      // that is wedged or wrong, not work that is merely slow. The liveness
+      // read is named so the model checks before it kills.
+      description: [
+        "Stop another agent Session in this project: interrupt its open turn, release its executor, and record a durable stopped event naming this Session as the actor.",
+        "Use it on a Session that is wedged or doing the wrong work — check `volli session list` or `volli session peek` first; a long quiet turn can be hard work rather than a hang.",
+        "It is not an undo: work already committed stays. The stopped Session's history remains openable, and a person can reattach it.",
+        "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "session",
+          type: "string",
+          required: true,
+          description: "The target's short session id, as `volli session list` prints it.",
+        },
+        {
+          name: "reason",
+          type: "string",
+          description:
+            "One line of why, recorded on the stopped event for the person who reads it later.",
+        },
+      ],
+    },
+    positionalId: "required",
+    options: [],
+  },
+  {
+    // Supervision half two (VC-86): steer a message into a running Session —
+    // the channel the rc-0.1.0 pass lacked when owner direction ("use the
+    // thinking-orbs library") had no way into a mid-flight implementer.
+    // Control tier with `session.stop` for the same structural reason, and
+    // appended after it for the same frozen-order one.
+    key: "session.send",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.send" },
+    listed: true,
+    referenceOrder: 22,
+    group: "Session",
+    summary: "Steer a message into another running agent session.",
+    example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
+    notes: [
+      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.",
+      "The message arrives marked as supervisor steering from this Session, never as the target's own user.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "Append a message.submit command carrying the marked steering message to the target Session's ledger.",
+        },
+      ],
+      humanVisible: [
+        "The steering message appears in the target Session's transcript, marked with the sending Session.",
+      ],
+      nonEffects: [
+        "It does not wait for the target's turn to finish and nothing reports back into the calling Session.",
+        "No Ticket moves, no Session stops, and no new Session starts.",
+      ],
+    },
+    tool: {
+      name: "session_send",
+      description: [
+        "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
+        "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
+        "The message is delivered marked as steering from this Session; it does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "session",
+          type: "string",
+          required: true,
+          description: "The target's short session id, as `volli session list` prints it.",
+        },
+        {
+          name: "message",
+          type: "string",
+          required: true,
+          description: "The steering direction the target Session reads.",
+        },
+      ],
+    },
+    positionalId: "required",
     options: [],
   },
 ] as const satisfies readonly VerbEntry[];

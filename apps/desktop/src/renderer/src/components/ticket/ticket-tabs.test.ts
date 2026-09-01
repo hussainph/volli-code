@@ -3,9 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { isClosableTicketTab, type TicketTabDescriptor, type TicketTabKind } from "./ticket-tabs";
 
 describe("isClosableTicketTab", () => {
-  it("treats file, diff, and chat tabs as closable like sessions", () => {
-    const kinds: TicketTabKind[] = ["body", "session", "file", "diff", "chat"];
-    expect(kinds.map(isClosableTicketTab)).toEqual([false, true, true, true, true]);
+  it("treats file, diff, chat, and Browser tabs as closable like sessions", () => {
+    const kinds: TicketTabKind[] = ["body", "session", "file", "diff", "chat", "browser"];
+    expect(kinds.map(isClosableTicketTab)).toEqual([false, true, true, true, true, true]);
   });
 
   it("accepts a chat descriptor with a prefixed id and a lifecycle dot", () => {

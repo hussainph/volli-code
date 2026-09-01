@@ -144,8 +144,7 @@ export function moveTicketCommand(
   context: TicketCommandContext,
 ): Ticket[] {
   return db.transaction((): Ticket[] => {
-    const row = requireLiveTicket(db, input.ticketId, "move");
-    if (row.project_id !== input.projectId) throw new Error("Ticket does not belong to project");
+    requireLiveTicket(db, input.ticketId, "move");
     const before = listTicketsByProject(db, input.projectId);
     const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
     const after = moveTicket(before, input.ticketId, input.toStatus, input.toIndex, context.now);

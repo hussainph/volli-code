@@ -61,11 +61,12 @@ import type { VerbToolKey } from "./verb-registry";
 /**
  * The verbs each Role holds with no grant (VC-162).
  *
- * `project` carries the agent-control family, because orchestrating work is
- * what a Project Session is for. `ticket` carries execution verbs — none of
- * the agent-control family: `session.stop`/`session.send` are VC-86's, merge
- * submission is VC-89's, and credential-adjacent git is VC-45's. `subagent`
- * stays empty until VC-9 defines what a Subagent Session is.
+ * `project` carries the agent-control family — start, stop, send (VC-86) —
+ * because orchestrating work is what a Project Session is for. `ticket`
+ * carries execution verbs and none of that family: merge submission is
+ * VC-89's, credential-adjacent git is VC-45's, and a ticket executor that
+ * needs stop over its own children is a VC-44 grant, never a bundle edit.
+ * `subagent` stays empty until VC-9 defines what a Subagent Session is.
  *
  * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
  * it is the default property this map exists to make true. A Ticket Session can
@@ -95,8 +96,18 @@ import type { VerbToolKey } from "./verb-registry";
  * discipline the registry's tier table holds for adding a verb.
  */
 const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> = Object.freeze({
+  // The whole agent-control family travels together (VC-92's pairing rule,
+  // completed by VC-86): a build that shipped stop/send as tools while start
+  // stayed elsewhere — or the reverse — would make the bundle no boundary.
+  // `automation.run` (VC-134) travels with them by the same rule.
+  //
+  // Literal order here is cosmetic: `resolveAgentToolSurface` reorders the
+  // union through `VERB_TOOL_KEYS`, so registry declaration order — not this
+  // array — is what a frozen Cache Prefix records.
   project: Object.freeze([
     "session.start",
+    "session.stop",
+    "session.send",
     "ticket.await",
     "automation.run",
   ]) as readonly VerbToolKey[],

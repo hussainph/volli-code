@@ -20,10 +20,10 @@ export interface TicketSelectionColumn {
 /**
  * Resolves one ticket click into the board's familiar desktop selection model:
  * plain click replaces, Command/Control toggles, Shift selects the visible
- * range, and Command/Control+Shift adds that range. Selection is scoped to the
- * clicked card's column; clicking another column starts a new selection. The
- * anchor survives a successful range selection so repeated Shift-clicks keep
- * extending from the same card.
+ * range, and Command/Control+Shift adds that range. Toggle gestures may span
+ * columns; ranges remain within the anchor's column because board columns do
+ * not form one continuous visual row. The anchor survives a successful range
+ * selection so repeated Shift-clicks keep extending from the same card.
  */
 export function ticketSelectionAfterClick(
   currentIds: readonly string[],
@@ -33,7 +33,6 @@ export function ticketSelectionAfterClick(
   gesture: TicketSelectionGesture,
 ): TicketSelectionResult {
   const columnIds = new Set(column.allIds);
-  const scopedCurrentIds = currentIds.filter((id) => columnIds.has(id));
   const scopedAnchorId = anchorId !== null && columnIds.has(anchorId) ? anchorId : null;
 
   if (gesture.range && scopedAnchorId !== null) {
@@ -45,20 +44,21 @@ export function ticketSelectionAfterClick(
       const range = column.visibleIds.slice(start, end + 1);
       if (!gesture.toggle) return { selectedIds: range, anchorId: scopedAnchorId };
 
-      const combined = new Set([...scopedCurrentIds, ...range]);
-      // Visible ids take board order; any currently-selected filtered-out ids
-      // from this column remain selected and trail in their existing order.
+      const combined = new Set([...currentIds, ...range]);
+      // This column's visible ids take board order. Existing selections outside
+      // it, plus filtered-out ids inside it, remain selected in their existing
+      // order; drag start canonicalizes the final payload to board order.
       const visible = column.visibleIds.filter((id) => combined.has(id));
       const visibleSet = new Set(column.visibleIds);
-      const hidden = scopedCurrentIds.filter((id) => !visibleSet.has(id));
-      return { selectedIds: [...visible, ...hidden], anchorId: scopedAnchorId };
+      const retained = currentIds.filter((id) => !visibleSet.has(id));
+      return { selectedIds: [...visible, ...retained], anchorId: scopedAnchorId };
     }
   }
 
   if (gesture.toggle) {
-    const selectedIds = scopedCurrentIds.includes(clickedId)
-      ? scopedCurrentIds.filter((id) => id !== clickedId)
-      : [...scopedCurrentIds, clickedId];
+    const selectedIds = currentIds.includes(clickedId)
+      ? currentIds.filter((id) => id !== clickedId)
+      : [...currentIds, clickedId];
     return { selectedIds, anchorId: clickedId };
   }
 

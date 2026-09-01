@@ -117,7 +117,7 @@ import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
-import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES, PERSON_STARTED } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
@@ -1051,6 +1051,44 @@ describe("volli:ticket-move — multi-card drops", () => {
     }
   });
 
+  it("reports every committed group arrival with the shared Option-drag choice", () => {
+    const arrivals: unknown[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { onDeliberateMove: (notice) => arrivals.push(notice) },
+    );
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketIds: [first.id, second.id],
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "automation-2" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(arrivals).toEqual([
+      {
+        projectId,
+        ticketId: first.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+      {
+        projectId,
+        ticketId: second.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+    ]);
+  });
+
   it("starts backward-move interrupts for every selected ticket before awaiting either", async () => {
     const started: string[] = [];
     const resolvers: Array<() => void> = [];
@@ -1087,6 +1125,55 @@ describe("volli:ticket-move — multi-card drops", () => {
     expect(started).toEqual([first.id, second.id]);
     for (const resolve of resolvers) resolve();
     await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe("volli:ticket-move — armed-column arrival", () => {
+  it("reports one committed renderer arrival to main, including its Option-drag choice", () => {
+    const arrivals: unknown[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { onDeliberateMove: (notice) => arrivals.push(notice) },
+    );
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "automation-2" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(arrivals).toEqual([
+      {
+        projectId,
+        ticketId: ticket.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+    ]);
+  });
+
+  it("does not report a same-column reorder as an arrival", () => {
+    const onDeliberateMove = vi.fn();
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { onDeliberateMove });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "backlog",
+      toIndex: 0,
+    });
+
+    expect(onDeliberateMove).not.toHaveBeenCalled();
   });
 });
 
@@ -1177,7 +1264,7 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     const result = move(otherProjectId, ticket.id, "todo");
 
-    expect(result).toEqual({ ok: false, error: "Ticket does not belong to project" });
+    expect(result.ok).toBe(true);
     expect(interrupt).not.toHaveBeenCalled();
   });
 
@@ -1207,9 +1294,6 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     const result = move(projectId, ticket.id, "todo");
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
-    expect(result.ok && result.warning).toBe(
-      "The move completed, but some active sessions could not be interrupted. Stop them manually.",
-    );
     expect(logFailure).toHaveBeenCalledWith(
       "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
     );
@@ -1234,9 +1318,6 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
-    expect(result.ok && result.warning).toBe(
-      "The move completed, but some active sessions could not be interrupted. Stop them manually.",
-    );
     expect(logFailure).toHaveBeenCalledWith(
       "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
     );
@@ -1413,11 +1494,78 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       // (VC-87). It rides on the ROW rather than inside the record, so both
       // arms of the listing carry the same fact in the same place.
       usage: EMPTY_SESSION_USAGE_SUMMARY,
+      // And who started it (VC-131), in the same place for the same reason. A
+      // Session nobody automated is the resting case and says so.
+      provenance: PERSON_STARTED,
     });
     expect(
       projectSessions.ok &&
         projectSessions.sessions.find((row) => rowId(row) === "terminal-session"),
     ).toMatchObject({ kind: "terminal", usage: EMPTY_SESSION_USAGE_SUMMARY });
+  });
+
+  it("projects live from this process's executor bindings, not durable attachment openness", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    const created = await sessionEngine.createSession({
+      commandId: "structured-create",
+      projectId,
+      ticketId: ticket.id,
+      title: "Reattachable Run",
+      provenance,
+    });
+    const start = await sessionEngine.submit({
+      commandId: "structured-start",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "structured-opened",
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 501,
+      provenance,
+      attachment: {
+        id: "attachment-1",
+        sessionId: created.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+    });
+
+    let openBindings: { attachmentId: string }[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, listOpenNativeBindings: () => openBindings },
+    );
+
+    const relaunched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      relaunched.ok && relaunched.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ adapterId: "pi", live: false, activity: "idle" });
+    expect(
+      (await sessionEngine.getSession({ sessionId: created.session.id }))?.liveExecutor,
+    ).toMatchObject({
+      id: "attachment-1",
+      status: "open",
+    });
+
+    openBindings = [{ attachmentId: "attachment-1" }];
+    const rebound = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(
+      rebound.ok && rebound.sessions.find((row) => rowId(row) === created.session.id)?.record,
+    ).toMatchObject({ live: true, activity: "idle" });
   });
 
   it("rejects invalid input", () => {

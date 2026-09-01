@@ -62,6 +62,22 @@ describe("describeEvent", () => {
     expect(describeEvent({ kind: "commented", commentId: "c1" })).toBeNull();
   });
 
+  // The one line whose SUBJECT is the news (VC-131): every other sentence here
+  // describes a change to the Ticket, where who made it is chrome. "started a
+  // session" attributed to nobody is exactly the line that cannot tell a Run
+  // from a person sitting down at the keyboard.
+  it("says which of the three parties started a session", () => {
+    const started = { kind: "session_started", sessionId: "session-1" } as const;
+    expect(describeEvent(started, "automation")).toBe("an Automation started a session");
+    expect(describeEvent(started, "session")).toBe("an agent started a session");
+    expect(describeEvent(started, "user")).toBe("started a session");
+    // The absence of evidence reads as the neutral sentence rather than as a
+    // claim about a party: `unauthenticated` names nobody, and neither does a
+    // caller that held only a payload.
+    expect(describeEvent(started, "unauthenticated")).toBe("started a session");
+    expect(describeEvent(started)).toBe("started a session");
+  });
+
   it("reads a verdict back with its reason attached (VC-85)", () => {
     // The detail rides the same line as the verdict. Splitting them is how the
     // `VERDICT:` comment convention read — a stamp somewhere, the reason

@@ -1,9 +1,28 @@
 import type Database from "better-sqlite3";
 import { isAutomationRuntimePin } from "@volli/shared";
-import type { Automation, AutomationRun, PromptResource } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationSkippedOccurrence,
+  ColumnArming,
+  ColumnAutomationOrder,
+  PromptResource,
+  TicketStatus,
+} from "@volli/shared";
 
-import { getAutomation, getAutomationRun } from "../db/automations-repo";
+import {
+  clearColumnArming,
+  getAutomation,
+  getAutomationRun,
+  insertSkippedOccurrence,
+  listColumnArmings,
+  listColumnOrders,
+  setColumnArming,
+  setColumnOrder,
+  triggerColumnValue,
+} from "../db/automations-repo";
 import { prepared } from "../db/prepared";
+import { enabledAutomationIds, putEnabledAutomationIds } from "./enablement";
 import type {
   AutomationCommand,
   AutomationEvent,
@@ -158,13 +177,14 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     prepared(
       this.db,
       `INSERT INTO automations
-        (id, project_id, name, instructions, runtime, row_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        (id, project_id, name, instructions, trigger_spec, runtime, row_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     ).run(
       automation.id,
       automation.projectId,
       automation.name,
       automation.instructions,
+      triggerColumnValue(automation.trigger),
       automation.runtime === null ? null : JSON.stringify(automation.runtime),
       automation.createdAt,
       automation.updatedAt,
@@ -178,11 +198,13 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     const changed = prepared(
       this.db,
       `UPDATE automations
-          SET name = ?, instructions = ?, runtime = ?, row_version = row_version + 1, updated_at = ?
+          SET name = ?, instructions = ?, trigger_spec = ?, runtime = ?,
+              row_version = row_version + 1, updated_at = ?
         WHERE id = ?`,
     ).run(
       automation.name,
       automation.instructions,
+      triggerColumnValue(automation.trigger),
       automation.runtime === null ? null : JSON.stringify(automation.runtime),
       automation.updatedAt,
       automation.id,
@@ -197,6 +219,93 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     );
   }
 
+  /**
+   * The machine-local half of the projection (VC-127). An `app_state` row
+   * rather than a table because it names THIS HOST rather than the record —
+   * `enablement.ts` states why — and it is written here, inside the same
+   * transaction as the event that decided it, so the switch and the history of
+   * the switch commit together or neither does.
+   */
+  enabledAutomationIds(): readonly string[] {
+    return enabledAutomationIds(this.db);
+  }
+
+  putEnabledAutomationIds(ids: readonly string[], recordedAt: number): readonly string[] {
+    return putEnabledAutomationIds(this.db, ids, recordedAt);
+  }
+
+  /**
+   * The other machine-local projection (VC-128), the same shape as the switch
+   * above it: a table rather than an `app_state` row because arming is keyed by
+   * `(project_id, status)` and "a column arms at most one Automation" is then a
+   * schema fact rather than a convention. Read and written here, inside the
+   * transaction that appended the event, so a column's arming and the history
+   * of its arming commit together or neither does.
+   */
+  columnArmings(projectId: string): readonly ColumnArming[] {
+    return listColumnArmings(this.db, projectId);
+  }
+
+  putColumnArming(
+    input: { projectId: string; status: TicketStatus; automationId: string | null },
+    recordedAt: number,
+  ): readonly ColumnArming[] {
+    if (input.automationId === null) {
+      clearColumnArming(this.db, { projectId: input.projectId, status: input.status });
+    } else {
+      setColumnArming(
+        this.db,
+        {
+          projectId: input.projectId,
+          status: input.status,
+          automationId: input.automationId,
+        },
+        recordedAt,
+      );
+    }
+    return listColumnArmings(this.db, input.projectId);
+  }
+
+  /**
+   * The third machine-local projection (VC-132): which Offered Automation reads
+   * as digit `1` in each column. Read and written here, inside the transaction
+   * that appended the event, so a column's order and the history of its order
+   * commit together or neither does — exactly as the arming above it does.
+   */
+  columnOrders(projectId: string): readonly ColumnAutomationOrder[] {
+    return listColumnOrders(this.db, projectId);
+  }
+
+  putColumnOrder(
+    input: { projectId: string; status: TicketStatus; rankedAutomationIds: readonly string[] },
+    recordedAt: number,
+  ): readonly ColumnAutomationOrder[] {
+    setColumnOrder(this.db, input, recordedAt);
+    return listColumnOrders(this.db, input.projectId);
+  }
+
+  /**
+   * The Skipped-occurrence projection (VC-130). Written here, inside the same
+   * transaction as the event that decided it, so a due time that passed and
+   * the history of it having passed commit together or neither does.
+   */
+  insertSkippedOccurrence(skip: AutomationSkippedOccurrence): void {
+    insertSkippedOccurrence(this.db, skip);
+  }
+
+  insertRunSessionMintIntent(input: {
+    automationCommandId: string;
+    sessionCreateCommandId: string;
+    recordedAt: number;
+  }): void {
+    prepared(
+      this.db,
+      `INSERT INTO automation_session_mint_intents
+        (session_create_command_id, automation_command_id, recorded_at)
+       VALUES (?, ?, ?)`,
+    ).run(input.sessionCreateCommandId, input.automationCommandId, input.recordedAt);
+  }
+
   getRun(runId: string): AutomationRun | null {
     return getAutomationRun(this.db, runId) ?? null;
   }
@@ -205,8 +314,8 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
     prepared(
       this.db,
       `INSERT INTO automation_runs
-        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, attendance, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       run.id,
       run.automationId,
@@ -216,6 +325,7 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
       run.model.providerId,
       run.model.modelId,
       run.model.reasoningLevel,
+      run.attendance,
       run.createdAt,
     );
   }

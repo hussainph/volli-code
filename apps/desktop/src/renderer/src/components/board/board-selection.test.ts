@@ -60,10 +60,19 @@ describe("ticketSelectionAfterClick", () => {
     ).toEqual({ selectedIds: ["hidden", "c"], anchorId: "c" });
   });
 
-  it("starts a new selection when the current ids and anchor belong to another column", () => {
+  it("keeps modifier selections from other columns while resetting the range anchor", () => {
     expect(
       ticketSelectionAfterClick(["other"], "c", COLUMN, "other", {
         toggle: true,
+        range: true,
+      }),
+    ).toEqual({ selectedIds: ["other", "c"], anchorId: "c" });
+  });
+
+  it("replaces a cross-column selection on an unmodified Shift-click", () => {
+    expect(
+      ticketSelectionAfterClick(["other"], "c", COLUMN, "other", {
+        toggle: false,
         range: true,
       }),
     ).toEqual({ selectedIds: ["c"], anchorId: "c" });

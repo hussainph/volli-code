@@ -67,13 +67,15 @@ import {
   type ActiveSessionRow,
   type BuildActiveSessionListingInput,
   type PreviousSessionRow,
-  type SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import {
   DEFAULT_SESSION_BAND_FILTER,
+  sessionListingFilter,
+  type SessionBandFilter,
+} from "@renderer/components/sidebar/session-band-filter";
+import {
   SessionBandFilterMenu,
   SessionBandHeader,
-  type SessionBandFilter,
 } from "@renderer/components/sidebar/session-band-header";
 import {
   ActiveBandRow,
@@ -469,10 +471,12 @@ const NEST_RULE = "mx-0 ml-2 gap-1 py-0 pr-0 pl-2";
  */
 function ActiveBand({
   rows,
+  now,
   selectedId,
   onSelect,
 }: {
   rows: readonly ActiveSessionRow[];
+  now: number;
   selectedId: string | null;
   onSelect(id: string): void;
 }) {
@@ -484,6 +488,7 @@ function ActiveBand({
           key={row.id}
           row={row}
           ticketPrefix={project.ticketPrefix}
+          now={now}
           selected={row.id === selectedId}
           onSelect={select}
         />
@@ -612,7 +617,12 @@ function SidebarColumn({
             {listing.active.length === 0 ? (
               <p className="px-2 py-1 text-xs text-muted-foreground">No active sessions</p>
             ) : (
-              <ActiveBand rows={listing.active} selectedId={selectedId} onSelect={onSelect} />
+              <ActiveBand
+                rows={listing.active}
+                now={now}
+                selectedId={selectedId}
+                onSelect={onSelect}
+              />
             )}
           </SidebarGroup>
 
@@ -753,12 +763,7 @@ export default function SidebarNestingScratch() {
     () =>
       buildActiveSessionListing({
         ...loadInput(activeLoad, depth),
-        filter: {
-          kinds: new Set(
-            (["chat", "terminal"] as const).filter((kind) => filter.kinds[kind]),
-          ) satisfies ReadonlySet<SessionRowKind>,
-          showCleaned: filter.showCleaned,
-        },
+        filter: sessionListingFilter(filter),
         now,
       }),
     [activeLoad, depth, filter, now],

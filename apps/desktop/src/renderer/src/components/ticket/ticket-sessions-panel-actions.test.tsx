@@ -34,7 +34,7 @@ describe("TicketSessionsPanel", () => {
 
     expect(html).toContain('aria-label="New chat"');
     expect(buttonTag(html, "New chat")).not.toContain('aria-haspopup="menu"');
-    expect(buttonTag(html, "Other session kinds")).toContain('aria-haspopup="menu"');
+    expect(buttonTag(html, "Other things to open")).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('aria-label="New session"');
   });
 
@@ -51,7 +51,7 @@ describe("TicketSessionsPanel", () => {
     const html = panel(true);
 
     expect(buttonTag(html, "New chat")).toContain('disabled=""');
-    expect(buttonTag(html, "Other session kinds")).toContain('disabled=""');
+    expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
   });
 
   it("says what is missing, once, with the offer already above it", () => {

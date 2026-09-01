@@ -1,6 +1,6 @@
-import { USER_ACTOR } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER, USER_ACTOR } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { createAutomation, recordAutomationRun } from "./automations-repo";
+import { createAutomation, recordAutomationRun, setColumnArming } from "./automations-repo";
 import { createComment } from "./comments-repo";
 import { recordTicketEvent } from "./events-repo";
 import {
@@ -91,6 +91,8 @@ describe("buildExportDocument — empty db", () => {
     expect(document.appState).toEqual([]);
     expect(document.automations).toEqual([]);
     expect(document.automationRuns).toEqual([]);
+    expect(document.automationSessionMintIntents).toEqual([]);
+    expect(document.automationColumnArmings).toEqual([]);
   });
 
   it("schemaVersion tracks the db's own PRAGMA user_version, not a hardcoded constant", async () => {
@@ -204,6 +206,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         name: "Review",
         instructions: "/review go",
+        trigger: NO_AUTOMATION_TRIGGER,
         runtime: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
       },
       70,
@@ -218,6 +221,25 @@ describe("buildExportDocument — populated db", () => {
       },
       71,
     );
+    setColumnArming(
+      ctx.db,
+      { projectId: project.id, status: "doing", automationId: automation.id },
+      72,
+    );
+    ctx.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run(
+        "automation-run-command",
+        JSON.stringify({ kind: "automation.run", plan: { sessionOperationId: "session-mint" } }),
+        73,
+      );
+    ctx.db
+      .prepare(
+        `INSERT INTO automation_session_mint_intents
+           (session_create_command_id, automation_command_id, recorded_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run("session-mint:create", "automation-run-command", 73);
 
     const document = await buildExportDocument(ctx.db, {
       appVersion: "9.9.9",
@@ -407,6 +429,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         name: "Review",
         instructions: "/review go",
+        triggerSpec: null,
         runtime: JSON.stringify({
           providerId: "anthropic",
           modelId: "claude-opus",
@@ -427,6 +450,24 @@ describe("buildExportDocument — populated db", () => {
         modelId: "claude-opus",
         reasoningLevel: "high",
         createdAt: 71,
+      },
+    ]);
+    expect(document.automationSessionMintIntents).toEqual([
+      {
+        sessionCreateCommandId: "session-mint:create",
+        automationCommandId: "automation-run-command",
+        recordedAt: 73,
+      },
+    ]);
+    // Column arming rides along even though it never travels with a PROJECT:
+    // this document is one machine's backup of its own database, and leaving
+    // the rows out would silently lose state somebody set by hand.
+    expect(document.automationColumnArmings).toEqual([
+      {
+        projectId: project.id,
+        status: "doing",
+        automationId: automation.id,
+        armedAt: 72,
       },
     ]);
   });

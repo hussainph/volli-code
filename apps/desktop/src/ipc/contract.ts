@@ -20,6 +20,11 @@ import type {
   AutomationCommandReceipt,
   AutomationRun,
   AutomationRunRefusalCode,
+  AutomationRunTarget,
+  AutomationSkippedOccurrence,
+  AutomationTrigger,
+  ColumnArming,
+  ColumnAutomationOrder,
   BlobLinkView,
   Canvas,
   ChangeSetSnapshot,
@@ -45,7 +50,10 @@ import type {
   LegacyProject,
   ManifestError,
   ModelAccessSignInType,
+  DeliberateMoveChoice,
   ModelSelection,
+  PendingArmedRun,
+  PendingArmedRunFailure,
   Project,
   ProjectThemeOverride,
   PromptTemplate,
@@ -192,6 +200,8 @@ export interface TicketMoveInput {
   ticketId: string;
   toStatus: TicketStatus;
   toIndex: number;
+  /** The Option-drag target, when that gesture supplied this renderer move. */
+  choice?: DeliberateMoveChoice;
 }
 
 /** Multi-card form of `volli:ticket-move`; persisted atomically in one board transaction. */
@@ -201,6 +211,8 @@ export interface TicketMoveManyInput {
   toStatus: TicketStatus;
   /** Destination slot after the selected tickets have been removed. */
   toIndex: number;
+  /** The Option-drag target applied to every Ticket in this deliberate group move. */
+  choice?: DeliberateMoveChoice;
 }
 
 /** `volli:ticket-move` accepts a single card or one selected card group. */
@@ -1402,6 +1414,120 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- Browser Tabs (VC-110) -------------------------------------------------
+
+/**
+ * Provenance main assigns when it creates a Browser Tab. The two values stay
+ * closed because personal and agent-created tabs have different profile and
+ * future grant policy; an arbitrary renderer label could not be trusted.
+ */
+export type BrowserTabCreatedBy = "user" | "session";
+
+/**
+ * Renderer-safe state for one live Browser Tab. Product identity and bounded
+ * browser chrome facts cross IPC; Chromium ids, Session partitions, page
+ * content, cookies, and history entries never do.
+ */
+export interface BrowserTabState {
+  /** Product-owned opaque id — never a positional Chromium tab index. */
+  tabId: string;
+  projectId: string;
+  /** Null for a project-level tab, whether opened by a person or Project Session. */
+  ticketId: string | null;
+  createdBy: BrowserTabCreatedBy;
+  url: string;
+  title: string;
+  loading: boolean;
+  /** Main-frame load failure, cleared when the next navigation starts. */
+  error: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** Monotonic within this tab; a main-frame navigation advances it. */
+  generation: number;
+}
+
+/**
+ * A person's request to open a Browser Tab in one workspace scope. Provenance
+ * is deliberately absent: renderer-originated tabs are always `user`, while a
+ * Session opens its own tabs through the main-process host port.
+ */
+export interface BrowserTabOpenInput {
+  projectId: string;
+  ticketId?: string;
+  url: string;
+}
+
+/** A scoped registry read; omitting `ticketId` lists the whole project. */
+export interface BrowserTabListInput {
+  projectId: string;
+  ticketId?: string;
+}
+
+/** An opaque Browser Tab target shared by operations that carry no other input. */
+export interface BrowserTabIdInput {
+  tabId: string;
+}
+
+/** One address-bar navigation, separate from history-direction commands. */
+export interface BrowserTabNavigateInput extends BrowserTabIdInput {
+  url: string;
+}
+
+/**
+ * The renderer-measured native host plane in BrowserWindow content coordinates.
+ * Main, not renderer, applies it to the WebContentsView.
+ */
+export interface BrowserTabBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One measured host plane paired with the opaque tab it belongs to. */
+export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
+  bounds: BrowserTabBounds;
+}
+
+/** A Browser Tab mutation/read that answers with the current chrome snapshot. */
+export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
+
+/** The scoped Browser Tab registry, containing no page-derived body data. */
+export type BrowserTabListResult = Result<{ tabs: BrowserTabState[] }>;
+
+/**
+ * The Browser workspace's renderer→main command surface. Every native-surface
+ * operation names Volli's opaque tab id; none accepts a Chromium index,
+ * partition name, preload, or WebContents id.
+ */
+export interface VolliBrowserIpcContract {
+  "volli:browser-open": { args: [input: BrowserTabOpenInput]; result: BrowserTabResult };
+  "volli:browser-close": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-list": { args: [input: BrowserTabListInput]; result: BrowserTabListResult };
+  "volli:browser-navigate": {
+    args: [input: BrowserTabNavigateInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-back": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-forward": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-reload": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-set-bounds": { args: [input: BrowserTabSetBoundsInput]; result: Result };
+  "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+}
+
+/** Every Browser workspace invoke channel, derived from its one contract. */
+export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
+
+/**
+ * A complete Browser Tab chrome snapshot pushed whenever URL, title, loading,
+ * history reachability, or generation changes. A full snapshot avoids merging
+ * partial events from different navigations out of order.
+ */
+export type BrowserTabStateEvent =
+  | { tab: BrowserTabState; closedTabId?: never }
+  | { tab?: never; closedTabId: string };
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
@@ -1411,6 +1537,17 @@ export interface AutomationCreateInput {
   projectId: string | null;
   name: string;
   instructions: string;
+  /**
+   * Which columns offer this Automation (VC-128).
+   *
+   * Required, and carried as the union's explicit `{ kind: "none" }` rather
+   * than left off: docs/BOUNDARIES.md rule 3 keeps RPC payloads JSON-safe, and
+   * an optional field says "Nothing else" only on a transport that survives
+   * `undefined` — Electron's structured clone does, JSON does not, so the
+   * spelling that means the default has to be a value. The union already has a
+   * member for it, which is why `none` exists at all.
+   */
+  trigger: AutomationTrigger;
   /** The pinned selection, whole, or `null` to inherit. */
   runtime: ModelSelection | null;
 }
@@ -1422,7 +1559,53 @@ export interface AutomationUpdateInput {
   automationId: string;
   name: string;
   instructions: string;
+  /** Rewritten whole like every other editable field, and present like it too. */
+  trigger: AutomationTrigger;
   runtime: ModelSelection | null;
+}
+
+/**
+ * Arming one column, or disarming it with `automationId: null` (VC-128).
+ *
+ * A `commandId` like every write above it, and for the reason
+ * {@link AutomationSetEnabledInput} states: the PROJECTION this lands in is
+ * machine-local (the `automation_column_arming` table, which never travels with
+ * a project), while the INTENT is an ordinary durable command — arming decides
+ * whether work starts without a person, and docs/BOUNDARIES.md rule 5 governs
+ * exactly that. A retry repeats the same command and replays its receipt rather
+ * than arming twice.
+ */
+export interface AutomationArmInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  automationId: string | null;
+}
+
+/**
+ * Arranging one column's Offered list — which Automation reads as digit `1`
+ * when a card is dragged over it (VC-132).
+ *
+ * A `commandId` like every write above it, for the reason {@link AutomationArmInput}
+ * states: the PROJECTION is machine-local (`automation_column_order`, which
+ * never travels with a project), while the INTENT is an ordinary durable
+ * command — the rank decides which Automation a release aims at.
+ *
+ * The whole list travels, never a moved id and an index: a JSON transport
+ * carries an array perfectly well, and "the new order" is a value the caller
+ * already holds, while a pair of indices would be a second spelling of the same
+ * arrangement that main would have to re-derive against a list it cannot see.
+ * An EMPTY list is "never arranged", which is a value rather than an absent
+ * field (docs/BOUNDARIES.md rule 3).
+ */
+export interface AutomationSetColumnOrderInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  projectId: string;
+  status: TicketStatus;
+  /** Automation ids, best rank first. Ids the column no longer offers are inert. */
+  rankedAutomationIds: string[];
 }
 
 export interface AutomationIdInput {
@@ -1431,12 +1614,91 @@ export interface AutomationIdInput {
   automationId: string;
 }
 
+/**
+ * One Run request: which Ticket, what it runs, and what it runs it on.
+ *
+ * `target` is the union rather than a nullable `automationId` beside nullable
+ * Instructions, so an Unbound Run (VC-129) is a Run this shape can spell and a
+ * Run that is somehow both, or neither, is one it cannot. Both fields are
+ * REQUIRED and explicitly nullable where they can be absent — an optional
+ * property admits `undefined`, which the Electron transport carries and an HTTP
+ * one would mangle (docs/BOUNDARIES.md rule 3).
+ */
 export interface AutomationRunInput {
   /** Caller-minted UUID: a transport retry repeats this exact command. */
   commandId: string;
-  automationId: string;
+  /** The saved Automation to run, or an Unbound Run's own Instructions. */
+  target: AutomationRunTarget;
   ticketId: string;
+  /**
+   * The Runtime THIS invocation runs on, or `null` to resolve the ordinary way
+   * — the Automation's own pin, then the project's preferences, then the global
+   * record (VC-112). A per-invocation override is never stored: the Run records
+   * the model it RESOLVED, which is the only durable evidence either way.
+   */
+  modelOverride: ModelSelection | null;
 }
+
+/**
+ * Running an Automation against a PROJECT rather than a Ticket (VC-130).
+ *
+ * Its own input and its own channel rather than a nullable `ticketId` on the
+ * one above: the two are different Targets with different Session Roles, and a
+ * nullable field on the wire would let a caller ask for a Project Session by
+ * FORGETTING something. docs/BOUNDARIES.md rule 3 wants the shape to say what
+ * it means, so the shape that means "the Project" names a project.
+ *
+ * The renderer reaches it from a Skipped occurrence's "Run now" — a schedule
+ * that did not fire, started by hand, at the Target it would have used.
+ */
+export interface AutomationRunForProjectInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  projectId: string;
+}
+
+/**
+ * Turning one Automation on or off ON THIS MACHINE (VC-127).
+ *
+ * Enablement is deliberately NOT a field on the {@link Automation} record.
+ * VC-112 puts the shareable half of an Automation in git as a Skill and keeps
+ * the record local; enablement is one step more local still — the same tier as
+ * a column's arming, which that ruling also declares per machine. So its
+ * PROJECTION lives in `app_state`, beside the global runtime-preferences record
+ * that ruling cites, and a project cannot carry it anywhere.
+ *
+ * The INTENT is an ordinary durable command all the same, hence the
+ * `commandId`: docs/BOUNDARIES.md rule 5 governs new domain surfaces, and a
+ * switch that decides whether an Automation fires is one. A retry repeats the
+ * same command and replays its receipt rather than flipping anything twice.
+ *
+ * It governs what starts an Automation BESIDES a person. Running by hand is
+ * universal (VC-112), so an Automation that is off is still runnable from
+ * every surface that lists it — it simply never fires on its own.
+ */
+export interface AutomationSetEnabledInput {
+  /** Caller-minted UUID: a transport retry repeats this exact command. */
+  commandId: string;
+  automationId: string;
+  enabled: boolean;
+}
+
+/**
+ * The ENABLED set, whole, rather than one automation's boolean.
+ *
+ * Whole, so a caller never reconstructs what it now believes from what it just
+ * asked for. Enabled rather than disabled, because VC-112 rules that a machine
+ * fires nothing until someone turns something on there: absent has to mean
+ * off, and a disabled-set shape cannot tell "never asked here" from "on".
+ */
+export type AutomationEnablementResult = Result<{ enabledAutomationIds: string[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetEnabledResult = Result<{
+  enabledAutomationIds: string[];
+  receipt: AutomationCommandReceipt;
+}>;
 
 export type AutomationsResult = Result<{ automations: Automation[] }>;
 export type AutomationResult = Result<{
@@ -1445,6 +1707,25 @@ export type AutomationResult = Result<{
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
+/** Every armed column in the project — the whole truth, so a caller reconstructs nothing. */
+export type AutomationArmingsResult = Result<{ armings: ColumnArming[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationArmResult = Result<{
+  armings: ColumnArming[];
+  receipt: AutomationCommandReceipt;
+}>;
+
+/** Every arranged column in the project — whole, so a caller reconstructs nothing. */
+export type AutomationColumnOrdersResult = Result<{ orders: ColumnAutomationOrder[] }>;
+
+/** The same set, plus the receipt for the command that changed it. */
+export type AutomationSetColumnOrderResult = Result<{
+  orders: ColumnAutomationOrder[];
+  receipt: AutomationCommandReceipt;
+}>;
 
 /**
  * A run's answer: the durable Run (holding the fresh Session's id and the
@@ -1463,6 +1744,36 @@ export type AutomationRunStartResult =
       receipt?: AutomationCommandReceipt;
     };
 
+/** Main's complete countdown and retained-failure projection. */
+export type PendingArmedRunsResult = Result<{
+  pending: PendingArmedRun[];
+  failures: PendingArmedRunFailure[];
+}>;
+
+/** Cancel identifies one exact arrival, never whichever later move shares its Ticket. */
+export interface PendingArmedRunCancelInput {
+  id: string;
+}
+
+export type PendingArmedRunCancelResult = Result<{ cancelled: boolean }>;
+
+/** Retry also names the exact move; main supplies its retained command id. */
+export interface PendingArmedRunRetryInput {
+  id: string;
+}
+
+export type PendingArmedRunRetryResult = Result<{ retrying: boolean }>;
+
+/** What main learned after removing an expired countdown from the pending projection. */
+export type PendingArmedRunSettledNotice =
+  | { kind: "attempted"; pending: PendingArmedRun; result: AutomationRunStartResult }
+  | { kind: "failed"; pending: PendingArmedRun; error: string }
+  | {
+      kind: "abandoned";
+      pending: PendingArmedRun;
+      reason: "gone" | "left-column" | "disarmed" | "switched-off";
+    };
+
 /**
  * The Automations planning surface (VC-126): the record's CRUD plus the one
  * Run door. Same stance as the rest of the planning data — typed channels,
@@ -1478,12 +1789,83 @@ export interface VolliAutomationIpcContract {
   "volli:automation-update": { args: [input: AutomationUpdateInput]; result: AutomationResult };
   /** A record delete — Runs retain their Automation id/name snapshot. */
   "volli:automation-delete": { args: [input: AutomationIdInput]; result: AutomationDeleteResult };
-  /** Runs an Automation by hand on a Ticket: one fresh chat Session, one Run row. */
+  /**
+   * Runs one Automation — or one Unbound Run's own Instructions (VC-129) — by
+   * hand on a Ticket: one fresh chat Session, one Run row, either way.
+   */
   "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
   /** A Ticket's Runs, newest first. */
   "volli:automation-runs-for-ticket": {
     args: [input: TicketIdInput];
     result: AutomationRunsResult;
+  };
+  /** One project's armed columns — machine-local, never listed with the record. */
+  "volli:automation-arming-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationArmingsResult;
+  };
+  /** Arms one column with one offered Automation, or disarms it. */
+  "volli:automation-arm": { args: [input: AutomationArmInput]; result: AutomationArmResult };
+  /** One project's arranged columns — machine-local, like the arming beside it. */
+  "volli:automation-column-order-list": {
+    args: [input: ProjectIdInput];
+    result: AutomationColumnOrdersResult;
+  };
+  /** Arranges one column's Offered list, and answers with the project's whole new set. */
+  "volli:automation-set-column-order": {
+    args: [input: AutomationSetColumnOrderInput];
+    result: AutomationSetColumnOrderResult;
+  };
+  /**
+   * Every Run in this project, newest first — the Automations page's Run
+   * history (VC-127). Scoped through each Run's own durable evidence (the
+   * Session it opened, which names the project) rather than through the
+   * Automation: a global Automation is listable everywhere, but a Run it
+   * produced happened in ONE project.
+   */
+  "volli:automation-runs-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationRunsResult;
+  };
+  /** Which Automations are switched on on this machine. */
+  "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
+  /** Switches one Automation on or off here, and answers with the whole new set. */
+  "volli:automation-set-enabled": {
+    args: [input: AutomationSetEnabledInput];
+    result: AutomationSetEnabledResult;
+  };
+  /** Main's whole durable pending-countdown projection, for a new renderer window. */
+  "volli:automation-pending-armed-runs": { args: []; result: PendingArmedRunsResult };
+  /** Cancels one exact pending arrival; idempotent when it already settled or was replaced. */
+  "volli:automation-cancel-pending-armed-run": {
+    args: [input: PendingArmedRunCancelInput];
+    result: PendingArmedRunCancelResult;
+  };
+  /** Retries one expired arrival with the Run command id main retained for it. */
+  "volli:automation-retry-pending-armed-run": {
+    args: [input: PendingArmedRunRetryInput];
+    result: PendingArmedRunRetryResult;
+  };
+  /**
+   * Every due time this project's schedules missed, newest first (VC-130).
+   *
+   * A read of its own beside `volli:automation-runs-for-project`, because a
+   * skip and a Run are different records with different actions — a Run opens
+   * its Session, a skip offers to start one. The page interleaves them by time;
+   * merging them on the wire would need a discriminant nothing else wants.
+   */
+  "volli:automation-skips-for-project": {
+    args: [input: ProjectIdInput];
+    result: AutomationSkipsResult;
+  };
+  /**
+   * Runs an Automation against the PROJECT: one fresh Project Session, one Run
+   * row naming no Ticket. The schedule's own Target, reachable by hand so a
+   * Skipped occurrence is recoverable (VC-112).
+   */
+  "volli:automation-run-for-project": {
+    args: [input: AutomationRunForProjectInput];
+    result: AutomationRunStartResult;
   };
 }
 
@@ -1685,6 +2067,7 @@ export interface VolliInvokeContract
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
+    VolliBrowserIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
@@ -1705,11 +2088,17 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  | "volli:browser-tab-state"
   | "volli:terminal-data"
   | "volli:terminal-exit"
   | "volli:terminal-park-state"
   | "volli:ghostty-config-changed"
   | "volli:data-changed"
+  // Main owns one durable armed-column countdown projection. Every window
+  // receives the same whole snapshot, and settlement is announced separately
+  // so renderer surfaces can react without owning the timer that decided it.
+  | "volli:pending-armed-runs-changed"
+  | "volli:pending-armed-run-settled"
   // Backward-move interrupt announcement (issue #78, CONCEPT #20): fired after
   // a ticket move out of the active columns actually Esc'd live agent sessions,
   // so every window can surface the automated de-escalation where the mover is
@@ -1851,6 +2240,23 @@ export interface DataChangedEvent {
   projectId?: string;
   /** Advisory hint at what changed — never the basis of a reader's refire decision. */
   kind?: DataChangeKind;
+}
+
+/**
+ * A committed Deliberate move as main's armed-arrival coordinator receives it.
+ *
+ * Both move doors report through this one shape after persistence: renderer IPC
+ * may carry the Option-drag choice, while an explicit `volli ticket move`
+ * carries no choice. Same-column no-ops are never reported because they are not
+ * arrivals.
+ */
+export interface TicketMovedNotice {
+  projectId: string;
+  ticketId: string;
+  /** The column it left — the fact a post-commit re-read cannot recover. */
+  from: TicketStatus;
+  to: TicketStatus;
+  choice?: DeliberateMoveChoice;
 }
 
 /**
@@ -2091,7 +2497,7 @@ export type ProjectMutationResult = Result;
 export type TicketResult = Result<{ ticket: Ticket }>;
 
 /** The full authoritative project ticket list — returned by `ticket-move`, which reorders many rows. */
-export type TicketsResult = Result<{ tickets: Ticket[]; warning?: string }>;
+export type TicketsResult = Result<{ tickets: Ticket[] }>;
 
 /**
  * A project's archived tickets, newest-archived first — returned by

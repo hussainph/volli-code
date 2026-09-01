@@ -341,27 +341,24 @@ describe("moveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
-  it("keeps the committed move and surfaces a post-commit session warning", async () => {
-    const a = ticket({ id: "a", status: "doing", order: 0 });
-    const authoritative = [{ ...a, status: "todo" as const }];
-    const warning =
-      "The move completed, but some active sessions could not be interrupted. Stop them manually.";
-    const gateway = fakeGateway({
-      moveTicket: vi.fn<BoardGateway["moveTicket"]>(async () => ({
-        ok: true,
-        tickets: authoritative,
-        warning,
-      })),
-    });
+  it("carries what the ⌥ picker named through the committed move door", async () => {
+    // Main owns classification and the countdown, so the choice travels on the
+    // move request instead of opening a renderer-local observer afterward.
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const gateway = fakeGateway();
     const store = createBoardStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
-    await store.getState().moveTicket("p1", "a", "todo", 0);
+    await store
+      .getState()
+      .moveTicket("p1", "a", "doing", 0, { kind: "automation", automationId: "auto-2" });
 
-    expect(store.getState().ticketsByProject.p1).toBe(authoritative);
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(warning, {
-      duration: 8000,
-      closeButton: true,
+    expect(gateway.moveTicket).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "auto-2" },
     });
   });
 
@@ -502,6 +499,27 @@ describe("moveTickets", () => {
       toIndex: 0,
     });
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
+  });
+
+  it("carries one Option-drag choice for every Ticket in the group", async () => {
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const b = ticket({ id: "b", status: "backlog", order: 1 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a, b] }, {});
+
+    await store.getState().moveTickets("p1", ["a", "b"], "doing", 0, {
+      kind: "automation",
+      automationId: "auto-2",
+    });
+
+    expect(gateway.moveTickets).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketIds: ["a", "b"],
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "auto-2" },
+    });
   });
 
   it("is a no-op for an unknown group on an unhydrated project", async () => {
