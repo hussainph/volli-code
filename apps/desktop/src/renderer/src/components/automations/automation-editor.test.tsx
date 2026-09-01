@@ -133,7 +133,7 @@ describe("the schedule time field", () => {
       buttonContaining("On a schedule").click();
     });
     await act(async () => {
-      buttonContaining("hour").click();
+      buttonContaining("Hourly").click();
     });
 
     const minute = document.querySelector(
@@ -141,6 +141,45 @@ describe("the schedule time field", () => {
     ) as HTMLInputElement;
     expect(minute.type).toBe("number");
     expect(minute.classList.contains("tabular-nums")).toBe(true);
+  });
+});
+
+describe("schedule wording", () => {
+  it("names each cadence plainly and gives Weekly one visible day choice", async () => {
+    await mountEditor();
+    await act(async () => {
+      buttonContaining("On a schedule").click();
+    });
+
+    for (const cadence of ["Hourly", "Every day", "Mon–Fri", "Weekly"]) {
+      expect(buttonContaining(cadence)).toBeTruthy();
+    }
+    await act(async () => {
+      buttonContaining("Weekly").click();
+    });
+
+    const weekday = document.querySelector('[aria-label="Day of the week"]');
+    const scheduleRow = document.querySelector('[aria-label="Schedule"]')?.parentElement;
+    expect(weekday?.textContent).toContain("Monday");
+    expect(scheduleRow?.parentElement?.textContent).toContain("onMondayat09:00");
+    // The weekday is one compact dropdown, not another seven-segment strip.
+    expect(document.querySelector('[aria-label="Day of the week"] [aria-pressed]')).toBeNull();
+  });
+
+  it("spells the hourly offset as minutes past the hour", async () => {
+    await mountEditor();
+    await act(async () => {
+      buttonContaining("On a schedule").click();
+    });
+    await act(async () => {
+      buttonContaining("Hourly").click();
+    });
+
+    const minute = document.querySelector(
+      '[aria-label="Minutes past the hour"]',
+    ) as HTMLInputElement;
+    expect(minute.value).toBe("00");
+    expect(minute.parentElement?.parentElement?.textContent).toContain(":past the hour");
   });
 });
 

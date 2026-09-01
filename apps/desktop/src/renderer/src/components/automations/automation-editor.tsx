@@ -78,6 +78,13 @@ import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@renderer/components/ui/select";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
@@ -103,17 +110,17 @@ type TriggerChoice = "none" | "columns" | "schedule";
 const DEFAULT_SCHEDULE_HOUR = 9;
 const DEFAULT_SCHEDULE_WEEKDAY: ScheduleWeekday = "monday";
 
-/** The preset control's own words, finishing the sentence "Every …". */
+/** Cadence names that stand on their own before the row's specific grammar. */
 const SCHEDULE_PRESET_OPTIONS: readonly { key: AutomationSchedulePreset; label: string }[] = [
-  { key: "hourly", label: "hour" },
-  { key: "daily", label: "day" },
-  { key: "weekdays", label: "weekday" },
-  { key: "weekly", label: "week" },
+  { key: "hourly", label: "Hourly" },
+  { key: "daily", label: "Every day" },
+  { key: "weekdays", label: "Mon–Fri" },
+  { key: "weekly", label: "Weekly" },
 ];
 
-/** Three letters each: seven segments have to fit beside the rest of the sentence. */
+/** Full names: the weekly dropdown has room to say which day it means. */
 const WEEKDAY_OPTIONS: readonly { key: ScheduleWeekday; label: string }[] = SCHEDULE_WEEKDAYS.map(
-  (weekday) => ({ key: weekday, label: `${weekday[0]!.toUpperCase()}${weekday.slice(1, 3)}` }),
+  (weekday) => ({ key: weekday, label: `${weekday[0]!.toUpperCase()}${weekday.slice(1)}` }),
 );
 
 function twoDigits(value: number): string {
@@ -442,8 +449,8 @@ function AutomationEditorForm({
               on their own row rather than beside the segmented pill, so the
               choice of ANSWER and the choice of COLUMNS are not one
               undifferentiated strip of five-plus chips. The schedule's own row
-              (VC-130) sits in the same place for the same reason, and reads as
-              the sentence VC-112 names: "Every [day] at [21:00] [zone]". */}
+              (VC-130) sits in the same place for the same reason, and gives
+              each cadence enough grammar to read without decoding it. */}
           <div className="flex flex-col gap-2">
             <Segmented<TriggerChoice>
               ariaLabel="Trigger"
@@ -459,43 +466,62 @@ function AutomationEditorForm({
             />
             {triggerChoice === "schedule" ? (
               <div className="flex flex-wrap items-center gap-2">
-                {/* The connecting words are the row's grammar, not copy under a
-                    control: VC-112 asks for one row that reads as a sentence,
-                    and "Every" / "at" are what make the controls a sentence
-                    rather than a form. */}
-                <span className="text-ui text-muted-foreground">Every</span>
                 <Segmented<AutomationSchedulePreset>
                   ariaLabel="Schedule"
                   value={preset}
                   options={SCHEDULE_PRESET_OPTIONS}
                   onChange={setPreset}
                 />
-                {preset === "weekly" ? (
-                  <Segmented<ScheduleWeekday>
-                    ariaLabel="Day of the week"
-                    value={weekday}
-                    options={WEEKDAY_OPTIONS}
-                    onChange={setWeekday}
-                  />
-                ) : null}
-                <span className="text-ui text-muted-foreground">at</span>
                 {preset === "hourly" ? (
-                  // An hourly schedule has no hour to state — only the minute
-                  // past each one. A time field here would ask for an hour the
-                  // record cannot hold.
-                  <ScheduleNumberInput
-                    value={minute}
-                    max={59}
-                    ariaLabel="Minutes past the hour"
-                    onChange={setMinute}
-                  />
+                  <>
+                    {/* An hourly schedule has no hour to state — only the
+                        minute past each one. A time field here would ask for an
+                        hour the record cannot hold. */}
+                    <span className="text-ui text-muted-foreground">at</span>
+                    <span className="flex items-center gap-1">
+                      <span className="text-ui text-muted-foreground">:</span>
+                      <ScheduleNumberInput
+                        value={minute}
+                        max={59}
+                        ariaLabel="Minutes past the hour"
+                        onChange={setMinute}
+                      />
+                    </span>
+                    <span className="text-ui text-muted-foreground">past the hour</span>
+                  </>
                 ) : (
-                  <TimeField
-                    hour={hour}
-                    minute={minute}
-                    onHourChange={setHour}
-                    onMinuteChange={setMinute}
-                  />
+                  <>
+                    {preset === "weekly" ? (
+                      <>
+                        <span className="text-ui text-muted-foreground">on</span>
+                        <Select
+                          value={weekday}
+                          onValueChange={(value) => {
+                            const next = SCHEDULE_WEEKDAYS.find((day) => day === value);
+                            if (next !== undefined) setWeekday(next);
+                          }}
+                        >
+                          <SelectTrigger size="sm" aria-label="Day of the week" className="px-2">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {WEEKDAY_OPTIONS.map((option) => (
+                              <SelectItem key={option.key} value={option.key}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </>
+                    ) : null}
+                    <span className="text-ui text-muted-foreground">at</span>
+                    <TimeField
+                      hour={hour}
+                      minute={minute}
+                      onHourChange={setHour}
+                      onMinuteChange={setMinute}
+                    />
+                  </>
                 )}
                 <TimeZonePicker value={timeZone} onChange={setTimeZone} />
               </div>
