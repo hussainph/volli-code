@@ -126,12 +126,16 @@ not a decision anyone can defend or repeat.
 | `/70` | strongly present but still transparent — secondary hovers, muted ink |
 | `/90` | the one rung above: a fill declaring itself *slightly* translucent (`hover:bg-primary/90`). Not a wash, and not on the wash ladder |
 
-Two things are deliberately not on this ladder. The focus ring is `ring-ring/45` — one recipe,
-spelled in `ui/button.tsx` and recorded in `ui/field-classes.ts`. And the overlay wash is
+Three things are deliberately not on this ladder. The focus ring is `ring-ring/45` — one recipe,
+spelled in `ui/button.tsx` and recorded in `ui/field-classes.ts`. The overlay wash is
 **`--scrim`**, a generated token rather than a modifier: it is the shadow tiers' own ink (the
 canvas's hue at the mode's shadow lightness) at 30% in light and 50% in dark, so a dialog dims the
 window in the window's own color instead of the `bg-black/N` that turned a warm gradient to dirt.
-Use `bg-scrim`; never hand-roll an overlay wash.
+Use `bg-scrim`; never hand-roll an overlay wash. And the split-view drop preview's ring is
+`ring-primary/40` (`split/split-drop-zones.tsx`, one site): it must read above its own `/10` fill
+mid-drag, where `/30` disappears on a busy canvas, yet stay under the focused pane's `/50` ring —
+a prospective result may not outrank the pane actually in context, and at `/50` the two would be
+the same ring saying two different things.
 
 ## Type scale — five steps
 
