@@ -329,6 +329,20 @@ export interface SessionRuntimeSnapshot extends SessionRuntimeProjectionSnapshot
   transcript: readonly SessionTranscriptArtifact[];
 }
 
+/**
+ * A host-observed message delivery failure that the adapter command path could
+ * not express as Session state on its own.
+ *
+ * The command id is the durable message intent's identity. Re-reporting the
+ * same failed intent therefore updates one Attention instead of accumulating a
+ * fresh error on every recovery sweep.
+ */
+export interface SessionMessageDeliveryFailure {
+  sessionId: string;
+  commandId: string;
+  detail: string;
+}
+
 export interface SessionRuntime {
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult>;
   snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot>;
@@ -367,6 +381,15 @@ export interface OpenNativeBinding {
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
 export interface HostedSessionRuntime extends SessionRuntime {
+  /**
+   * Make a message refusal that happened after attach durable and visible.
+   *
+   * This is deliberately a host-only report rather than a client command. A
+   * product workflow such as an Automation Run decides that an unobserved
+   * delivery refusal is fatal; an ordinary chat client still receives and
+   * handles its own command receipt without being allowed to mint Attentions.
+   */
+  reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void>;
   /**
    * Every native binding this process currently holds open.
    *
@@ -605,6 +628,48 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: spec.attachmentId,
       lastProgressAt,
     }));
+  }
+
+  async reportMessageDeliveryFailure(input: SessionMessageDeliveryFailure): Promise<void> {
+    this.#assertOpen();
+    const projection = await this.#requireSession(input.sessionId);
+    this.#assertOpen();
+    const attachment = projection.liveExecutor;
+    const adapter =
+      attachment === null ? this.ports.executor : this.#adapterIdentityFor(attachment.adapterId);
+    const attentionId = messageDeliveryFailureAttentionId(
+      input.sessionId,
+      adapter.id,
+      input.commandId,
+    );
+    const existing = projection.attention.active.find(({ id }) => id === attentionId);
+    if (
+      existing?.kind === "adapter_unrecoverable" &&
+      existing.attachmentId === null &&
+      existing.detail === input.detail
+    ) {
+      return;
+    }
+    const attention = await this.ports.engine.observe({
+      id: this.#id("event"),
+      sessionId: input.sessionId,
+      occurredAt: this.ports.clock.now(),
+      provenance: adapterProvenance(adapter, attachment?.venue ?? null),
+      kind: "attention.raised",
+      attention: {
+        id: attentionId,
+        // The delivery intent outlives the binding that happened to refuse it.
+        // Keep the failure on the Session so an attachment closing in the same
+        // instant cannot erase (or reject) the only account of the empty Run.
+        // A later successful fresh attach retires this kind through the same
+        // path as VC-220's attach failures.
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: input.detail,
+        diagnostic: null,
+      },
+    });
+    await this.#publish([attention]);
   }
 
   command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -2912,7 +2977,7 @@ function userProvenance(venue: SessionExecutionVenue | null): SessionEventProven
 
 function adapterProvenance(
   adapter: AdapterIdentity,
-  venue: SessionExecutionVenue,
+  venue: SessionExecutionVenue | null,
 ): SessionEventProvenance {
   return {
     source: {
@@ -3023,6 +3088,15 @@ function freshAttachAttentionId(
   return ["attach", sessionId, adapterId, FROZEN_ATTACH_ATTENTION_PROFILE_SEGMENT, kind]
     .map(encodeURIComponent)
     .join(":");
+}
+
+/** One durable failure marker per first-message command, across every replay. */
+function messageDeliveryFailureAttentionId(
+  sessionId: string,
+  adapterId: string,
+  commandId: string,
+): string {
+  return ["message-delivery", sessionId, adapterId, commandId].map(encodeURIComponent).join(":");
 }
 
 function nativeObservationId(

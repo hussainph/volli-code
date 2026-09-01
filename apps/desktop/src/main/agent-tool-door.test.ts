@@ -474,6 +474,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     },
     promptSupply: async () => ({ templates: [], skills: [] }),
     deliverInstructions: async () => undefined,
+    reportInstructionDeliveryFailure: async () => undefined,
     readSessionActivity: async () => activity,
     log: () => undefined,
   });

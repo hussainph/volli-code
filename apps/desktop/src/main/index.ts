@@ -1916,6 +1916,8 @@ app.whenReady().then(async () => {
                 },
               },
             }),
+          reportInstructionDeliveryFailure: (input) =>
+            sessionRuntime.reportMessageDeliveryFailure(input),
           // Projection failures deliberately propagate: the runner fails the
           // single-flight guard closed instead of treating unknown as idle.
           readSessionActivity: async (sessionId) => {

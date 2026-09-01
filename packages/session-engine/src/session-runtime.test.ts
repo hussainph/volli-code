@@ -20,6 +20,7 @@ import {
   SessionRuntimeNotFoundError,
   type BindingHandle,
   type HarnessCommand,
+  type HostedSessionRuntime,
   type NativeHarnessAdapter,
   type ObservationSink,
   type SessionEngine,
@@ -191,7 +192,7 @@ function composition(
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
   } = {},
-): { runtime: SessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
+): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
   const clock = options.clock ?? { now: () => now++ };
   const engine =
@@ -1297,6 +1298,34 @@ describe("SessionRuntime native adapter contract", () => {
         command: { kind: "adapter.attach", continuity: "fresh" },
       }),
     ).resolves.toMatchObject({ receipt: { detail: "socket disappeared" } });
+  });
+
+  it("records a host-observed post-attach message failure as Session error Attention", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+    // Recovery can revisit one pending Automation intent repeatedly. Its stable
+    // message command id updates one Attention rather than stacking errors.
+    await runtime.reportMessageDeliveryFailure({
+      sessionId,
+      commandId: "automation-kickoff-message",
+      detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+    });
+
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active).toMatchObject([
+      {
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
+      },
+    ]);
+    expect(sessionPersonNeed(projection)).toBe("error");
   });
 
   it("retires an unrecoverable attach Attention once an attach succeeds", async () => {
