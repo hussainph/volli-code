@@ -321,7 +321,7 @@ function AutomationRowItem({
         leading={<LightningIcon className="size-4 text-muted-foreground" />}
         primary={automation.name}
         secondary={
-          <span className="flex min-w-0 items-center gap-1">
+          <span className="flex min-w-0 items-center gap-1 text-ui">
             {/* The record's own Trigger, not a constant: a row whose Trigger
                 names columns says so, because this is the page that authors
                 the field. */}
@@ -611,7 +611,7 @@ function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
       leading={<ClockCounterClockwiseIcon className="size-4 text-muted-foreground" />}
       primary={skip.automationName}
       secondary={
-        <span className="flex min-w-0 items-center gap-1">
+        <span className="flex min-w-0 items-center gap-1 text-ui">
           <span className="truncate">{skipReasonLabel(skip)}</span>
           {count === "" ? null : (
             <>
@@ -675,7 +675,7 @@ function RunRow({
       leading={<LightningIcon className="size-4 text-muted-foreground" />}
       primary={runAutomationLabel(run)}
       secondary={
-        <span className="flex min-w-0 items-center gap-1" title={runModelTitle(run)}>
+        <span className="flex min-w-0 items-center gap-1 text-ui" title={runModelTitle(run)}>
           {ticketNumber === undefined ? null : (
             <>
               <span className="shrink-0 font-mono text-label">

@@ -178,6 +178,12 @@ function text(): string {
   return container?.textContent ?? "";
 }
 
+function hasUiText(needle: string): boolean {
+  return [...document.querySelectorAll(".text-ui")].some((candidate) =>
+    candidate.textContent?.includes(needle),
+  );
+}
+
 function button(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
@@ -266,6 +272,7 @@ describe("the page", () => {
 
     expect(text()).toContain("Only when I run it");
     expect(text()).toContain("Default model");
+    expect(hasUiText("Only when I run it")).toBe(true);
   });
 
   it("prints a column Trigger's own columns rather than claiming manual-only", async () => {
@@ -401,6 +408,7 @@ describe("run history", () => {
 
     expect(text()).toContain("Review sweep");
     expect(text()).toContain("claude-opus · high");
+    expect(hasUiText("claude-opus · high")).toBe(true);
   });
 
   it("keeps the order main answered with — newest first", async () => {
@@ -698,6 +706,7 @@ describe("schedules (VC-130)", () => {
 
     // Fifty missed occurrences, one Run: a missed occurrence is never replayed
     // (VC-112), and this is the by-hand recovery offered instead.
+    expect(hasUiText("Skipped")).toBe(true);
     expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAutomationForProject)).toHaveBeenCalledWith({
       automationId: "automation-1",
