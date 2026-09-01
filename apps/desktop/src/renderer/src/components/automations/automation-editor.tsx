@@ -76,6 +76,7 @@ import {
 } from "@renderer/components/ui/dialog";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
@@ -117,6 +118,92 @@ const WEEKDAY_OPTIONS: readonly { key: ScheduleWeekday; label: string }[] = SCHE
 
 function twoDigits(value: number): string {
   return value.toString().padStart(2, "0");
+}
+
+/** One schedule number, keyboard-typeable and arrow-adjustable. */
+function ScheduleNumberInput({
+  value,
+  max,
+  ariaLabel,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  ariaLabel: string;
+  onChange(value: number): void;
+}) {
+  return (
+    <Input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      max={max}
+      aria-label={ariaLabel}
+      value={twoDigits(value)}
+      className="h-6 w-14 px-2 text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => {
+        const next = Number(event.currentTarget.value);
+        // A schedule always holds a real integer. A half-typed or out-of-range
+        // value leaves the last valid one in place rather than entering the
+        // record as a repair main has to guess at later.
+        if (Number.isInteger(next) && next >= 0 && next <= max) onChange(next);
+      }}
+    />
+  );
+}
+
+/** A token-themed replacement for the platform's native time picker. */
+function TimeField({
+  hour,
+  minute,
+  onHourChange,
+  onMinuteChange,
+}: {
+  hour: number;
+  minute: number;
+  onHourChange(hour: number): void;
+  onMinuteChange(minute: number): void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Time"
+          className="min-w-20 shrink-0 tabular-nums"
+        >
+          {twoDigits(hour)}:{twoDigits(minute)}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-auto p-2">
+        <div className="flex items-end gap-2">
+          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+            Hour
+            <ScheduleNumberInput
+              value={hour}
+              max={23}
+              ariaLabel="Hour"
+              onChange={onHourChange}
+            />
+          </label>
+          <span aria-hidden className="h-6 text-ui leading-6 text-muted-foreground">
+            :
+          </span>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground uppercase">
+            Minute
+            <ScheduleNumberInput
+              value={minute}
+              max={59}
+              ariaLabel="Minute"
+              onChange={onMinuteChange}
+            />
+          </label>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /**
@@ -396,32 +483,18 @@ function AutomationEditorForm({
                   // An hourly schedule has no hour to state — only the minute
                   // past each one. A time field here would ask for an hour the
                   // record cannot hold.
-                  <Input
-                    type="number"
-                    min={0}
-                    max={59}
-                    aria-label="Minutes past the hour"
-                    className="w-20"
+                  <ScheduleNumberInput
                     value={minute}
-                    onChange={(event) => {
-                      const next = Number(event.currentTarget.value);
-                      // An out-of-range or half-typed value changes nothing:
-                      // the record stores a real minute or the previous one.
-                      if (Number.isInteger(next) && next >= 0 && next <= 59) setMinute(next);
-                    }}
+                    max={59}
+                    ariaLabel="Minutes past the hour"
+                    onChange={setMinute}
                   />
                 ) : (
-                  <Input
-                    type="time"
-                    aria-label="Time"
-                    className="w-28"
-                    value={`${twoDigits(hour)}:${twoDigits(minute)}`}
-                    onChange={(event) => {
-                      const [nextHour, nextMinute] = event.currentTarget.value.split(":");
-                      if (nextHour === undefined || nextMinute === undefined) return;
-                      setHour(Number(nextHour));
-                      setMinute(Number(nextMinute));
-                    }}
+                  <TimeField
+                    hour={hour}
+                    minute={minute}
+                    onHourChange={setHour}
+                    onMinuteChange={setMinute}
                   />
                 )}
                 <TimeZonePicker value={timeZone} onChange={setTimeZone} />

@@ -45,6 +45,14 @@ async function mountEditor(): Promise<void> {
   });
 }
 
+function buttonContaining(label: string): HTMLButtonElement {
+  const found = [...document.querySelectorAll("button")].find((candidate) =>
+    candidate.textContent?.includes(label),
+  );
+  if (found === undefined) throw new Error(`no button containing ${label}`);
+  return found;
+}
+
 async function typeInstructions(value: string): Promise<void> {
   const box = document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement;
   const setter = Object.getOwnPropertyDescriptor(
@@ -86,6 +94,54 @@ afterEach(async () => {
   container = null;
   useAutomationsStore.setState({ editor: null });
   vi.unstubAllGlobals();
+});
+
+describe("the schedule time field", () => {
+  it("uses a content-sized themed trigger and editable numeric parts", async () => {
+    await mountEditor();
+    await act(async () => {
+      buttonContaining("On a schedule").click();
+    });
+
+    const trigger = document.querySelector('[aria-label="Time"]') as HTMLButtonElement;
+    expect(trigger.textContent).toBe("09:00");
+    expect(trigger.classList.contains("min-w-20")).toBe(true);
+    expect(trigger.classList.contains("tabular-nums")).toBe(true);
+    expect(document.querySelector('input[type="time"]')).toBeNull();
+
+    await act(async () => {
+      trigger.click();
+    });
+    const hour = document.querySelector('[aria-label="Hour"]') as HTMLInputElement;
+    const minute = document.querySelector('[aria-label="Minute"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(hour, "17");
+      hour.dispatchEvent(new Event("input", { bubbles: true }));
+      setter?.call(minute, "45");
+      minute.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(trigger.textContent).toBe("17:45");
+    expect(hour.classList.contains("tabular-nums")).toBe(true);
+    expect(minute.classList.contains("tabular-nums")).toBe(true);
+  });
+
+  it("gives hourly minutes the same themed numeric treatment", async () => {
+    await mountEditor();
+    await act(async () => {
+      buttonContaining("On a schedule").click();
+    });
+    await act(async () => {
+      buttonContaining("hour").click();
+    });
+
+    const minute = document.querySelector(
+      '[aria-label="Minutes past the hour"]',
+    ) as HTMLInputElement;
+    expect(minute.type).toBe("number");
+    expect(minute.classList.contains("tabular-nums")).toBe(true);
+  });
 });
 
 describe("the Instructions picker", () => {
