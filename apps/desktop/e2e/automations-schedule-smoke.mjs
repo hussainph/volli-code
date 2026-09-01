@@ -281,7 +281,7 @@ try {
   await must(7, "the skip is visible in the Run history, and says so", async () => {
     await openAutomationsPage();
     await page.locator("[data-automation-rail-row]").filter({ hasText: "Nightly sweep" }).click();
-    const editor = page.locator('[data-slot="automation-editor"]');
+    const editor = page.locator('[data-slot="automation-editor"]:visible');
     const skipped = editor.getByText("Skipped \u2014 Volli wasn\u2019t running");
     await skipped.scrollIntoViewIfNeeded();
     await skipped.waitFor({ timeout: 15000 });
