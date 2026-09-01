@@ -5,8 +5,8 @@ import { openTestDb, type TestDb } from "../db/test-helpers";
 import {
   advanceScheduleCursor,
   AUTOMATION_SCHEDULE_CURSORS_KEY,
-  clearScheduleCursor,
   readScheduleCursors,
+  rebaseScheduleCursor,
 } from "./schedule-cursor";
 
 let ctx: TestDb;
@@ -81,17 +81,22 @@ describe("advanceScheduleCursor", () => {
   });
 });
 
-describe("clearScheduleCursor", () => {
-  it("forgets one lifecycle and leaves every other schedule alone", () => {
-    advanceScheduleCursor(ctx.db, { automationId: "a1", through: 1_000 }, 5);
+describe("rebaseScheduleCursor", () => {
+  it("starts one new lifecycle and leaves every other schedule alone", () => {
+    advanceScheduleCursor(ctx.db, { automationId: "a1", through: 3_000 }, 5);
     advanceScheduleCursor(ctx.db, { automationId: "a2", through: 2_000 }, 5);
 
-    expect(clearScheduleCursor(ctx.db, "a1", 6)).toEqual({ a2: 2_000 });
-    expect(readScheduleCursors(ctx.db)).toEqual({ a2: 2_000 });
+    expect(rebaseScheduleCursor(ctx.db, { automationId: "a1", through: 1_000 }, 6)).toEqual({
+      a1: 1_000,
+      a2: 2_000,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({ a1: 1_000, a2: 2_000 });
   });
 
-  it("does not manufacture an initial baseline for an unseen schedule", () => {
-    expect(clearScheduleCursor(ctx.db, "a1", 6)).toEqual({});
-    expect(getAppState(ctx.db, AUTOMATION_SCHEDULE_CURSORS_KEY)).toBeUndefined();
+  it("durably establishes the baseline before a scheduler has seen the schedule", () => {
+    expect(rebaseScheduleCursor(ctx.db, { automationId: "a1", through: 1_000 }, 6)).toEqual({
+      a1: 1_000,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({ a1: 1_000 });
   });
 });
