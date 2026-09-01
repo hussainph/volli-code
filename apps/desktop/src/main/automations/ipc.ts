@@ -130,11 +130,10 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
           error: "The Session runtime is not available this launch.",
         };
       }
-      // ATTENDED for the same reason as the Ticket door above: the only caller
-      // of this CHANNEL is "Run now" on a Skipped occurrence, which is a person
-      // recovering an evening the app was closed for. The schedule timer runs
-      // the same Automation through the same runner method, but it does not
-      // come through IPC — it is inside main, and it passes `unattended`.
+      // ATTENDED for the same reason as the Ticket door above: every IPC caller
+      // is a person — Skipped-occurrence Run now, scheduled-page Play, or the
+      // palette. The schedule timer uses the same runner method inside main,
+      // bypasses IPC, and passes `unattended`.
       return deps.runner.runForProject({ ...input, attendance: "attended" });
     },
   };

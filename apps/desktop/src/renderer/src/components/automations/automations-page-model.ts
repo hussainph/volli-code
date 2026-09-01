@@ -28,6 +28,7 @@ import {
   isTicketStatus,
   scheduleSentence,
   TICKET_STATUS_LABELS,
+  UNBOUND_RUN_LABEL,
 } from "@volli/shared";
 import type {
   Automation,
@@ -156,7 +157,7 @@ export function runModelTitle(run: Pick<AutomationRun, "model">): string {
 export function runAutomationLabel(
   run: Pick<AutomationRun, "automationId" | "automationName">,
 ): string {
-  return run.automationName ?? "Run once";
+  return run.automationName ?? UNBOUND_RUN_LABEL;
 }
 
 /**

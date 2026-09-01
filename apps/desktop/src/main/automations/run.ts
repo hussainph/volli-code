@@ -69,7 +69,7 @@ interface ResolvedRunScope {
 }
 
 /** What the Session runtime answers after attempting the persistent message intent. */
-export type InstructionDeliveryResult = void | {
+export type InstructionDeliveryResult = {
   receipt?: {
     status: "accepted" | "completed" | "rejected" | "unreconciled";
     code?: string;
@@ -255,7 +255,7 @@ interface InstructionDeliveryFailure {
 
 /** The failure state and sentence a non-successful first-message result carries. */
 function instructionDeliveryFailure(
-  result: Exclude<InstructionDeliveryResult, void>,
+  result: InstructionDeliveryResult,
 ): InstructionDeliveryFailure | null {
   const receipt = result.receipt;
   if (receipt === undefined || receipt === null) {
@@ -398,19 +398,16 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       return;
     }
 
-    // Legacy test/host seams return void; a real Session runtime names a
-    // receipt. Only an accepted/completed receipt proves the intent reached
-    // the Session, so a rejected/unreconciled one remains pending for its
+    // Only an accepted/completed receipt proves the intent reached the
+    // Session, so a missing/rejected/unreconciled one remains pending for its
     // existing recovery path rather than being falsely marked delivered.
-    if (result !== undefined) {
-      const failure = instructionDeliveryFailure(result);
-      if (failure !== null) {
-        await reportDeliveryFailure(delivery, failure.detail);
-        log(
-          `[volli] automation Run ${delivery.runId} first-message receipt is ${failure.status}; retaining its delivery intent`,
-        );
-        return;
-      }
+    const failure = instructionDeliveryFailure(result);
+    if (failure !== null) {
+      await reportDeliveryFailure(delivery, failure.detail);
+      log(
+        `[volli] automation Run ${delivery.runId} first-message receipt is ${failure.status}; retaining its delivery intent`,
+      );
+      return;
     }
 
     try {
