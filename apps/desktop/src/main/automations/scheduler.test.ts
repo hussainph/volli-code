@@ -64,7 +64,7 @@ interface Harness {
   delays: number[];
   setNow(at: number): void;
   setEnabled(automationIds: readonly string[]): void;
-  /** Forgets the prior lifecycle exactly as an enable or schedule edit does. */
+  /** Starts a lifecycle now exactly as an enable or schedule edit does. */
   rebaseCursor(automationId: string): void;
   /** Runs whatever the timer is waiting for, as if the delay elapsed. */
   fire(): Promise<void>;
@@ -134,7 +134,7 @@ function harness(options: {
       enabled = [...automationIds];
     },
     rebaseCursor: (automationId) => {
-      delete cursors[automationId];
+      cursors[automationId] = now;
     },
     fire: async () => {
       const fireTimer = pending;
@@ -529,8 +529,8 @@ describe("the pass as a whole", () => {
     h.setNow(reenabledAt);
 
     // With the stale cursor, the first occurrence would be recorded as a skip
-    // and the second replayed inside grace. Enabling retires that lifecycle
-    // before refreshing, so first sight begins at this pass's `now` instead.
+    // and the second replayed inside grace. Enabling starts a new lifecycle at
+    // its command time before refreshing, so the disabled gap is not owed.
     h.rebaseCursor("a1");
     h.setEnabled(["a1"]);
     await h.scheduler.refresh();

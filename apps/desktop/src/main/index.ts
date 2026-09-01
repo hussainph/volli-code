@@ -131,8 +131,8 @@ import { createAutomationScheduler } from "./automations/scheduler";
 import type { AutomationScheduler } from "./automations/scheduler";
 import {
   advanceScheduleCursor,
-  clearScheduleCursor,
   readScheduleCursors,
+  rebaseScheduleCursor,
 } from "./automations/schedule-cursor";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
@@ -1169,11 +1169,11 @@ app.whenReady().then(async () => {
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
           onMutation: (change) => broadcastDataChanged(change),
-          // Enabling or changing the schedule clears the old lifecycle first:
-          // the next pass sees first sight and begins at its own `now`, owing
-          // nothing from the disabled interval or the schedule it replaced.
-          rebaseScheduleCursor: (automationId) => {
-            clearScheduleCursor(sessionDb, automationId, Date.now());
+          // Create, enable, and schedule-changing commands establish the new
+          // lifecycle before the scheduler's asynchronous refresh. Relaunch
+          // can therefore still account for a due time missed in that gap.
+          rebaseScheduleCursor: (automationId, through) => {
+            rebaseScheduleCursor(sessionDb, { automationId, through }, Date.now());
           },
           // Every record write can add, retime or remove a schedule, and the
           // enabled switch decides whether one may fire here at all — so the
