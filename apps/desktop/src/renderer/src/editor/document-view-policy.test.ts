@@ -156,6 +156,8 @@ describe("the repository's own markdown", () => {
     ]);
   });
 
+  // The same corpus projection as the sweep below, and likewise slower when
+  // coverage instrumentation shares the machine with the full renderer suite.
   it("conceals 13k spans across the corpus, and that is what is sampled below", () => {
     const spans = files
       .map(read)
@@ -166,7 +168,7 @@ describe("the repository's own markdown", () => {
         0,
       );
     expect(spans).toBeGreaterThan(10_000);
-  });
+  }, 30_000);
 
   it("hides nothing in an accepted file that the caret cannot bring back", () => {
     // SAMPLED, deliberately: the property is per-span and the corpus holds
