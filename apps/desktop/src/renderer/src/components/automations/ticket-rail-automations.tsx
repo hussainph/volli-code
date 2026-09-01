@@ -389,7 +389,7 @@ function TicketRuns({ projectId, runs }: { projectId: string; runs: readonly Aut
             secondary={
               // The RESOLVED model this Session was born with, printed from the
               // Run's own row rather than re-labelled through today's catalogue.
-              <span className="truncate" title={runModelTitle(run)}>
+              <span className="block truncate text-ui" title={runModelTitle(run)}>
                 {runModelLabel(run)}
               </span>
             }

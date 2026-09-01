@@ -154,6 +154,12 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
+function hasUiText(needle: string): boolean {
+  return [...document.querySelectorAll(".text-ui")].some((candidate) =>
+    candidate.textContent?.includes(needle),
+  );
+}
+
 function control(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
@@ -518,6 +524,11 @@ describe("this Ticket's Runs", () => {
     });
 
     expect(text()).toContain("claude-opus · high");
+    expect(hasUiText("claude-opus · high")).toBe(true);
+    const runtimeLine = [...document.querySelectorAll(".text-ui")].find((candidate) =>
+      candidate.textContent?.includes("claude-opus · high"),
+    );
+    expect(runtimeLine?.classList.contains("block")).toBe(true);
     expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
   });
 
