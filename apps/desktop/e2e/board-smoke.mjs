@@ -231,11 +231,35 @@ async function volliLocalStorageKeys(page) {
 
 /** Drag from `sourceBox`'s centre to `target`, with enough travel for dnd-kit's PointerSensor (distance 4) to activate and dragOver to fire on the target. */
 async function drag(page, sourceBox, target) {
+  const boardView = (await page.locator("[data-board-column]").count()) > 0;
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await page.mouse.down();
   await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
+  if (boardView) {
+    await page.waitForFunction(
+      () => {
+        const board = document.querySelector("[data-board-drag]");
+        return board !== null && board.getAttribute("data-board-drag") !== null;
+      },
+      null,
+      { timeout: 5_000 },
+    );
+  }
   await page.mouse.move(target.x, target.y, { steps: 20 });
-  await sleep(250);
+  if (boardView) {
+    // Group cards stay in their source slots while the detached overlay moves,
+    // so there is no preview DOM to poll. The board exposes its resolved
+    // destination specifically so a loaded CI runner is never released before
+    // React has committed the final drag-over.
+    await page.waitForFunction(
+      () => {
+        const board = document.querySelector("[data-board-drag]");
+        return board !== null && board.getAttribute("data-board-drop-status") !== null;
+      },
+      null,
+      { timeout: 5_000 },
+    );
+  }
   await page.mouse.up();
   await waitForDragSettled(page);
 }
