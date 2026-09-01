@@ -319,7 +319,7 @@ describe("the page", () => {
     await mount({});
 
     expect(text()).toContain("New Automation");
-    expect(text()).toContain("No automations");
+    expect(text()).toContain("Nothing saved yet");
     expect(text()).toContain("Nothing has run in this project yet.");
   });
 

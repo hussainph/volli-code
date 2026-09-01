@@ -526,7 +526,7 @@ function EmptyAutomations({ onCreate, history }: { onCreate(): void; history?: R
         <div className="flex max-w-sm flex-col items-center gap-4 text-center">
           <LightningIcon className="size-5 text-muted-foreground" />
           <div>
-            <h2 className="text-heading font-semibold">No automations</h2>
+            <h2 className="text-heading font-semibold">Nothing saved yet</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Save a way of starting work, then run it by hand or give it a Trigger.
             </p>
