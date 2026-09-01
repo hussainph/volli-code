@@ -2,9 +2,9 @@
  * The column-header bolt (VC-112, "Surfaces"): arm this column, or disarm it.
  *
  * The menu offers exactly this column's **Offered list** — the Automations
- * whose Trigger names it — plus `Nothing`. That is the whole vocabulary, and
- * the order matters: offering is a property of the record and arming is a
- * property of the column, so a column can only ever fire something it already
+ * whose Trigger names it — plus `No Automation`. That is the whole
+ * vocabulary, and the order matters: offering is a property of the record and
+ * arming is a property of the column, so a column can only ever fire something it already
  * offers. When the list is empty the menu says so and hands over the way to
  * change it, rather than showing an armed-looking control with nothing behind
  * it.
@@ -63,7 +63,7 @@ import {
 } from "@renderer/stores/automations";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-/** The `Nothing` row's value. Not an empty string: a radio group needs a real token. */
+/** The `No Automation` row's value. Not an empty string: a radio group needs a real token. */
 const DISARMED = "none";
 
 export function ColumnArmingButton({
@@ -154,7 +154,7 @@ export function ColumnArmingButton({
               });
             }}
           >
-            <DropdownMenuRadioItem value={DISARMED}>Nothing</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value={DISARMED}>No Automation</DropdownMenuRadioItem>
             {offered.map((automation) => (
               <DropdownMenuRadioItem key={automation.id} value={automation.id}>
                 {automation.name}

@@ -467,6 +467,18 @@ describe("the lane view", () => {
     expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
   });
 
+  it("calls the disarmed choice No Automation", async () => {
+    await mount({ automations: [doingOnly] });
+
+    await act(async () => {
+      button("Arm Doing").dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+      );
+    });
+
+    expect(document.body.textContent).toContain("No Automation");
+  });
+
   it("puts a SCHEDULE record in that lane too, rather than claiming every automation has a column", async () => {
     // A schedule fires on a clock, so no column offers it and no digit means
     // anything for it — exactly the off-board case. Filtering for the "Nothing
