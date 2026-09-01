@@ -162,13 +162,10 @@ let armings: ColumnArming[] = [];
 let orders: ColumnAutomationOrder[] = [];
 
 export function seed(): void {
-  records = SEEDED_AUTOMATIONS.map((automation) => ({ ...automation }));
+  records = [...SEEDED_AUTOMATIONS];
   enabledIds = ["automation-review", "automation-implement", "automation-standards"];
-  armings = ARMINGS.map((arming) => ({ ...arming }));
-  orders = ORDERS.map((order) => ({
-    ...order,
-    rankedAutomationIds: [...order.rankedAutomationIds],
-  }));
+  armings = [...ARMINGS];
+  orders = [...ORDERS];
   useProjectsStore.setState({ projects: [project], selectedProjectId: project.id });
   useBoardStore.setState({ ticketsByProject: { [project.id]: tickets } });
   useAutomationsStore.setState({
