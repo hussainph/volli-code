@@ -23,7 +23,6 @@
  * with `openai-codex` credentials); NOT wired into `vp test`.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import { makeShortScratch } from "./lib/agent-kit.mjs";
@@ -34,6 +33,7 @@ import {
   cardById,
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   goToBoard,
   launch,
   makeGitRepo,
@@ -92,7 +92,7 @@ const { attempt, summarize } = createRunner();
  */
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-cli-chat-mode-evidence");
+const EVIDENCE_DIR = await evidenceDir("cli-chat-mode");
 
 async function captureFailureEvidence(page, mainOut, mainErr, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});

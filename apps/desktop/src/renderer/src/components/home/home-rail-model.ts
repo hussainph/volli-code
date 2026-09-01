@@ -51,7 +51,7 @@ export interface HomeSessionRow {
   id: string;
   kind: "chat" | "terminal";
   title: string;
-  /** Liveness, in the app's one dot vocabulary. */
+  /** Activity, in the app's one dot vocabulary. */
   state: StatusDotState;
   /** Newest fact about the Session — what its age is measured from. */
   at: number;
@@ -117,11 +117,11 @@ export function homeSessionRows(
   return rows.toSorted((left, right) => right.at - left.at);
 }
 
-/** A chat row's dot: waiting outranks working, exactly as it does on a tab. */
+/** A chat row's dot: waiting outranks working; between turns is simply idle. */
 function chatState(row: ChatSessionRecord): StatusDotState {
   if (row.activity === "waiting") return "waiting";
   if (row.activity === "working") return "working";
-  return row.live ? "ready" : "idle";
+  return "idle";
 }
 
 /**

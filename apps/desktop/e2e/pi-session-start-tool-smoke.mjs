@@ -56,12 +56,12 @@
  * `~/.pi/agent/auth.json`); NOT wired into `vp test`.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import {
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   goToBoard,
   launch,
   makeGitRepo,
@@ -100,7 +100,7 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-session-
 const fakeHome = join(scratch, "home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-session-start-evidence");
+const EVIDENCE_DIR = await evidenceDir("pi-session-start");
 
 async function captureFailureEvidence(page, mainOut, mainErr, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});

@@ -18,7 +18,7 @@
     "@volli/shared": "workspace:*"
   },
   "devDependencies": {
-    "ai": "^7.0.60",
+    "ai": "^7.0.83",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

@@ -790,6 +790,62 @@ describe("agent command service", () => {
     expect(notifications).toEqual([{ title: "VC-1 → Doing", message: "Moved via VC-2's session" }]);
   });
 
+  describe("ticket.move is a Deliberate move (VC-128)", () => {
+    /** A service whose Deliberate-move seam records what it was told. */
+    function serviceWithDeliberateMoves() {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      let id = 0;
+      let timestamp = 100;
+      const moves: unknown[] = [];
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "1.2.3",
+        now: () => timestamp++,
+        newId: () => `ticket-${++id}`,
+        onDeliberateMove: (notice) => moves.push(notice),
+      });
+      const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+      return { exec, moves };
+    }
+
+    it("announces the columns it left and entered, which a re-read cannot recover", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+      await exec("ticket.create", { title: "T", status: "todo" });
+
+      await exec("ticket.move", { id: "VC-1", to: "doing" });
+
+      // CONTEXT.md: an explicit `volli ticket move` is a Deliberate move with
+      // the same semantics as a drag, so an armed destination column must be
+      // able to tell this was an ARRIVAL — which needs the previous status.
+      expect(moves).toEqual([
+        { projectId: "project-one", ticketId: "ticket-1", from: "todo", to: "doing" },
+      ]);
+    });
+
+    it("says nothing about a same-column move, because nothing arrived", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+      await exec("ticket.create", { title: "T", status: "doing" });
+
+      const moved = await exec("ticket.move", { id: "VC-1", to: "doing" });
+
+      expect((moved as { ok: boolean }).ok).toBe(true);
+      expect(moves).toEqual([]);
+    });
+
+    it("says nothing about a move it refused", async () => {
+      const { exec, moves } = serviceWithDeliberateMoves();
+
+      await exec("ticket.move", { id: "VC-404", to: "doing" });
+
+      expect(moves).toEqual([]);
+    });
+  });
+
   describe("ticket.move backward-move interrupt (issue #78)", () => {
     /** Builds a service whose interrupt seam records its calls and returns `ids`. */
     function serviceWithInterrupt(ids: string[]) {

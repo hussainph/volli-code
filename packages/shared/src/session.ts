@@ -40,6 +40,7 @@
 
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
+import type { SessionProvenance } from "./session-provenance";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
@@ -208,8 +209,17 @@ export interface ChatSessionRecord {
  * {@link EMPTY_SESSION_USAGE_SUMMARY}, which reads as unmeasured rather than as
  * free, and that distinction is the reason it is a summary here and not a
  * nullable dollar amount.
+ *
+ * `provenance` rides here for exactly the same reason, and VC-112 states it as
+ * a rule rather than a preference: who started a Session is a property of the
+ * SESSION, so it cannot live inside one attachment's record and be invisible
+ * from the other. Every row carries one; {@link PERSON_STARTED} is the resting
+ * answer and draws nothing.
  */
-export type SessionListingRow = SessionListingIdentity & { usage: SessionUsageSummary };
+export type SessionListingRow = SessionListingIdentity & {
+  usage: SessionUsageSummary;
+  provenance: SessionProvenance;
+};
 
 /**
  * The identity half of a listing row: which kind of Session, and its record.

@@ -639,6 +639,119 @@ describe("Sessions", () => {
       ).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
       expect(commands).toEqual([]);
     });
+
+    /* ------------------------------- whenUnavailable: "record" (VC-133) --- */
+
+    it("records an unavailable pin rather than refusing it, when asked to", async () => {
+      // VC-112's Runtime clause, and the door an Automation Run comes through:
+      // "a pinned model that has since become unavailable does not silently
+      // fall back — let the Session fail through the existing error path." So
+      // the Session EXISTS, carrying the model it was told to carry, and the
+      // attach is what refuses it (`configuration_invalid`, which is `error`).
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const created = await overrideSessions(commands).create({
+        ...startInput("operation-retired-pin"),
+        modelOverride: {
+          model: { providerId: "acme", modelId: "retired" },
+          reasoningLevel: "medium",
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(created.model).toEqual({
+        providerId: "acme",
+        modelId: "retired",
+        reasoningLevel: "medium",
+      });
+      // Durably, in the Session's own history — so the failure a person opens
+      // names the model that caused it instead of an empty policy.
+      expect(commands.map((request) => request.command.kind)).toEqual([
+        "session.create",
+        "model.select",
+      ]);
+      expect(commands[1]).toMatchObject({
+        command: {
+          kind: "model.select",
+          selection: { providerId: "acme", modelId: "retired", reasoningLevel: "medium" },
+        },
+      });
+    });
+
+    it("records a level the model does not advertise rather than second-guessing it", async () => {
+      // Same clause, the other half of a pin: a model that still exists but has
+      // dropped the level this record pinned. One door, one answer — splitting
+      // it would put half the failures in a toast and half in the Session.
+      const commands: SessionRuntimeCommandRequest[] = [];
+      const created = await overrideSessions(commands).create({
+        ...startInput("operation-retired-level"),
+        modelOverride: {
+          model: { providerId: "anthropic", modelId: "claude-opus" },
+          reasoningLevel: "xhigh",
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(created.model).toEqual({
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "xhigh",
+      });
+    });
+
+    it("never inspects Model Access at all for a recorded override", async () => {
+      // Not merely tolerant of an unavailable answer: it does not ask. That is
+      // what lets a Run start while the provider is unreachable, and what keeps
+      // this arm free of a second availability policy that could drift.
+      let inspections = 0;
+      const { sessions: door } = sessions({
+        inspectModelAccess: async () => {
+          inspections += 1;
+          return access;
+        },
+      });
+
+      await door.create({
+        ...startInput("operation-unasked"),
+        modelOverride: {
+          model: { providerId: "acme", modelId: "retired" },
+          whenUnavailable: "record",
+        },
+      });
+
+      expect(inspections).toBe(0);
+    });
+
+    it("still refuses a recorded override that names no model at all", async () => {
+      // "Record it as asked" is not "invent one". A reasoning level with no
+      // model and no default is unanswerable, and it refuses before anything
+      // durable exists exactly as it always did.
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: () => null,
+        inspectModelAccess: async () => access,
+      });
+
+      await expect(
+        door.create({
+          ...startInput("operation-record-no-model"),
+          modelOverride: { reasoningLevel: "high", whenUnavailable: "record" },
+        }),
+      ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
+      expect(commands).toEqual([]);
+    });
+
+    it("keeps validation for every door that does not ask to record", async () => {
+      // The default, and it is the human doors: a person who just picked a
+      // model in a picker gets the immediate answer, with nothing started and
+      // nothing to clean up.
+      const commands: SessionRuntimeCommandRequest[] = [];
+      await expect(
+        overrideSessions(commands).create({
+          ...startInput("operation-still-refuses"),
+          modelOverride: { model: { providerId: "acme", modelId: "retired" } },
+        }),
+      ).rejects.toMatchObject({ code: "MODEL_UNAVAILABLE" });
+      expect(commands).toEqual([]);
+    });
   });
 
   it("refuses a ticket outside the requested project before creating a Session", async () => {

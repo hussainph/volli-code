@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
   HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
   type CreateSessionHarnessStateInput,
@@ -1165,6 +1166,7 @@ const RECORD: SessionListingRow = {
     bornTicketless: false,
   },
   usage: EMPTY_SESSION_USAGE_SUMMARY,
+  provenance: PERSON_STARTED,
 };
 
 describe("announceHarness / subscribeSessionHarness", () => {
@@ -1262,6 +1264,7 @@ describe("announceHarness / subscribeSessionHarness", () => {
             kind: "terminal",
             record: { ...RECORD.record, activeHarnessId: "claude-code" },
             usage: EMPTY_SESSION_USAGE_SUMMARY,
+            provenance: PERSON_STARTED,
           },
         ],
       },

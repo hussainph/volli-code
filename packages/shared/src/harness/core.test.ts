@@ -12,7 +12,7 @@ import {
   buildHarnessInstallPlan,
   CANONICAL_SKILL_FILES,
   fencedBlockPattern,
-  fencedBodyPattern,
+  fencedBody,
   harnessAdapters,
   harnessBaselineActions,
   managedWriteDecision,
@@ -51,6 +51,26 @@ describe("mergeFencedSection", () => {
     });
   });
 
+  it("appends to a file of blank lines in milliseconds", () => {
+    // `/\n+$/`, the trailing-newline trim this replaced, was the one genuinely
+    // quadratic regex CodeQL flagged (js/polynomial-redos): 23 seconds on 80k
+    // blank lines followed by any real character.
+    const blankHeavy = `${"\n".repeat(100_000)}# My rules\n`;
+    const started = performance.now();
+    expect(mergeFencedSection(blankHeavy, "Use Volli.", 1).content).toBe(
+      `${"\n".repeat(100_000)}# My rules\n\n<!-- volli:begin v=1 -->\nUse Volli.\n<!-- volli:end -->\n`,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("trims only the trailing `\\n` run, leaving a lone `\\r` in place", () => {
+    // What `/\n+$/` matched, exactly: the run of `\n` at the very end. A `\r`
+    // stops it, so a CRLF file keeps its last `\r`.
+    expect(mergeFencedSection("# My rules\r\n\r\n", "Use Volli.", 1).content).toBe(
+      "# My rules\r\n\r\n\n<!-- volli:begin v=1 -->\nUse Volli.\n<!-- volli:end -->\n",
+    );
+  });
+
   it("inserts a managed body containing $& / $$ verbatim", () => {
     const body = "Cost is $$5 and $& stays literal.";
     const appended = mergeFencedSection("# rules\n", body, 1);
@@ -83,14 +103,57 @@ describe("fence patterns", () => {
   it("recognizes the same block the merge writes, in both comment styles", () => {
     const html = mergeFencedSection("", "body", 3).content;
     expect(html.match(fencedBlockPattern())?.[0]).toContain("body");
-    expect(html.match(fencedBodyPattern())?.[1]).toBe("body");
+    expect(fencedBody(html)).toBe("body");
 
     const hash = mergeFencedSection("", "body", 3, "hash").content;
     expect(hash.match(fencedBlockPattern("hash"))?.[0]).toContain("body");
-    expect(hash.match(fencedBodyPattern("hash"))?.[1]).toBe("body");
+    expect(fencedBody(hash, "hash")).toBe("body");
 
     // Cross-style: a zsh profile block must be invisible to the HTML patterns.
     expect(hash.match(fencedBlockPattern("html"))).toBeNull();
+  });
+});
+
+describe("fencedBody", () => {
+  it("reads a body a Windows editor saved with CRLF line endings", () => {
+    // The guard that protects hand edits hashes this body. A strict `\n` would
+    // return null here, which reads as "unmanaged" and overwrites the edits.
+    expect(fencedBody("<!-- volli:begin v=1 -->\r\nmy hand edits\r\n<!-- volli:end -->\r\n")).toBe(
+      "my hand edits",
+    );
+    expect(fencedBody("# volli:begin v=1\r\nexport PATH=mine\r\n# volli:end\r\n", "hash")).toBe(
+      "export PATH=mine",
+    );
+  });
+
+  it("reads a body with no newline adjacent to either marker", () => {
+    expect(fencedBody("<!-- volli:begin v=1 -->body<!-- volli:end -->")).toBe("body");
+    expect(fencedBody("# volli:begin v=1 body# volli:end", "hash")).toBe("body");
+  });
+
+  it("strips exactly one line ending next to each marker", () => {
+    expect(fencedBody("<!-- volli:begin v=1 -->\n\nbody\n\n<!-- volli:end -->")).toBe("\nbody\n");
+  });
+
+  it("keeps an empty body empty rather than reaching past a marker", () => {
+    expect(fencedBody("<!-- volli:begin v=1 -->\n<!-- volli:end -->")).toBe("");
+    expect(fencedBody("<!-- volli:begin v=1 -->\r\n<!-- volli:end -->")).toBe("");
+  });
+
+  it("is null when a marker is missing", () => {
+    expect(fencedBody("nothing managed here\n")).toBeNull();
+    expect(fencedBody("<!-- volli:begin v=1 -->\nbody, but no end marker\n")).toBeNull();
+  });
+
+  it("answers a newline-heavy file with no end marker in milliseconds", () => {
+    // The shape CodeQL flagged in the `BEGIN\r?\n?(body)\r?\n?END` regex this
+    // replaced (js/polynomial-redos): every `\n` could belong to the body or to
+    // a separator. The scan has no such choice to make, at any length.
+    const unterminated = `<!-- volli:begin v=1 -->${"\n".repeat(100_000)}`;
+    const started = performance.now();
+    expect(fencedBody(unterminated)).toBeNull();
+    expect(fencedBody(`# volli:begin v=1${"\r\n".repeat(100_000)}`, "hash")).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });
 

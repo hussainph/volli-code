@@ -30,8 +30,19 @@ import { LabThemeToolbar, useLabThemeController, type LabThemeController } from 
  * fails loudly at load rather than when you happen to click it. Importing all
  * of them is only safe because setup is declared, not run on import (see
  * scratch.ts) — a scratch must have no module-level side effects.
+ *
+ * A SCRATCH'S TESTS ARE NOT A SCRATCH, and the exclusion is load-bearing rather
+ * than tidy. `*.tsx` also matched `scratches/*.test.tsx`, whose `describe()`
+ * runs at module scope against a vitest context that does not exist in a
+ * browser — so the eager import threw before the shell rendered and the WHOLE
+ * lab was a blank page, not just the scratch that owned the test. The failure
+ * even looked like the paragraph above working as intended, which is why it
+ * survived: a loud load-time throw is the design, but only for the modules this
+ * glob is meant to be loading.
  */
-const modules = import.meta.glob("./scratches/*.tsx", { eager: true });
+const modules = import.meta.glob(["./scratches/*.tsx", "!./scratches/*.test.tsx"], {
+  eager: true,
+});
 
 interface Scratch extends ScratchModule {
   slug: string;

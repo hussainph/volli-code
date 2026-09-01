@@ -97,8 +97,11 @@ import { PrChecksRow } from "@renderer/components/ticket/pr-checks-row";
 import {
   DiffTotals,
   RailFaultBanner,
+  RAIL_CARD_FRAME,
   RAIL_CARD_ROW,
+  RAIL_CARD_SEAM,
   RAIL_PANEL_INSET,
+  RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
@@ -1091,7 +1094,7 @@ export function TicketRepositorySummary({
     // and adding it is a visual call, not a revival of the broken string.
     <section
       data-testid="ticket-repository-summary"
-      className="mx-4 overflow-hidden rounded-xl border border-sidebar-border/70 bg-background/50 group-data-[narrow=true]/rail:mx-3 dark:bg-accent/50"
+      className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN)}
     >
       <button
         type="button"
@@ -1135,10 +1138,7 @@ export function TicketRepositorySummary({
                 ? "Worktree identity"
                 : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
             }
-            className={cn(
-              RAIL_CARD_ROW,
-              "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50",
-            )}
+            className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
           >
             <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
             {ticket.baseBranch !== null && ticket.branch !== null ? (
@@ -1165,7 +1165,7 @@ export function TicketRepositorySummary({
       <PrChecksRow retention={retention} />
 
       {hasWorktree ? (
-        <div className="flex flex-col gap-2 border-t border-sidebar-border/70 px-4 py-2">
+        <div className={cn("flex flex-col gap-2 px-4 py-2", RAIL_CARD_SEAM)}>
           {fault !== null && worktreeMissing ? (
             // A gone directory is not a failed read, so it does not get the
             // fault banner's Retry — it gets the one action that can actually

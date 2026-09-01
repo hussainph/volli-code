@@ -49,7 +49,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import {
@@ -62,6 +61,7 @@ import {
   createDeadline,
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   goToBoard,
   launch,
   makeGitRepo,
@@ -142,7 +142,7 @@ const fakeHome = join(scratch, "home");
 const worktreesRoot = join(scratch, "worktree-home");
 const { attempt, results, summarize } = createRunner();
 
-const EVIDENCE_ROOT = process.argv[2] ?? join(os.tmpdir(), "volli-pi-ticket-chat-evidence");
+const EVIDENCE_ROOT = await evidenceDir("pi-ticket-chat");
 const EVIDENCE_RUN = `${new Date().toISOString().replaceAll(":", "-")}-${QUEUE_RUN_ID}`;
 const EVIDENCE_DIR = join(EVIDENCE_ROOT, EVIDENCE_RUN);
 const PI_SESSION_DIR = join(userDataDir, "pi-sessions");

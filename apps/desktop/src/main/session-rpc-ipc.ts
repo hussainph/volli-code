@@ -49,8 +49,9 @@ import type {
  */
 type RouterProcedures = ReturnType<typeof createSessionRouter>["_def"]["procedures"];
 type SessionRouterProcedure = {
-  [Namespace in keyof RouterProcedures &
-    string]: `${Namespace}.${keyof RouterProcedures[Namespace] & string}`;
+  [
+    Namespace in keyof RouterProcedures & string
+  ]: `${Namespace}.${keyof RouterProcedures[Namespace] & string}`;
 }[keyof RouterProcedures & string];
 
 /**

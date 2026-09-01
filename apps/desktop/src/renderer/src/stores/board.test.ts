@@ -339,6 +339,27 @@ describe("moveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
+  it("carries what the ⌥ picker named through the committed move door", async () => {
+    // Main now owns classification and the countdown, so the choice travels on
+    // the move request instead of opening a renderer-local observer afterward.
+    const a = ticket({ id: "a", status: "backlog", order: 0 });
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [a] }, {});
+
+    await store
+      .getState()
+      .moveTicket("p1", "a", "doing", 0, { kind: "automation", automationId: "auto-2" });
+
+    expect(gateway.moveTicket).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "auto-2" },
+    });
+  });
+
   it("is a no-op when the shared op reports an unchanged position", async () => {
     const a = ticket({ id: "a", status: "backlog", order: 0 });
     const gateway = fakeGateway();

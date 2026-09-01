@@ -89,7 +89,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
 /** The single muted line for one property-change event: icon + sentence + time. */
 function EventLine({ event, muted = false }: { event: TicketEvent; muted?: boolean }) {
   const Icon = EVENT_ICON[event.payload.kind];
-  const sentence = describeEvent(event.payload);
+  const sentence = describeEvent(event.payload, event.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   return (
     <div
@@ -134,7 +134,7 @@ function BunchRow({
   events: TicketEvent[];
 }) {
   const [expanded, setExpanded] = React.useState(false);
-  const sentence = describeEvent(label.payload);
+  const sentence = describeEvent(label.payload, label.actor);
   if (sentence === null) return null; // defensive: `commented` is filtered upstream
   const Icon = EVENT_ICON[label.payload.kind];
   const hidden = events.length - 1;

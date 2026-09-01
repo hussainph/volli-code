@@ -11,9 +11,9 @@
  *
  * ── THE TWO WORDS ─────────────────────────────────────────────────────────
  * `working` is an agent producing right now; `waiting` is one blocked on a
- * person. Nothing else lights a card: `idle` is a Session that exists, which is
- * true of most cards in Doing and would make the signal mean nothing, and
- * `parked`/`exited` are not running at all.
+ * person. Nothing else lights a card: `parked`/`exited` are not running at all,
+ * and an `idle` Session merely EXISTS, which is true of most cards in Doing and
+ * would make the signal mean nothing.
  *
  * WAITING OUTRANKS WORKING, which is main's own precedence for a single chat
  * (`chatActivity` in `session-control/chat-attachment.ts`) applied to a ticket:
@@ -21,6 +21,15 @@
  * that said "working" there would hide the one thing the user could act on. A
  * ticket with one Session blocked and another producing is a ticket that needs
  * a person, and that is what the card says.
+ *
+ * ── RUNS USE THE SAME WORDS ────────────────────────────────────────────────
+ * VC-112 introduced the board ring for unattended Runs, and VC-131 made their
+ * Sessions distinguishable by provenance. Neither creates a third activity:
+ * the ring says what the Session is doing, not whether an executor is attached.
+ * A Run producing or blocked therefore draws the same `working` or `waiting`
+ * ring as any other Session. Between turns it draws nothing. That deliberately
+ * trades continuous Run presence for a ring whose every appearance has a
+ * useful meaning.
  *
  * ── THE TWO SOURCES ───────────────────────────────────────────────────────
  * Terminal panes are read from the live sessions store, through the same
@@ -51,7 +60,7 @@ export interface BoardSessionActivity {
    * Epoch ms of the next instant this answer changes with no new input — a
    * terminal's output window closing. `null` when nothing here depends on the
    * clock, which is the common case: every chat word is pushed, and a board
-   * with no live terminal on it never needs waking.
+   * with no open terminal on it never needs waking.
    */
   nextBoundaryAt: number | null;
 }
@@ -71,16 +80,6 @@ export interface BuildBoardSessionActivityInput {
 
 const EMPTY: BoardSessionActivity = { byTicket: {}, nextBoundaryAt: null };
 
-/** `waiting` beats `working` beats nothing — see the module doc. */
-function louder(
-  current: TicketSessionActivity | undefined,
-  next: SessionActivityState,
-): TicketSessionActivity | undefined {
-  if (next === "waiting") return "waiting";
-  if (next === "working") return current === "waiting" ? "waiting" : "working";
-  return current;
-}
-
 export function buildBoardSessionActivity(
   input: BuildBoardSessionActivityInput,
 ): BoardSessionActivity {
@@ -92,8 +91,9 @@ export function buildBoardSessionActivity(
   };
 
   const mark = (ticketId: string, state: SessionActivityState): void => {
-    const next = louder(byTicket[ticketId], state);
-    if (next !== undefined) byTicket[ticketId] = next;
+    if (state === "waiting" || (state === "working" && byTicket[ticketId] === undefined)) {
+      byTicket[ticketId] = state;
+    }
   };
 
   for (const ticketId of input.ticketIds) {

@@ -47,6 +47,34 @@ describe("resolveGhosttyThemeName", () => {
     expect(resolveGhosttyThemeName("Nord", "light")).toBe("Nord");
     expect(resolveGhosttyThemeName("Nord", "dark")).toBe("Nord");
   });
+
+  it("skips an entry whose prefix is not a variant, colon or no colon", () => {
+    expect(resolveGhosttyThemeName("auto:Nord,dark:Rose Pine", "dark")).toBe("Rose Pine");
+    expect(resolveGhosttyThemeName("auto:Nord", "dark")).toBe("auto:Nord");
+  });
+
+  it("tolerates whitespace around the variant colon", () => {
+    expect(resolveGhosttyThemeName("light\t:\tRose Pine Dawn", "light")).toBe("Rose Pine Dawn");
+    expect(resolveGhosttyThemeName("dark  :  Rose Pine", "dark")).toBe("Rose Pine");
+  });
+
+  // A newline is what made the old regex fail late: `(.*)` cannot cross one, so
+  // the value is not a variant entry at all and resolution falls back to it
+  // verbatim. Both halves of that sentence are asserted here.
+  it("skips a variant entry whose name carries a newline", () => {
+    expect(resolveGhosttyThemeName("dark:Rose\nPine", "dark")).toBe("dark:Rose\nPine");
+    expect(resolveGhosttyThemeName("dark:Rose\nPine,light:Dawn", "dark")).toBe("Dawn");
+  });
+
+  it("fails a `dark:<tabs>\\n…` value in milliseconds instead of seconds", () => {
+    // The overlap between `\s*` and `(.*)` in `/^(light|dark)\s*:\s*(.*)$/` made
+    // this shape quadratic (CodeQL js/polynomial-redos): at 40k tabs the old
+    // regex took 16 seconds to conclude what the split concludes at once.
+    const value = `dark:${"\t".repeat(100_000)}\nx\ny`;
+    const started = performance.now();
+    expect(resolveGhosttyThemeName(value, "dark")).toBe(value);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("parseGhosttyTerminalPrefs", () => {
