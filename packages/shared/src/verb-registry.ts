@@ -1140,7 +1140,7 @@ export const VERB_REGISTRY = [
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
-        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start at most three Sessions in total; the Sessions it starts cannot start any of their own.",
+        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; each start past that asks the person driving for approval, where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),

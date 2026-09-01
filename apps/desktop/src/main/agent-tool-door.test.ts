@@ -18,12 +18,18 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
-import type { AutomationRun, ModelSelection, RuntimeSessionIdentity } from "@volli/shared";
+import type {
+  AuthorityPolicy,
+  AutomationRun,
+  ModelSelection,
+  RuntimeAskRequest,
+  RuntimeSessionIdentity,
+} from "@volli/shared";
 
 import type { SessionStartedNotice } from "../ipc/contract";
 
 import { createAgentToolDoor } from "./agent-tool-door";
-import type { AgentToolDoorOptions } from "./agent-tool-door";
+import type { AgentToolDoorOptions, VerbBudgetAsk } from "./agent-tool-door";
 import { createAutomationEngine } from "./automations/engine";
 import { createAutomationRunner } from "./automations/run";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
@@ -87,12 +93,46 @@ function grantingDelegation(
       },
     }),
     releaseIfUnstarted: () => undefined,
+    recordExtension: () => undefined,
     ...overrides,
   };
 }
 
+/**
+ * A ledger at its allowance until a person extends it: `limit` while no
+ * extension is recorded, an ordinary grant after — the same two answers the
+ * real store's claim gives around `recordExtension` (VC-204).
+ */
+function cappedDelegation(
+  recorded: { parentSessionId: string; toolCallId: string }[],
+): TicketSessionDelegationClaims & { extensions: typeof recorded } {
+  return {
+    startGrantScope: () => null,
+    claimStart: ({ parentSessionId, toolCallId }) =>
+      recorded.length === 0
+        ? { ok: false, reason: "limit", allowed: 3 }
+        : {
+            ok: true,
+            delegation: {
+              parentSessionId,
+              depth: 1,
+              maxDepth: 1,
+              maxChildren: 3,
+              claimToolCallId: toolCallId,
+            },
+          },
+    releaseIfUnstarted: () => undefined,
+    recordExtension: (input) => recorded.push(input),
+    extensions: recorded,
+  };
+}
+
 function harness(
-  overrides: { startError?: unknown; delegation?: TicketSessionDelegationClaims } = {},
+  overrides: {
+    startError?: unknown;
+    delegation?: TicketSessionDelegationClaims;
+    authorityPolicy?: () => AuthorityPolicy;
+  } = {},
 ) {
   ctx = openTestDb();
   insertProject(
@@ -151,7 +191,7 @@ function harness(
     // host is inert here for the same reason — its suite below wires the real
     // engine and the real Run door.
     automations: () => null,
-    authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+    authorityPolicy: overrides.authorityPolicy ?? (() => DEFAULT_AUTHORITY_POLICY),
     subscribeTicketWake: () => () => undefined,
     // Supervision's ports likewise: `supervise-session.test.ts` drives the
     // operations; this suite proves only the door — identity binding, wording,
@@ -162,7 +202,14 @@ function harness(
     input: Record<string, unknown>,
     toolCallId = "tc-0",
     caller: RuntimeSessionIdentity = CALLER,
-  ) => door(caller, { verb: "session.start", input, toolCallId }, new AbortController().signal);
+    budgetAsk?: VerbBudgetAsk,
+  ) =>
+    door(
+      caller,
+      { verb: "session.start", input, toolCallId },
+      new AbortController().signal,
+      budgetAsk,
+    );
   // `door` is returned raw as well: the supervision suite drives this harness
   // as its no-runtime case, where the verb under test is not `session.start`.
   return { call, door, startInputs, kickoffs, notices };
@@ -245,17 +292,111 @@ describe("session_start through the Agent Tool Surface", () => {
         claimStart: ({ toolCallId }) =>
           toolCallId === "no-grant"
             ? { ok: false, reason: "not-granted" as const }
-            : { ok: false, reason: "limit" as const, maxChildren: 3 },
+            : { ok: false, reason: "limit" as const, allowed: 3 },
       }),
     });
 
     const missing = await h.call({ ticket: "VC-1" }, "no-grant", TICKET_CALLER);
+    // No ask capability rides this call, so the `ask` posture has no one to
+    // put the question to and the allowance ends the way it always did.
     const capped = await h.call({ ticket: "VC-1" }, "at-cap", TICKET_CALLER);
 
     expect(missing.text).toContain("was not granted in-ticket delegation when it started");
     // The number, not the word "limit": a model told only that it hit a bound
     // has no way to size what it has left.
     expect(capped.text).toContain("already started the 3 Sessions its in-ticket delegation allows");
+    expect(h.startInputs).toEqual([]);
+  });
+
+  /**
+   * VC-204: the allowance is a soft cap. Its end is a question for the person
+   * driving, whose "once" is recorded as one durable extension before the
+   * claim is made again — the ledger stays the only judge of a slot, and the
+   * door never widens anything itself.
+   */
+  it("asks the person driving at the allowance, and starts on their once", async () => {
+    const delegation = cappedDelegation([]);
+    const asked: RuntimeAskRequest[] = [];
+    const h = harness({ delegation });
+
+    const result = await h.call({ ticket: "VC-1" }, "fourth-start", TICKET_CALLER, (request) => {
+      asked.push(request);
+      return Promise.resolve("allow");
+    });
+
+    expect(result.text).toContain("Started Session");
+    expect(delegation.extensions).toEqual([
+      { parentSessionId: TICKET_CALLER.sessionId, toolCallId: "fourth-start" },
+    ]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      cause: "budget.delegation-children",
+      // The wire name the model called, as the card will title it — read off
+      // the registry's own projection, never respelled here.
+      tool: "session_start",
+      toolCallId: "fourth-start",
+      trip: "budget",
+      overridable: true,
+    });
+    expect(asked[0]?.reason).toContain(
+      "already started the 3 Sessions its in-ticket delegation allows",
+    );
+  });
+
+  it("leaves the refusal standing when the person declines", async () => {
+    const delegation = cappedDelegation([]);
+    const h = harness({ delegation });
+
+    const result = await h.call({ ticket: "VC-1" }, "declined", TICKET_CALLER, () =>
+      Promise.resolve("refuse"),
+    );
+
+    expect(result.text).toContain("already started the 3 Sessions");
+    expect(result.text).toContain("declined to extend");
+    expect(delegation.extensions).toEqual([]);
+    expect(h.startInputs).toEqual([]);
+  });
+
+  it("does not ask at all under a refuse posture", async () => {
+    const delegation = cappedDelegation([]);
+    let askedCount = 0;
+    const h = harness({
+      delegation,
+      authorityPolicy: () => ({
+        ...DEFAULT_AUTHORITY_POLICY,
+        budgets: { delegationExceeded: "refuse" },
+      }),
+    });
+
+    const result = await h.call({ ticket: "VC-1" }, "hard-cap", TICKET_CALLER, () => {
+      askedCount += 1;
+      return Promise.resolve("allow");
+    });
+
+    expect(result.text).toContain("already started the 3 Sessions its in-ticket delegation allows");
+    expect(result.text).not.toContain("declined");
+    expect(askedCount).toBe(0);
+    expect(delegation.extensions).toEqual([]);
+    expect(h.startInputs).toEqual([]);
+  });
+
+  /**
+   * A withdrawn question is the absence of a decision, not a refusal by the
+   * person — the binding rejects the parked promise when the turn stops
+   * waiting — so the refusal that was already true stands, without wording
+   * that would put a "no" in someone's mouth.
+   */
+  it("a question nobody answered leaves the plain refusal", async () => {
+    const delegation = cappedDelegation([]);
+    const h = harness({ delegation });
+
+    const result = await h.call({ ticket: "VC-1" }, "withdrawn", TICKET_CALLER, () =>
+      Promise.reject(new Error("the turn stopped waiting")),
+    );
+
+    expect(result.text).toContain("already started the 3 Sessions its in-ticket delegation allows");
+    expect(result.text).not.toContain("declined");
+    expect(delegation.extensions).toEqual([]);
     expect(h.startInputs).toEqual([]);
   });
 

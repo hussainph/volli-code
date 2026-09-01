@@ -1288,6 +1288,34 @@ BEGIN
 END;
 `;
 
+/**
+ * Person-approved slots past the in-ticket delegation allowance (VC-204).
+ *
+ * Migration 030's `CHECK (max_children BETWEEN 1 AND 3)` stays exactly as it
+ * is: the stored grant remains the allowance a Session is BORN with, and no
+ * runtime path may widen it — a fan-out bound a caller could raise would not
+ * be a bound. What softened is the end of the allowance: each row here is one
+ * "once" a person answered when a Ticket Session asked to start one more child
+ * than its grant allows, and the claims ledger counts these rows on top of
+ * `max_children` when it judges the next claim.
+ *
+ * Keyed by the asking tool call so a replayed call finds its extension already
+ * recorded rather than asking twice. A slot is granted to the PARENT, not the
+ * call: an extension whose start later failed before the create command stays,
+ * and the next attempt consumes it without asking again — the person granted
+ * one more Session, and one more Session is what they get. No trigger guards
+ * these rows because they are append-only by construction: nothing updates an
+ * extension, and deleting one only narrows what a Session may do.
+ */
+const MIGRATION_031_SESSION_DELEGATION_EXTENSIONS = `
+CREATE TABLE session_delegation_extensions (
+  parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (parent_session_id, tool_call_id)
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1437,6 +1465,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 30,
     name: "session delegation grants — birth-frozen scoped control grants and fan-out claims",
     sql: MIGRATION_030_SESSION_DELEGATION_GRANTS,
+  },
+  {
+    version: 31,
+    name: "session delegation extensions — person-approved slots past the in-ticket allowance",
+    sql: MIGRATION_031_SESSION_DELEGATION_EXTENSIONS,
   },
 ];
 
