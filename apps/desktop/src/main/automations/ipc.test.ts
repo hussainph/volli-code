@@ -34,6 +34,7 @@ import { registerAutomationIpcHandlers } from "./ipc";
 import { createAutomationEngine } from "./engine";
 import { enabledAutomationIds } from "./enablement";
 import type { AutomationRunner } from "./run";
+import { advanceScheduleCursor, clearScheduleCursor, readScheduleCursors } from "./schedule-cursor";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
@@ -104,6 +105,7 @@ function setup(
   const ticket = testTicket(project.id);
   insertTicket(ctx.db, ticket);
   const mutations: Array<{ projectId?: string }> = [];
+  const scheduleRebases: string[] = [];
   const engine = createAutomationEngine({
     ledger: new SqliteAutomationLedger(ctx.db),
     now: () => 5_000,
@@ -121,12 +123,16 @@ function setup(
     skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
+    rebaseScheduleCursor: (automationId) => {
+      scheduleRebases.push(automationId);
+      clearScheduleCursor(ctx.db, automationId, 5_000);
+    },
   });
   registerAutomationIpcHandlers(
     { ok: true, db: ctx.db },
     { service, runner: overrides.runner ?? null },
   );
-  return { project, ticket, mutations, engine, service };
+  return { project, ticket, mutations, scheduleRebases, engine, service };
 }
 
 describe("automation IPC", () => {
@@ -910,7 +916,7 @@ describe("automation IPC", () => {
   });
 
   it("switches an Automation on for this machine through a durable command", async () => {
-    const { project, mutations } = setup();
+    const { project, mutations, scheduleRebases } = setup();
     const one = createAutomation(
       ctx.db,
       {
@@ -933,6 +939,8 @@ describe("automation IPC", () => {
       },
       1,
     );
+    advanceScheduleCursor(ctx.db, { automationId: one.id, through: 1_000 }, 2);
+    advanceScheduleCursor(ctx.db, { automationId: two.id, through: 2_000 }, 2);
 
     // VC-112: a machine fires nothing until someone turns something on there,
     // so a record nobody has switched on here is absent from the set.
@@ -953,6 +961,7 @@ describe("automation IPC", () => {
       // the projection it writes is machine-local.
       receipt: { status: "completed" },
     });
+    expect(readScheduleCursors(ctx.db)).toEqual({ [two.id]: 2_000 });
     await call<AutomationSetEnabledResult>("volli:automation-set-enabled", {
       commandId: "22222222-2222-4222-8222-222222222222",
       automationId: two.id,
@@ -976,10 +985,14 @@ describe("automation IPC", () => {
 
     // No `volli:data-changed` fan-out: no projection of the RECORD moved.
     expect(mutations).toEqual([]);
+    // Switching on retires any cursor left by this record's previous enabled
+    // lifecycle. Switching off does not create another lifecycle.
+    expect(scheduleRebases).toEqual([one.id, two.id]);
+    expect(readScheduleCursors(ctx.db)).toEqual({});
   });
 
   it("replays one enablement command rather than flipping the switch twice", async () => {
-    const { project } = setup();
+    const { project, scheduleRebases } = setup();
     const automation = createAutomation(
       ctx.db,
       {
@@ -1015,6 +1028,9 @@ describe("automation IPC", () => {
 
     expect(replayed).toEqual(accepted);
     expect(enabledAutomationIds(ctx.db)).toEqual([]);
+    // Replaying the old receipt is not a fresh enable and cannot reset what the
+    // schedule watched after that command originally completed.
+    expect(scheduleRebases).toEqual([automation.id]);
   });
 
   it("refuses a switch for a record that is gone, and guards the wire shape", async () => {
@@ -1073,6 +1089,52 @@ describe("automation IPC", () => {
     // The stored zone is part of the record, not a rendering choice: it comes
     // back exactly as written, whatever this machine's own zone is.
     expect(listed.automations[0]?.trigger).toEqual(NIGHTLY);
+  });
+
+  it("rebases an edited schedule without treating metadata edits as a new lifecycle", async () => {
+    const { project, scheduleRebases } = setup();
+    const created = await call<AutomationResult>("volli:automation-create", {
+      commandId: randomUUID(),
+      projectId: project.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: NIGHTLY,
+      runtime: null,
+    });
+    if (!created.ok) throw new Error("refused");
+    // Create only wakes the scheduler; it does not make the initial cursor
+    // baseline durable at mutation time.
+    expect(scheduleRebases).toEqual([]);
+    expect(readScheduleCursors(ctx.db)).toEqual({});
+
+    advanceScheduleCursor(ctx.db, { automationId: created.automation.id, through: 1_000 }, 2);
+    const retimed = {
+      kind: "schedule" as const,
+      schedule: { ...NIGHTLY.schedule, minute: 45 },
+    };
+    await call<AutomationResult>("volli:automation-update", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      name: "Nightly sweep",
+      instructions: "/sweep",
+      trigger: retimed,
+      runtime: null,
+    });
+    expect(readScheduleCursors(ctx.db)).toEqual({});
+
+    advanceScheduleCursor(ctx.db, { automationId: created.automation.id, through: 2_000 }, 3);
+    await call<AutomationResult>("volli:automation-update", {
+      commandId: randomUUID(),
+      automationId: created.automation.id,
+      name: "Nightly sweep",
+      instructions: "/sweep more",
+      trigger: retimed,
+      runtime: null,
+    });
+
+    expect(scheduleRebases).toEqual([created.automation.id]);
+    // The unchanged schedule still owes its watched occurrences after a metadata edit.
+    expect(readScheduleCursors(ctx.db)).toEqual({ [created.automation.id]: 2_000 });
   });
 
   it("refuses a schedule this build cannot read, rather than repairing it", async () => {

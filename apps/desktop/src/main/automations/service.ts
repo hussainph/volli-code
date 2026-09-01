@@ -2,6 +2,7 @@ import {
   automationDraftProblem,
   automationPinProblem,
   automationScheduleProblem,
+  automationTriggerSchedule,
   automationTriggersColumn,
   NO_AUTOMATION_TRIGGER,
   parseAutomationTrigger,
@@ -31,6 +32,16 @@ export interface AutomationServiceDeps {
   skipsForProject(projectId: string): AutomationSkippedOccurrence[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
+  /**
+   * Retires the cursor from a record's previous schedule lifecycle.
+   *
+   * Enabling a record or changing its schedule starts watching from the next
+   * scheduler pass's `now`, so occurrences due while disabled, or under the old
+   * schedule, are not owed by the new lifecycle. This callback clears only; it
+   * deliberately does not establish a new record's initial baseline at
+   * mutation time.
+   */
+  rebaseScheduleCursor?(automationId: string): void;
   /**
    * Something about the set of Automations this host may fire on its own
    * changed — a record written or deleted, or a switch flipped (VC-130).
@@ -104,6 +115,18 @@ export type AutomationEnablementOutcome =
  */
 function canonicalTrigger(trigger: AutomationTrigger): AutomationTrigger {
   return parseAutomationTrigger(trigger);
+}
+
+/** Whether an accepted update changed the schedule lifecycle it describes. */
+function scheduleChanged(before: AutomationTrigger, after: AutomationTrigger): boolean {
+  // Both values came through the shared parser, whose discriminated-union
+  // output has one canonical JSON shape per schedule. Comparing only that arm
+  // means an instructions, name, or Runtime edit does not forgive an occurrence
+  // the unchanged schedule still owes.
+  return (
+    JSON.stringify(automationTriggerSchedule(before)) !==
+    JSON.stringify(automationTriggerSchedule(after))
+  );
 }
 
 /**
@@ -301,8 +324,13 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       const outcome = await deps.engine.setEnabled(input);
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       // The switch is what decides whether a schedule may fire here, so the
-      // timer hears about it even though no other window does.
-      if (!outcome.replayed) deps.onAutomationsChanged?.();
+      // timer hears about it even though no other window does. Switching on
+      // begins a new schedule lifecycle; switching off only removes it from
+      // the timer's next read.
+      if (!outcome.replayed) {
+        if (input.enabled) deps.rebaseScheduleCursor?.(input.automationId);
+        deps.onAutomationsChanged?.();
+      }
       return { ok: true, enabledAutomationIds: outcome.value, receipt: outcome.receipt };
     },
 
@@ -347,6 +375,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }): Promise<AutomationWriteOutcome> {
+      const prior = deps.findAutomation(input.automationId);
       // Same replay rule as create: validation guards a new command, never
       // hides an already-accepted receipt behind changed Model Access.
       if (!(await deps.engine.hasCommand(input.commandId))) {
@@ -356,7 +385,6 @@ export function createAutomationService(deps: AutomationServiceDeps) {
         // answering "can't be listed in all projects" about a record listed
         // nowhere would be the more confusing lie — so its Trigger is not
         // judged here at all.
-        const prior = deps.findAutomation(input.automationId);
         const problem = await writeProblem({
           ...input,
           projectId: prior?.projectId ?? null,
@@ -374,7 +402,12 @@ export function createAutomationService(deps: AutomationServiceDeps) {
         deps.onMutation?.(
           outcome.value.projectId === null ? {} : { projectId: outcome.value.projectId },
         );
-        // An edit can add a schedule, retime one, or take one away.
+        // An edit can add a schedule, retime one, or take one away. Only that
+        // arm begins a new lifecycle; metadata edits keep the cursor because
+        // the unchanged schedule still owes every occurrence it watched.
+        if (prior !== undefined && scheduleChanged(prior.trigger, outcome.value.trigger)) {
+          deps.rebaseScheduleCursor?.(outcome.value.id);
+        }
         deps.onAutomationsChanged?.();
       }
       return { ok: true, automation: outcome.value, receipt: outcome.receipt };
