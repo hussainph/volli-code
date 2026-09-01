@@ -149,6 +149,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     promptSupply: async () => ({ templates: [TEMPLATE], skills: [SKILL] }),
     deliverInstructions: async (input) => {
       delivered.push(input);
+      return { receipt: { status: "accepted" } };
     },
     reportInstructionDeliveryFailure: async (input) => {
       deliveryFailures.push(input);

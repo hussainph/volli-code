@@ -1387,10 +1387,9 @@ describe("automation IPC", () => {
       }),
     ).toMatchObject({
       ok: true,
-      // ATTENDED: the only caller of this CHANNEL is "Run now" on a Skipped
-      // occurrence — a person recovering an evening the app was closed for.
-      // The schedule timer runs the same Automation through the same runner
-      // method, but it is inside main and passes `unattended`.
+      // ATTENDED: every IPC caller is a person — Skipped-occurrence Run now,
+      // scheduled-page Play, or the palette. The schedule timer uses the same
+      // runner method inside main, bypasses IPC, and passes `unattended`.
       run: { ticketId: null, sessionId: "session-project-1", attendance: "attended" },
     });
 
