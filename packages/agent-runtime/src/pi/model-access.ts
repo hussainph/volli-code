@@ -29,6 +29,11 @@ export interface InspectPiModelAccessInput {
 export interface PiModelAccessSource {
   models: Models;
   credentials: PiModelAccess["credentials"] | null;
+  /**
+   * Completion of the profile's local overlay restore. Optional only for
+   * scripted collections, which have no persisted catalog to initialize.
+   */
+  catalogReady?: PiModelAccess["catalogReady"];
 }
 
 /**
@@ -49,6 +54,8 @@ export async function inspectPiModelAccess(
   input: InspectPiModelAccessInput = {},
 ): Promise<ModelAccessSnapshot> {
   const models = source.models;
+  input.signal?.throwIfAborted();
+  await (source.catalogReady ?? Promise.resolve());
   input.signal?.throwIfAborted();
   // One read of the whole file rather than one per provider: every credential
   // lives in the same document, and `list` yields ids and types only — the
@@ -87,16 +94,19 @@ export async function inspectPiModelAccess(
     const refreshError = refreshErrors.get(provider.id);
     const availableKeys = new Set(available.map(modelKey));
     const known = models.getModels(provider.id);
+    // A catalog refresh failure means the last-known catalog is stale, not
+    // that a provider which just passed auth and availability stopped working.
+    // Keep usable static/restored models available and offer Retry beside them;
+    // otherwise one shared feed outage would turn every configured provider
+    // red despite leaving every request path intact.
     const providerState: ModelAccessState =
-      refreshError !== undefined
-        ? "unavailable"
-        : available.length > 0
-          ? "available"
-          : probeFailed
-            ? "unavailable"
-            : auth === undefined
-              ? "authentication-required"
-              : "unavailable";
+      available.length > 0
+        ? "available"
+        : refreshError !== undefined || probeFailed
+          ? "unavailable"
+          : auth === undefined
+            ? "authentication-required"
+            : "unavailable";
     providers.push({
       id: provider.id,
       label: provider.name,
@@ -126,14 +136,11 @@ export async function inspectPiModelAccess(
         modelId: model.id,
         label: model.name,
         ...(contextWindow === undefined ? {} : { contextWindow }),
-        state:
-          refreshError !== undefined
-            ? "unavailable"
-            : availableKeys.has(modelKey(model))
-              ? "available"
-              : providerState === "authentication-required"
-                ? "authentication-required"
-                : "unavailable",
+        state: availableKeys.has(modelKey(model))
+          ? "available"
+          : providerState === "authentication-required"
+            ? "authentication-required"
+            : "unavailable",
         reasoningLevels: getSupportedThinkingLevels(model),
         // Same defensive stance as contextWindow above — Pi types `input` as
         // required, a gateway entry need not honour that. An unreadable field

@@ -312,6 +312,8 @@ export interface PiAdapterOptions {
    * question that decides whether signing out has anything to remove.
    */
   credentials?: PiRuntimeHostOptions["credentials"];
+  /** Completion of the injected collection's persisted catalog restore. */
+  catalogReady?: PiRuntimeHostOptions["catalogReady"];
   /**
    * Injectable execution environment factory. Defaults to Pi's own
    * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
@@ -513,6 +515,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     sessionDataDir: options.sessionDataDir,
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
+    ...(options.catalogReady === undefined ? {} : { catalogReady: options.catalogReady }),
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),

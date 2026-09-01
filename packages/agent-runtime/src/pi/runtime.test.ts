@@ -799,7 +799,43 @@ describe("model access", () => {
     expect(JSON.stringify(access)).not.toMatch(/api-secret|MIXED_API_KEY|oauth-secret/);
   });
 
-  it("turns a failed explicit catalog refresh into sanitized retry recovery", async () => {
+  it("waits for an injected persisted catalog before the first inspection", async () => {
+    const faux = fauxProvider({ provider: "restored", models: [{ id: "persisted-model" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    vi.spyOn(models, "getAvailable").mockResolvedValue([]);
+    const gate = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogReady: gate.promise,
+    });
+
+    const pending = runtime.inspectModelAccess();
+    await Promise.resolve();
+    expect(checkAuth).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await expect(pending).resolves.toMatchObject({
+      models: [expect.objectContaining({ modelId: "persisted-model" })],
+    });
+  });
+
+  it("surfaces a persisted-catalog restoration failure before probing providers", async () => {
+    const models = createModels();
+    const checkAuth = vi.spyOn(models, "checkAuth");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogReady: Promise.reject(new Error("catalog restore failed")),
+    });
+
+    await expect(runtime.inspectModelAccess()).rejects.toThrow(/catalog restore failed/);
+    expect(checkAuth).not.toHaveBeenCalled();
+  });
+
+  it("keeps usable stale models available when an explicit catalog refresh fails", async () => {
     const faux = fauxProvider({
       provider: "dynamic",
       models: [{ id: "stale-model" }],
@@ -829,7 +865,7 @@ describe("model access", () => {
       {
         id: "dynamic",
         label: "dynamic",
-        state: "unavailable",
+        state: "available",
         accountLabel: null,
         billingSource: "unknown",
         recovery: { kind: "retry" },
@@ -837,7 +873,7 @@ describe("model access", () => {
         hasStoredCredential: false,
       },
     ]);
-    expect(access.models[0]?.state).toBe("unavailable");
+    expect(access.models[0]?.state).toBe("available");
     expect(JSON.stringify(access)).not.toContain("refresh-secret");
   });
 

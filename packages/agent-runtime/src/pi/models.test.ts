@@ -5,7 +5,14 @@ import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
-import { PiFileCredentialStore, piAuthFilePath, piModelsFilePath, piOwnedModels } from "./models";
+import { PiFileModelsStore } from "./model-catalog";
+import {
+  PiFileCredentialStore,
+  piAuthFilePath,
+  piModelsFilePath,
+  piOwnedModelAccess,
+  piOwnedModels,
+} from "./models";
 
 const OAUTH = {
   type: "oauth",
@@ -308,6 +315,35 @@ describe("piModelsFilePath", () => {
 });
 
 describe("piOwnedModels", () => {
+  it("restores a persisted overlay before catalogReady resolves", async () => {
+    const agentDir = agentDirWith("{}");
+    const first = piOwnedModelAccess({ agentDir });
+    await first.catalogReady;
+    const sibling = first.models.getModel("opencode-go", "glm-5.3");
+    expect(sibling).toBeDefined();
+    if (sibling === undefined) return;
+    const added = { ...sibling, id: "glm-5.3-flash", name: "Persisted after restart" };
+    await new PiFileModelsStore(piModelsFilePath({ agentDir })).write("opencode-go", {
+      models: [added],
+      checkedAt: 1,
+    });
+
+    const restarted = piOwnedModelAccess({ agentDir });
+    await restarted.catalogReady;
+
+    expect(restarted.models.getModel("opencode-go", added.id)?.name).toBe(added.name);
+  });
+
+  it("surfaces catalog restoration failures without provider error details", async () => {
+    const access = piOwnedModelAccess({ agentDir: agentDirWith("{ secret-ish malformed auth") });
+    const failure = await access.catalogReady.catch((error: Error) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) return;
+    expect(failure.message).toMatch(/Could not restore model catalogs for:/);
+    expect(failure.message).not.toContain("secret-ish");
+  });
+
   it("registers Pi's built-in providers against the credentials on disk", async () => {
     const models = piOwnedModels({
       agentDir: agentDirWith(JSON.stringify({ "openai-codex": OAUTH })),

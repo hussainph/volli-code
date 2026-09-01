@@ -999,6 +999,7 @@ app.whenReady().then(async () => {
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
+          catalogReady: piModelAccess.catalogReady,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed

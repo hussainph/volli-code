@@ -24,20 +24,17 @@
  *    generator reads, keyed by the same provider ids. One refresh burst costs
  *    one GET — the document is whole-catalogue, so concurrent per-provider
  *    refreshes share a single in-flight request and each slice their provider
- *    out of it. The mapping refreshes only what the feed actually knows —
- *    cost, context window, max tokens, name, reasoning flag, input modalities
- *    — and *inherits* what only pi knows. `api`, `compat`, `baseUrl` and
- *    `thinkingLevelMap` decide how a request is shaped, and their values in
- *    the wild are provider-private strings (`"HIGH"`, `"default"`, `"none"`)
- *    that no generic feed can supply: a matched model keeps its static
- *    entry's, and a new model inherits from the static sibling whose id it
- *    most resembles (`claude-fable-5.1` from `claude-fable-5`, `glm-5.3-flash`
- *    from `glm-5.3`). A new model with no plausible sibling, no price or no
- *    window is skipped rather than guessed at — an overlay model always
- *    carries the metadata compaction and cost telemetry divide by. What this
- *    deliberately cannot catch is an API-shape flip on an *existing* model
- *    (grok's `openai-completions` → `openai-responses` in 0.84.3); that class
- *    of change names pi request code and still rides the pinned bump.
+ *    out of it. The mapping owns facts only — cost, context/output limits,
+ *    name and input modalities. `api`, `compat`, `baseUrl`, `reasoning` and
+ *    `thinkingLevelMap` are executable protocol, with provider-private values
+ *    a generic feed cannot supply. Exact existing ids therefore re-materialize
+ *    over the current Pi baseline, while new ids require an exact reviewed
+ *    entry in `PINNED_MODEL_PROTOCOLS`; fuzzy sibling inheritance is forbidden.
+ *    Restore performs the same materialization, so a cache written before a Pi
+ *    bump cannot roll corrected request shape back. API-shape flips still ride
+ *    the pinned Pi bump (or an explicit Volli protocol pin), while factual
+ *    price/window updates move at runtime. Exact supersession policy retires a
+ *    known stealth alias only when its canonical id is present.
  *
  * 3. {@link PiFileModelsStore} makes the overlay durable. `piOwnedModelAccess`
  *    passes pi's `Models` no `modelsStore`, so pi fell back to its in-memory
@@ -101,6 +98,54 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
 /** Upper bound on overlay entries per provider; a feed gone wrong stays bounded. */
 const MAX_OVERLAY_MODELS = 200;
 
+/** Facts a generic catalogue may own without choosing how a request is sent. */
+export type CatalogModelFacts = Pick<
+  Model<Api>,
+  "id" | "name" | "input" | "cost" | "contextWindow" | "maxTokens"
+>;
+
+type CatalogModelProtocol = Omit<Model<Api>, keyof CatalogModelFacts>;
+
+/**
+ * Executable protocol for runtime additions reviewed by exact provider/model id.
+ *
+ * models.dev cannot say which Pi API implementation, compatibility flags, or
+ * provider-private thinking values a model needs. Unknown ids therefore remain
+ * catalogue candidates, never runnable Models, until this narrow table vouches
+ * for their wire shape. Factual fields still come from the live feed.
+ */
+const PINNED_MODEL_PROTOCOLS: Readonly<
+  Record<string, Readonly<Record<string, CatalogModelProtocol>>>
+> = {
+  "opencode-go": {
+    "glm-5.3-flash": {
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
+      },
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    },
+  },
+};
+
+/** Exact catalogue identity policy; applied only when the canonical id exists. */
+const SUPERSEDED_MODEL_IDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "opencode-go": { "ox-alpha-free": "glm-5.3-flash" },
+};
+
 /** What one provider's overlay fetch may read. */
 export interface CatalogFetchContext {
   /** pi's shared refresh signal — always present, honoured for blocking work. */
@@ -120,10 +165,10 @@ export interface CatalogFetchResult {
 /**
  * Where a wrapped provider's overlay comes from.
  *
- * Handed the static baseline because the overlay is *derived from* it: updated
- * entries start from their static selves and new entries inherit request shape
- * from a static sibling. A provider the source has no data for yields an empty
- * overlay, which merges to exactly the static catalog.
+ * Handed the static baseline because accepted models are materialized through
+ * its current executable protocol; reviewed additions use an exact local pin.
+ * A provider the source has no data for yields an empty overlay, which merges
+ * to exactly the static catalog.
  */
 export interface CatalogSource {
   fetchOverlay(
@@ -158,14 +203,23 @@ export function withRefreshableCatalog(
   let overlay: readonly Model<Api>[] = [];
   return {
     ...base,
-    getModels: () => mergeCatalog(base.getModels(), overlay),
+    getModels: () => mergeCatalog(base.id, base.getModels(), overlay),
     refreshModels: async (context: RefreshModelsContext): Promise<void> => {
       // Restore phase: pi calls this once with network disallowed before any
       // auth resolution, which is what brings a persisted overlay back at
       // startup. Foreign entries are filtered exactly as radius filters them —
       // a store another version wrote may hold models this provider disowns.
       if (context.stored) {
-        const restored = context.stored.models.filter((model) => model.provider === base.id);
+        // Stored Models are persistence encoding, not executable authority.
+        // Project them back to facts and materialize them through today's
+        // baseline/pins so a Pi bump cannot be rolled back by an old cache.
+        const restored = materializeCatalog(
+          base.id,
+          base.getModels(),
+          context.stored.models
+            .filter((model) => model.provider === base.id)
+            .flatMap(storedModelFacts),
+        );
         if (
           !(await context.publish({
             update: () => {
@@ -216,6 +270,7 @@ export function attachRefreshableCatalog(
 }
 
 function mergeCatalog(
+  providerId: string,
   baseline: readonly Model<Api>[],
   overlay: readonly Model<Api>[],
 ): Model<Api>[] {
@@ -225,7 +280,13 @@ function mergeCatalog(
     if (index >= 0) merged[index] = model;
     else merged.push(model);
   }
-  return merged;
+  const superseded = SUPERSEDED_MODEL_IDS[providerId];
+  if (superseded === undefined) return merged;
+  const present = new Set(merged.map((model) => model.id));
+  return merged.filter((model) => {
+    const canonicalId = superseded[model.id];
+    return canonicalId === undefined || !present.has(canonicalId);
+  });
 }
 
 function isFresh(stored: Readonly<ModelsStoreEntry> | undefined, at: number): boolean {
@@ -239,6 +300,8 @@ export interface ModelsDevSourceOptions {
   fetchFn?: typeof fetch;
   timeoutMs?: number;
   memoMs?: number;
+  /** Injectable response bound for deterministic tests. */
+  maxBodyBytes?: number;
   now?: () => number;
 }
 
@@ -265,6 +328,7 @@ export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): Ca
   const fetchFn = options.fetchFn ?? fetch;
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
   const memoMs = options.memoMs ?? MEMO_MS;
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const now = options.now ?? Date.now;
   let memo: FetchedDocument | undefined;
   let inFlight: Promise<FetchedDocument> | undefined;
@@ -281,7 +345,7 @@ export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): Ca
         throw new Error(`Model catalog fetch failed: HTTP ${response.status} from ${url}.`);
       }
       const text = await response.text();
-      if (text.length > MAX_BODY_BYTES) {
+      if (text.length > maxBodyBytes) {
         throw new Error(`Model catalog at ${url} exceeds the readable size bound.`);
       }
       let parsed: unknown;
@@ -311,7 +375,7 @@ export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): Ca
     void shared
       .catch(() => undefined)
       .then(() => {
-        if (inFlight === shared) inFlight = undefined;
+        inFlight = undefined;
       });
     return shared;
   };
@@ -320,7 +384,11 @@ export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): Ca
     fetchOverlay: async (providerId, baseline, context) => {
       const loaded = await raceSignal(load(), context.signal);
       return {
-        models: modelsDevOverlay(providerId, baseline, loaded.document),
+        models: materializeCatalog(
+          providerId,
+          baseline,
+          modelsDevCatalogFacts(providerId, baseline, loaded.document),
+        ),
         ...(loaded.etag === undefined ? {} : { etag: loaded.etag }),
         ...(loaded.lastModified === undefined ? {} : { lastModified: loaded.lastModified }),
       };
@@ -329,136 +397,168 @@ export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): Ca
 }
 
 /**
- * One provider's overlay, derived from the models.dev document.
+ * One provider's factual updates, derived from the models.dev document.
  *
- * Exported for tests: this is the whole feed-to-`Model` policy in one pure
- * function, and the tests that pin the ticket's motivating cases (a price cut
- * on an existing model, a stealth alias renamed, a sibling-inherited new
- * model) exercise it directly.
+ * Exported for tests: this is the whole feed-to-facts policy in one pure
+ * function, and the tests pin the ticket's factual cases directly. Executable
+ * materialization is tested through {@link modelsDevCatalogSource} instead.
  */
-export function modelsDevOverlay(
+export function modelsDevCatalogFacts(
   providerId: string,
   baseline: readonly Model<Api>[],
   document: unknown,
-): Model<Api>[] {
+): CatalogModelFacts[] {
   if (!isRecord(document)) return [];
   const provider = document[providerId];
   const listed = isRecord(provider) && isRecord(provider.models) ? provider.models : undefined;
   if (listed === undefined) return [];
   const byId = new Map(baseline.map((model) => [model.id, model]));
-  const overlay: Model<Api>[] = [];
+  const facts: CatalogModelFacts[] = [];
   for (const [id, raw] of Object.entries(listed)) {
-    if (overlay.length >= MAX_OVERLAY_MODELS) break;
+    if (facts.length >= MAX_OVERLAY_MODELS) break;
     if (!isRecord(raw) || !producesText(raw)) continue;
     const existing = byId.get(id);
-    const model =
-      existing === undefined ? addedModel(baseline, id, raw) : refreshedModel(existing, raw);
-    if (model !== undefined) overlay.push(model);
+    const modelFacts = existing === undefined ? addedFacts(id, raw) : refreshedFacts(existing, raw);
+    if (modelFacts !== undefined) facts.push(modelFacts);
   }
-  return overlay;
+  return facts;
 }
 
-/**
- * A known model, with the facts the feed carries refreshed over it.
- *
- * Undefined when nothing moved, so the overlay and the persisted entry hold
- * actual differences rather than a copy of the static catalog. Request shape —
- * `api`, `baseUrl`, `compat`, `headers`, `thinkingLevelMap` — is the static
- * entry's own; the one exception is a model the feed says no longer reasons,
- * whose thinking map would otherwise advertise levels it cannot take.
- */
-function refreshedModel(model: Model<Api>, entry: Record<string, unknown>): Model<Api> | undefined {
-  const limit = isRecord(entry.limit) ? entry.limit : undefined;
-  const updated: Model<Api> = {
-    ...model,
-    name: nonEmptyString(entry.name) ?? model.name,
-    cost: costOf(entry) ?? model.cost,
-    contextWindow: positiveInteger(limit?.context) ?? model.contextWindow,
-    maxTokens: positiveInteger(limit?.output) ?? model.maxTokens,
-    reasoning: typeof entry.reasoning === "boolean" ? entry.reasoning : model.reasoning,
-    input: inputsOf(entry) ?? model.input,
-  };
-  if (!updated.reasoning) delete updated.thinkingLevelMap;
-  return sameModelFacts(model, updated) ? undefined : updated;
-}
-
-/**
- * A model the static catalog has never heard of, built from a sibling.
- *
- * The sibling contributes everything the feed cannot know; the feed
- * contributes identity, price and limits, which are required — a model
- * without a price cannot be metered and a model without a window cannot be
- * compacted against, and Model Access already treats an unknown window as
- * uncompactable. No sibling, no model: guessing an API shape produces a
- * catalog entry whose every request fails, which is worse than absence.
- */
-function addedModel(
-  baseline: readonly Model<Api>[],
-  id: string,
+/** A known model with only feed-owned catalogue facts refreshed. */
+function refreshedFacts(
+  model: Model<Api>,
   entry: Record<string, unknown>,
-): Model<Api> | undefined {
-  const sibling = closestSibling(baseline, id);
-  if (sibling === undefined) return undefined;
+): CatalogModelFacts | undefined {
+  const limit = isRecord(entry.limit) ? entry.limit : undefined;
+  const current = catalogFactsOf(model);
+  const updated: CatalogModelFacts = {
+    ...current,
+    name: nonEmptyString(entry.name) ?? current.name,
+    cost: costOf(entry) ?? current.cost,
+    contextWindow: positiveInteger(limit?.context) ?? current.contextWindow,
+    maxTokens: positiveInteger(limit?.output) ?? current.maxTokens,
+    input: inputsOf(entry) ?? current.input,
+  };
+  return sameCatalogFacts(current, updated) ? undefined : updated;
+}
+
+/** A new catalogue candidate; executable protocol is admitted separately. */
+function addedFacts(id: string, entry: Record<string, unknown>): CatalogModelFacts | undefined {
   const cost = costOf(entry);
   const limit = isRecord(entry.limit) ? entry.limit : undefined;
   const contextWindow = positiveInteger(limit?.context);
   const maxTokens = positiveInteger(limit?.output);
-  if (cost === undefined || contextWindow === undefined || maxTokens === undefined) {
+  const input = inputsOf(entry);
+  if (
+    cost === undefined ||
+    contextWindow === undefined ||
+    maxTokens === undefined ||
+    input === undefined
+  ) {
     return undefined;
   }
-  const reasoning = entry.reasoning === true;
-  const added: Model<Api> = {
-    ...sibling,
+  return {
     id,
     name: nonEmptyString(entry.name) ?? id,
-    reasoning,
-    input: inputsOf(entry) ?? sibling.input,
+    input,
     cost,
     contextWindow,
     maxTokens,
   };
-  if (!reasoning) delete added.thinkingLevelMap;
-  return added;
 }
 
-/**
- * The static model whose id shares the longest prefix with the new one.
- *
- * Longest common prefix is how model families actually spell themselves —
- * `glm-5.3-flash` next to `glm-5.3`, `claude-fable-5.1` next to
- * `claude-fable-5` — and picking the closest family member matters on
- * mixed-API providers, where the wrong sibling means the wrong request shape.
- * The threshold scales down for very short ids so `o4` can still find `o3`;
- * ties prefer the closest id length, then lexicographic order, so the choice
- * is deterministic under catalog reordering.
- */
-function closestSibling(baseline: readonly Model<Api>[], id: string): Model<Api> | undefined {
-  const threshold = Math.min(3, Math.ceil(id.length / 2));
-  let best: Model<Api> | undefined;
-  let bestPrefix = 0;
-  for (const model of baseline) {
-    const prefix = commonPrefixLength(model.id, id);
-    if (prefix < threshold || prefix < bestPrefix) continue;
-    if (prefix > bestPrefix || best === undefined || closerId(model.id, best.id, id)) {
-      best = model;
-      bestPrefix = prefix;
-    }
+/** Materialize feed/store facts only through today's exact executable protocol. */
+function materializeCatalog(
+  providerId: string,
+  baseline: readonly Model<Api>[],
+  facts: readonly CatalogModelFacts[],
+): Model<Api>[] {
+  const baselineById = new Map(baseline.map((model) => [model.id, model]));
+  const pins = PINNED_MODEL_PROTOCOLS[providerId];
+  const materialized: Model<Api>[] = [];
+  for (const entry of facts) {
+    const protocol = baselineById.get(entry.id) ?? pins?.[entry.id];
+    if (protocol === undefined) continue;
+    materialized.push({ ...protocol, ...entry });
   }
-  return best;
+  return materialized;
 }
 
-function commonPrefixLength(a: string, b: string): number {
-  const bound = Math.min(a.length, b.length);
-  let length = 0;
-  while (length < bound && a[length] === b[length]) length++;
-  return length;
+function catalogFactsOf(model: Model<Api>): CatalogModelFacts {
+  return {
+    id: model.id,
+    name: model.name,
+    input: model.input,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+  };
 }
 
-function closerId(candidate: string, incumbent: string, id: string): boolean {
-  const candidateDistance = Math.abs(candidate.length - id.length);
-  const incumbentDistance = Math.abs(incumbent.length - id.length);
-  if (candidateDistance !== incumbentDistance) return candidateDistance < incumbentDistance;
-  return candidate < incumbent;
+/** Invalid legacy/cache entries fail closed rather than becoming runnable protocol. */
+function storedModelFacts(model: Model<Api>): CatalogModelFacts[] {
+  const id = nonEmptyString(model.id);
+  const name = nonEmptyString(model.name);
+  const input = inputsOf({ modalities: { input: model.input } });
+  const cost = storedCost(model.cost);
+  const contextWindow = positiveInteger(model.contextWindow);
+  const maxTokens = positiveInteger(model.maxTokens);
+  if (
+    id === undefined ||
+    name === undefined ||
+    input === undefined ||
+    cost === undefined ||
+    contextWindow === undefined ||
+    maxTokens === undefined
+  ) {
+    return [];
+  }
+  return [{ id, name, input, cost, contextWindow, maxTokens }];
+}
+
+function storedCost(value: unknown): ModelCost | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = rate(value.input);
+  const output = rate(value.output);
+  const cacheRead = rate(value.cacheRead);
+  const cacheWrite = rate(value.cacheWrite);
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  const tiers = storedTiers(value.tiers);
+  return tiers === null
+    ? undefined
+    : { input, output, cacheRead, cacheWrite, ...(tiers ? { tiers } : {}) };
+}
+
+function storedTiers(value: unknown): ModelCostTier[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const tiers: ModelCostTier[] = [];
+  for (const tier of value) {
+    if (!isRecord(tier)) return null;
+    const input = rate(tier.input);
+    const output = rate(tier.output);
+    const cacheRead = rate(tier.cacheRead);
+    const cacheWrite = rate(tier.cacheWrite);
+    const inputTokensAbove = positiveInteger(tier.inputTokensAbove);
+    if (
+      input === undefined ||
+      output === undefined ||
+      cacheRead === undefined ||
+      cacheWrite === undefined ||
+      inputTokensAbove === undefined
+    ) {
+      return null;
+    }
+    tiers.push({ input, output, cacheRead, cacheWrite, inputTokensAbove });
+  }
+  return tiers;
 }
 
 /** Price mapping is all-or-nothing: a cost with unmappable tiers is no cost. */
@@ -526,43 +626,34 @@ function inputsOf(entry: Record<string, unknown>): ("text" | "image")[] | undefi
   return kept.length > 0 ? kept : undefined;
 }
 
-function sameModelFacts(a: Model<Api>, b: Model<Api>): boolean {
+function sameCatalogFacts(a: CatalogModelFacts, b: CatalogModelFacts): boolean {
   return (
     a.name === b.name &&
     a.contextWindow === b.contextWindow &&
     a.maxTokens === b.maxTokens &&
-    a.reasoning === b.reasoning &&
-    a.thinkingLevelMap === b.thinkingLevelMap &&
     sameCost(a.cost, b.cost) &&
     sameInputs(a.input, b.input)
   );
 }
 
 function sameCost(a: ModelCost, b: ModelCost): boolean {
-  if (
-    a.input !== b.input ||
-    a.output !== b.output ||
-    a.cacheRead !== b.cacheRead ||
-    a.cacheWrite !== b.cacheWrite
-  ) {
-    return false;
-  }
-  const aTiers = a.tiers ?? [];
-  const bTiers = b.tiers ?? [];
-  return (
-    aTiers.length === bTiers.length &&
-    aTiers.every((tier, index) => {
-      const other = bTiers[index];
-      return (
-        other !== undefined &&
-        tier.input === other.input &&
-        tier.output === other.output &&
-        tier.cacheRead === other.cacheRead &&
-        tier.cacheWrite === other.cacheWrite &&
-        tier.inputTokensAbove === other.inputTokensAbove
-      );
-    })
-  );
+  return costKey(a) === costKey(b);
+}
+
+function costKey(cost: ModelCost): string {
+  return JSON.stringify([
+    cost.input,
+    cost.output,
+    cost.cacheRead,
+    cost.cacheWrite,
+    ...(cost.tiers ?? []).map((tier) => [
+      tier.input,
+      tier.output,
+      tier.cacheRead,
+      tier.cacheWrite,
+      tier.inputTokensAbove,
+    ]),
+  ]);
 }
 
 function sameInputs(a: readonly string[], b: readonly string[]): boolean {
