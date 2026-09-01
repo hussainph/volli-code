@@ -709,6 +709,7 @@ function SkippedRow({ skip }: { skip: AutomationSkippedOccurrence }) {
   const count = skipCountLabel(skip);
   return (
     <ListRow
+      data-run-history-skip={skip.id}
       // Inert as a row: a skip opened no Session, so there is nowhere for the
       // row itself to go. Its one act is the control, which is why the control
       // is on it rather than a click nothing would answer.

@@ -286,11 +286,16 @@ try {
       .click();
     const editor = page.locator('[data-slot="automation-editor"]:visible');
     await editor.waitFor({ timeout: 30000 });
-    const skipped = editor.getByText("Skipped \u2014 Volli wasn\u2019t running");
-    await skipped.evaluate((element) => element.scrollIntoView({ block: "center" }));
+    const skipped = editor.locator("[data-run-history-skip]").first();
+    await skipped.scrollIntoViewIfNeeded();
     await skipped.waitFor({ timeout: 30000 });
-    await editor.getByText("3 occurrences").waitFor({ timeout: 10000 });
-    return { ok: true, detail: "a skip does not look like a silence" };
+    const copy = await skipped.textContent();
+    return {
+      ok:
+        (copy ?? "").includes("Skipped \u2014 Volli wasn\u2019t running") &&
+        (copy ?? "").includes("3 occurrences"),
+      detail: copy ?? "skip row had no text",
+    };
   });
 
   await attempt(8, "Run now reaches the Run door, at the Project", async () => {
