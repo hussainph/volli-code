@@ -339,39 +339,25 @@ describe("moveTicket", () => {
     expect(store.getState().ticketsByProject.p1).toBe(authoritative);
   });
 
-  it("carries what the ⌥ picker named to the one observer, and only after main committed", async () => {
-    // VC-132: the board's drop is the ONE door that has a choice to carry. It
-    // is reported through the same observer a plain move is, after the write
-    // came back OK — a move main refused cannot have named anything.
+  it("carries what the ⌥ picker named through the committed move door", async () => {
+    // Main now owns classification and the countdown, so the choice travels on
+    // the move request instead of opening a renderer-local observer afterward.
     const a = ticket({ id: "a", status: "backlog", order: 0 });
-    const moves: unknown[] = [];
-    const store = createBoardStore(fakeGateway(), (move) => moves.push(move));
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
     store.getState().hydrate({ p1: [a] }, {});
 
     await store
       .getState()
       .moveTicket("p1", "a", "doing", 0, { kind: "automation", automationId: "auto-2" });
 
-    expect(moves).toEqual([
-      {
-        projectId: "p1",
-        ticketId: "a",
-        from: "backlog",
-        to: "doing",
-        choice: { kind: "automation", automationId: "auto-2" },
-      },
-    ]);
-  });
-
-  it("reports no choice at all for every other Deliberate move", async () => {
-    const a = ticket({ id: "a", status: "backlog", order: 0 });
-    const moves: { choice?: unknown }[] = [];
-    const store = createBoardStore(fakeGateway(), (move) => moves.push(move));
-    store.getState().hydrate({ p1: [a] }, {});
-
-    await store.getState().moveTicket("p1", "a", "doing", 0);
-
-    expect(moves[0]?.choice).toBeUndefined();
+    expect(gateway.moveTicket).toHaveBeenCalledWith({
+      projectId: "p1",
+      ticketId: "a",
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "auto-2" },
+    });
   });
 
   it("is a no-op when the shared op reports an unchanged position", async () => {

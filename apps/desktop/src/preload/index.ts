@@ -29,6 +29,7 @@ import type {
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   OverlayEdits,
+  PendingArmedRun,
   ProjectThemeOverride,
   // Imported for `typeof` only — see the Session RPC door below. `import type`
   // of a const is legal and fully erased, which is exactly why these three can
@@ -72,6 +73,10 @@ import type {
   AutomationSetEnabledResult,
   AutomationSkipsResult,
   AutomationUpdateInput,
+  PendingArmedRunCancelInput,
+  PendingArmedRunCancelResult,
+  PendingArmedRunsResult,
+  PendingArmedRunSettledNotice,
   CliDoctorInput,
   CliDoctorResult,
   CliRepairResult,
@@ -163,7 +168,6 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
-  TicketMovedNotice,
   TicketMoveInput,
   TicketResult,
   TicketSetLabelsInput,
@@ -422,20 +426,6 @@ const api = {
     /** When each non-archived ticket entered its current status — one batched read backing the sidebar. */
     statusEntries: (input: ProjectIdInput): Promise<TicketStatusEntriesResult> =>
       invoke("volli:ticket-status-entries", input),
-    /**
-     * Subscribes to Deliberate moves main committed for someone else (VC-128):
-     * an explicit `volli ticket move`, or an agent's own through the tool door.
-     * The renderer's own moves never arrive here — they report their before and
-     * after themselves. Carries the column the Ticket LEFT, which a re-read can
-     * no longer recover and an armed column cannot do without.
-     */
-    onMoved: (callback: (notice: TicketMovedNotice) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: TicketMovedNotice) =>
-        callback(payload);
-      ipcRenderer.on("volli:ticket-moved" satisfies VolliIpcEvent, listener);
-      return () =>
-        ipcRenderer.removeListener("volli:ticket-moved" satisfies VolliIpcEvent, listener);
-    },
   },
   comments: {
     /** A ticket's comments, chronological — the work-log feed. */
@@ -789,6 +779,38 @@ const api = {
     /** Switches one on or off here; answers with the whole new enabled set. */
     setEnabled: (input: AutomationSetEnabledInput): Promise<AutomationSetEnabledResult> =>
       invoke("volli:automation-set-enabled", input),
+    /** Main's whole durable armed-column countdown projection. */
+    pendingArmedRuns: (): Promise<PendingArmedRunsResult> =>
+      invoke("volli:automation-pending-armed-runs"),
+    /** Cancels one exact arrival; a stale id is an idempotent no-op. */
+    cancelPendingArmedRun: (
+      input: PendingArmedRunCancelInput,
+    ): Promise<PendingArmedRunCancelResult> =>
+      invoke("volli:automation-cancel-pending-armed-run", input),
+    /** Every window receives the same whole pending snapshot from main. */
+    onPendingArmedRunsChanged: (callback: (pending: PendingArmedRun[]) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, pending: PendingArmedRun[]) =>
+        callback(pending);
+      ipcRenderer.on("volli:pending-armed-runs-changed" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-runs-changed" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
+    /** Main settled one countdown by attempting or abandoning its Run. */
+    onPendingArmedRunSettled: (
+      callback: (notice: PendingArmedRunSettledNotice) => void,
+    ): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, notice: PendingArmedRunSettledNotice) =>
+        callback(notice);
+      ipcRenderer.on("volli:pending-armed-run-settled" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:pending-armed-run-settled" satisfies VolliIpcEvent,
+          listener,
+        );
+    },
   },
   /**
    * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A

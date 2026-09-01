@@ -15,6 +15,8 @@ import type {
   AutomationSetColumnOrderResult,
   AutomationSetEnabledResult,
   AutomationSkipsResult,
+  PendingArmedRunCancelResult,
+  PendingArmedRunsResult,
   Result,
 } from "../../ipc/contract";
 
@@ -33,6 +35,7 @@ vi.mock("electron", () => ({
 import { registerAutomationIpcHandlers } from "./ipc";
 import { createAutomationEngine } from "./engine";
 import { enabledAutomationIds } from "./enablement";
+import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
 import type { AutomationRunner } from "./run";
 import { createAutomationService } from "./service";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
@@ -97,6 +100,7 @@ function setup(
   overrides: {
     runner?: AutomationRunner | null;
     inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
+    pendingArmedRuns?: Pick<PendingArmedRunCoordinator, "list" | "cancel">;
   } = {},
 ) {
   const project = testProject();
@@ -124,7 +128,13 @@ function setup(
   });
   registerAutomationIpcHandlers(
     { ok: true, db: ctx.db },
-    { service, runner: overrides.runner ?? null },
+    {
+      service,
+      runner: overrides.runner ?? null,
+      ...(overrides.pendingArmedRuns === undefined
+        ? {}
+        : { pendingArmedRuns: overrides.pendingArmedRuns }),
+    },
   );
   return { project, ticket, mutations, engine, service };
 }
@@ -149,6 +159,8 @@ describe("automation IPC", () => {
       "volli:automation-runs-for-project",
       "volli:automation-enablement",
       "volli:automation-set-enabled",
+      "volli:automation-pending-armed-runs",
+      "volli:automation-cancel-pending-armed-run",
       "volli:automation-skips-for-project",
       "volli:automation-run-for-project",
     ]) {
@@ -157,6 +169,34 @@ describe("automation IPC", () => {
         error: "The local database failed to open.",
       });
     }
+  });
+
+  it("lists and Cancels main's exact shared pending arrival", async () => {
+    const pending = {
+      id: "arrival-1",
+      ticketId: "ticket-1",
+      projectId: "project-1",
+      ticketDisplayId: "VC-12",
+      automationId: "automation-1",
+      automationName: "Review sweep",
+      status: "doing" as const,
+      origin: "armed" as const,
+      openedAt: 1_000,
+      startAt: 4_500,
+    };
+    const cancel = vi.fn(() => true);
+    setup({ pendingArmedRuns: { list: () => [pending], cancel } });
+
+    expect(await call<PendingArmedRunsResult>("volli:automation-pending-armed-runs")).toEqual({
+      ok: true,
+      pending: [pending],
+    });
+    expect(
+      await call<PendingArmedRunCancelResult>("volli:automation-cancel-pending-armed-run", {
+        id: pending.id,
+      }),
+    ).toEqual({ ok: true, cancelled: true });
+    expect(cancel).toHaveBeenCalledExactlyOnceWith("arrival-1");
   });
 
   it("is a transport-only adapter over command receipts, events, and projections", async () => {

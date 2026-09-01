@@ -7,6 +7,7 @@
  * single implementation rather than each rolling their own.
  */
 import { BrowserWindow } from "electron";
+import type { PendingArmedRun } from "@volli/shared";
 import type {
   DataChangedEvent,
   HarnessEventNotice,
@@ -15,7 +16,7 @@ import type {
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionStartedNotice,
-  TicketMovedNotice,
+  PendingArmedRunSettledNotice,
   UpdateUiState,
   VolliIpcEvent,
 } from "../ipc/contract";
@@ -165,22 +166,25 @@ export function broadcastSessionRetitled(sessionId: string, title: string): void
 }
 
 /**
- * Announces a Deliberate move main committed for the agent socket (VC-128):
- * `volli ticket move` is a Deliberate move exactly as a drag is (CONTEXT.md),
- * so an armed column must hear it the same way.
+ * Projects main's whole pending armed-column list into every renderer.
  *
- * To every window, like the interrupt announcement above it, because the board
- * this concerns is visible in whichever window has that project open. Windows
- * that do not have it open ignore it — the arrival door reads that project's
- * own armings, and a window showing another project has none of them armed.
- * Two windows on the SAME project each open a countdown, and the Run door's
- * one-Run-per-Ticket guard is what makes the second one harmless; a person
- * cancelling in one window is cancelling the countdown they can see.
+ * A whole snapshot rather than an add/remove delta means two windows can never
+ * reconstruct different countdowns after one missed an earlier event. Main has
+ * already persisted the list before this sends it, and a newly opened window
+ * primes itself through the matching list IPC.
  */
-export function broadcastTicketMoved(notice: TicketMovedNotice): void {
+export function broadcastPendingArmedRuns(pending: readonly PendingArmedRun[]): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
-    window.webContents.send("volli:ticket-moved" satisfies VolliIpcEvent, notice);
+    window.webContents.send("volli:pending-armed-runs-changed" satisfies VolliIpcEvent, pending);
+  }
+}
+
+/** Announces the one main-owned countdown's outcome without giving a renderer a Run door. */
+export function broadcastPendingArmedRunSettled(notice: PendingArmedRunSettledNotice): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:pending-armed-run-settled" satisfies VolliIpcEvent, notice);
   }
 }
 

@@ -2460,3 +2460,40 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
     });
   });
 });
+
+describe("migrate — 036, pending armed-column arrivals (VC-226)", () => {
+  it("creates one durable countdown row per Ticket with an exact arrival id", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+
+    db.prepare(
+      `INSERT INTO automation_pending_armed_runs
+         (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+          status, origin, opened_at, start_at)
+       VALUES ('t1', 'arrival-1', 'p1', 'VC-1', 'a1', 'Review sweep',
+               'doing', 'armed', 1000, 4500)`,
+    ).run();
+
+    expect(
+      db
+        .prepare("SELECT ticket_id, id, automation_id, start_at FROM automation_pending_armed_runs")
+        .get(),
+    ).toEqual({ ticket_id: "t1", id: "arrival-1", automation_id: "a1", start_at: 4500 });
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO automation_pending_armed_runs
+           (ticket_id, id, project_id, ticket_display_id, automation_id, automation_name,
+            status, origin, opened_at, start_at)
+         VALUES ('t1', 'arrival-2', 'p1', 'VC-1', 'a1', 'Review sweep',
+                 'doing', 'armed', 2000, 5500)`,
+        )
+        .run(),
+    ).toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
