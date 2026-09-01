@@ -129,7 +129,11 @@ import type { AutomationRunner } from "./automations/run";
 import { createAutomationService } from "./automations/service";
 import { createAutomationScheduler } from "./automations/scheduler";
 import type { AutomationScheduler } from "./automations/scheduler";
-import { advanceScheduleCursor, readScheduleCursors } from "./automations/schedule-cursor";
+import {
+  advanceScheduleCursor,
+  clearScheduleCursor,
+  readScheduleCursors,
+} from "./automations/schedule-cursor";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   assertDefaultModelAvailable,
@@ -1165,6 +1169,12 @@ app.whenReady().then(async () => {
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
           onMutation: (change) => broadcastDataChanged(change),
+          // Enabling or changing the schedule clears the old lifecycle first:
+          // the next pass sees first sight and begins at its own `now`, owing
+          // nothing from the disabled interval or the schedule it replaced.
+          rebaseScheduleCursor: (automationId) => {
+            clearScheduleCursor(sessionDb, automationId, Date.now());
+          },
           // Every record write can add, retime or remove a schedule, and the
           // enabled switch decides whether one may fire here at all — so the
           // timer re-reads after each rather than waiting out its own tick.

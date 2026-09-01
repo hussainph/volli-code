@@ -33,7 +33,10 @@
  * clock now: the next occurrence stands and nothing before it is owed. That is
  * the same non-retroactive rule arming has (VC-128) and it is what stops a
  * newly created schedule, a newly enabled one, or a corrupt row from
- * manufacturing a backlog out of history it never watched.
+ * manufacturing a backlog out of history it never watched. Enabling a record
+ * or changing its schedule clears the old lifecycle's cursor back to this
+ * state; the scheduler, not that user mutation, establishes the new baseline
+ * when it next evaluates the record.
  */
 import type Database from "better-sqlite3";
 
@@ -95,6 +98,31 @@ export function advanceScheduleCursor(
   const current = cursors[input.automationId];
   if (current !== undefined && current >= input.through) return cursors;
   const next = { ...cursors, [input.automationId]: input.through };
+  setAppState(db, AUTOMATION_SCHEDULE_CURSORS_KEY, JSON.stringify(next), now);
+  return next;
+}
+
+/**
+ * Forgets one schedule lifecycle's place without disturbing any other.
+ *
+ * Re-enabling a record and editing its schedule both begin a new lifecycle:
+ * occurrences from the disabled interval or the old schedule were never owed
+ * by the new one. Removing the entry makes the scheduler apply its ordinary
+ * first-sight rule and start watching from its next pass's `now`.
+ *
+ * An absent entry stays absent rather than writing an initial baseline here.
+ * Establishing that baseline durably at mutation time is a separate concern;
+ * this operation only prevents an existing lifecycle from leaking forward.
+ */
+export function clearScheduleCursor(
+  db: Database.Database,
+  automationId: string,
+  now: number,
+): ScheduleCursors {
+  const cursors = readScheduleCursors(db);
+  if (cursors[automationId] === undefined) return cursors;
+  const next = { ...cursors };
+  delete next[automationId];
   setAppState(db, AUTOMATION_SCHEDULE_CURSORS_KEY, JSON.stringify(next), now);
   return next;
 }
