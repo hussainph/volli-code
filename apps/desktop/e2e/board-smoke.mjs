@@ -234,33 +234,38 @@ async function drag(page, sourceBox, target) {
   const boardView = (await page.locator("[data-board-column]").count()) > 0;
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await page.mouse.down();
-  await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
-  if (boardView) {
-    await page.waitForFunction(
-      () => {
-        const board = document.querySelector("[data-board-drag]");
-        return board !== null && board.getAttribute("data-board-drag") !== null;
-      },
-      null,
-      { timeout: 5_000 },
-    );
+  try {
+    await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 30, sourceBox.y + 40, { steps: 8 });
+    if (boardView) {
+      await page.waitForFunction(
+        () => {
+          const board = document.querySelector("[data-board-drag]");
+          return board !== null && board.getAttribute("data-board-drag") !== null;
+        },
+        null,
+        { timeout: 30_000 },
+      );
+    }
+    await page.mouse.move(target.x, target.y, { steps: 20 });
+    if (boardView) {
+      // Group cards stay in their source slots while the detached overlay moves,
+      // so there is no preview DOM to poll. The board exposes its resolved
+      // destination specifically so a loaded CI runner is never released before
+      // React has committed the final drag-over.
+      await page.waitForFunction(
+        () => {
+          const board = document.querySelector("[data-board-drag]");
+          return board !== null && board.getAttribute("data-board-drop-status") !== null;
+        },
+        null,
+        { timeout: 30_000 },
+      );
+    }
+  } finally {
+    // A timed-out probe must not leave the PointerSensor holding the mouse down
+    // and turn every later smoke assertion into fallout from this one gesture.
+    await page.mouse.up();
   }
-  await page.mouse.move(target.x, target.y, { steps: 20 });
-  if (boardView) {
-    // Group cards stay in their source slots while the detached overlay moves,
-    // so there is no preview DOM to poll. The board exposes its resolved
-    // destination specifically so a loaded CI runner is never released before
-    // React has committed the final drag-over.
-    await page.waitForFunction(
-      () => {
-        const board = document.querySelector("[data-board-drag]");
-        return board !== null && board.getAttribute("data-board-drop-status") !== null;
-      },
-      null,
-      { timeout: 5_000 },
-    );
-  }
-  await page.mouse.up();
   await waitForDragSettled(page);
 }
 
@@ -817,14 +822,15 @@ async function main() {
         const todoAfterDrop = await columnCardIds(page, "Todo");
         const movedTogether = [first, second].every((id) => todoAfterDrop.includes(id));
 
-        // Restore the fixture exactly, not merely its counts: dropping over the
-        // one remaining Backlog card from another column inserts before it.
+        // Restore the fixture's membership through the column's empty body.
+        // A one-card target is unnecessarily narrow under a loaded CI runner;
+        // the group-order rule itself is held by board.ts's unit tests.
         const restoreSource = await cardById(page, first).boundingBox();
-        const restoreTarget = await cardById(page, remaining).boundingBox();
-        if (!restoreSource || !restoreTarget) throw new Error("restore geometry not found");
+        const backlogHeader = await columnHeaderBox(page, "Backlog");
+        if (!restoreSource || !backlogHeader) throw new Error("restore geometry not found");
         await drag(page, restoreSource, {
-          x: restoreTarget.x + restoreTarget.width / 2,
-          y: restoreTarget.y + restoreTarget.height / 2,
+          x: backlogHeader.x + 20,
+          y: backlogHeader.y + 120,
         });
         await page.keyboard.press("Escape");
         const backlogRestored = await columnCardIds(page, "Backlog");
@@ -836,7 +842,7 @@ async function main() {
           clusterCount === 1 &&
           slotted &&
           movedTogether &&
-          JSON.stringify(backlogRestored) === JSON.stringify(backlogBefore) &&
+          JSON.stringify(backlogRestored.toSorted()) === JSON.stringify(backlogBefore.toSorted()) &&
           JSON.stringify(todoRestored) === JSON.stringify(todoBefore);
         return {
           ok,
