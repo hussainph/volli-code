@@ -226,6 +226,18 @@ function callerActor(session: RuntimeSessionIdentity): TicketEventActor {
  * capability, a declined or withdrawn question — lands on the same honest
  * refusal the cap has always spoken, so the model's next move never depends on
  * why the slot was not granted.
+ *
+ * One crash window is carried knowingly, and its failure direction is the
+ * safe one. The interaction's resolution commits durably before the parked
+ * promise settles, and the extension row is written only after — so a process
+ * lost between the two leaves a recorded "once" with no slot to show for it,
+ * and the replayed call asks again rather than reading the ledger's answer
+ * back. Asking a person twice is an annoyance; the alternatives are worse in
+ * both directions — granting from an answer this process never observed, or a
+ * slot no one approved. Every other boundary IS replay-proof without a second
+ * question: extension-before-claim re-claims under the widened allowance
+ * (`claimStart` counts extensions), and claim-before-start finds its claim row
+ * (`claimStart` is idempotent per tool call).
  */
 async function delegationLimitOutcome(
   options: AgentToolDoorOptions,

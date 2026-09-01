@@ -349,6 +349,29 @@ describe("session_start through the Agent Tool Surface", () => {
     );
   });
 
+  /**
+   * The extension→claim crash boundary: a process lost after `recordExtension`
+   * but before the claim replays into a ledger that already counts the slot,
+   * so the person is not asked a second time for the "once" they already gave.
+   */
+  it("a replay that finds its extension recorded does not ask again", async () => {
+    const delegation = cappedDelegation([
+      { parentSessionId: TICKET_CALLER.sessionId, toolCallId: "fourth-start" },
+    ]);
+    let askedCount = 0;
+    const h = harness({ delegation });
+
+    const result = await h.call({ ticket: "VC-1" }, "fourth-start", TICKET_CALLER, () => {
+      askedCount += 1;
+      return Promise.resolve("allow");
+    });
+
+    expect(result.text).toContain("Started Session");
+    expect(askedCount).toBe(0);
+    // Still exactly the one slot the person granted before the crash.
+    expect(delegation.extensions).toHaveLength(1);
+  });
+
   it("leaves the refusal standing when the person declines", async () => {
     const delegation = cappedDelegation([]);
     const h = harness({ delegation });
