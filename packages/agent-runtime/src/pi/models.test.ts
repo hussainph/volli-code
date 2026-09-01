@@ -5,7 +5,7 @@ import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
-import { PiFileCredentialStore, piAuthFilePath, piOwnedModels } from "./models";
+import { PiFileCredentialStore, piAuthFilePath, piModelsFilePath, piOwnedModels } from "./models";
 
 const OAUTH = {
   type: "oauth",
@@ -297,6 +297,16 @@ describe("PiFileCredentialStore writes", () => {
   });
 });
 
+describe("piModelsFilePath", () => {
+  it("keeps the catalog cache beside Pi's auth.json, under the same profile rules", () => {
+    expect(piModelsFilePath({ agentDir: "/explicit/agent" })).toBe(
+      "/explicit/agent/volli-models.json",
+    );
+    process.env.PI_CODING_AGENT_DIR = "/env/agent";
+    expect(piModelsFilePath()).toBe("/env/agent/volli-models.json");
+  });
+});
+
 describe("piOwnedModels", () => {
   it("registers Pi's built-in providers against the credentials on disk", async () => {
     const models = piOwnedModels({
@@ -315,6 +325,19 @@ describe("piOwnedModels", () => {
   it("reports a provider with nothing stored as unconfigured", async () => {
     const models = piOwnedModels({ agentDir: agentDirWith("{}") });
     await expect(models.checkAuth("openai-codex")).resolves.toBeUndefined();
+  });
+
+  it("gives every built-in provider a refreshable catalog", () => {
+    // The premise of VC-135: pi ships its catalogs frozen and only radius
+    // implements `refreshModels`, so without the wrapping the Refresh button
+    // re-reads the same static lists forever. Every provider — static ones
+    // wrapped, dynamic ones on their own contract — must now answer it.
+    const models = piOwnedModels({ agentDir: agentDirWith("{}") });
+    const providers = models.getProviders();
+    expect(providers.length).toBeGreaterThan(0);
+    for (const provider of providers) {
+      expect(provider.refreshModels, provider.id).toBeDefined();
+    }
   });
 
   it("is what a runtime built without an injected collection uses", async () => {
