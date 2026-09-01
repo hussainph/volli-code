@@ -111,7 +111,9 @@ try {
 
   async function openAutomationsPage() {
     await page.getByRole("button", { name: "Automations", exact: true }).first().click();
-    await page.getByRole("heading", { name: "Automations" }).waitFor({ timeout: 15000 });
+    await page
+      .getByRole("heading", { name: "Automations", exact: true })
+      .waitFor({ timeout: 15000 });
   }
 
   await must(1, "the Automations page opens", async () => {
@@ -124,7 +126,7 @@ try {
     "a schedule is authored through preset controls — and there is no cron field",
     async () => {
       await page.getByRole("button", { name: "New Automation" }).first().click();
-      const form = page.getByRole("dialog");
+      const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
       await form.getByLabel("Name").fill("Nightly sweep");
       await form.getByLabel("Instructions").fill("/review the day");
@@ -134,16 +136,21 @@ try {
       // what "no cron expression is accepted anywhere in the UI" means at the
       // only surface that authors one.
       await form.getByRole("button", { name: "On a schedule" }).click();
-      const preset = form.getByRole("group", { name: "Schedule" });
+      const preset = form.getByLabel("Schedule");
       await preset.waitFor({ timeout: 10000 });
       // Through the preset control both ways, so this asserts the control
       // DRIVES the record rather than agreeing with a default. An hourly
       // schedule has no hour to state, which is why its time control is a
       // different one — the form cannot spell "hourly, at 09:00".
-      await preset.getByRole("button", { name: "hour", exact: true }).click();
+      await preset.click();
+      await page.getByRole("option", { name: "Hourly" }).click();
       await form.getByLabel("Minutes past the hour").waitFor({ timeout: 10000 });
-      await preset.getByRole("button", { name: "day", exact: true }).click();
-      await form.getByLabel("Time", { exact: true }).fill("21:30");
+      await preset.click();
+      await page.getByRole("option", { name: "Every day" }).click();
+      await form.getByLabel("Time", { exact: true }).click();
+      await page.getByLabel("Hour", { exact: true }).fill("21");
+      await page.getByLabel("Minute", { exact: true }).fill("30");
+      await page.keyboard.press("Escape");
 
       // The zone is shown, and it is a picker over the real IANA catalog.
       const zone = form.getByLabel("Time zone", { exact: true });
@@ -155,9 +162,12 @@ try {
       await search.fill("Europe/London");
       await page.getByRole("option", { name: "Europe/London" }).first().click();
 
-      const textFields = await form.locator("input[type=text], textarea").count();
+      const textFields = await form.locator('input:not([inputmode="numeric"]), textarea').count();
       await form.getByRole("button", { name: "Create automation" }).click();
-      await form.waitFor({ state: "detached", timeout: 15000 });
+      await page
+        .locator("[data-automation-rail-row]")
+        .filter({ hasText: "Nightly sweep" })
+        .waitFor({ timeout: 15000 });
 
       const listed = await listedSchedule();
       return {
