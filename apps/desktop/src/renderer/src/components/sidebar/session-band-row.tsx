@@ -155,18 +155,16 @@ function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason
 /**
  * The meta line's first slot: WHERE the Session lives, not what launched it.
  *
- * This slot used to hold the source label — the harness name, or `Chat · Live`
- * for an attached chat. Neither is what a reader scans this band for. A band
- * holding twenty Sessions is parsed by which ticket column each one sits in,
- * and "Live" in particular said only what the Active band already says by
- * being the Active band. The ticket's status is the fact that makes the list
- * sortable by eye, so it takes the slot; the harness moves to the row's
- * `title`, where a question asked about ONE row belongs.
+ * This slot used to hold the source label — the harness name or `Chat`. Neither
+ * is what a reader scans this band for. A band holding twenty Sessions is
+ * parsed by which ticket column each one sits in. The ticket's status is the
+ * fact that makes the list sortable by eye, so it takes the slot; the harness
+ * moves to the row's `title`, where a question asked about ONE row belongs.
  *
  * A ticketless row — a project Project Session, or one whose ticket has left
- * the board — has no column to name and keeps its source. That is also the one
- * place `Chat · Live` still earns its keep: with no status to say it better,
- * whether the attachment is still open is the only thing worth saying.
+ * the board — has no column to name and keeps its source. A chat still says
+ * only `Chat`; whether its attachment is open remains a functional listing
+ * fact rather than a displayed state.
  */
 function placeLine(row: ActiveSessionRow): string {
   return row.ticket === null ? row.source : TICKET_STATUS_LABELS[row.ticket.status];

@@ -125,16 +125,14 @@ describe("ActiveBandRow", () => {
     expect(render(row())).toContain("last 1m");
   });
 
-  it("says where a chat Session lives instead of saying it is Live", () => {
-    // The whole point of the change: `Live` told a reader nothing the Active
-    // band was not already telling them by holding the row.
+  it("says where a ticketed chat Session lives and keeps its source plain", () => {
     const markup = render(
-      row({ id: "chat:c1", source: "Chat · Live", ticket: { ...ticket, status: "needs_review" } }),
+      row({ id: "chat:c1", source: "Chat", ticket: { ...ticket, status: "needs_review" } }),
     );
 
     expect(stateLine(markup)).toBe("Needs Review · Working");
-    expect(stateLine(markup)).not.toContain("Live");
-    expect(hoverTitle(markup)).toContain("Chat · Live");
+    expect(hoverTitle(markup)).toContain("Chat");
+    expect(markup).not.toContain("Live");
   });
 
   it("keeps the source on a ticketless row, which has no column to name", () => {
