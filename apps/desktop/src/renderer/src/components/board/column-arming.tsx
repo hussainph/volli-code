@@ -16,10 +16,10 @@
  * in both states for the same reason: the answer to "nothing is offered here"
  * and to "I want a different one" is the same page.
  *
- * The bolt is filled only while the column is armed. That is the fill rule
- * exactly as CLAUDE.md states it — the exception among its neighbours, where
- * position and ink are not already saying it — and it is the only mark that a
- * card dropped here will start work.
+ * The bolt is filled only while the column is armed AND that Automation is
+ * switched on here. Arming survives a switched-off machine-local switch, so
+ * that state keeps a visible regular bolt and names both facts in its tooltip;
+ * it must not use the filled mark that says a plain drop will start work.
  *
  * And an UNARMED column's bolt is invisible until the column is hovered, the
  * button is focused, or its menu is open. A board with nothing armed must read
@@ -93,10 +93,14 @@ export function ColumnArmingButton({
     () => offeredAutomationsForColumn(automations, status, rank),
     [automations, status, rank],
   );
+  const armingState =
+    armed === null ? "unarmed" : enabledIds.includes(armed.id) ? "ready" : "switched-off";
   const label =
     armed === null
       ? `Arm ${TICKET_STATUS_LABELS[status]}`
-      : `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`;
+      : armingState === "ready"
+        ? `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`
+        : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — switched off`;
 
   return (
     <DropdownMenu
@@ -117,6 +121,7 @@ export function ColumnArmingButton({
               aria-label={label}
               data-column-arming={status}
               data-armed={armed === null ? undefined : armed.id}
+              data-arming-state={armingState}
               className={cn(
                 "shrink-0 transition-opacity duration-150",
                 armed === null
@@ -128,7 +133,10 @@ export function ColumnArmingButton({
                   : "text-foreground",
               )}
             >
-              <LightningIcon weight={armed === null ? "regular" : "fill"} />
+              <LightningIcon
+                weight={armingState === "ready" ? "fill" : "regular"}
+                data-arming-mark={armingState === "ready" ? "filled" : "unfilled"}
+              />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

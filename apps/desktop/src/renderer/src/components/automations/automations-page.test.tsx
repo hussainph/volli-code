@@ -167,7 +167,7 @@ async function mount(seed: {
     // (`ui/sidebar.tsx`): the lane header's arming bolt is the board's own
     // control, tooltip and all.
     root?.render(
-      <TooltipProvider>
+      <TooltipProvider delayDuration={0}>
         <AutomationsPage />
       </TooltipProvider>,
     );
@@ -182,6 +182,24 @@ function button(label: string): HTMLElement {
   const found = document.querySelector(`[aria-label="${label}"]`);
   if (found === null) throw new Error(`no control labelled ${label}`);
   return found as HTMLElement;
+}
+
+/** Opens a tooltip through the pointer door its Radix trigger actually listens to. */
+async function showTooltip(trigger: HTMLElement): Promise<HTMLElement> {
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const found = document.querySelector('[data-slot="tooltip-content"]');
+  if (found === null) throw new Error("tooltip did not open");
+  return found as HTMLElement;
+}
+
+/** Opens a dropdown through the pointer door its Radix trigger actually listens to. */
+async function openDropdown(trigger: HTMLElement): Promise<void> {
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  });
 }
 
 /** Types into a controlled input the way React's own event system sees it. */
@@ -539,39 +557,62 @@ describe("the lane view", () => {
     ).toBe("1");
   });
 
-  it("pins the armed row to 1 ahead of its authored rank — while it is switched on here", async () => {
-    const armed = [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }];
-    const orders = [
-      {
-        projectId: "p1",
-        status: "doing",
-        rankedAutomationIds: ["implement", "shared"],
-        orderedAt: 1,
-      },
-    ];
+  it("pins the armed row to 1 and fills its bolt while it is switched on here", async () => {
     await mount({
       automations: [doingAndReview, doingOnly],
-      armings: armed,
-      orders,
+      armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+      ],
       enabled: ["shared"],
     });
 
-    expect(
-      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
-    ).toBe("1");
+    const bolt = button("Doing runs Standards sweep");
+    expect(bolt.getAttribute("data-arming-state")).toBe("ready");
+    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
+    const row = document.querySelector('[data-lane-row="doing:shared"]');
+    expect(row?.getAttribute("data-lane-digit")).toBe("1");
+    expect(row?.getAttribute("data-lane-arming")).toBe("ready");
+  });
 
-    // Switched off here, a plain drop runs nothing — so the pin lets go and the
-    // authored rank stands, exactly as the drag reads it.
-    await act(async () => {
-      root?.unmount();
+  it("marks an armed-but-switched-off bolt, tooltip, menu row, and authored lane digit alike", async () => {
+    await mount({
+      automations: [doingAndReview, doingOnly],
+      armings: [{ projectId: "p1", status: "doing", automationId: "shared", armedAt: 1 }],
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: ["implement", "shared"],
+          orderedAt: 1,
+        },
+      ],
+      enabled: [],
     });
-    container?.remove();
-    useAutomationsStore.setState({ byProject: {}, armingByProject: {}, orderByProject: {} });
-    await mount({ automations: [doingAndReview, doingOnly], armings: armed, orders, enabled: [] });
 
-    expect(
-      document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
-    ).toBe("2");
+    const label = "Doing is armed with Standards sweep — switched off";
+    const bolt = button(label);
+    expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
+    expect(bolt.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+    expect((await showTooltip(bolt)).textContent).toBe(label);
+
+    // No effective arming means no pin: the authored digit remains, and the
+    // annotation says why this persisted arming will not fire on a plain drop.
+    const row = document.querySelector('[data-lane-row="doing:shared"]');
+    expect(row?.getAttribute("data-lane-digit")).toBe("2");
+    expect(row?.getAttribute("data-lane-arming")).toBe("switched-off");
+    expect(row?.textContent).toContain("Armed · Switched off");
+
+    await openDropdown(bolt);
+    const menuRow = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
+      (candidate) => candidate.textContent?.includes("Standards sweep"),
+    );
+    expect(menuRow?.textContent).toContain("Switched off");
   });
 });
 
