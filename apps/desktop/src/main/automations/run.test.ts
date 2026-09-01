@@ -32,7 +32,7 @@ import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
-import { StructuredSessionsError } from "../session-runtime/sessions";
+import { sessionCreateCommandId, StructuredSessionsError } from "../session-runtime/sessions";
 import type { SessionStartInput } from "../session-runtime/sessions";
 
 let ctx: TestDb;
@@ -131,6 +131,22 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
           // this row (`listProjectRunsForAutomation`) — a fake that skipped it
           // would leave the schedule's own single-flight guard untestable.
           insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
+          ctx.db
+            .prepare(
+              `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+               VALUES (?, ?, ?, ?, NULL)`,
+            )
+            .run(
+              sessionCreateCommandId(input.operationId),
+              sessionId,
+              42_000,
+              JSON.stringify({
+                kind: "session.create",
+                projectId: input.projectId,
+                ticketId: input.ticketId,
+                title: input.title,
+              }),
+            );
         }
         return { sessionId, model: RESOLVED };
       },
@@ -387,6 +403,45 @@ describe("createAutomationRunner", () => {
     expect(h.delivered).toEqual([
       expect.objectContaining({ text: "Persisted instructions", resources: [] }),
     ]);
+  });
+
+  it("credits a scheduled Project Run when Run insertion dies after Session mint", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h);
+    // The Session transaction will commit first. Abort only the following Run
+    // projection transaction to leave the exact process-death window on disk.
+    ctx.db.exec(`
+      CREATE TRIGGER fail_scheduled_run_insert
+      BEFORE INSERT ON automation_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated process death before Run insert');
+      END;
+    `);
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "unattended",
+      }),
+    ).rejects.toThrow("simulated process death before Run insert");
+
+    expect(h.creates).toHaveLength(1);
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    expect(
+      ctx.db
+        .prepare(
+          `SELECT automation_command_id
+             FROM automation_session_mint_intents
+            WHERE session_create_command_id = ?`,
+        )
+        .get(sessionCreateCommandId(h.creates[0]!.operationId)),
+    ).toEqual({ automation_command_id: expect.any(String) });
+    expect(readSessionProvenance(ctx.db, { sessionId: "session-1", ticketId: null })).toEqual({
+      kind: "automation",
+      automationName: null,
+    });
   });
 
   it("replays one command id while its Session is working, without a second Session or first turn", async () => {
