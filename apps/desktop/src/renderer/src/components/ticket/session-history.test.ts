@@ -284,12 +284,9 @@ describe("sessionSourceLabel", () => {
     expect(sourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
   });
 
-  // A chat row has no PTY to describe, so it names its own thing — whether the
-  // structured attachment is still open — instead of borrowing terminal words.
-  it("names a chat row by its liveness, not a harness", () => {
-    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe(
-      "Chat · Live",
-    );
+  // A chat row has no PTY to describe, and attachment is not source metadata.
+  it("names a chat row without displaying its attachment state", () => {
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe("Chat");
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
   });
 });
@@ -481,20 +478,20 @@ describe("filterSessionHistory", () => {
 });
 
 describe("buildTicketChatSessionRows", () => {
-  it("names each row by its title, open only while its attachment is live", () => {
+  it("keeps attachment behavior under the non-visual isOpen name", () => {
     expect(
       buildTicketChatSessionRows([
-        chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
-        chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+        chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
+        chatRecord({ sessionId: "closed", title: "Draft the RFC", live: false }),
       ]),
     ).toEqual([
       {
-        record: chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
+        record: chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
         title: "Plan the migration",
         isOpen: true,
       },
       {
-        record: chatRecord({ sessionId: "ended", title: "Draft the RFC", live: false }),
+        record: chatRecord({ sessionId: "closed", title: "Draft the RFC", live: false }),
         title: "Draft the RFC",
         isOpen: false,
       },
@@ -507,16 +504,14 @@ describe("buildTicketChatSessionRows", () => {
 });
 
 describe("filterChatSessionHistory", () => {
-  // [0] is live, [1] is ended — the source line each matches on differs.
   const chatRows = buildTicketChatSessionRows([
-    chatRecord({ sessionId: "live", title: "Plan the migration", live: true }),
-    chatRecord({ sessionId: "ended", title: "Review auth flow", live: false }),
+    chatRecord({ sessionId: "attached", title: "Plan the migration", live: true }),
+    chatRecord({ sessionId: "closed", title: "Review auth flow", live: false }),
   ]);
 
   it("matches titles and source metadata case-insensitively", () => {
     expect(filterChatSessionHistory(chatRows, "AUTH")).toEqual([chatRows[1]]);
-    // "Chat · Live" is the live row's source line, and nothing else's.
-    expect(filterChatSessionHistory(chatRows, "live")).toEqual([chatRows[0]]);
+    expect(filterChatSessionHistory(chatRows, "live")).toEqual([]);
     expect(filterChatSessionHistory(chatRows, "chat")).toEqual(chatRows);
   });
 

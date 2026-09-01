@@ -295,8 +295,8 @@ function SessionList({
               // A chat Session's activity is the same vocabulary a terminal
               // row's status is (`ChatSessionRecord.activity` is a subset of
               // `SessionActivityState`), so the two kinds trail with one column
-              // rather than a status beside a "Chat · Live". Most History rows
-              // say only when they last said anything; a stopped chat retains
+              // rather than repeating source metadata. Most History rows say
+              // only when they last said anything; a stopped chat retains
               // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (

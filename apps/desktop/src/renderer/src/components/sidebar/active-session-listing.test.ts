@@ -661,7 +661,7 @@ describe("buildActiveSessionListing — who started each Session", () => {
 });
 
 describe("buildActiveSessionListing — chat Sessions", () => {
-  it("puts a live chat Session in Active on its own recency, with no terminal involved", () => {
+  it("puts an attached chat Session in Active on its own recency, with no terminal involved", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
@@ -677,7 +677,7 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     expect(result.active).toMatchObject([
       {
         title: "Plan the migration",
-        source: "Chat · Live",
+        source: "Chat",
         // Derived from the Session, not from an open tab: the row can say where
         // it belongs before anything has been adopted on it.
         target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
