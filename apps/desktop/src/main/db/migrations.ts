@@ -1902,8 +1902,25 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 39,
     name: "session delegation extensions — person-approved slots past the in-ticket allowance",
     sql: MIGRATION_039_SESSION_DELEGATION_EXTENSIONS,
+    apply: applyMigration039SessionDelegationExtensions,
   },
 ];
+
+/**
+ * Migration 039's reconciler — the VC-204 branch shipped this table as its own
+ * 031 before main's automations series claimed 031–038, so a database from
+ * that lineage says `user_version = 31` while holding the extension table and
+ * MISSING main's 031 schema entirely. The runner will never offer that
+ * database 031 again — 032–039 are all it has left — so main's 031 rides
+ * here, exactly the way 024 carries 023's web-keys rebuild: probe-gated on the
+ * schema facts it changes (`trigger_spec` by column probe, the arming table by
+ * IF NOT EXISTS), a no-op on every lineage that ran main's own 031. Both
+ * halves converge on one schema whichever parallel 031 a database ran first.
+ */
+function applyMigration039SessionDelegationExtensions(db: Database.Database): void {
+  applyMigration031AutomationTriggers(db);
+  db.exec(MIGRATION_039_SESSION_DELEGATION_EXTENSIONS);
+}
 
 /**
  * Migration 031's reconciler. `ALTER TABLE … ADD COLUMN` is the one statement
