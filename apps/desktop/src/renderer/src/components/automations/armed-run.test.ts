@@ -3,6 +3,8 @@ import type { PendingArmedRun } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
+import type { AutomationRunStartResult } from "../../../../ipc/contract";
+
 import {
   announcePendingArmedRunSettlement,
   cancelArmedRun,
@@ -36,6 +38,29 @@ function pending(overrides: Partial<PendingArmedRun> = {}): PendingArmedRun {
   };
 }
 
+function started(automationName: string): AutomationRunStartResult {
+  return {
+    ok: true,
+    projectId: "p1",
+    run: {
+      id: "run-1",
+      automationId: "a1",
+      automationName,
+      ticketId: "t1",
+      sessionId: "session-1",
+      model: { providerId: "anthropic", modelId: "claude", reasoningLevel: "medium" },
+      attendance: "attended",
+      createdAt: 4_500,
+    },
+    receipt: {
+      id: "receipt-1",
+      commandId: "command-1",
+      status: "completed",
+      recordedAt: 4_500,
+    },
+  };
+}
+
 let cancel: ReturnType<typeof vi.fn>;
 let retry: ReturnType<typeof vi.fn>;
 
@@ -47,6 +72,15 @@ beforeEach(() => {
       automations: {
         cancelPendingArmedRun: cancel,
         retryPendingArmedRun: retry,
+      },
+      sessions: {
+        list: vi.fn(async () => ({ ok: true, sessions: [] })),
+        listForTicket: vi.fn(async () => ({ ok: true, sessions: [] })),
+      },
+      sessionRpc: {
+        onEvent: () => () => {},
+        request: vi.fn(async () => ({ ok: true })),
+        subscribe: vi.fn(() => () => {}),
       },
     },
   });
@@ -101,5 +135,19 @@ describe("main-owned armed Run projection", () => {
     const action = options?.action as { onClick(): void } | undefined;
     action?.onClick();
     await vi.waitFor(() => expect(retry).toHaveBeenCalledWith({ id: "arrival-1" }));
+  });
+
+  it("names a successful launch from main's outcome after a countdown-time rename", () => {
+    const snapshot = pending({ automationName: "Old review sweep" });
+    const result = started("Renamed review sweep");
+
+    announcePendingArmedRunSettlement({ kind: "attempted", pending: snapshot, result });
+
+    // The Run outcome's name is also the Session title main resolved at launch;
+    // the pending name only described the countdown before that launch.
+    expect(toast.success).toHaveBeenCalledWith(
+      "Renamed review sweep started on VC-12",
+      expect.objectContaining({ action: expect.objectContaining({ label: "Open session" }) }),
+    );
   });
 });

@@ -149,7 +149,7 @@ export async function runAutomationForProject(input: {
       return;
     case "open-session": {
       useChatSessionsStore.getState().adoptChatSession(action.sessionId);
-      toast.success(`${input.automationName} started`, {
+      toast.success(`${action.automationName ?? input.automationName} started`, {
         action: {
           label: "Open session",
           onClick: () =>
@@ -240,17 +240,20 @@ export async function runAutomationFromListing(input: {
       // So the Ticket's rail holds the row without waiting on a refresh nobody
       // on this page would trigger.
       void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
-      toast.success(`${input.automationName} started on ${input.ticketDisplayId}`, {
-        action: {
-          label: "Open session",
-          onClick: () =>
-            openRunSession({
-              sessionId: action.sessionId,
-              projectId: action.projectId,
-              ticketId: input.ticketId,
-            }),
+      toast.success(
+        `${action.automationName ?? input.automationName} started on ${input.ticketDisplayId}`,
+        {
+          action: {
+            label: "Open session",
+            onClick: () =>
+              openRunSession({
+                sessionId: action.sessionId,
+                projectId: action.projectId,
+                ticketId: input.ticketId,
+              }),
+          },
         },
-      });
+      );
       return;
     }
   }

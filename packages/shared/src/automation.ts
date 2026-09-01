@@ -943,7 +943,11 @@ export interface PendingArmedRun {
   /** Snapshotted display id for windows that did not observe the move itself. */
   ticketDisplayId: string;
   automationId: string;
-  /** Snapshotted so every window keeps naming the Run consistently through a rename. */
+  /**
+   * Snapshotted for the countdown and any failure/abandonment before launch.
+   * A successful launch is named by its Run outcome instead, which is the same
+   * live name main resolved into the Session title.
+   */
   automationName: string;
   /** The column arrived in, re-checked when the deadline expires. */
   status: TicketStatus;
