@@ -75,16 +75,29 @@ import {
   getAutomation,
   listAllAutomations,
   listAutomationsForProject,
+  listColumnArmings,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
-import { getTicket, getTicketBrief } from "./db/tickets-repo";
+import { getTicket, getTicketBrief, getTicketRow } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { readAutomationRunAttendance } from "./db/automations-repo";
+import {
+  deletePendingArmedRun,
+  deletePendingArmedRunForTicket,
+  getPendingArmedRun,
+  listPendingArmedRuns,
+  putPendingArmedRun,
+} from "./db/pending-armed-runs-repo";
+import { enabledAutomationIds } from "./automations/enablement";
+import {
+  createPendingArmedRunCoordinator,
+  type PendingArmedRunCoordinator,
+} from "./automations/pending-armed-runs";
 import { createRunAttentionWatch } from "./automations/run-attention";
 import { readNotificationPreferences } from "./notification-preferences";
 import {
@@ -163,13 +176,14 @@ import { registerFileIpcHandlers } from "./volli-fs";
 import {
   broadcastDataChanged,
   broadcastHarnessEvent,
+  broadcastPendingArmedRuns,
+  broadcastPendingArmedRunSettled,
   broadcastSessionActivity,
   broadcastSessionHarness,
   broadcastSessionRetitled,
   broadcastSessionsInterrupted,
   broadcastSessionStarted,
   broadcastSystemAppearance,
-  broadcastTicketMoved,
   broadcastUpdateState,
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
@@ -1184,6 +1198,7 @@ app.whenReady().then(async () => {
         });
   let automationRunner: AutomationRunner | null = null;
   let automationScheduler: AutomationScheduler | null = null;
+  let pendingArmedRuns: PendingArmedRunCoordinator | null = null;
   /**
    * How a Session start turns skills into its durable prompt resources
    * (`SessionSkillPorts`): resolve reads BOTH skill tiers — `.agents/skills/`
@@ -1827,6 +1842,9 @@ app.whenReady().then(async () => {
     // Backward-move interrupt (issue #78): a user move that leaves the active
     // columns Esc's the ticket's live agent sessions, announced via toast.
     interruptTicketSessions: interruptTicketSessionsAnnounced,
+    // Renderer moves now reach main's one durable armed-column arrival owner,
+    // carrying an Option-drag choice when that gesture supplied one.
+    onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
     // Where attachment bytes live (VC-50) — the same root the volli-blob:
     // protocol serves from and materialization copies out of.
     blobsRoot: blobsRoot(app.getPath("userData")),
@@ -1934,6 +1952,66 @@ app.whenReady().then(async () => {
             ),
         })
       : null;
+
+  // The armed-column delay window (VC-226) belongs to main, not to any one
+  // renderer. Its SQLite row survives window count (and a relaunch), one timer
+  // serves that row, and every renderer receives the same full projection.
+  if (sessionDb !== null) {
+    const pendingDb = sessionDb;
+    pendingArmedRuns = createPendingArmedRunCoordinator({
+      now: Date.now,
+      nextId: randomUUID,
+      listPending: () => listPendingArmedRuns(pendingDb),
+      getPending: (id) => getPendingArmedRun(pendingDb, id),
+      putPending: (pending) => putPendingArmedRun(pendingDb, pending),
+      deletePending: (id) => deletePendingArmedRun(pendingDb, id),
+      deletePendingForTicket: (ticketId) => deletePendingArmedRunForTicket(pendingDb, ticketId),
+      readTicket: (ticketId) => {
+        const row = getTicketRow(pendingDb, ticketId);
+        if (row === undefined || row.archived_at !== null) return undefined;
+        const ticket = getTicket(pendingDb, ticketId);
+        const project = getProjectById(pendingDb, row.project_id);
+        if (ticket === undefined || project === undefined) return undefined;
+        return {
+          projectId: ticket.projectId,
+          status: ticket.status,
+          displayId: displayTicketId(project.ticketPrefix, ticket.ticketNumber),
+        };
+      },
+      readPlanning: (projectId) => ({
+        automations: listAutomationsForProject(pendingDb, projectId),
+        armings: listColumnArmings(pendingDb, projectId),
+        enabledAutomationIds: enabledAutomationIds(pendingDb),
+      }),
+      run: async ({ commandId, automationId, ticketId }) => {
+        const runner = automationRunner;
+        if (runner === null) {
+          return {
+            ok: false,
+            code: "RUN_FAILED",
+            error: "The Session runtime is not available this launch.",
+          };
+        }
+        // A Deliberate column move retains the attended semantics its renderer
+        // expiry door had. Only ownership of the timer moved into main.
+        return runner.run({
+          commandId,
+          target: { kind: "automation", automationId },
+          ticketId,
+          modelOverride: null,
+          attendance: "attended",
+        });
+      },
+      setTimer: (delayMs, fire) => setTimeout(fire, delayMs),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      onPendingChanged: broadcastPendingArmedRuns,
+      onSettled: broadcastPendingArmedRunSettled,
+      log: (message) => console.error(message),
+    });
+    pendingArmedRuns.start();
+    app.on("before-quit", () => pendingArmedRuns?.stop());
+  }
+
   if (automationRunner !== null) {
     void automationRunner.recover().catch((error: unknown) => {
       console.error(`[volli] automation recovery failed: ${errorMessage(error)}`);
@@ -2007,6 +2085,7 @@ app.whenReady().then(async () => {
   registerAutomationIpcHandlers(dbHandle, {
     service: automationService,
     runner: automationRunner,
+    ...(pendingArmedRuns === null ? {} : { pendingArmedRuns }),
   });
   // The OTHER half of `auto`: the system flipping while the app is running.
   // Only main can see it — the renderer's `prefers-color-scheme` query resolves
@@ -2696,13 +2775,10 @@ app.whenReady().then(async () => {
           // down. Read-only commands and no-ops (e.g. a same-column move) never
           // fire it, so a stray broadcast can't slip through.
           onMutation: (change) => broadcastDataChanged(change),
-          // The armed column's other reporter (VC-128). `volli ticket move` is
-          // a Deliberate move exactly as a drag is, so it reaches the same
-          // arrival door in the renderer — carrying the column the Ticket LEFT,
-          // which the broadcast above cannot say and a re-read can no longer
-          // recover. Same-column no-ops never fire it, so nothing arrives
-          // where nothing moved.
-          onDeliberateMove: (notice) => broadcastTicketMoved(notice),
+          // An explicit `volli ticket move` is the other Deliberate-move door.
+          // It reaches the same one main-owned pending arrival as renderer IPC;
+          // no renderer has to exist for the timer to fire.
+          onDeliberateMove: (notice) => pendingArmedRuns?.noteDeliberateMove(notice),
           // The involuntary channel's fan-out (harness-events): every canonical
           // event a hook reports reaches every window, so a session's activity
           // state stops being guessed from PTY output alone.

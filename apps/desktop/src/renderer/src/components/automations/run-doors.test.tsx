@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * VC-220 — every Run door, driven from the control a person actually presses,
- * as far as the one seam they all have to reach.
+ * VC-220 — every renderer-owned hand-Run door, driven from the control a
+ * person actually presses, as far as the one seam they all have to reach.
  *
  * The report said the kickoff never fired "across ALL Run doors", and the
  * answer to that claim cannot be one call to the shared runner: the whole point
@@ -9,8 +9,8 @@
  * seam — the surface that grew its own call, or stopped making one at all. So
  * each case here starts at the real entry path (a click on the rail's split
  * button, a board card's context-menu row, the page's Ticket chooser, the
- * palette's run-by-name row, the armed column's countdown expiring) with the
- * real `run-automation.ts` glue behind it, and asserts what reached
+ * palette's run-by-name row) with the real `run-automation.ts` glue behind it,
+ * and asserts what reached
  * `window.api.automations.run` — the preload's `volli:automation-run`.
  *
  * That channel is where this file stops, and the rest of the chain is pinned
@@ -22,9 +22,10 @@
  *    FIRST turn under the Run's durable ids, and the loud failure when the
  *    attach that would have carried them is refused:
  *    `main/automations/run.test.ts`.
- *  - the two doors that never touch the renderer — the agent verb and the
- *    schedule timer — reach the same runner in `agent-tool-door.test.ts` and
- *    `automations/scheduler.test.ts`.
+ *  - the doors that never ask the renderer to run — the agent verb, schedule
+ *    timer, and main-owned armed-column expiry — reach the same runner in
+ *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and
+ *    `automations/pending-armed-runs.test.ts`.
  *
  * Nothing here asserts where a started Run LANDS (a tab, a toast, Model
  * Access); that is `run-automation-model.ts`'s decision and each surface's own
@@ -33,7 +34,7 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { ARMED_RUN_DELAY_MS, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type {
   Automation,
   AutomationRun,
@@ -42,7 +43,7 @@ import type {
   Ticket,
 } from "@volli/shared";
 
-import { noteDeliberateMove, resetArmedRuns } from "./armed-run";
+import { resetArmedRuns } from "./armed-run";
 import { TicketAutomationMenuItems } from "./automation-run-menu";
 import { AutomationsPage } from "./automations-page";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
@@ -346,7 +347,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("every Run door reaches the one Run seam (VC-220)", () => {
+describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
   it("the Ticket rail's split button", async () => {
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
@@ -471,37 +472,6 @@ describe("every Run door reaches the one Run seam (VC-220)", () => {
         modelOverride: null,
       }),
     );
-  });
-
-  it("the armed column's window, when nobody takes it back", async () => {
-    // The one door with no control at the end of it: a card is dropped, 3500ms
-    // pass, and the Run starts itself. It is also the door that calls the seam
-    // directly rather than through the shared glue, which is exactly the kind
-    // of bypass a single runner-level test cannot see.
-    vi.useFakeTimers();
-    try {
-      useAutomationsStore.setState({
-        byProject: { p1: [AUTOMATION] },
-        armingByProject: { p1: [ARMING] },
-        orderByProject: { p1: [] },
-        enabledIds: [AUTOMATION.id],
-        enablementRead: true,
-      });
-      noteDeliberateMove({ projectId: "p1", ticketId: "t1", from: "todo", to: "doing" });
-
-      await vi.advanceTimersByTimeAsync(ARMED_RUN_DELAY_MS);
-
-      expect(run).toHaveBeenCalledWith(
-        askedFor({
-          target: { kind: "automation", automationId: "a1" },
-          ticketId: "t1",
-          // Never on the drag path (VC-112).
-          modelOverride: null,
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("the command palette's run-by-name row", async () => {

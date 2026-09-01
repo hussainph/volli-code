@@ -1601,6 +1601,45 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 037: main-owned pending arrivals for armed columns (VC-226).
+ *
+ * Numbered 037 rather than its branch's 036: VC-225's mint-intents migration
+ * landed first on main, and migration versions are a total order.
+ *
+ * The renderer used to own both the countdown and its timer. That made the
+ * record disappear with the last window and multiply with every additional
+ * one. This table is main's durable operating projection instead: one row per
+ * Ticket, replaced by a later Deliberate move of that Ticket, while every
+ * renderer merely lists and cancels the same row.
+ *
+ * `id` identifies the exact move so a late Cancel from a replaced countdown
+ * cannot cancel the newer arrival. `ticket_id` is the primary key because a
+ * Ticket cannot be arriving in two columns at once. The Automation id is not a
+ * foreign key on purpose: deleting or editing the Automation during the delay
+ * leaves enough snapshot evidence for expiry to classify the window as
+ * abandoned rather than erasing it behind the timer's back.
+ *
+ * There is deliberately no Run command id here. Expiry mints one only when it
+ * calls the existing Run door; retaining and retrying that id belongs to
+ * VC-228, not this migration.
+ */
+const MIGRATION_037_PENDING_ARMED_RUNS = `
+CREATE TABLE IF NOT EXISTS automation_pending_armed_runs (
+  ticket_id         TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  id                TEXT NOT NULL UNIQUE,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_display_id TEXT NOT NULL CHECK (ticket_display_id <> ''),
+  automation_id     TEXT NOT NULL,
+  automation_name   TEXT NOT NULL CHECK (automation_name <> ''),
+  status             TEXT NOT NULL CHECK (status IN ('backlog', 'todo', 'doing', 'needs_review', 'done')),
+  origin             TEXT NOT NULL CHECK (origin IN ('armed', 'chosen')),
+  opened_at          INTEGER NOT NULL,
+  start_at           INTEGER NOT NULL CHECK (start_at >= opened_at)
+);
+CREATE INDEX IF NOT EXISTS idx_pending_armed_runs_start ON automation_pending_armed_runs(start_at, id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1783,6 +1822,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 36,
     name: "automations — durable Session mint intents for pre-Run provenance",
     sql: MIGRATION_036_AUTOMATION_SESSION_MINT_INTENTS,
+  },
+  {
+    version: 37,
+    name: "automations — main-owned pending armed-column arrivals",
+    sql: MIGRATION_037_PENDING_ARMED_RUNS,
   },
 ];
 

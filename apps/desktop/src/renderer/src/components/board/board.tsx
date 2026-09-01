@@ -407,11 +407,10 @@ export const Board = React.memo(function Board({
     // a drag answers is composed from the same four reads, so the rank belongs
     // beside the arming rather than a frame behind it.
     void store.refreshOrder(projectId);
-    // And which of them are switched on HERE (VC-127): an armed column fires
-    // only what this machine has turned on, so the answer belongs beside the
-    // other two. An arrival that beats all three still gets a true answer —
-    // `noteDeliberateMove` waits for cold caches rather than reading them
-    // empty — but a board that is up should not be making it wait.
+    // And which of them are switched on HERE (VC-127): the drag picker pins
+    // only the effective armed Automation, so its renderer model needs this
+    // beside the other reads. Main independently classifies the committed
+    // arrival from its durable projections; these caches never own the timer.
     void store.refreshEnablement();
   }, [projectId]);
 

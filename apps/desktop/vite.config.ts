@@ -149,11 +149,10 @@ export default defineConfig(({ mode }) => ({
         // refusal opens Model Access, which toasts, and what success opens —
         // pure precisely so the gate can reach the classification.
         "src/components/automations/run-automation-model.ts",
-        // And whether a Run starts at all (VC-128). This is the armed column's
-        // entire safety argument as arithmetic: what counts as an arrival, and
-        // whether a window that woke may fire. A missed branch here is a Run a
-        // person did not ask for, which is the one failure this feature cannot
-        // have — so it is gated rather than left to the view that renders it.
+        // Renderer import seam for the armed-column arithmetic. The executable
+        // rules moved to @volli/shared with main's countdown ownership (VC-226)
+        // and are held at 100% by that package's gate; keeping this seam listed
+        // prevents a second renderer implementation from quietly returning.
         "src/components/automations/armed-move-model.ts",
         // What the Automations page SAYS (VC-127). In the gate because a Run
         // is durable evidence: it records the RESOLVED model and reasoning so

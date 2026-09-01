@@ -3170,10 +3170,9 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      // 11 through VC-128, plus VC-130's two (the project's Skipped
-      // occurrences, and the Run door whose Target is the Project) and
-      // VC-132's two (reading and writing a column's own order).
-      expect(AUTOMATION_CHANNELS).toHaveLength(15);
+      // 15 through VC-132, plus VC-226's shared pending-list and exact-Cancel
+      // doors. Derived above; the count catches an accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(17);
     });
   });
 });

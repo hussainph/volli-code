@@ -921,6 +921,144 @@ export function effectiveArmedAutomationFor(input: {
  */
 export const ARMED_RUN_DELAY_MS = 3500;
 
+/** What a Deliberate move carries when the Option-drag picker named a target. */
+export type DeliberateMoveChoice =
+  | { kind: "automation"; automationId: string }
+  | { kind: "move-only" };
+
+/** Which door opened an armed Run window: the column's arming or a person's pick. */
+export type PendingArmedRunOrigin = "armed" | "chosen";
+
+/**
+ * One durable, main-owned delay window for a committed arrival.
+ *
+ * `id` identifies this exact arrival. `ticketId` is still the replacement key:
+ * a Ticket cannot be arriving in two columns at once, so a later move replaces
+ * its earlier window instead of queueing another Run behind it.
+ */
+export interface PendingArmedRun {
+  id: string;
+  ticketId: string;
+  projectId: string;
+  /** Snapshotted display id for windows that did not observe the move itself. */
+  ticketDisplayId: string;
+  automationId: string;
+  /** Snapshotted so every window keeps naming the Run consistently through a rename. */
+  automationName: string;
+  /** The column arrived in, re-checked when the deadline expires. */
+  status: TicketStatus;
+  origin: PendingArmedRunOrigin;
+  /** Epoch milliseconds when main recorded the arrival. */
+  openedAt: number;
+  /** Epoch milliseconds when the Run may start, and never before. */
+  startAt: number;
+}
+
+export type ArmedMoveDecision =
+  | { kind: "nothing" }
+  | { kind: "open-window"; automation: Automation; origin: PendingArmedRunOrigin };
+
+/**
+ * What a committed Deliberate move means for Automations: nothing, or one
+ * delay window. Kept in shared domain code so main and every renderer project
+ * the same arrival rule rather than independently deciding what an arming does.
+ */
+export function armedMoveDecision(input: {
+  automations: readonly Automation[];
+  armings: readonly ColumnArming[];
+  enabledAutomationIds: readonly string[];
+  from: TicketStatus;
+  to: TicketStatus;
+  choice?: DeliberateMoveChoice;
+}): ArmedMoveDecision {
+  if (!isColumnArrival(input.from, input.to)) return { kind: "nothing" };
+  if (input.choice?.kind === "move-only") return { kind: "nothing" };
+  const choice = input.choice;
+  if (choice?.kind === "automation") {
+    const picked = input.automations.find((automation) => automation.id === choice.automationId);
+    // Never substitute the column's arming for a picked record that disappeared.
+    return picked === undefined
+      ? { kind: "nothing" }
+      : { kind: "open-window", automation: picked, origin: "chosen" };
+  }
+  const automation = armedAutomationFor(input.automations, input.armings, input.to);
+  if (automation === null || !input.enabledAutomationIds.includes(automation.id)) {
+    return { kind: "nothing" };
+  }
+  return { kind: "open-window", automation, origin: "armed" };
+}
+
+/** Creates the durable snapshot main stores for one countdown. */
+export function openArmedRun(input: {
+  id: string;
+  ticketId: string;
+  ticketDisplayId: string;
+  projectId: string;
+  automation: Automation;
+  status: TicketStatus;
+  origin: PendingArmedRunOrigin;
+  now: number;
+}): PendingArmedRun {
+  return {
+    id: input.id,
+    ticketId: input.ticketId,
+    ticketDisplayId: input.ticketDisplayId,
+    projectId: input.projectId,
+    automationId: input.automation.id,
+    automationName: input.automation.name,
+    status: input.status,
+    origin: input.origin,
+    openedAt: input.now,
+    startAt: input.now + ARMED_RUN_DELAY_MS,
+  };
+}
+
+/** Why a pending armed Run ended without starting. */
+export type ArmedRunAbandonReason = "gone" | "left-column" | "disarmed" | "switched-off";
+
+export type ArmedRunVerdict =
+  | { kind: "start" }
+  | { kind: "wait"; remainingMs: number }
+  | { kind: "abandon"; reason: ArmedRunAbandonReason };
+
+/** Re-checks the clock and every live fact the arrival depended on. */
+export function armedRunVerdict(input: {
+  pending: PendingArmedRun;
+  now: number;
+  currentStatus: TicketStatus | null;
+  armedNow: Automation | null;
+  enabledAutomationIds: readonly string[];
+}): ArmedRunVerdict {
+  const remainingMs = input.pending.startAt - input.now;
+  if (remainingMs > 0) return { kind: "wait", remainingMs };
+  if (input.currentStatus === null) return { kind: "abandon", reason: "gone" };
+  if (input.currentStatus !== input.pending.status) {
+    return { kind: "abandon", reason: "left-column" };
+  }
+  // A named pick is a human invocation and never depended on either
+  // machine-local automatic-Run switch.
+  if (input.pending.origin === "chosen") return { kind: "start" };
+  if (input.armedNow === null || input.armedNow.id !== input.pending.automationId) {
+    return { kind: "abandon", reason: "disarmed" };
+  }
+  if (!input.enabledAutomationIds.includes(input.pending.automationId)) {
+    return { kind: "abandon", reason: "switched-off" };
+  }
+  return { kind: "start" };
+}
+
+/** Countdown progress, clamped to the renderable 0…1 range. */
+export function armedRunProgress(pending: PendingArmedRun, now: number): number {
+  const span = pending.startAt - pending.openedAt;
+  if (span <= 0) return 1;
+  return Math.min(1, Math.max(0, (now - pending.openedAt) / span));
+}
+
+/** Whole seconds left, rounded up while Cancel is still live. */
+export function armedRunSecondsLeft(pending: PendingArmedRun, now: number): number {
+  return Math.max(0, Math.ceil((pending.startAt - now) / 1000));
+}
+
 /**
  * Whether a committed move is an ARRIVAL in `to` — the only thing an Arming
  * ever reacts to.

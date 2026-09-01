@@ -1016,6 +1016,55 @@ describe("archived-ticket guards — ticket-update/set-priority/set-labels/move"
   });
 });
 
+describe("volli:ticket-move — armed-column arrival", () => {
+  it("reports one committed renderer arrival to main, including its Option-drag choice", () => {
+    const arrivals: unknown[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { onDeliberateMove: (notice) => arrivals.push(notice) },
+    );
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "automation-2" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(arrivals).toEqual([
+      {
+        projectId,
+        ticketId: ticket.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+    ]);
+  });
+
+  it("does not report a same-column reorder as an arrival", () => {
+    const onDeliberateMove = vi.fn();
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { onDeliberateMove });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: ticket.id,
+      toStatus: "backlog",
+      toIndex: 0,
+    });
+
+    expect(onDeliberateMove).not.toHaveBeenCalled();
+  });
+});
+
 describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
   /** Re-registers the data handlers with a stubbed interrupt seam returning `ids`. */
   function withInterrupt(ids: string[]) {

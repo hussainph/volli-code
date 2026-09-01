@@ -160,11 +160,10 @@ export interface AutomationRunRequest {
    * Whether a person was at the door that asked (VC-133).
    *
    * **Set by the door, never carried on the wire.** The renderer's IPC payload
-   * has no such field: `automations/ipc.ts` fills in `attended` because being
-   * that handler IS the evidence — a person clicked the rail, the palette, the
-   * board card or the armed column's window to get there. The agent verb
-   * (`agent-tool-door.ts`) is the other caller of this door and fills in
-   * `unattended`, because its caller is a Session that has gone on to its own
+   * has no such field: `automations/ipc.ts` fills in `attended` for its hand-Run
+   * controls, and main's pending-arrival coordinator fills in `attended` for an
+   * armed column's Deliberate move. The agent verb (`agent-tool-door.ts`) fills
+   * in `unattended`, because its caller is a Session that has gone on to its own
    * work.
    *
    * Keeping it off the wire is what makes it trustworthy: a fact the renderer
