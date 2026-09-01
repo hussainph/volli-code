@@ -3,11 +3,11 @@
  * sections an `@` scope narrows to, WHERE a section truncates behind its
  * "Show all" row, and the exact match text a row hands cmdk to be judged by.
  *
- * Matching itself is deliberately NOT decided here. cmdk filters and sorts
- * natively; this module calls the same `defaultFilter` cmdk exports only to
- * learn which rows would survive a query, so the truncated slice the palette
- * mounts can never disagree with the scores cmdk then assigns to those same
- * rows. One matcher, owned by the library — the palette adds no second one.
+ * Matching remains cmdk's native `defaultFilter`. The one product-level score
+ * rule lives in {@link commandPaletteFilter}: a matching Ticket gets a fixed
+ * section-priority point so cmdk cannot reorder Sessions ahead of Tickets.
+ * The same wrapper scores the truncated slice and the mounted rows, preventing
+ * the two passes from disagreeing.
  */
 import { defaultFilter } from "cmdk";
 
@@ -60,17 +60,23 @@ export function scopeForToken(word: string): PaletteScope | null {
   );
 }
 
+export interface ParsedPaletteScopeQuery {
+  readonly scope: PaletteScope;
+  /** Everything after the leading scope token, ready to remain in the input. */
+  readonly query: string;
+}
+
 /**
- * The scope a just-typed query completes into: the ENTIRE text is one `@`
- * token sealed by trailing whitespace ("@sessions "). A token still being
- * typed has no trailing space, and a token embedded among other words is
- * someone searching for literal text — neither converts.
+ * A recognized leading `@scope` once whitespace seals it, plus any query that
+ * follows. This handles both incremental typing (`@sessions `) and one-step
+ * paste (`@sessions auth`) without treating an embedded token as syntax.
  */
-export function completedScopeToken(text: string): PaletteScope | null {
-  if (!/\s$/.test(text)) return null;
-  const word = text.trim();
-  if (!word.startsWith("@") || /\s/.test(word)) return null;
-  return scopeForToken(word);
+export function parsePaletteScopeQuery(text: string): ParsedPaletteScopeQuery | null {
+  const normalized = text.trimStart();
+  const separator = normalized.search(/\s/);
+  if (separator < 0) return null;
+  const scope = scopeForToken(normalized.slice(0, separator));
+  return scope === null ? null : { scope, query: normalized.slice(separator).trimStart() };
 }
 
 /**
@@ -93,6 +99,20 @@ export function paletteEmptyCopy(scope: PaletteScopeId | null): string {
 
 /* -------------------------------------------------------------- match text */
 
+/** Every Ticket value starts here, giving the shared filter a typed row marker. */
+const TICKET_ROW_PREFIX = "ticket ";
+
+/**
+ * cmdk's matcher plus VC-205's section priority. The added point is constant
+ * within the Ticket section, so native relevance still orders its rows while
+ * every matching Ticket group score remains above every other group's score.
+ * Leading whitespace is ignored consistently for typed suggestions and rows.
+ */
+export function commandPaletteFilter(value: string, search: string, keywords?: string[]): number {
+  const score = defaultFilter(value, search.trimStart(), keywords);
+  return score > 0 && value.startsWith(TICKET_ROW_PREFIX) ? score + 1 : score;
+}
+
 /**
  * The exact strings a palette row hands cmdk: the item `value` plus the
  * `keywords` cmdk appends to it before scoring. Built here — once — because
@@ -106,7 +126,7 @@ export interface PaletteRowMatch {
 
 export function ticketRowMatch(item: CommandPaletteTicketItem): PaletteRowMatch {
   return {
-    value: `ticket ${item.displayId} ${item.title} ${item.projectName}`,
+    value: `${TICKET_ROW_PREFIX}${item.displayId} ${item.title} ${item.projectName}`,
     keywords: [item.displayId, item.title, item.projectName],
   };
 }
@@ -149,7 +169,7 @@ export interface PaletteSectionSlice<T> {
  * The slice of one section the palette mounts: every row cmdk would keep,
  * best score first, truncated at {@link PALETTE_SECTION_LIMIT} until expanded.
  *
- * Scored with cmdk's own `defaultFilter` over the same value/keywords the
+ * Scored with {@link commandPaletteFilter} over the same value/keywords the
  * mounted rows then carry, so cmdk's native pass over the mounted subset
  * reproduces exactly this ranking — truncation can never cut a row cmdk would
  * have shown above the cut. An empty search mirrors cmdk's own short-circuit:
@@ -171,7 +191,7 @@ export function slicePaletteSection<T>(
       : entries
           .map((entry) => ({
             entry,
-            score: defaultFilter(entry.match.value, search, entry.match.keywords),
+            score: commandPaletteFilter(entry.match.value, search, entry.match.keywords),
           }))
           .filter((scored) => scored.score > 0)
           // Stable, so equal scores keep the model's own order.

@@ -23,6 +23,19 @@ export function getAllAppState(db: Database.Database): Record<string, string> {
   return result;
 }
 
+/**
+ * One `app_state` value, or `undefined` when the key has never been written.
+ *
+ * Distinct from reading {@link getAllAppState} and indexing it: the bootstrap
+ * payload is every persisted store's blob, and a main-process reader that
+ * wants one small row should not have to materialize all of them. Still
+ * unparsed — this layer never knows what a value means.
+ */
+export function getAppState(db: Database.Database, key: string): string | undefined {
+  return prepared<[string], AppStateRow>(db, "SELECT * FROM app_state WHERE key = ?").get(key)
+    ?.value;
+}
+
 /** Upserts one `app_state` key. */
 export function setAppState(db: Database.Database, key: string, value: string, now: number): void {
   prepared(

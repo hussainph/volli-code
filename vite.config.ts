@@ -55,6 +55,44 @@ export default defineConfig({
       // created from them and there is nothing to remount. `allowAsProps` is
       // the option the rule ships for exactly this shape.
       "react/no-unstable-nested-components": ["error", { allowAsProps: true }],
+
+      // --- React Compiler rules: OFF pending VC-216, not dismissed ---
+      //
+      // oxlint 1.79 (in with vite-plus 0.3.0) split the single, inactive
+      // `react/react-compiler` rule into the ten rules below, resolved the
+      // inactive ones, and aligned their categories (oxc #25500, #25830,
+      // #25840). They landed in `correctness`/`perf`, which this file sets to
+      // "error", so 205 errors appeared at once on app code that had not
+      // changed — in a PR whose only subject was a toolchain version.
+      //
+      // These are named individually rather than by turning off the `react`
+      // plugin or relaxing the categories above: every react rule that was
+      // enforcing before the bump is still enforcing, and any NEW rule oxlint
+      // adds later still arrives as an error rather than landing pre-silenced.
+      // The list is the exact set the 1.79 split activated — nothing wider.
+      //
+      // The findings are real (refs read during render, setState inside
+      // effects), and VC-216 carries adopting them, one rule at a time.
+      // Fixing them here would have meant rewriting render behaviour across
+      // the desktop app with a dependency bump as its only cover — the thing
+      // d60016c7 and VC-211 both refused to do. Delete an entry here as VC-216
+      // lands that rule; when the last one goes, this whole block goes too.
+      //
+      // Ordered most findings first, as counted at the split. The numbers
+      // themselves live in VC-216, which is dated and cannot go stale;
+      // repeating them here would plant an assertion about current code that
+      // nothing re-checks, which is the trap VC-211's review caught in its own
+      // dependabot comment. `vp lint` re-counts on demand.
+      "react/refs": "off",
+      "react/set-state-in-effect": "off",
+      "react/exhaustive-effect-dependencies": "off",
+      "react/hooks": "off",
+      "react/immutability": "off",
+      "react/memo-dependencies": "off",
+      "react/preserve-manual-memoization": "off",
+      "react/globals": "off",
+      "react/purity": "off",
+      "react/use-memo": "off",
     },
   },
   staged: {

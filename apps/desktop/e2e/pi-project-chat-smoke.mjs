@@ -52,7 +52,6 @@
  * `vp test`.
  */
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import { join } from "node:path";
 
 import {
@@ -60,6 +59,7 @@ import {
   assistantReplyTexts,
   createRunner,
   ensurePiAuthInto,
+  evidenceDir,
   goToBoard,
   launch,
   makeGitRepo,
@@ -90,7 +90,7 @@ const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-project-
 const fakeHome = join(scratch, "home");
 const { attempt, summarize } = createRunner();
 
-const EVIDENCE_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-pi-project-chat-evidence");
+const EVIDENCE_DIR = await evidenceDir("pi-project-chat");
 
 async function captureFailureEvidence(page, mainOut, mainErr, label) {
   await fs.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});

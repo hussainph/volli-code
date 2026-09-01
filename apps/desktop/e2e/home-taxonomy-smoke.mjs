@@ -100,7 +100,7 @@ const terminalCanvasCount = (page) =>
 
 async function startTerminalTab(page) {
   const before = await strip(page).getByRole("tab").count();
-  await page.getByRole("button", { name: "Other session kinds", exact: true }).first().click();
+  await page.getByRole("button", { name: "Other things to open", exact: true }).first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await waitUntil(
     "a Project Session terminal tab to appear",

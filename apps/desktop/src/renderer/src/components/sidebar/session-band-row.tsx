@@ -27,6 +27,7 @@ import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   displayTicketId,
+  sessionProvenanceHoverLine,
   TICKET_STATUS_LABELS,
   type ChatWaitingReason,
   type SessionActivityState,
@@ -39,6 +40,7 @@ import type {
   SessionAttention,
   SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
+import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
@@ -153,21 +155,40 @@ function attentionLine(attention: SessionAttention, waitingOn: ChatWaitingReason
 /**
  * The meta line's first slot: WHERE the Session lives, not what launched it.
  *
- * This slot used to hold the source label — the harness name, or `Chat · Live`
- * for an attached chat. Neither is what a reader scans this band for. A band
- * holding twenty Sessions is parsed by which ticket column each one sits in,
- * and "Live" in particular said only what the Active band already says by
- * being the Active band. The ticket's status is the fact that makes the list
- * sortable by eye, so it takes the slot; the harness moves to the row's
- * `title`, where a question asked about ONE row belongs.
+ * This slot used to hold the source label — the harness name or `Chat`. Neither
+ * is what a reader scans this band for. A band holding twenty Sessions is
+ * parsed by which ticket column each one sits in. The ticket's status is the
+ * fact that makes the list sortable by eye, so it takes the slot; the harness
+ * moves to the row's `title`, where a question asked about ONE row belongs.
  *
  * A ticketless row — a project Project Session, or one whose ticket has left
- * the board — has no column to name and keeps its source. That is also the one
- * place `Chat · Live` still earns its keep: with no status to say it better,
- * whether the attachment is still open is the only thing worth saying.
+ * the board — has no column to name and keeps its source. A chat still says
+ * only `Chat`; whether its attachment is open remains a functional listing
+ * fact rather than a displayed state.
  */
 function placeLine(row: ActiveSessionRow): string {
   return row.ticket === null ? row.source : TICKET_STATUS_LABELS[row.ticket.status];
+}
+
+/**
+ * The row's hover `title`, with its provenance appended when there is any
+ * (VC-131).
+ *
+ * This is the ENTIRE mark for a Session another Session started, and it costs
+ * the resting band nothing: the `title` attribute is already on both rows, so a
+ * parent's name reaches the reader through a node that was going to exist
+ * anyway. A Run's row appends its line too even though its bolt is visible,
+ * because the visible half truncates in a rail this narrow and a tooltip is
+ * where the untruncated fact belongs.
+ *
+ * Shared by both bands so the two cannot drift into saying it differently.
+ */
+function rowTitleAttribute(
+  row: Pick<ActiveSessionRow, "provenance">,
+  lines: readonly string[],
+): string {
+  const provenance = sessionProvenanceHoverLine(row.provenance);
+  return (provenance === null ? lines : [...lines, provenance]).join("\n");
 }
 
 /** The Active row's second line: why a human is needed, else where it lives and what is running. */
@@ -220,7 +241,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
         // COLLAPSED (`ui/sidebar.tsx`), so it would never fire on the expanded
         // band this row lives in. The full title rides along because the
         // visible one truncates.
-        title={`${row.title}\n${row.source}`}
+        title={rowTitleAttribute(row, [row.title, row.source])}
         // Two lines at the tighter padding: long titles stay readable and the
         // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
@@ -253,6 +274,12 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           )}
           <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
             <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
+            {/* Right of the identity and left of the state: the mark qualifies
+                WHOSE Session this is, which sits with the id rather than with
+                what the agent is doing this second. It draws nothing at all on
+                a row no Automation started, so the meta line of a resting band
+                is byte-for-byte the line it was before this feature. */}
+            <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
             <span aria-hidden>·</span>
             <span className="truncate">{stateLine(row)}</span>
             {row.lastActivityAt !== null ? (
@@ -328,6 +355,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.
         className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
+        // The band's second listing surface gets the same provenance line the
+        // Active row gets, from the same function — a Session that dropped its
+        // mark on ageing out of Active would be a Run hiding in the quiet band.
+        title={rowTitleAttribute(row, [row.title])}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active
@@ -335,6 +366,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
         <KindGlyph kind={row.kind} />
         {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
+        {/* Same slot as the Active row's — after the identity, before the title
+            — so a Session keeps its mark in the same place as it ages out of
+            one band and into the other. */}
+        <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
         <span className="min-w-0 flex-1 truncate">{row.title}</span>
         {/* 0 is the model's "nothing durable can date this" sentinel — an age
             drawn from it would read as the epoch, so the row says nothing. */}

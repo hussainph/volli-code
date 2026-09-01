@@ -198,7 +198,7 @@ async function main() {
     // session-start control's caret. `.first()` because an empty surface
     // mounts the control twice (tab strip + empty state).
     await page.getByText("Home", { exact: true }).click();
-    await page.getByLabel("Other session kinds").first().click();
+    await page.getByLabel("Other things to open").first().click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 1,
@@ -216,7 +216,7 @@ async function main() {
     // The Project Session strip's control is a split button — its press starts a chat,
     // its caret half opens the kinds. Parking is a terminal-only tier, so this
     // goes through the caret. The item's name carries its chord, hence the regex.
-    await page.getByLabel("Other session kinds").click();
+    await page.getByLabel("Other things to open").click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await page.waitForFunction(
       () => document.querySelectorAll('[aria-label^="Close Terminal"]').length === 2,

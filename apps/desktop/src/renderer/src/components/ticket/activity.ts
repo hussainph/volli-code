@@ -21,6 +21,7 @@ import {
   USER_ACTOR,
   type TicketComment,
   type TicketEvent,
+  type TicketEventActorKind,
   type TicketEventKind,
   type TicketEventPayload,
   type WorktreeFailureStage,
@@ -194,8 +195,20 @@ function worktreeFailureExcerpt(stderr: string): string {
  * The one-line sentence for a property-change event (`null` for `commented`,
  * which the feed renders as its comment instead). Verb-phrase style, no
  * subject — the feed row supplies the actor/timestamp chrome.
+ *
+ * `actor` is read by exactly one kind and is optional for that reason: a start
+ * is the only event whose SUBJECT is the news (VC-131). Every other line here
+ * describes a change to the Ticket, where who made it is chrome; a Session
+ * start describes a worker appearing, and "started a session" attributed to
+ * nobody is precisely the line that cannot tell a Run from a person sitting
+ * down at the keyboard. Callers that have the event pass its actor; a caller
+ * holding only a payload (a fixture, a summary) still gets the neutral
+ * sentence rather than a compile error.
  */
-export function describeEvent(payload: TicketEventPayload): string | null {
+export function describeEvent(
+  payload: TicketEventPayload,
+  actor?: TicketEventActorKind,
+): string | null {
   switch (payload.kind) {
     case "created":
       return "created the ticket";
@@ -250,7 +263,15 @@ export function describeEvent(payload: TicketEventPayload): string | null {
       return payload.detail === null
         ? `signalled ${payload.signalKind}: ${payload.verdict}`
         : `signalled ${payload.signalKind}: ${payload.verdict} — ${payload.detail}`;
+    // Three actors can start a Session and each gets its own reading, which is
+    // the timeline's half of "a Run's Session is distinguishable everywhere".
+    // The Automation is not NAMED here: the event's payload cannot carry which
+    // one ran, and inventing a name from a second lookup would let the timeline
+    // and the Run record disagree. The Session's own row says which — this line
+    // only has to stop reading as a person.
     case "session_started":
+      if (actor === "automation") return "an Automation started a session";
+      if (actor === "session") return "an agent started a session";
       return "started a session";
     case "attachment_added":
       return `attached "${payload.label}"`;

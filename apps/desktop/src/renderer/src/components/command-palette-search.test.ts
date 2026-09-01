@@ -1,3 +1,4 @@
+import { PERSON_STARTED } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import type {
@@ -9,9 +10,10 @@ import {
   PALETTE_SCOPES,
   PALETTE_SECTION_LIMIT,
   automationRowMatch,
-  completedScopeToken,
+  commandPaletteFilter,
   paletteEmptyCopy,
   paletteScopeById,
+  parsePaletteScopeQuery,
   scopeForToken,
   sessionRowContext,
   sessionRowMatch,
@@ -34,22 +36,58 @@ describe("scopeForToken", () => {
   });
 });
 
-describe("completedScopeToken", () => {
-  it("converts the whole query once a scope token is sealed by whitespace", () => {
-    expect(completedScopeToken("@tickets ")?.id).toBe("tickets");
-    expect(completedScopeToken("  @session  ")?.id).toBe("sessions");
+describe("parsePaletteScopeQuery", () => {
+  it("converts a scope once whitespace seals it", () => {
+    expect(parsePaletteScopeQuery("@tickets ")).toEqual({
+      scope: PALETTE_SCOPES[0],
+      query: "",
+    });
+    expect(parsePaletteScopeQuery("  @session  ")?.scope.id).toBe("sessions");
+  });
+
+  it("preserves the query after a pasted or typed scope", () => {
+    expect(parsePaletteScopeQuery("@sessions auth issue")).toEqual({
+      scope: PALETTE_SCOPES[1],
+      query: "auth issue",
+    });
+    expect(parsePaletteScopeQuery("@automation  nightly")).toEqual({
+      scope: PALETTE_SCOPES[2],
+      query: "nightly",
+    });
   });
 
   it("leaves a token still being typed alone", () => {
-    expect(completedScopeToken("@tickets")).toBeNull();
-    expect(completedScopeToken("@ti")).toBeNull();
+    expect(parsePaletteScopeQuery("@tickets")).toBeNull();
+    expect(parsePaletteScopeQuery("@ti")).toBeNull();
   });
 
-  it("leaves ordinary text alone, even with a trailing space or an embedded token", () => {
-    expect(completedScopeToken("auth ")).toBeNull();
-    expect(completedScopeToken("fix @tickets ")).toBeNull();
-    expect(completedScopeToken("@bogus ")).toBeNull();
-    expect(completedScopeToken("   ")).toBeNull();
+  it("leaves ordinary text, embedded tokens, and unknown scopes alone", () => {
+    expect(parsePaletteScopeQuery("auth ")).toBeNull();
+    expect(parsePaletteScopeQuery("fix @tickets ")).toBeNull();
+    expect(parsePaletteScopeQuery("@bogus query")).toBeNull();
+    expect(parsePaletteScopeQuery("   ")).toBeNull();
+  });
+});
+
+describe("commandPaletteFilter", () => {
+  it("keeps cmdk matching while ignoring leading query whitespace", () => {
+    expect(commandPaletteFilter("@tickets", "  @ti", ["Tickets"])).toBeGreaterThan(0);
+    expect(commandPaletteFilter("session Deploy", "auth", [])).toBe(0);
+  });
+
+  it("keeps every matching Ticket above a more relevant Session", () => {
+    const ticketScore = commandPaletteFilter("ticket VC-1 Session cleanup Alpha", "session", [
+      "VC-1",
+      "Session cleanup",
+      "Alpha",
+    ]);
+    const sessionScore = commandPaletteFilter(
+      "session Session Alpha · Project Session Alpha",
+      "session",
+      ["Session", "Alpha · Project Session", "Alpha"],
+    );
+    expect(ticketScore).toBeGreaterThan(sessionScore);
+    expect(commandPaletteFilter("ticket VC-1 Auth Alpha", "session", [])).toBe(0);
   });
 });
 
@@ -103,6 +141,7 @@ function sessionItem(
     scope: { kind: "project", projectId: "p1" },
     ticketDisplayId: null,
     ticketTitle: null,
+    provenance: PERSON_STARTED,
     ...overrides,
   };
 }

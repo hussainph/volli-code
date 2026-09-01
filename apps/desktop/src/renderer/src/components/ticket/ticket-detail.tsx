@@ -10,8 +10,10 @@ import {
   type FileWorkspaceTab,
   type Ticket,
 } from "@volli/shared";
+import { BROWSER_START_URL } from "../../../../browser-start-page";
 
 import { renameChatSession } from "@renderer/chat/rename";
+import { BrowserPane } from "@renderer/components/browser/browser-pane";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import {
   planTabClose,
@@ -51,6 +53,7 @@ import {
   type TicketRecencyWatchOwner,
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
+import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-tabs";
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
@@ -62,12 +65,12 @@ import { TicketTitle } from "@renderer/components/ticket/ticket-title";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
-import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { browserTabDisplayTitle, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -164,6 +167,15 @@ export function TicketDetail({
   const ticketTabsState = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
   );
+  const browserApi = window.api.browser;
+  const browserTabs = useBrowserTabsStore(
+    useShallow((state) =>
+      Object.values(state.byId).filter(
+        (tab) => tab.projectId === projectId && tab.ticketId === ticket.id,
+      ),
+    ),
+  );
+  const browserTabsHydrated = useBrowserTabsStore((state) => state.hydratedProjects.has(projectId));
   const ticketDiffViewStates = useWorkspaceStore(
     (state) => state.byProject[projectId]?.ticketDiffViewStates?.[ticket.id],
   );
@@ -776,17 +788,15 @@ export function TicketDetail({
   // `kind`, not id, so the plane and content branch generically.
   const composedTabs: TicketTabDescriptor[] = [
     { id: BODY_TAB_ID, kind: "body", label: displayId },
-    ...openFiles.map(
-      (tab): TicketTabDescriptor => ({
-        id: `file:${tab.relPath}`,
-        kind: "file",
-        label: baseNameOf(tab.relPath),
-        relPath: tab.relPath,
-        preview: !tab.pinned,
-        badge: fileSources[tab.relPath] === "worktree" ? "worktree" : undefined,
-        dirty: dirtyFiles.has(tab.relPath),
-      }),
-    ),
+    ...openFiles.map((tab): TicketTabDescriptor => ({
+      id: `file:${tab.relPath}`,
+      kind: "file",
+      label: baseNameOf(tab.relPath),
+      relPath: tab.relPath,
+      preview: !tab.pinned,
+      badge: fileSources[tab.relPath] === "worktree" ? "worktree" : undefined,
+      dirty: dirtyFiles.has(tab.relPath),
+    })),
     ...openDiffs.map((relPath): TicketTabDescriptor => {
       const meta = diffMeta[relPath];
       return {
@@ -798,21 +808,24 @@ export function TicketDetail({
         dirty: dirtyFiles.has(relPath),
       };
     }),
-    ...(sessionTabs ?? []).map(
-      (tab): TicketTabDescriptor => ({
-        id: tab.sessionId,
-        kind: "session",
-        label: tab.title,
-      }),
-    ),
-    ...openChatIds.map(
-      (sessionId, index): TicketTabDescriptor => ({
-        id: chatTabId(sessionId),
-        kind: "chat",
-        label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-        status: chatStatuses[index],
-      }),
-    ),
+    ...(sessionTabs ?? []).map((tab): TicketTabDescriptor => ({
+      id: tab.sessionId,
+      kind: "session",
+      label: tab.title,
+    })),
+    ...openChatIds.map((sessionId, index): TicketTabDescriptor => ({
+      id: chatTabId(sessionId),
+      kind: "chat",
+      label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      status: chatStatuses[index],
+    })),
+    ...browserTabs.map((tab): TicketTabDescriptor => ({
+      id: browserTabId(tab.tabId),
+      kind: "browser",
+      label: browserTabDisplayTitle(tab),
+      browserTabId: tab.tabId,
+      loading: tab.loading,
+    })),
   ];
   // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one
   // thing that can interleave a file tab with a chat tab, and the Body tab at
@@ -826,6 +839,11 @@ export function TicketDetail({
       ? sessionTabs?.find((candidate) => candidate.sessionId === activeTab.id)
       : undefined;
   const activeChatSessionId = activeTab.kind === "chat" ? parseChatTabId(activeTab.id) : null;
+  const activeBrowserTabId = activeTab.kind === "browser" ? parseBrowserTabId(activeTab.id) : null;
+  const activeBrowserTab =
+    activeBrowserTabId === null
+      ? undefined
+      : browserTabs.find((tab) => tab.tabId === activeBrowserTabId);
   const terminalFocused =
     terminalFocusTarget?.projectId === projectId &&
     terminalFocusTarget.ticketId === ticket.id &&
@@ -875,6 +893,7 @@ export function TicketDetail({
   // falls back because it is genuinely gone.
   React.useEffect(() => {
     if (creating || activeTabIsRenderable) return;
+    if (parseBrowserTabId(activeTabId) !== null && !browserTabsHydrated) return;
     const relaunch = resolveChatRelaunch(activeTabId, durableChatIds);
     if (relaunch.kind === "wait") return;
     if (relaunch.kind === "adopt") {
@@ -887,6 +906,7 @@ export function TicketDetail({
   }, [
     activeTabId,
     activeTabIsRenderable,
+    browserTabsHydrated,
     creating,
     durableChatIds,
     projectId,
@@ -947,10 +967,26 @@ export function TicketDetail({
     if (sessionId !== null) setActiveTab(sessionId);
   }, [projectId, ticket.id, setActiveTab]);
 
-  // The project's skills, for the session-start control's "Chat with skill"
-  // submenu — the attach-time injection route, chosen at the moment of
-  // creation because promptResources are fixed once the runtime attaches.
-  const { skills } = usePromptTemplates(projectId);
+  // Opens the tab first and asks where to go second — see the note on Home's
+  // twin. The `window.prompt` this replaces throws in Electron by definition,
+  // and threw from outside the try, so the press was swallowed whole.
+  const createBrowser = React.useCallback(async () => {
+    try {
+      const result = await browserApi.open({
+        projectId,
+        ticketId: ticket.id,
+        url: BROWSER_START_URL,
+      });
+      if (!result.ok) {
+        toastError(`Could not open Browser Tab: ${result.error}`);
+        return;
+      }
+      useBrowserTabsStore.getState().receive(result.tab);
+      setActiveTab(browserTabId(result.tab.tabId));
+    } catch (reason) {
+      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
+    }
+  }, [browserApi, projectId, setActiveTab, ticket.id]);
 
   // Mints one durable chat Session on this ticket and opens its tab, through
   // the same boot guard the terminal path uses: one create per ticket at a
@@ -1041,6 +1077,26 @@ export function TicketDetail({
                 requestCloseDiffTab(tab.relPath);
                 return;
               }
+              if (tab.kind === "browser" && tab.browserTabId !== undefined) {
+                const opaqueId = tab.browserTabId;
+                void browserApi
+                  .close({ tabId: opaqueId })
+                  .then((result) => {
+                    if (!result.ok) {
+                      toastError(`Could not close Browser Tab: ${result.error}`);
+                      return;
+                    }
+                    useBrowserTabsStore.getState().remove(opaqueId);
+                    const active =
+                      useWorkspaceStore.getState().byProject[projectId]?.ticketTabs?.[ticket.id]
+                        ?.active ?? BODY_TAB_ID;
+                    if (active === tab.id) setActiveTab(BODY_TAB_ID);
+                  })
+                  .catch((reason: unknown) => {
+                    toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
+                  });
+                return;
+              }
               if (tab.kind === "chat") {
                 const chatId = parseChatTabId(tab.id);
                 if (chatId === null) return;
@@ -1078,8 +1134,7 @@ export function TicketDetail({
             }}
             onNewSession={() => void createSession()}
             onNewChat={() => void createChat()}
-            skills={skills}
-            onNewChatWithSkill={(name) => void createChat([name])}
+            onNewBrowser={() => void createBrowser()}
             railCollapsed={railCollapsed}
             onToggleRail={toggleRailCollapsed}
           />
@@ -1157,6 +1212,15 @@ export function TicketDetail({
                   exists so a GPU-owning terminal is never unmounted, and a chat
                   needs nothing of the sort — its stream, fold and queue live in
                   the registry client, which outlives this view either way. */}
+              {activeBrowserTab !== undefined ? (
+                <BrowserPane
+                  key={activeBrowserTab.tabId}
+                  tab={activeBrowserTab}
+                  visible
+                  api={browserApi}
+                  onTabState={useBrowserTabsStore.getState().receive}
+                />
+              ) : null}
               {activeChatSessionId !== null ? (
                 <ChatPlane
                   key={activeChatSessionId}
@@ -1189,8 +1253,7 @@ export function TicketDetail({
                 creating={creating || creatingChat}
                 onNewSession={() => void createSession()}
                 onNewChat={() => void createChat()}
-                skills={skills}
-                onNewChatWithSkill={(name) => void createChat([name])}
+                onNewBrowser={() => void createBrowser()}
                 onActivateSession={setActiveTab}
                 onActivateChat={activateChat}
                 activeTabId={activeTabId}

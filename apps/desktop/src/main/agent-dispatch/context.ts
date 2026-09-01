@@ -39,6 +39,7 @@ import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionStartedNotice,
+  TicketMovedNotice,
 } from "../../ipc/contract";
 
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
@@ -177,6 +178,18 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
+  /**
+   * Called after `ticket.move` COMMITS a real column change, carrying the
+   * before/after fact main's pending-arrival coordinator cannot reconstruct
+   * afterward (VC-226).
+   *
+   * Separate from {@link AgentCommandOptions.onMutation}, which only tells
+   * renderers to re-read planning data. CONTEXT.md makes an explicit `volli
+   * ticket move` a Deliberate move with the same semantics as a drag, so this
+   * seam creates the same one durable countdown even when no renderer exists.
+   * Never called for a same-column no-op. Absent in tests means no observer.
+   */
+  onDeliberateMove?: (notice: TicketMovedNotice) => void;
   /**
    * Called for every canonical harness event this door ingests (harness-events),
    * after any session-record write it implies has committed — the notice

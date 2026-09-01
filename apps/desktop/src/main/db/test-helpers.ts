@@ -7,49 +7,39 @@
  * file, so `vite.config.ts`'s main-project test include (every "*.test.ts"
  * under src/main) never treats it as a suite — it's imported BY the suites below.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { createSessionRecord, createTicket } from "@volli/shared";
 import type { Project, SessionRecord, Ticket } from "@volli/shared";
 import { migrate } from "./migrations";
 
-const requireFromHere = createRequire(import.meta.url);
-
 /**
- * Under plain Node (vitest), the installed better-sqlite3 binary is
- * Electron-ABI (`rebuild:native` bakes it for the app), so tests must load the
- * Node-ABI copy cached by `scripts/cache-node-sqlite.mjs` (run on postinstall).
- * Under Electron the default binding is already correct.
- */
-function nodeAbiBindingPath(): string | null {
-  if (process.versions.electron) return null;
-  const pkgJsonPath = requireFromHere.resolve("better-sqlite3/package.json");
-  const { version } = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version: string };
-  const binding = join(
-    dirname(pkgJsonPath),
-    "prebuilds",
-    `better_sqlite3-v${version}-node-v${process.versions.modules}.node`,
-  );
-  if (!existsSync(binding)) {
-    throw new Error(
-      `Node-ABI better-sqlite3 binding missing at ${binding} — ` +
-        "run `pnpm -C apps/desktop run cache:node-sqlite`.",
-    );
-  }
-  return binding;
-}
-
-/**
- * Constructs a raw better-sqlite3 handle with the ABI-correct binding and no
- * further setup. Test code must use this (or {@link openTestDb}) instead of
- * `new Database(...)` so suites run under both plain Node and Electron.
+ * Constructs a raw better-sqlite3 handle with no further setup. Test code uses
+ * this (or {@link openTestDb}) instead of `new Database(...)` so every suite
+ * opens its fixture the same way.
+ *
+ * WHY THIS IS NOW ONE LINE (VC-213). It used to pass an explicit
+ * `nativeBinding`, because there was no single binary both runtimes could
+ * load: the app runs better-sqlite3 inside Electron and these suites run it
+ * under plain Node via `vp test`, and up to v12 the addon was a
+ * NODE_MODULE_VERSION-keyed build. `rebuild:native` baked the Electron-ABI one
+ * into `build/Release`, so a `scripts/cache-node-sqlite.mjs` postinstall step
+ * fetched the Node-ABI one through better-sqlite3's own `prebuild-install`
+ * dependency and parked it in `prebuilds/` — out of the blast radius of the
+ * next electron-rebuild — for this helper to point at.
+ *
+ * better-sqlite3 13 moved the addon to the N-API, which is ABI-stable across
+ * BOTH Node and Electron, and ships one prebuilt binary per platform inside
+ * the package (`prebuilds/<platform>-<arch>.node`). There is no second ABI to
+ * cache and nothing left to fetch, so the script is gone and the default
+ * binding is correct in either runtime. `binding.gyp` makes an explicit
+ * rebuild a no-op while that prebuild exists, which is why `rebuild:native`
+ * leaves `build/Release` empty and nothing notices.
  */
 export function openRawDb(dbPath: string): Database.Database {
-  const nativeBinding = nodeAbiBindingPath();
-  return nativeBinding === null ? new Database(dbPath) : new Database(dbPath, { nativeBinding });
+  return new Database(dbPath);
 }
 
 export interface TestDb {

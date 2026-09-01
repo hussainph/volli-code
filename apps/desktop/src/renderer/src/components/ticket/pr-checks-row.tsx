@@ -53,7 +53,7 @@ import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import type { PrCheck, PrCheckState, TicketRetentionState } from "../../../../ipc/contract";
 
 import { resolvePrChecks, type PrChecksView } from "@renderer/components/ticket/pr-checks-model";
-import { RAIL_CARD_ROW } from "@renderer/components/ticket/rail-panel-parts";
+import { RAIL_CARD_ROW, RAIL_CARD_SEAM } from "@renderer/components/ticket/rail-panel-parts";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { cn } from "@renderer/lib/utils";
@@ -243,10 +243,7 @@ export function PrChecksRow({ retention }: { retention: TicketRetentionState | n
           // got the one-line verdict and no way to reach the rest without
           // opening the popover. Same information, both ways in.
           aria-label={`${view.label}${view.summary === null ? "" : `, ${view.summary}`}. Show checks`}
-          className={cn(
-            RAIL_CARD_ROW,
-            "min-h-8 border-t border-sidebar-border/70 py-2 hover:bg-accent/50",
-          )}
+          className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
         >
           <StateIcon state={view.verdict} />
           <span className="min-w-0 flex-1 truncate text-ui font-medium">{view.label}</span>

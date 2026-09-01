@@ -1,10 +1,23 @@
-import { automationDraftProblem, automationPinProblem } from "@volli/shared";
+import {
+  automationDraftProblem,
+  automationPinProblem,
+  automationScheduleProblem,
+  automationTriggerSchedule,
+  automationTriggersColumn,
+  NO_AUTOMATION_TRIGGER,
+  parseAutomationTrigger,
+} from "@volli/shared";
 import type {
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
+  AutomationSkippedOccurrence,
+  AutomationTrigger,
+  ColumnArming,
+  ColumnAutomationOrder,
   ModelAccessSnapshot,
   ModelSelection,
+  TicketStatus,
 } from "@volli/shared";
 
 import type { AutomationEngine } from "./engine";
@@ -15,8 +28,30 @@ export interface AutomationServiceDeps {
   findAutomation(automationId: string): Automation | undefined;
   listAutomationsForProject(projectId: string): Automation[];
   runsForTicket(ticketId: string): AutomationRun[];
+  runsForProject(projectId: string): AutomationRun[];
+  skipsForProject(projectId: string): AutomationSkippedOccurrence[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
+  /**
+   * Durably starts a schedule lifecycle at the command's accepted instant.
+   *
+   * This synchronous write happens before mutation fan-out or the scheduler's
+   * asynchronous refresh. Occurrences from a disabled interval or an old
+   * schedule are therefore not owed, while a process exit before that refresh
+   * cannot silently forgive the first occurrence the new lifecycle did owe.
+   */
+  rebaseScheduleCursor?(automationId: string, through: number): void;
+  /**
+   * Something about the set of Automations this host may fire on its own
+   * changed — a record written or deleted, or a switch flipped (VC-130).
+   *
+   * Separate from {@link AutomationServiceDeps.onMutation}, which tells OTHER
+   * WINDOWS that the shared record moved. This one tells THIS HOST's timer to
+   * re-read, and the two are deliberately different fan-outs: the switch is
+   * machine-local and broadcasts nothing, yet it is exactly what decides
+   * whether a schedule may fire here.
+   */
+  onAutomationsChanged?(): void;
 }
 
 export type AutomationReadOutcome =
@@ -31,6 +66,68 @@ export type AutomationDeleteOutcome =
   | { ok: true; receipt: AutomationCommandReceipt }
   | { ok: false; error: string; receipt?: AutomationCommandReceipt };
 
+/** Every armed column in the project — a read, with no command behind it. */
+export type AutomationArmingReadOutcome =
+  | { ok: true; armings: ColumnArming[] }
+  | { ok: false; error: string };
+
+/** The same set after a write, plus the receipt for the command that changed it. */
+export type AutomationArmingOutcome =
+  | { ok: true; armings: ColumnArming[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
+
+/** Every arranged column in the project — a read, with no command behind it. */
+export type AutomationColumnOrderReadOutcome =
+  | { ok: true; orders: ColumnAutomationOrder[] }
+  | { ok: false; error: string };
+
+/** The same set after a write, plus the receipt for the command that changed it. */
+export type AutomationColumnOrderOutcome =
+  | { ok: true; orders: ColumnAutomationOrder[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
+
+export type AutomationRunHistoryOutcome =
+  | { ok: true; runs: AutomationRun[] }
+  | { ok: false; error: string };
+
+/** One project's Skipped occurrences — the other half of its Run history (VC-130). */
+export type AutomationSkipHistoryOutcome =
+  | { ok: true; skips: AutomationSkippedOccurrence[] }
+  | { ok: false; error: string };
+
+/** The whole machine-local set after the write, plus the receipt that changed it. */
+export type AutomationEnablementOutcome =
+  | { ok: true; enabledAutomationIds: string[]; receipt: AutomationCommandReceipt }
+  | { ok: false; error: string; receipt?: AutomationCommandReceipt };
+
+/**
+ * The Trigger a write actually stores.
+ *
+ * Every write carries one — "Nothing else" is the union's own `{ kind: "none" }`
+ * rather than an absent field, so a JSON transport can spell the default
+ * (docs/BOUNDARIES.md rule 3). What arrives still goes through the shared
+ * parser, so the record is canonical the moment it is written: columns in board
+ * order, duplicates and unknown names dropped, an empty list collapsed. The IPC
+ * guard judges wire SHAPE only, which is why the vocabulary check has to happen
+ * here rather than at the door — and why a create's own answer names the same
+ * columns a later list will.
+ */
+function canonicalTrigger(trigger: AutomationTrigger): AutomationTrigger {
+  return parseAutomationTrigger(trigger);
+}
+
+/** Whether an accepted update changed the schedule lifecycle it describes. */
+function scheduleChanged(before: AutomationTrigger, after: AutomationTrigger): boolean {
+  // Both values came through the shared parser, whose discriminated-union
+  // output has one canonical JSON shape per schedule. Comparing only that arm
+  // means an instructions, name, or Runtime edit does not forgive an occurrence
+  // the unchanged schedule still owes.
+  return (
+    JSON.stringify(automationTriggerSchedule(before)) !==
+    JSON.stringify(automationTriggerSchedule(after))
+  );
+}
+
 /**
  * The host-facing Automation application service. It owns validation against
  * live host facts (projects and Model Access), then delegates every durable
@@ -41,10 +138,19 @@ export function createAutomationService(deps: AutomationServiceDeps) {
   async function writeProblem(input: {
     name: string;
     instructions: string;
+    /** The Ownership this write lands under — a create's choice, an update's record. */
+    projectId: string | null;
+    trigger: AutomationTrigger;
     runtime: ModelSelection | null;
   }): Promise<string | null> {
     const draft = automationDraftProblem(input);
     if (draft !== null) return draft;
+    // The Ownership/Trigger rule, checked here as well as in the editor: a
+    // schedule Run's Target is the Project, so a record listed in every project
+    // has no Project to be the Target of (VC-112, VC-130). One shared function,
+    // so the form's blocked Save and this refusal are one policy.
+    const scheduled = automationScheduleProblem(input);
+    if (scheduled !== null) return scheduled;
     if (input.runtime === null) return null;
     if (deps.inspectModelAccess === undefined) {
       return "Model Access is unavailable, so a pinned model cannot be validated. Save without a pin, or retry after relaunch.";
@@ -62,11 +168,185 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       return deps.runsForTicket(ticketId);
     },
 
+    /**
+     * One project's armed columns — machine-local, never part of the record's
+     * list. Project-guarded like {@link list}: an unknown id is a refusal
+     * rather than a convincing empty board.
+     */
+    async armings(projectId: string): Promise<AutomationArmingReadOutcome> {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, armings: await deps.engine.columnArmings(projectId) };
+    },
+
+    /**
+     * Arms one column with one Automation, or disarms it (`automationId: null`).
+     *
+     * A durable command like every other product write, and the same one the
+     * switch uses (docs/BOUNDARIES.md rule 5): what is machine-local is where
+     * the projection LANDS, not whether the intent is recorded. A retry repeats
+     * this command id and replays its receipt instead of arming twice.
+     *
+     * A column may only arm what it OFFERS — an Automation whose Trigger names
+     * this column. Offering is the record's word and arming is the column's, and
+     * this door keeps them in that order rather than quietly rewriting a Trigger
+     * on a machine-local act: "fires here" is a stronger claim than "is offered
+     * here", and the weaker one is a prerequisite, not a side effect.
+     *
+     * Those live-fact checks guard a NEW command only, exactly as create and
+     * update guard theirs: an already-accepted arming is a fact, and a Trigger
+     * edited afterwards must not turn its retry into a refusal.
+     *
+     * No `onMutation` fan-out — nothing about the shared record moved, and
+     * another window's list is unchanged by a choice belonging to this host.
+     */
+    async arm(input: {
+      commandId: string;
+      projectId: string;
+      status: TicketStatus;
+      automationId: string | null;
+    }): Promise<AutomationArmingOutcome> {
+      if (!(await deps.engine.hasCommand(input.commandId))) {
+        if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        if (input.automationId !== null) {
+          const automation = deps.findAutomation(input.automationId);
+          if (automation === undefined) return { ok: false, error: "Unknown automation" };
+          // Ownership is the listing axis: a column may only arm what its own
+          // project lists — its own Automations plus the global ones.
+          if (automation.projectId !== null && automation.projectId !== input.projectId) {
+            return { ok: false, error: "That automation belongs to another project." };
+          }
+          if (!automationTriggersColumn(automation, input.status)) {
+            return {
+              ok: false,
+              error: `"${automation.name}" is not offered in this column. Add the column to its Trigger first.`,
+            };
+          }
+        }
+      }
+      const outcome = await deps.engine.setColumnArming(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, armings: outcome.value, receipt: outcome.receipt };
+    },
+
+    /**
+     * One project's arranged columns — machine-local, never part of the
+     * record's list. Project-guarded like {@link list}, for its reason.
+     */
+    async columnOrders(projectId: string): Promise<AutomationColumnOrderReadOutcome> {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, orders: await deps.engine.columnOrders(projectId) };
+    },
+
+    /**
+     * Arranges one column's Offered list — which Automation reads as digit `1`
+     * when a card is dragged over it (VC-132).
+     *
+     * A durable command like the arming beside it, and validated far more
+     * lightly on purpose. Arming makes a column FIRE something, so it checks
+     * that the record exists, is listed in this project and is offered here;
+     * a rank only decides the ORDER of a list every reader re-filters against
+     * the Offered list anyway. An id that went stale between the lane's read
+     * and this write is inert rather than a refusal — refusing would make a
+     * lane un-arrangeable until someone found the row that had moved.
+     *
+     * What it does refuse is a request that could not have come from a lane:
+     * an unknown project, or a list naming one Automation twice, which would
+     * put one record in two slots of a list whose whole content is position.
+     *
+     * No `onMutation` fan-out — nothing about the shared record moved, and
+     * another window's list is unchanged by an arrangement belonging to this
+     * host.
+     */
+    async setColumnOrder(input: {
+      commandId: string;
+      projectId: string;
+      status: TicketStatus;
+      rankedAutomationIds: readonly string[];
+    }): Promise<AutomationColumnOrderOutcome> {
+      if (!(await deps.engine.hasCommand(input.commandId))) {
+        if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+        if (new Set(input.rankedAutomationIds).size !== input.rankedAutomationIds.length) {
+          return { ok: false, error: "An automation can hold only one rank in a column." };
+        }
+      }
+      const outcome = await deps.engine.setColumnOrder(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      return { ok: true, orders: outcome.value, receipt: outcome.receipt };
+    },
+
+    /**
+     * The Automations page's Run history. Project-guarded like {@link list}
+     * above and unlike `runsForTicket`: this reads a whole project's work,
+     * so an unknown id is a refusal rather than a convincing empty list.
+     */
+    runsForProject(projectId: string): AutomationRunHistoryOutcome {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, runs: deps.runsForProject(projectId) };
+    },
+
+    /**
+     * This project's Skipped occurrences (VC-130) — the due times that passed
+     * without a Run, read beside {@link runsForProject} and project-guarded for
+     * the same reason. A separate read rather than one merged list, because
+     * they are different records with different actions: a Run opens its
+     * Session, a skip offers "Run now". The page interleaves them by time; the
+     * transport does not pretend they are one kind.
+     */
+    skipsForProject(projectId: string): AutomationSkipHistoryOutcome {
+      if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, skips: deps.skipsForProject(projectId) };
+    },
+
+    /**
+     * Which Automations are switched on ON THIS MACHINE (VC-127).
+     *
+     * Absent means off: VC-112 rules that a machine fires nothing until
+     * someone turns something on there, so "never asked here" and "said no
+     * here" are deliberately one state — see `enablement.ts`.
+     */
+    enabledAutomationIds(): Promise<string[]> {
+      return deps.engine.enabledAutomationIds();
+    },
+
+    /**
+     * Flips one switch. A durable command like every other product write
+     * (docs/BOUNDARIES.md rule 5): what is machine-local is where the
+     * projection LANDS, not whether the intent is recorded. No `onMutation`
+     * fan-out — nothing about the shared record moved, and another window's
+     * list is unchanged by a switch belonging to this host.
+     */
+    async setEnabled(input: {
+      commandId: string;
+      automationId: string;
+      enabled: boolean;
+    }): Promise<AutomationEnablementOutcome> {
+      const outcome = await deps.engine.setEnabled(input);
+      if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
+      // The switch is what decides whether a schedule may fire here, so the
+      // timer hears about it even though no other window does. Switching on a
+      // scheduled record begins a new lifecycle at the accepted command — not
+      // at whenever the fire-and-forget refresh happens to land. Switching off
+      // only removes it from the timer's next read.
+      if (!outcome.replayed) {
+        const automation = deps.findAutomation(input.automationId);
+        if (
+          input.enabled &&
+          automation !== undefined &&
+          automationTriggerSchedule(automation.trigger) !== null
+        ) {
+          deps.rebaseScheduleCursor?.(input.automationId, outcome.receipt.recordedAt);
+        }
+        deps.onAutomationsChanged?.();
+      }
+      return { ok: true, enabledAutomationIds: outcome.value, receipt: outcome.receipt };
+    },
+
     async create(input: {
       commandId: string;
       projectId: string | null;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }): Promise<AutomationWriteOutcome> {
       // A retry must replay its receipt before consulting live facts. The
@@ -81,13 +361,21 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       }
       const outcome = await deps.engine.create({
         ...input,
+        trigger: canonicalTrigger(input.trigger),
         name: input.name.trim(),
       });
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       if (!outcome.replayed) {
+        // Most new records are switched off, but writing a scheduled record's
+        // baseline now makes creation itself crash-safe and leaves enable free
+        // to start a later lifecycle at its own accepted instant.
+        if (automationTriggerSchedule(outcome.value.trigger) !== null) {
+          deps.rebaseScheduleCursor?.(outcome.value.id, outcome.receipt.recordedAt);
+        }
         deps.onMutation?.(
           outcome.value.projectId === null ? {} : { projectId: outcome.value.projectId },
         );
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, automation: outcome.value, receipt: outcome.receipt };
     },
@@ -97,20 +385,48 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       automationId: string;
       name: string;
       instructions: string;
+      trigger: AutomationTrigger;
       runtime: ModelSelection | null;
     }): Promise<AutomationWriteOutcome> {
+      const prior = deps.findAutomation(input.automationId);
       // Same replay rule as create: validation guards a new command, never
       // hides an already-accepted receipt behind changed Model Access.
       if (!(await deps.engine.hasCommand(input.commandId))) {
-        const problem = await writeProblem(input);
+        // Ownership is identity on update, so a schedule is judged against the
+        // RECORD's own scope rather than anything the caller sent. A record
+        // that is GONE owes the engine's "Unknown automation" instead —
+        // answering "can't be listed in all projects" about a record listed
+        // nowhere would be the more confusing lie — so its Trigger is not
+        // judged here at all.
+        const problem = await writeProblem({
+          ...input,
+          projectId: prior?.projectId ?? null,
+          trigger: prior === undefined ? NO_AUTOMATION_TRIGGER : input.trigger,
+        });
         if (problem !== null) return { ok: false, error: problem };
       }
-      const outcome = await deps.engine.update({ ...input, name: input.name.trim() });
+      const outcome = await deps.engine.update({
+        ...input,
+        trigger: canonicalTrigger(input.trigger),
+        name: input.name.trim(),
+      });
       if (!outcome.ok) return { ok: false, error: outcome.error, receipt: outcome.receipt };
       if (!outcome.replayed) {
+        // An edit that adds or retimes a schedule begins a new lifecycle at the
+        // accepted command. Metadata edits keep the cursor because the
+        // unchanged schedule still owes every occurrence it watched. Removing
+        // a schedule leaves its old entry inert; adding one again rebases it.
+        if (
+          prior !== undefined &&
+          scheduleChanged(prior.trigger, outcome.value.trigger) &&
+          automationTriggerSchedule(outcome.value.trigger) !== null
+        ) {
+          deps.rebaseScheduleCursor?.(outcome.value.id, outcome.receipt.recordedAt);
+        }
         deps.onMutation?.(
           outcome.value.projectId === null ? {} : { projectId: outcome.value.projectId },
         );
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, automation: outcome.value, receipt: outcome.receipt };
     },
@@ -132,6 +448,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
               ? {}
               : { projectId: existing.projectId },
         );
+        deps.onAutomationsChanged?.();
       }
       return { ok: true, receipt: outcome.receipt };
     },

@@ -54,7 +54,7 @@ import type {
 import { ticketForDisplayId } from "./agent-dispatch/resolution";
 import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
-import type { RunAutomationOutcome } from "./automations/run";
+import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import type {
   TicketSessionDelegation,
@@ -92,11 +92,7 @@ export interface AutomationToolPort {
   /** Automations this project lists: its own plus every global one, in the app's order. */
   list(projectId: string): readonly Automation[];
   /** The one Run door. Its refusals are this door's refusals, unedited. */
-  run(input: {
-    commandId: string;
-    automationId: string;
-    ticketId: string;
-  }): Promise<RunAutomationOutcome>;
+  run(input: AutomationRunRequest): Promise<RunAutomationOutcome>;
 }
 
 /**
@@ -501,6 +497,12 @@ function resolveAutomation(
  * the Run door does the rest. Nothing about the Run is parameterised from here
  * — no Instructions, no model, no title, no actor — because anything an agent
  * could vary would be a way for its Run to differ from a person's.
+ *
+ * The Ticket remains explicit even when the saved record carries a schedule
+ * Trigger. VC-230 rules this agent-only door an exception to VC-112/VC-130's
+ * "the Trigger decides the Target": the scheduler and person-facing doors aim
+ * that Trigger at its Project, while an orchestrator may aim this one Run at a
+ * named Ticket. Resolution therefore deliberately does not branch on Trigger.
  */
 async function runAutomationTool(
   options: AgentToolDoorOptions,
@@ -551,8 +553,22 @@ async function runAutomationTool(
     // random one: the Automation command ledger deduplicates on this, so a
     // replayed tool call lands one Run, one Session and one first message.
     commandId: `${session.sessionId}:${request.toolCallId}`,
-    automationId: found.automation.id,
+    // The verb runs a SAVED Automation by name (VC-134). Unbound Runs and
+    // per-invocation overrides are deliberate human surfaces (VC-112) and are
+    // not part of this bundle's authority, so the target is always a record and
+    // the Runtime is always the one that record resolves. Under VC-230 that
+    // record may have a schedule Trigger: unlike the scheduler and person-facing
+    // doors, this ruled agent invocation still supplies its explicit Ticket.
+    target: { kind: "automation", automationId: found.automation.id },
     ticketId: resolvedTicket.ticket.id,
+    modelOverride: null,
+    // UNATTENDED (VC-133). The caller is another Session, not a person: it
+    // issued this tool call and went back to its own turn, so when the Run's
+    // Session stops to ask a permission question there is nobody in front of it
+    // who can answer. That is precisely the case VC-112's notification rule
+    // exists for, and it is the same answer the schedule timer gives — both are
+    // doors inside main with no human on the other side.
+    attendance: "unattended",
   });
   if (!outcome.ok) {
     // The Run door's refusals are already sentences about this request — a Run
