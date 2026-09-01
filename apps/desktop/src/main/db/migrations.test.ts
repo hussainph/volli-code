@@ -2460,3 +2460,76 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
     });
   });
 });
+
+describe("migration 036 — Automation Session mint provenance (VC-225)", () => {
+  it("backfills accepted Run plans and leaves rejected attempts unmarked", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 35)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 35");
+
+    const acceptedPlan = { sessionOperationId: "accepted-session" };
+    const rejectedPlan = { sessionOperationId: "rejected-session" };
+    const insertCommand = db.prepare(
+      "INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)",
+    );
+    insertCommand.run(
+      "accepted-run",
+      JSON.stringify({ kind: "automation.run", plan: acceptedPlan }),
+      1_000,
+    );
+    insertCommand.run(
+      "rejected-run",
+      JSON.stringify({ kind: "automation.run", plan: rejectedPlan }),
+      2_000,
+    );
+    const insertReceipt = db.prepare(
+      `INSERT INTO automation_command_receipts
+         (id, command_id, status, result, recorded_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    insertReceipt.run(
+      "accepted-receipt",
+      "accepted-run",
+      "accepted",
+      JSON.stringify({ kind: "automation.run.accepted", plan: acceptedPlan }),
+      1_000,
+    );
+    insertReceipt.run(
+      "rejected-receipt",
+      "rejected-run",
+      "rejected",
+      JSON.stringify({ kind: "automation.run.rejected", code: "RUN_IN_FLIGHT", error: "busy" }),
+      2_000,
+    );
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "automation_session_mint_intents")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT session_create_command_id, automation_command_id, recorded_at
+             FROM automation_session_mint_intents`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        session_create_command_id: "accepted-session:create",
+        automation_command_id: "accepted-run",
+        recorded_at: 1_000,
+      },
+    ]);
+    expect(() =>
+      db.prepare("UPDATE automation_session_mint_intents SET recorded_at = 3").run(),
+    ).toThrow(/mint intents are immutable/);
+    expect(() => db.prepare("DELETE FROM automation_session_mint_intents").run()).toThrow(
+      /mint intents are immutable/,
+    );
+    db.close();
+  });
+});

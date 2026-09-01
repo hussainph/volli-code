@@ -1548,6 +1548,59 @@ CREATE INDEX IF NOT EXISTS idx_blob_links_session ON blob_links(session_id, crea
 CREATE INDEX IF NOT EXISTS idx_blob_links_blob ON blob_links(blob_hash);
 `;
 
+/**
+ * Migration 036: the durable pre-mint half of Automation Session provenance
+ * (VC-225).
+ *
+ * A Project Run has no Ticket timeline on which `session_started` can record
+ * its Automation actor. Its accepted plan nevertheless knows the stable
+ * Session-create operation before mint. This narrow projection indexes that
+ * relation by the exact Session command id: after the Session transaction
+ * lands, provenance can join `session_commands` to it without scanning either
+ * immutable JSON ledger.
+ *
+ * Existing accepted plans are backfilled. The `:create` suffix is a shipped
+ * durable id derivation (`sessionCreateCommandId`); migrations are immutable,
+ * so its literal spelling is intentionally frozen here.
+ */
+const MIGRATION_036_AUTOMATION_SESSION_MINT_INTENTS = `
+CREATE TABLE IF NOT EXISTS automation_session_mint_intents (
+  session_create_command_id TEXT PRIMARY KEY CHECK (session_create_command_id <> ''),
+  automation_command_id     TEXT NOT NULL UNIQUE
+    REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  recorded_at               INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO automation_session_mint_intents
+  (session_create_command_id, automation_command_id, recorded_at)
+SELECT json_extract(command.intent, '$.plan.sessionOperationId') || ':create',
+       command.id,
+       command.created_at
+  FROM automation_commands AS command
+ WHERE json_extract(command.intent, '$.kind') = 'automation.run'
+   AND json_type(command.intent, '$.plan.sessionOperationId') = 'text'
+   AND EXISTS (
+     SELECT 1
+       FROM automation_command_receipts AS receipt
+      WHERE receipt.command_id = command.id
+        AND json_extract(receipt.result, '$.kind') IN (
+          'automation.run.accepted',
+          'automation.run.completed'
+        )
+   );
+
+CREATE TRIGGER IF NOT EXISTS automation_session_mint_intents_immutable_update
+BEFORE UPDATE ON automation_session_mint_intents
+BEGIN
+  SELECT RAISE(ABORT, 'automation Session mint intents are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_session_mint_intents_immutable_delete
+BEFORE DELETE ON automation_session_mint_intents
+BEGIN
+  SELECT RAISE(ABORT, 'automation Session mint intents are immutable');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1725,6 +1778,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "blobs + blob_links — reconcile a lineage that took 020's number without its schema",
     sql: MIGRATION_020_BLOBS_RECONCILE,
     apply: applyMigration035BlobsReconcile,
+  },
+  {
+    version: 36,
+    name: "automations — durable Session mint intents for pre-Run provenance",
+    sql: MIGRATION_036_AUTOMATION_SESSION_MINT_INTENTS,
   },
 ];
 

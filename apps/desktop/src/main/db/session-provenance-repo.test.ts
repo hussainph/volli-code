@@ -21,7 +21,7 @@ interface Fixture {
   db: Database.Database;
   projectId: string;
   ticketId: string;
-  session(id: string, title: string | null): string;
+  session(id: string, title: string | null, ticketId?: string | null): string;
 }
 
 function fixture(): Fixture {
@@ -34,12 +34,12 @@ function fixture(): Fixture {
     db: ctx.db,
     projectId: project.id,
     ticketId: ticket.id,
-    session(id, title) {
+    session(id, title, ticketId = ticket.id) {
       ctx.db
         .prepare(
           "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?,?,?,?,?)",
         )
-        .run(id, project.id, ticket.id, title, 1_000);
+        .run(id, project.id, ticketId, title, 1_000);
       return id;
     },
   };
@@ -177,8 +177,23 @@ describe("readSessionProvenance", () => {
     ).toEqual({ kind: "user" });
   });
 
-  it("reads a ticketless Session as person-started without touching the log", () => {
+  it("reads a Project Session a person started as person-started", () => {
     const f = fixture();
+    f.session("session-project", "Project chat", null);
+    f.db
+      .prepare(
+        `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+         VALUES ('project-person:create', 'session-project', 1000, ?, NULL)`,
+      )
+      .run(
+        JSON.stringify({
+          kind: "session.create",
+          projectId: f.projectId,
+          ticketId: null,
+          title: "Project chat",
+        }),
+      );
+
     expect(readSessionProvenance(f.db, { sessionId: "session-project", ticketId: null })).toEqual({
       kind: "user",
     });
@@ -214,6 +229,64 @@ describe("readSessionProvenance", () => {
     expect(readSessionProvenance(f.db, { sessionId: "session-run", ticketId: f.ticketId })).toEqual(
       { kind: "automation", automationName: null },
     );
+  });
+
+  // Project Sessions have no Ticket timeline. The accepted Run therefore
+  // records its Session-create command id before mint; after a process death,
+  // that marker and the minted command are the two durable halves that meet.
+  it("marks a scheduled Project Run between Session mint and Run insert", () => {
+    const f = fixture();
+    const plan = {
+      sessionOperationId: "scheduled-session",
+      ticketId: null,
+      projectId: f.projectId,
+    };
+    f.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run("scheduled-run", JSON.stringify({ kind: "automation.run", plan }), 1_500);
+    f.db
+      .prepare(
+        `INSERT INTO automation_command_receipts
+           (id, command_id, status, result, recorded_at)
+         VALUES (?, ?, 'accepted', ?, ?)`,
+      )
+      .run(
+        "scheduled-run-accepted",
+        "scheduled-run",
+        JSON.stringify({ kind: "automation.run.accepted", plan }),
+        1_500,
+      );
+    // Pre-mint: this relation is durable while no Session row exists yet.
+    f.db
+      .prepare(
+        `INSERT INTO automation_session_mint_intents
+           (session_create_command_id, automation_command_id, recorded_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run("scheduled-session:create", "scheduled-run", 1_500);
+
+    f.session("session-project-run", "Nightly sweep", null);
+    f.db
+      .prepare(
+        `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+         VALUES (?, ?, ?, ?, NULL)`,
+      )
+      .run(
+        "scheduled-session:create",
+        "session-project-run",
+        2_000,
+        JSON.stringify({
+          kind: "session.create",
+          projectId: f.projectId,
+          ticketId: null,
+          title: "Nightly sweep",
+        }),
+      );
+
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM automation_runs").get()).toEqual({ n: 0 });
+    expect(
+      readSessionProvenance(f.db, { sessionId: "session-project-run", ticketId: null }),
+    ).toEqual({ kind: "automation", automationName: null });
   });
 
   // The other spelling of the same actor: a session-driven Automation stores
