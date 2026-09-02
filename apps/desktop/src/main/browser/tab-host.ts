@@ -534,9 +534,24 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
-  /** Detaches the named page and DevTools when its workspace surface is no longer visible. */
+  /**
+   * Detaches the named page and DevTools when its workspace surface is no
+   * longer visible.
+   *
+   * Alone among the tab operations this one tolerates an unknown id, because
+   * hiding asks for an end state rather than an action: a tab that no longer
+   * exists has no native surface attached, which is exactly what the caller
+   * wanted. The renderer's plane controller emits one last hide as its React
+   * surface unmounts, and a closed tab is the ordinary reason that surface went
+   * away — `close` detaches and forgets the entry before the renderer hears
+   * about it. Throwing there reported a failure for work already done. Every
+   * other door still requires a live tab: `show`, `navigate`, and the rest
+   * cannot do anything meaningful without one, so an unknown id is a real
+   * fault.
+   */
   hide(tabId: string): void {
-    const entry = this.requireTab(tabId);
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return;
     if (this.attached?.entry !== entry) return;
     this.detachEntry(entry, this.attached.window);
     this.attached = null;
