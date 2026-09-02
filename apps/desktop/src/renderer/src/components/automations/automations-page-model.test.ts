@@ -293,13 +293,13 @@ describe("triggerLabel for a schedule", () => {
         kind: "schedule",
         schedule: { preset: "hourly", minute: 5, timeZone: "America/New_York" },
       }),
-    ).toBe("Every hour at :05 America/New_York");
+    ).toBe("Hourly at :05 past the hour America/New_York");
     expect(
       triggerLabel({
         kind: "schedule",
         schedule: { preset: "weekly", weekday: "monday", hour: 8, minute: 30, timeZone: "UTC" },
       }),
-    ).toBe("Every Monday at 08:30 UTC");
+    ).toBe("Weekly on Monday at 08:30 UTC");
   });
 });
 

@@ -759,9 +759,14 @@ export function useComposerCaretBinding(): ComposerCaretBinding {
  * genuinely local view state — the one thing a controlled textarea does not
  * hand back — so it lives here, in the one component that has both the list
  * that reacts to it and the input that produces it beneath it.
+ *
+ * Normal flow remains the default because chat measures this whole stack for
+ * transcript clearance. Compact editors can opt into `overlay`: the card then
+ * covers the top of their textarea without making the stack taller.
  */
 export function ComposerPickerStack({
   children,
+  layout = "flow",
   ...input
 }: React.PropsWithChildren<{
   value: string;
@@ -774,29 +779,51 @@ export function ComposerPickerStack({
   files: readonly IndexedFile[];
   onFilePickerOpen?(): void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
+  /** `flow` reserves height above the input; `overlay` covers it in place. */
+  layout?: "flow" | "overlay";
 }>) {
   const picker = useComposerPicker(input);
+  const card = (
+    <ComposerPicker
+      mode={picker.state?.mode ?? null}
+      rows={picker.rows}
+      active={picker.active}
+      onActiveChange={picker.setActive}
+      onSelect={picker.select}
+    />
+  );
+
   return (
-    // NORMAL FLOW, and it has to stay that way. `chat-plane.tsx` measures the
-    // whole bottom mount with a ResizeObserver and publishes it as
-    // `--composer-height`; the transcript pads its bottom by that plus the
-    // fade, and the scroll button hangs off it. Because the picker is a
-    // *sibling above the input inside that measured box*, opening it grows the
-    // box, the feed's clearance grows with it, and the last message rides up —
-    // while the composer, being the last child of a bottom-anchored container,
-    // does not move at all.
+    // NORMAL FLOW BY DEFAULT, and it has to stay that way for chat.
+    // `chat-plane.tsx` measures the whole bottom mount with a ResizeObserver
+    // and publishes it as `--composer-height`; the transcript pads its bottom
+    // by that plus the fade, and the scroll button hangs off it. Because the
+    // picker is a sibling above the input inside that measured box, opening it
+    // grows the feed's clearance instead of covering its last message.
     //
-    // An absolutely-positioned or portalled picker would look identical on an
-    // empty transcript and then quietly cover the reader's last message on a
-    // full one, because it would contribute no height for anything to clear.
-    <div data-slot="composer-picker-stack" className="flex flex-col gap-2">
-      <ComposerPicker
-        mode={picker.state?.mode ?? null}
-        rows={picker.rows}
-        active={picker.active}
-        onActiveChange={picker.setActive}
-        onSelect={picker.select}
-      />
+    // Overlay is deliberately opt-in for bounded editors whose textarea is the
+    // space the suggestions may cover. The absolute layer contributes no flow
+    // height and starts below the first input line, so the slash/caret that
+    // opened it stays visible. Both inline insets pin its width to this relative
+    // stack, while `min-w-0` lets a grid or flex parent shrink it below a long
+    // row's intrinsic width. The layer itself ignores pointers so an
+    // empty/animating edge never blocks the textarea; the card remains
+    // `pointer-events-auto`, labelled by mode, and keyboard-driven from the
+    // focused textarea.
+    <div
+      data-slot="composer-picker-stack"
+      className={layout === "overlay" ? "relative flex min-w-0 flex-col" : "flex flex-col gap-2"}
+    >
+      {layout === "overlay" ? (
+        <div
+          data-slot="composer-picker-overlay"
+          className="pointer-events-none absolute inset-x-0 top-10 z-10 min-w-0 max-w-full"
+        >
+          {card}
+        </div>
+      ) : (
+        card
+      )}
       <ComposerCaretContext.Provider value={picker.binding}>
         {children}
       </ComposerCaretContext.Provider>

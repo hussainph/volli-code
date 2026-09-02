@@ -521,7 +521,9 @@ function RunOnceForm({
         <DialogHeader>
           <DialogTitle>{UNBOUND_RUN_LABEL}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        {/* DialogContent is a grid. This zero minimum lets the shared picker
+            truncate inside the dialog instead of widening the grid track. */}
+        <div className="flex min-w-0 flex-col gap-2">
           <ComposerPickerStack
             value={instructions}
             onValueChange={setInstructions}
@@ -573,10 +575,10 @@ function RunOnceForm({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={incomplete} onClick={submit}>
+          <Button size="sm" disabled={incomplete} onClick={submit}>
             Run
           </Button>
         </DialogFooter>
