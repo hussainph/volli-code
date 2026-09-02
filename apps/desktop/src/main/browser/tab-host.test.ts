@@ -579,6 +579,38 @@ describe("BrowserTabHost native surface", () => {
     expect(fakeWindow.contentView.addChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
     expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
   });
+
+  it("accepts a hide for a closed tab, because its surface is already detached", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    host.close(tab.tabId);
+    const detaches = fakeWindow.contentView.removeChildView.mock.calls.length;
+
+    // The renderer plane controller emits this as its React surface unmounts,
+    // which is exactly what closing the tab caused.
+    expect(() => host.hide(tab.tabId)).not.toThrow();
+
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toHaveLength(detaches);
+    expect(() => host.show(tab.tabId)).toThrow("Unknown Browser Tab");
+  });
+
+  it("accepts a hide for a tab whose WebContents died outside the close command", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    views[0]?.webContents.emit("destroyed");
+
+    expect(() => host.hide(tab.tabId)).not.toThrow();
+  });
 });
 
 describe("BrowserTabHost registry", () => {
