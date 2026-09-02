@@ -396,7 +396,7 @@ async function main() {
 
   await must(
     "2b",
-    "the floating navigation sidebar hides the native Browser plane until it leaves",
+    "the floating navigation sidebar freezes the Browser plane until it leaves",
     async () => {
       const trigger = page.getByRole("button", {
         name: "Toggle navigation sidebar",
@@ -416,6 +416,7 @@ async function main() {
         "the floating sidebar to take the renderer overlay tier",
         async () =>
           (await page.locator("[data-native-plane-overlay]").count()) === 1 &&
+          (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
           !(await remoteViewAttached(app, startUrl)),
       );
       await page.mouse.move(700, 70);
@@ -423,6 +424,7 @@ async function main() {
         "the floating sidebar to leave before restoring the Browser plane",
         async () =>
           (await page.locator("[data-native-plane-overlay]").count()) === 0 &&
+          (await page.locator("[data-browser-plane-snapshot]").count()) === 0 &&
           (await remoteViewAttached(app, startUrl)),
       );
       await trigger.click();
@@ -432,9 +434,30 @@ async function main() {
           (await shell.getAttribute("data-volli-shell")) === "framed" &&
           (await remoteViewAttached(app, startUrl)),
       );
+
+      // Exercise a real Radix menu too: this is the everyday overlay path the
+      // ticket reported, whereas the floating sidebar uses the explicit marker.
+      await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+      await waitUntil(
+        "the new-session menu to freeze the Browser plane over its last pixels",
+        async () =>
+          (await page.getByRole("menu").count()) === 1 &&
+          (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
+          !(await remoteViewAttached(app, startUrl)),
+      );
+      await page.keyboard.press("Escape");
+      await waitUntil(
+        "closing the menu to restore the live Browser plane",
+        async () =>
+          (await page.getByRole("menu").count()) === 0 &&
+          (await page.locator("[data-browser-plane-snapshot]").count()) === 0 &&
+          (await remoteViewAttached(app, startUrl)),
+      );
+
       return {
         ok: true,
-        detail: "floating=renderer plane=hidden withdrawn/pinned=browser plane=restored",
+        detail:
+          "floating/menu=renderer snapshot/live plane=hidden withdrawn/closed=live plane restored",
       };
     },
   );

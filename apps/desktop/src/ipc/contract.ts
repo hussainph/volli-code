@@ -1478,6 +1478,26 @@ export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
+/**
+ * One inert bitmap captured from a native Browser surface.
+ *
+ * Bounds are relative to the renderer's measured Browser plane. `kind` keeps
+ * the page and its optional docked DevTools frame distinct without making a
+ * data URL part of renderer identity.
+ */
+export interface BrowserTabCaptureFrame {
+  kind: "page" | "devtools";
+  dataUrl: string;
+  bounds: BrowserTabBounds;
+}
+
+/**
+ * The frozen pixels the renderer paints while an app overlay covers the native
+ * Browser plane. No remote DOM, script, storage, or WebContents handle crosses
+ * with them; the frame is display-only and discarded when the overlay closes.
+ */
+export type BrowserTabCaptureResult = Result<{ frames: BrowserTabCaptureFrame[] }>;
+
 /** The scoped Browser Tab registry, containing no page-derived body data. */
 export type BrowserTabListResult = Result<{ tabs: BrowserTabState[] }>;
 
@@ -1498,6 +1518,10 @@ export interface VolliBrowserIpcContract {
   "volli:browser-forward": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
   "volli:browser-reload": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
   "volli:browser-set-bounds": { args: [input: BrowserTabSetBoundsInput]; result: Result };
+  "volli:browser-capture": {
+    args: [input: BrowserTabIdInput];
+    result: BrowserTabCaptureResult;
+  };
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };

@@ -261,6 +261,10 @@ export const BROWSER_IPC: {
     },
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-capture": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
   "volli:browser-show": {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",

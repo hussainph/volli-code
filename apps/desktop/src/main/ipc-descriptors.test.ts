@@ -35,6 +35,7 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-forward",
       "volli:browser-reload",
       "volli:browser-set-bounds",
+      "volli:browser-capture",
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
@@ -65,12 +66,13 @@ describe("BROWSER_IPC descriptor table", () => {
     expect(guard([])).toBe(false);
   });
 
-  it("requires one opaque string id for close, history, visibility, reload, and DevTools", () => {
+  it("requires one opaque string id for close, history, capture, visibility, reload, and DevTools", () => {
     const channels = [
       "volli:browser-close",
       "volli:browser-back",
       "volli:browser-forward",
       "volli:browser-reload",
+      "volli:browser-capture",
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",

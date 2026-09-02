@@ -9,7 +9,11 @@ import type {
 import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
-import type { BrowserTabCreatedBy, BrowserTabState } from "../../ipc/contract";
+import type {
+  BrowserTabCaptureFrame,
+  BrowserTabCreatedBy,
+  BrowserTabState,
+} from "../../ipc/contract";
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
@@ -519,6 +523,53 @@ export class BrowserTabHost {
     const entry = this.requireTab(tabId);
     entry.bounds = { ...bounds };
     this.layout(entry);
+  }
+
+  /**
+   * Captures inert fallback pixels before the renderer hides this native plane
+   * for one of its overlays.
+   *
+   * A WebContentsView always composites above the BrowserWindow renderer. The
+   * live view therefore has to detach before a dialog or menu can cover it, but
+   * detaching without a replacement exposes an empty (usually black) native
+   * hole. These frames let the renderer paint the last visible page underneath
+   * its overlay instead. Only PNG pixels cross the boundary — never remote DOM,
+   * script, storage, or a WebContents handle.
+   */
+  async capture(tabId: string): Promise<BrowserTabCaptureFrame[]> {
+    const entry = this.requireTab(tabId);
+    const split = browserSurfaceBounds(
+      entry.bounds,
+      entry.devToolsOpen && entry.devToolsView !== null,
+    );
+    const captures: Promise<BrowserTabCaptureFrame>[] = [
+      entry.view.webContents.capturePage().then((image) => ({
+        kind: "page",
+        dataUrl: image.toDataURL(),
+        bounds: {
+          x: split.page.x - entry.bounds.x,
+          y: split.page.y - entry.bounds.y,
+          width: split.page.width,
+          height: split.page.height,
+        },
+      })),
+    ];
+    const devToolsBounds = split.devTools;
+    if (devToolsBounds !== null && entry.devToolsView !== null) {
+      captures.push(
+        entry.devToolsView.webContents.capturePage().then((image) => ({
+          kind: "devtools",
+          dataUrl: image.toDataURL(),
+          bounds: {
+            x: devToolsBounds.x - entry.bounds.x,
+            y: devToolsBounds.y - entry.bounds.y,
+            width: devToolsBounds.width,
+            height: devToolsBounds.height,
+          },
+        })),
+      );
+    }
+    return Promise.all(captures);
   }
 
   /** Attaches exactly one selected native page (and its DevTools) to the live app window. */

@@ -61,6 +61,10 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       host.setBounds(input.tabId, input.bounds);
       return { ok: true };
     },
+    "volli:browser-capture": async (input: BrowserTabIdInput) => ({
+      ok: true,
+      frames: await host.capture(input.tabId),
+    }),
     "volli:browser-show": (input: BrowserTabIdInput): Result => {
       host.show(input.tabId);
       return { ok: true };

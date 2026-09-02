@@ -2,7 +2,12 @@ import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../../../browser-start-page";
-import type { BrowserTabResult, BrowserTabState, Result } from "../../../../ipc/contract";
+import type {
+  BrowserTabCaptureFrame,
+  BrowserTabResult,
+  BrowserTabState,
+  Result,
+} from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
@@ -28,23 +33,45 @@ export function hasNativePlaneOverlay(root: ParentNode): boolean {
   return root.querySelector(NATIVE_PLANE_OVERLAY_SELECTOR) !== null;
 }
 
-/** Native child views always composite above renderer portals, so overlays hide the plane. */
-function useRendererOverlayActive(): boolean {
-  const [active, setActive] = React.useState(false);
+interface RendererOverlayState {
+  active: boolean;
+  /** Distinguishes two openings so pixels from the first can never freeze the second. */
+  epoch: number;
+}
+
+/**
+ * Native child views always composite above renderer portals. Each overlay
+ * opening gets an epoch so an asynchronous capture from an older opening can
+ * never hide the live plane under a newer one.
+ */
+function useRendererOverlay(): RendererOverlayState {
+  const [state, setState] = React.useState<RendererOverlayState>({ active: false, epoch: 0 });
   React.useEffect(() => {
-    const read = (): void => setActive(hasNativePlaneOverlay(document));
+    const read = (): void => {
+      const active = hasNativePlaneOverlay(document);
+      setState((current) => {
+        if (active === current.active) return current;
+        return { active, epoch: active ? current.epoch + 1 : current.epoch };
+      });
+    };
     read();
     const observer = new MutationObserver(read);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
-  return active;
+  return state;
+}
+
+interface OverlaySnapshot {
+  epoch: number;
+  frames: BrowserTabCaptureFrame[];
 }
 
 /**
  * Renderer chrome plus the measured hole occupied by main's WebContentsView.
- * Remote page bytes never enter this tree; the native view is attached over the
- * plane rectangle and only bounded chrome state crosses the preload bridge.
+ * The live remote page stays in that sandboxed native view. The only page body
+ * data this tree receives is an inert PNG captured for the brief interval when
+ * an app overlay must replace the always-on-top native plane.
  */
 export function BrowserPane({
   tab,
@@ -59,11 +86,16 @@ export function BrowserPane({
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
+  const controllerRef = React.useRef<BrowserPlaneController | null>(null);
   const previousUrlRef = React.useRef(addressOf(tab.url));
   const [address, setAddress] = React.useState(() => addressOf(tab.url));
   const [error, setError] = React.useState<string | null>(null);
-  const rendererOverlayActive = useRendererOverlayActive();
-  const planeVisible = visible && !rendererOverlayActive;
+  const [overlaySnapshot, setOverlaySnapshot] = React.useState<OverlaySnapshot | null>(null);
+  const rendererOverlay = useRendererOverlay();
+  const snapshotReady = rendererOverlay.active && overlaySnapshot?.epoch === rendererOverlay.epoch;
+  // Capture first, then detach. The snapshot is already in this render when
+  // the layout effect hides the native child, so no black frame is exposed.
+  const planeVisible = visible && !snapshotReady;
 
   // A state push should move an untouched address bar but must not erase an
   // address the person is midway through typing because a title/loading push
@@ -93,6 +125,39 @@ export function BrowserPane({
     return () => window.cancelAnimationFrame(frame);
   }, [blank, tab.tabId]);
 
+  React.useEffect(() => {
+    if (!rendererOverlay.active) {
+      setOverlaySnapshot(null);
+      return;
+    }
+    if (!visible) return;
+
+    let current = true;
+    const epoch = rendererOverlay.epoch;
+    const fail = (detail: string): void => {
+      if (!current) return;
+      toastError(`Could not freeze Browser Tab for overlay: ${detail}`);
+      // The overlay must remain operable even when capture fails. An empty
+      // frame list falls back to the plane's themed renderer background.
+      setOverlaySnapshot({ epoch, frames: [] });
+    };
+    void api
+      .capture({ tabId: tab.tabId })
+      .then((result) => {
+        if (!current) return;
+        if (!result.ok) {
+          fail(result.error);
+          return;
+        }
+        setOverlaySnapshot({ epoch, frames: result.frames });
+      })
+      .catch((reason: unknown) => fail(errorMessage(reason)));
+
+    return () => {
+      current = false;
+    };
+  }, [api, rendererOverlay.active, rendererOverlay.epoch, tab.tabId, visible]);
+
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
     if (anchor === null) return;
@@ -100,9 +165,9 @@ export function BrowserPane({
       setError(message);
       toastError(message);
     });
+    controllerRef.current = controller;
     const measure = () => controller.reportBounds(anchor.getBoundingClientRect());
     measure();
-    controller.setVisible(planeVisible);
     const observer = new ResizeObserver(measure);
     observer.observe(anchor);
     window.addEventListener("resize", measure);
@@ -110,7 +175,12 @@ export function BrowserPane({
       observer.disconnect();
       window.removeEventListener("resize", measure);
       controller.dispose();
+      if (controllerRef.current === controller) controllerRef.current = null;
     };
+  }, [api, tab.tabId]);
+
+  React.useLayoutEffect(() => {
+    controllerRef.current?.setVisible(planeVisible);
   }, [api, planeVisible, tab.tabId]);
 
   const runTabCommand = React.useCallback(
@@ -169,7 +239,31 @@ export function BrowserPane({
           void runCommand(api.toggleDevTools({ tabId: tab.tabId }), "toggle DevTools")
         }
       />
-      <div ref={anchorRef} data-browser-plane={tab.tabId} className="relative min-h-0 flex-1" />
+      <div
+        ref={anchorRef}
+        data-browser-plane={tab.tabId}
+        className="relative min-h-0 flex-1 overflow-hidden bg-background"
+      >
+        {snapshotReady
+          ? overlaySnapshot.frames.map((frame) => (
+              <img
+                key={frame.kind}
+                aria-hidden
+                alt=""
+                src={frame.dataUrl}
+                draggable={false}
+                data-browser-plane-snapshot={frame.kind}
+                className="pointer-events-none absolute max-w-none select-none"
+                style={{
+                  left: frame.bounds.x,
+                  top: frame.bounds.y,
+                  width: frame.bounds.width,
+                  height: frame.bounds.height,
+                }}
+              />
+            ))
+          : null}
+      </div>
     </div>
   );
 }

@@ -64,6 +64,10 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
+  captureDataUrl = "data:image/png;base64,page";
+  capturePage = vi.fn(async () => ({
+    toDataURL: () => this.captureDataUrl,
+  }));
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -555,6 +559,54 @@ describe("BrowserTabHost navigation controls", () => {
 });
 
 describe("BrowserTabHost native surface", () => {
+  it("captures page and docked DevTools pixels in plane-relative positions", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const bounds = { x: 12, y: 48, width: 800, height: 600 };
+    host.setBounds(tab.tabId, bounds);
+    host.show(tab.tabId);
+    host.toggleDevTools(tab.tabId);
+    const tools = views[1];
+    if (tools === undefined) throw new Error("expected DevTools view");
+    tools.webContents.captureDataUrl = "data:image/png;base64,tools";
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/png;base64,page",
+        bounds: { x: 0, y: 0, width: 800, height: 347 },
+      },
+      {
+        kind: "devtools",
+        dataUrl: "data:image/png;base64,tools",
+        bounds: { x: 0, y: 348, width: 800, height: 252 },
+      },
+    ]);
+    expect(views[0]?.webContents.capturePage).toHaveBeenCalledOnce();
+    expect(tools.webContents.capturePage).toHaveBeenCalledOnce();
+  });
+
+  it("captures just the page when DevTools is closed", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/png;base64,page",
+        bounds: BROWSER_DEFAULT_BOUNDS,
+      },
+    ]);
+  });
+
   it("sets renderer-measured bounds and attaches only the visible tab", () => {
     const first = host.open({
       url: "https://one.example.com",
