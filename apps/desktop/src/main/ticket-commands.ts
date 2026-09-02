@@ -4,6 +4,7 @@ import {
   isValidBranchName,
   leavesActiveColumns,
   moveTicket,
+  moveTickets,
   type Ticket,
   type TicketEventActor,
   type HarnessId,
@@ -161,6 +162,59 @@ export function moveTicketCommand(
           db,
           input.ticketId,
           { kind: "status_changed", from: movedBefore.status, to: movedAfter.status },
+          context.now,
+          context.actor,
+        );
+      }
+    }
+    return after;
+  })();
+}
+
+/**
+ * Persists one multi-card drop as one transaction. The shared operation owns
+ * group ordering and dense positions; this command writes every affected row
+ * and emits one status event per selected ticket that crossed a column.
+ */
+export function moveTicketsCommand(
+  db: Database.Database,
+  input: { projectId: string; ticketIds: string[]; toStatus: TicketStatus; toIndex: number },
+  context: TicketCommandContext,
+): Ticket[] {
+  return db.transaction((): Ticket[] => {
+    const ticketIds = [...new Set(input.ticketIds)];
+    for (const ticketId of ticketIds) requireLiveTicket(db, ticketId, "move");
+
+    const before = listTicketsByProject(db, input.projectId);
+    const beforeById = new Map(before.map((ticket) => [ticket.id, ticket]));
+    if (ticketIds.some((ticketId) => !beforeById.has(ticketId))) {
+      throw new Error("Ticket does not belong to project");
+    }
+
+    const after = moveTickets(before, ticketIds, input.toStatus, input.toIndex, context.now);
+    if (after === before) return after;
+
+    const afterById = new Map(after.map((ticket) => [ticket.id, ticket]));
+    const movedIds = new Set(ticketIds);
+    for (const ticket of after) {
+      const prior = beforeById.get(ticket.id);
+      if (
+        prior &&
+        (prior.status !== ticket.status ||
+          prior.order !== ticket.order ||
+          (movedIds.has(ticket.id) && prior.updatedAt !== ticket.updatedAt))
+      ) {
+        updateTicketPositionStatus(db, ticket.id, ticket.status, ticket.order, ticket.updatedAt);
+      }
+    }
+    for (const ticketId of ticketIds) {
+      const prior = beforeById.get(ticketId);
+      const moved = afterById.get(ticketId);
+      if (prior && moved && prior.status !== moved.status) {
+        recordTicketEvent(
+          db,
+          ticketId,
+          { kind: "status_changed", from: prior.status, to: moved.status },
           context.now,
           context.actor,
         );

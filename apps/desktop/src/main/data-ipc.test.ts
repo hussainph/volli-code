@@ -1016,6 +1016,118 @@ describe("archived-ticket guards — ticket-update/set-priority/set-labels/move"
   });
 });
 
+describe("volli:ticket-move — multi-card drops", () => {
+  it("persists a selected group contiguously and wakes every ticket that changed status", () => {
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+    const target = createTicket(projectId);
+    invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketId: target.id,
+      toStatus: "doing",
+      toIndex: 0,
+    });
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      // Reverse payload order must not reverse board order.
+      ticketIds: [second.id, first.id],
+      toStatus: "doing",
+      toIndex: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.tickets
+        .filter((ticket) => ticket.status === "doing")
+        .toSorted((a, b) => a.order - b.order)
+        .map((ticket) => ticket.id),
+    ).toEqual([first.id, second.id, target.id]);
+    for (const ticket of [first, second]) {
+      const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+      expect(events.ok && events.events.at(-1)?.payload.kind).toBe("status_changed");
+    }
+  });
+
+  it("reports every committed group arrival with the shared Option-drag choice", () => {
+    const arrivals: unknown[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { onDeliberateMove: (notice) => arrivals.push(notice) },
+    );
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+
+    const result = invoke<TicketsResult>("volli:ticket-move", {
+      projectId,
+      ticketIds: [first.id, second.id],
+      toStatus: "doing",
+      toIndex: 0,
+      choice: { kind: "automation", automationId: "automation-2" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(arrivals).toEqual([
+      {
+        projectId,
+        ticketId: first.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+      {
+        projectId,
+        ticketId: second.id,
+        from: "backlog",
+        to: "doing",
+        choice: { kind: "automation", automationId: "automation-2" },
+      },
+    ]);
+  });
+
+  it("starts backward-move interrupts for every selected ticket before awaiting either", async () => {
+    const started: string[] = [];
+    const resolvers: Array<() => void> = [];
+    const interruptTicketSessions = vi.fn(
+      (ticketId: string) =>
+        new Promise<string[]>((resolve) => {
+          started.push(ticketId);
+          resolvers.push(() => resolve([]));
+        }),
+    );
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+    for (const ticket of [first, second]) {
+      await invoke<Promise<TicketsResult>>("volli:ticket-move", {
+        projectId,
+        ticketId: ticket.id,
+        toStatus: "doing",
+        toIndex: 0,
+      });
+    }
+    started.length = 0;
+    resolvers.length = 0;
+
+    const pending = invoke<Promise<TicketsResult>>("volli:ticket-move", {
+      projectId,
+      ticketIds: [first.id, second.id],
+      toStatus: "todo",
+      toIndex: 0,
+    });
+
+    expect(started).toEqual([first.id, second.id]);
+    for (const resolve of resolvers) resolve();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+  });
+});
+
 describe("volli:ticket-move — armed-column arrival", () => {
   it("reports one committed renderer arrival to main, including its Option-drag choice", () => {
     const arrivals: unknown[] = [];
@@ -1138,6 +1250,24 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(interrupt).not.toHaveBeenCalled();
   });
 
+  it("does not interrupt when a single-card request names the wrong project", () => {
+    const interrupt = withInterrupt(["s1"]);
+    const projectId = createProject();
+    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Other",
+    });
+    const otherProjectId = other.project.id;
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+    interrupt.mockClear();
+
+    const result = move(otherProjectId, ticket.id, "todo");
+
+    expect(result.ok).toBe(true);
+    expect(interrupt).not.toHaveBeenCalled();
+  });
+
   it("records nothing when the interrupt finds no live agent sessions", () => {
     const interrupt = withInterrupt([]);
     const projectId = createProject();
@@ -1148,6 +1278,25 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "todo");
 
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
+  });
+
+  it("keeps the committed move successful when the interrupt throws synchronously", () => {
+    const interruptTicketSessions = vi.fn(() => {
+      throw new Error("terminal interrupt unavailable");
+    });
+    const logFailure = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "doing");
+
+    const result = move(projectId, ticket.id, "todo");
+
+    expect(result.ok && result.tickets[0]?.status).toBe("todo");
+    expect(logFailure).toHaveBeenCalledWith(
+      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+    );
   });
 
   it("keeps the committed move successful when the asynchronous interrupt rejects", async () => {

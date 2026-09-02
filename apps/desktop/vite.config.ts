@@ -172,6 +172,9 @@ export default defineConfig(({ mode }) => ({
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
         "src/components/board/board-dnd.ts",
+        // Desktop selection gestures are board policy, not view glue: modifier
+        // toggles may span columns while Shift ranges stay in one visual column.
+        "src/components/board/board-selection.ts",
         // The ⌥-drag picker's whole decision surface (VC-132): whether a column
         // is expanded into landing targets, which row a release obeys, and what
         // that release chose. Gated for `armed-move-model.ts`'s reason one file

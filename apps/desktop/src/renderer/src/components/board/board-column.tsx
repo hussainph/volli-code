@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from "@volli/shared";
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
+import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import { ColumnArmingButton } from "@renderer/components/board/column-arming";
 import {
   ColumnOfferedPanel,
@@ -25,8 +26,11 @@ interface BoardColumnProps {
   ticketPrefix: string;
   /** The board's owning project's label rows — constant for the whole board tree. */
   projectLabels: readonly Label[];
-  selectedId: string | null;
-  onSelect(ticketId: string): void;
+  selectedIds: readonly string[];
+  draggingIds: readonly string[];
+  /** Payload shared by every selected card; unselected cards advertise only themselves. */
+  groupDragIds: readonly string[];
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   composerInitiallyOpen: boolean;
@@ -50,7 +54,9 @@ export function BoardColumn({
   projectId,
   ticketPrefix,
   projectLabels,
-  selectedId,
+  selectedIds,
+  draggingIds,
+  groupDragIds,
   onSelect,
   onOpen,
   composerInitiallyOpen,
@@ -79,6 +85,8 @@ export function BoardColumn({
   // identity board.tsx now holds across a drag-over for every column the drag
   // did not touch.
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
+  const selectedSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
+  const draggingSet = React.useMemo(() => new Set(draggingIds), [draggingIds]);
   const composer = useTicketComposer({
     projectId,
     status,
@@ -175,7 +183,9 @@ export function BoardColumn({
                   projectId={projectId}
                   ticketPrefix={ticketPrefix}
                   projectLabels={projectLabels}
-                  selected={ticket.id === selectedId}
+                  selected={selectedSet.has(ticket.id)}
+                  dragHidden={draggingSet.has(ticket.id)}
+                  dragTicketIds={selectedSet.has(ticket.id) ? groupDragIds : undefined}
                   sessionActivity={sessionActivity[ticket.id] ?? null}
                   onSelect={onSelect}
                   onOpen={onOpen}

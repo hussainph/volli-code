@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import { createTicket, displayTicketId } from "./ticket";
 import type { Ticket, TicketStatus } from "./ticket";
-import { groupTicketsByStatus, moveTicket, setTicketPriority } from "./board";
+import { groupTicketsByStatus, moveTicket, moveTickets, setTicketPriority } from "./board";
 
 function ticket(overrides: {
   ticketNumber: number;
@@ -138,6 +138,105 @@ describe("moveTicket", () => {
     // Ticket "VC-2" is already last (index 1); requesting index 99 clamps to 1 too, so this is a no-op.
     const result = moveTicket(tickets, "VC-2", "todo", 99, 100);
     expect(result).toBe(tickets);
+  });
+});
+
+describe("moveTickets", () => {
+  it("moves a same-column selection as one contiguous group", () => {
+    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
+    const b = ticket({ ticketNumber: 2, status: "todo", order: 1 });
+    const c = ticket({ ticketNumber: 3, status: "todo", order: 2 });
+    const d = ticket({ ticketNumber: 4, status: "todo", order: 3 });
+
+    const result = moveTickets([a, b, c, d], [a.id, b.id], "todo", 2, 100);
+
+    expect(groupTicketsByStatus(result).todo.map((entry) => entry.id)).toEqual([
+      c.id,
+      d.id,
+      a.id,
+      b.id,
+    ]);
+  });
+
+  it("preserves canonical board order for a selection spanning columns", () => {
+    const backlog = ticket({ ticketNumber: 1, status: "backlog", order: 0 });
+    const todo = ticket({ ticketNumber: 2, status: "todo", order: 0 });
+    const doing = ticket({ ticketNumber: 3, status: "doing", order: 0 });
+    const target = ticket({ ticketNumber: 4, status: "done", order: 0 });
+
+    const result = moveTickets(
+      [backlog, todo, doing, target],
+      // Click order deliberately differs from board order.
+      [doing.id, backlog.id, todo.id],
+      "done",
+      0,
+      200,
+    );
+
+    expect(groupTicketsByStatus(result).done.map((entry) => entry.id)).toEqual([
+      backlog.id,
+      todo.id,
+      doing.id,
+      target.id,
+    ]);
+  });
+
+  it("treats toIndex as the destination slot after selected tickets are removed", () => {
+    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
+    const b = ticket({ ticketNumber: 2, status: "doing", order: 0 });
+    const c = ticket({ ticketNumber: 3, status: "doing", order: 1 });
+    const d = ticket({ ticketNumber: 4, status: "doing", order: 2 });
+
+    const result = moveTickets([a, b, c, d], [a.id, b.id], "doing", 1, 300);
+
+    expect(groupTicketsByStatus(result).doing.map((entry) => entry.id)).toEqual([
+      c.id,
+      a.id,
+      b.id,
+      d.id,
+    ]);
+  });
+
+  it("densely reorders every source column and stamps every moved ticket", () => {
+    const a = ticket({ ticketNumber: 1, status: "backlog", order: 0 });
+    const b = ticket({ ticketNumber: 2, status: "backlog", order: 1 });
+    const c = ticket({ ticketNumber: 3, status: "todo", order: 0 });
+    const d = ticket({ ticketNumber: 4, status: "todo", order: 1 });
+
+    const result = moveTickets([a, b, c, d], [a.id, c.id], "doing", 0, 4242);
+    const groups = groupTicketsByStatus(result);
+
+    expect(groups.backlog).toMatchObject([{ id: b.id, order: 0 }]);
+    expect(groups.todo).toMatchObject([{ id: d.id, order: 0 }]);
+    expect(groups.doing).toMatchObject([
+      { id: a.id, status: "doing", order: 0, updatedAt: 4242 },
+      { id: c.id, status: "doing", order: 1, updatedAt: 4242 },
+    ]);
+  });
+
+  it("ignores duplicate and unknown ids", () => {
+    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
+    const b = ticket({ ticketNumber: 2, status: "doing", order: 0 });
+
+    const result = moveTickets([a, b], [a.id, "unknown", a.id], "doing", 0, 100);
+
+    expect(groupTicketsByStatus(result).doing.map((entry) => entry.id)).toEqual([a.id, b.id]);
+  });
+
+  it("returns the same array when no known ids are supplied", () => {
+    const tickets = [ticket({ ticketNumber: 1, status: "todo", order: 0 })];
+
+    expect(moveTickets(tickets, ["unknown"], "doing", 0, 100)).toBe(tickets);
+    expect(moveTickets(tickets, [], "doing", 0, 100)).toBe(tickets);
+  });
+
+  it("returns the same array when the group resolves to its current slot", () => {
+    const a = ticket({ ticketNumber: 1, status: "todo", order: 0 });
+    const b = ticket({ ticketNumber: 2, status: "todo", order: 1 });
+    const c = ticket({ ticketNumber: 3, status: "todo", order: 2 });
+    const tickets = [a, b, c];
+
+    expect(moveTickets(tickets, [a.id, b.id], "todo", 0, 100)).toBe(tickets);
   });
 });
 
