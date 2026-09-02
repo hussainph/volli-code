@@ -656,17 +656,25 @@ function ActivityIsland({
               aria-label="Agent activity"
               className="relative will-change-transform"
             >
-              {/* The now-channel: a drop breaks out of the pill upward — mitosis —
-                hangs while the message reads, and is reabsorbed. `mode="wait"`
-                IS the metaphor: a new event waits for the old drop to return
-                before the next one emerges. The wrapper carries no transform of
-                its own (flex-centering, not translate), because Motion owns
-                `transform` on the drop. `-z-10` is the whole illusion: the drop
-                paints BEHIND the pill, whose opaque body masks it during travel
-                — so it slides out of the pill's top edge instead of riding over
-                its face like a stacked card. */}
+              {/* The now-channel: a drop that buds off the pill upward, hangs
+                while the message reads, and merges back. `mode="wait"` IS the
+                metaphor: a new event waits for the old drop to return first.
+                TWO hard rules, learned the hard way (a drop once sat at full
+                opacity across the pill's face for its whole hold):
+                • geometry is INLINE STYLE — `bottom-full`/`-z-10` are used
+                  nowhere else in the app, and a first-use utility a stale
+                  Tailwind scan drops is a silent lie (lab.css's own warning);
+                  inline `bottom`/`zIndex` cannot be dropped.
+                • the travel NEVER crosses the pill's top edge — the drop rises
+                  and fades entirely inside the gap, so no stacking rule in any
+                  browser decides what the reader sees. The wrapper carries no
+                  transform of its own (flex-centering, not translate), because
+                  Motion owns `transform` on the drop. */}
               {dials.grammar === "clusters-now" ? (
-                <span className="pointer-events-none absolute inset-x-0 bottom-full -z-10 flex justify-center pb-2">
+                <span
+                  className="pointer-events-none absolute inset-x-0 flex justify-center"
+                  style={{ bottom: "100%", paddingBottom: 8, zIndex: -1 }}
+                >
                   <AnimatePresence initial={false} mode="wait">
                     {bubble ? (
                       <motion.span
@@ -674,18 +682,18 @@ function ActivityIsland({
                         initial={
                           reduce
                             ? { opacity: 0 }
-                            : { opacity: 0.9, y: 30, scale: 0.55, filter: "blur(2px)" }
+                            : { opacity: 0, y: 10, scale: 0.6, filter: "blur(2px)" }
                         }
                         animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
                         exit={
                           reduce
                             ? { opacity: 0, transition: { duration: 0.1 } }
                             : {
-                                opacity: 0.9,
-                                y: 26,
-                                scale: 0.5,
+                                opacity: 0,
+                                y: 8,
+                                scale: 0.55,
                                 filter: "blur(2px)",
-                                transition: { duration: 0.2, ease: EASE_OUT },
+                                transition: { duration: 0.18, ease: EASE_OUT },
                               }
                         }
                         transition={
@@ -694,11 +702,12 @@ function ActivityIsland({
                             : {
                                 y: spring,
                                 scale: spring,
-                                opacity: { duration: 0.18, ease: EASE_OUT },
+                                opacity: { duration: 0.15, ease: EASE_OUT },
                                 filter: { duration: 0.18, ease: EASE_OUT },
                               }
                         }
-                        className="origin-bottom flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
+                        style={{ originY: 1 }}
+                        className="flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
                       >
                         <span className="truncate text-ui text-muted-foreground">
                           {bubble.text}
