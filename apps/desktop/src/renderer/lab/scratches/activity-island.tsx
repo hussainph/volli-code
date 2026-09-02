@@ -40,7 +40,6 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { Spinner } from "@renderer/components/ui/spinner";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   Tooltip,
@@ -67,6 +66,7 @@ interface TabSim {
 interface AgentSim {
   id: number;
   label: string;
+  tone: string;
   /** 0..1 */
   progress: number;
   state: "working" | "done" | "failed";
@@ -115,8 +115,8 @@ const DEFAULT_DIALS: Dials = {
   forceReduced: false,
 };
 
-/** Project-tile-ish tones for the fixture favicon dots. Fixture data, not tokens. */
-const TAB_TONES = ["#e8652a", "#3577f2", "#2fa36b", "#a65cd6", "#d1a03c"] as const;
+/** Project-tile-ish tones — worn by the subagent chips. Fixture data, not tokens. */
+const SIM_TONES = ["#e8652a", "#3577f2", "#2fa36b", "#a65cd6", "#d1a03c"] as const;
 
 const TAB_HOSTS = [
   "localhost:5177",
@@ -306,7 +306,6 @@ function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; re
         <div className="flex flex-col gap-1">
           {tabs.map((tab) => (
             <div key={tab.id} className="flex items-center gap-2 px-2 py-1 text-ui">
-              <span className="size-2 rounded-full" style={{ backgroundColor: tab.tone }} />
               <span className="min-w-0 flex-1 truncate text-foreground">{tab.host}</span>
               <span className="text-label uppercase text-muted-foreground">
                 {tab.state === "loading" ? "loading" : "ready"}
@@ -316,119 +315,93 @@ function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; re
         </div>
       }
     >
+      {/* Tabs compress to namespace glyph + count — the colored chips belong
+          to the SUBAGENTS now (they are the workers; circles + letters is the
+          people idiom, and this pill has exactly one people-cluster). Identity
+          per tab lives in the popover. While any tab is loading, the browser's
+          own idiom — an arc — orbits the globe. */}
       <span className="flex items-center gap-1">
-        {/* The namespace glyph leads, so the chips read as “browser: …” rather
-            than as avatars — and the chips are rounded SQUARES for the same
-            reason: circles + letters is the people idiom, squares + letters is
-            the favicon idiom. */}
-        <GlobeSimpleIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="flex items-center">
-          {tabs.slice(0, 4).map((tab, index) => (
-            <motion.span
-              key={tab.id}
-              layout
-              {...clusterPresence(reduce)}
+        <span className="relative flex size-5 shrink-0 items-center justify-center">
+          <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
+          {tabs.some((tab) => tab.state === "loading") ? (
+            <svg
+              viewBox="0 0 20 20"
               className={cn(
-                "relative flex size-4 shrink-0 items-center justify-center rounded-sm ring-2 ring-card",
-                index > 0 && "-ml-1",
+                "absolute inset-0 block size-5 text-primary",
+                reduce ? "" : "animate-spin",
               )}
-              style={{ backgroundColor: tab.tone, borderRadius: 4 }}
             >
-              {tab.state === "loading" ? (
-                <Spinner className="size-3 text-white" />
-              ) : (
-                <span className="text-label leading-none font-semibold text-white">
-                  {tab.host.charAt(0).toUpperCase()}
-                </span>
-              )}
-            </motion.span>
-          ))}
-          {tabs.length > 4 ? (
-            <span className="ml-1 text-label text-muted-foreground">+{tabs.length - 4}</span>
+              <circle
+                cx="10"
+                cy="10"
+                r="8.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeDasharray="12 41"
+              />
+            </svg>
           ) : null}
         </span>
+        <span className="text-label font-medium tabular-nums text-foreground">{tabs.length}</span>
       </span>
     </ClusterShell>
   );
 }
 
-const RING_RADIUS = 6.5;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-function AgentRing({ agent, reduce }: { agent: AgentSim; reduce: boolean }) {
+/**
+ * One subagent as a round toned chip — the people idiom ON PURPOSE, because
+ * subagents are the pill's workers. State rides the chip without moving it:
+ * working wears the loading arc, failed dims and takes a destructive badge,
+ * done just rests. Same drawing in the pill stack and the popover rows.
+ */
+function AgentDot({
+  agent,
+  reduce,
+  className,
+}: {
+  agent: AgentSim;
+  reduce: boolean;
+  className?: string;
+}) {
   return (
     <motion.span
-      key={agent.id}
       layout
       {...clusterPresence(reduce)}
-      className="relative flex size-4 shrink-0 items-center justify-center"
+      className={cn(
+        "relative flex size-4 shrink-0 items-center justify-center rounded-full",
+        agent.state === "failed" && "opacity-60",
+        className,
+      )}
+      style={{ backgroundColor: agent.tone, borderRadius: 999 }}
     >
-      <svg viewBox="0 0 16 16" className="block size-4 -rotate-90">
-        <circle
-          cx="8"
-          cy="8"
-          r={RING_RADIUS}
-          fill="none"
-          strokeWidth="1.5"
-          className="stroke-border"
-        />
-        <motion.circle
-          cx="8"
-          cy="8"
-          r={RING_RADIUS}
-          fill="none"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeDasharray={RING_CIRCUMFERENCE}
-          animate={{
-            strokeDashoffset:
-              agent.state === "working"
-                ? RING_CIRCUMFERENCE * (1 - Math.max(0.04, agent.progress))
-                : 0,
-          }}
-          transition={{ duration: reduce ? 0 : 0.5, ease: EASE_OUT }}
+      <span className="text-label leading-none font-semibold text-white">
+        {agent.label.charAt(0).toUpperCase()}
+      </span>
+      {agent.state === "working" ? (
+        <svg
+          viewBox="0 0 20 20"
           className={cn(
-            agent.state === "failed"
-              ? "stroke-destructive"
-              : agent.state === "done"
-                ? "stroke-primary/50"
-                : "stroke-primary",
+            "absolute -inset-0.5 block size-5 text-primary",
+            reduce ? "" : "animate-spin",
           )}
-        />
-      </svg>
-      <AnimatePresence>
-        {agent.state !== "working" ? (
-          <motion.svg
-            viewBox="0 0 16 16"
-            initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.2, ease: EASE_OUT }}
-            className={cn(
-              "absolute inset-0 size-4",
-              agent.state === "failed" ? "text-destructive" : "text-primary",
-            )}
-          >
-            {agent.state === "done" ? (
-              <path
-                d="M5 8.2 7.2 10.4 11 6.2"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ) : (
-              <path
-                d="M5.6 5.6 10.4 10.4 M10.4 5.6 5.6 10.4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-              />
-            )}
-          </motion.svg>
-        ) : null}
-      </AnimatePresence>
+        >
+          <circle
+            cx="10"
+            cy="10"
+            r="8.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeDasharray="12 41"
+          />
+        </svg>
+      ) : null}
+      {agent.state === "failed" ? (
+        <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-destructive ring-2 ring-card" />
+      ) : null}
     </motion.span>
   );
 }
@@ -455,7 +428,7 @@ function AgentsCluster({
         <div className="flex flex-col gap-1">
           {agents.map((agent) => (
             <div key={agent.id} className="flex items-center gap-2 px-2 py-1 text-ui">
-              <AgentRing agent={agent} reduce={reduce} />
+              <AgentDot agent={agent} reduce={reduce} />
               <span className="min-w-0 flex-1 truncate text-foreground">{agent.label}</span>
               <span className="text-label uppercase text-muted-foreground">
                 {agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state}
@@ -465,11 +438,10 @@ function AgentsCluster({
         </div>
       }
     >
-      {/* Grouped, fixed-width, and AGNOSTIC: orbs breathing while any subagent
-          works, resting as three still dots when all have settled — the same
-          life-vs-rest drawing the heartbeat uses. Per-agent rings live in the
-          popover, where there is room for names; five subagents cost the same
-          pill width as one. */}
+      {/* Orbs lead as the life sign — breathing while any subagent works,
+          resting as still dots when settled — and the toned chips carry
+          identity, stacked with overlap and capped at four so the width stays
+          bounded however many spawn. */}
       <span className="flex items-center gap-1">
         {/* The forced-reduced dial must still the orbs too — ThinkingOrbs only
             honors the real OS preference — so under `reduce` the working state
@@ -489,10 +461,19 @@ function AgentsCluster({
             <span className="size-1 rounded-full bg-current" />
           </span>
         )}
-        <span className="text-label font-medium tabular-nums text-foreground">{agents.length}</span>
-        {agents.some((agent) => agent.state === "failed") ? (
-          <span className="size-1.5 shrink-0 rounded-full bg-destructive" />
-        ) : null}
+        <span className="flex items-center">
+          {agents.slice(0, 4).map((agent, index) => (
+            <AgentDot
+              key={agent.id}
+              agent={agent}
+              reduce={reduce}
+              className={cn("ring-2 ring-card", index > 0 && "-ml-1")}
+            />
+          ))}
+          {agents.length > 4 ? (
+            <span className="ml-1 text-label text-muted-foreground">+{agents.length - 4}</span>
+          ) : null}
+        </span>
       </span>
     </ClusterShell>
   );
@@ -680,9 +661,12 @@ function ActivityIsland({
                 IS the metaphor: a new event waits for the old drop to return
                 before the next one emerges. The wrapper carries no transform of
                 its own (flex-centering, not translate), because Motion owns
-                `transform` on the drop. */}
+                `transform` on the drop. `-z-10` is the whole illusion: the drop
+                paints BEHIND the pill, whose opaque body masks it during travel
+                — so it slides out of the pill's top edge instead of riding over
+                its face like a stacked card. */}
               {dials.grammar === "clusters-now" ? (
-                <span className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center pb-2">
+                <span className="pointer-events-none absolute inset-x-0 bottom-full -z-10 flex justify-center pb-2">
                   <AnimatePresence initial={false} mode="wait">
                     {bubble ? (
                       <motion.span
@@ -690,18 +674,18 @@ function ActivityIsland({
                         initial={
                           reduce
                             ? { opacity: 0 }
-                            : { opacity: 0, y: 18, scale: 0.4, filter: "blur(3px)" }
+                            : { opacity: 0.9, y: 30, scale: 0.55, filter: "blur(2px)" }
                         }
                         animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
                         exit={
                           reduce
                             ? { opacity: 0, transition: { duration: 0.1 } }
                             : {
-                                opacity: 0,
-                                y: 16,
-                                scale: 0.35,
-                                filter: "blur(3px)",
-                                transition: { duration: 0.16, ease: EASE_OUT },
+                                opacity: 0.9,
+                                y: 26,
+                                scale: 0.5,
+                                filter: "blur(2px)",
+                                transition: { duration: 0.2, ease: EASE_OUT },
                               }
                         }
                         transition={
@@ -714,7 +698,7 @@ function ActivityIsland({
                                 filter: { duration: 0.18, ease: EASE_OUT },
                               }
                         }
-                        className="flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
+                        className="origin-bottom flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
                       >
                         <span className="truncate text-ui text-muted-foreground">
                           {bubble.text}
@@ -882,7 +866,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
   switch (action.type) {
     case "add-tab": {
       const host = TAB_HOSTS[sim.tabs.length % TAB_HOSTS.length] ?? "localhost";
-      const tone = TAB_TONES[sim.tabs.length % TAB_TONES.length] ?? "#3577f2";
+      const tone = SIM_TONES[sim.tabs.length % SIM_TONES.length] ?? "#3577f2";
       const next = flashed(sim, `Opened ${host}`);
       return {
         ...next,
@@ -904,10 +888,11 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     }
     case "spawn-agent": {
       const label = AGENT_LABELS[sim.agents.length % AGENT_LABELS.length] ?? "Subagent";
+      const tone = SIM_TONES[sim.agents.length % SIM_TONES.length] ?? "#3577f2";
       const next = flashed(sim, `Subagent started · ${label}`);
       return {
         ...next,
-        agents: [...sim.agents, { id: next.seq, label, progress: 0.08, state: "working" }],
+        agents: [...sim.agents, { id: next.seq, label, tone, progress: 0.08, state: "working" }],
         seq: next.seq + 1,
       };
     }
