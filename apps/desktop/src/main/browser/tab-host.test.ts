@@ -111,11 +111,32 @@ class FakeView {
 
 const fakeWindow = {
   isDestroyed: () => false,
+  getContentBounds: () => ({ x: 0, y: 0, width: 1_440, height: 900 }),
   contentView: {
     addChildView: vi.fn(),
     removeChildView: vi.fn(),
   },
 };
+
+function navigationDetails(url: string) {
+  return {
+    url,
+    isSameDocument: false,
+    isMainFrame: true,
+    frame: null,
+    initiator: null,
+    preventDefault: vi.fn(),
+  };
+}
+
+/** Electron 43 keeps deprecated positional args on these two event families. */
+function emitMainFrameNavigation(
+  contents: FakeWebContents,
+  event: "will-navigate" | "will-redirect",
+  details: ReturnType<typeof navigationDetails>,
+): void {
+  contents.emit(event, details, details.url, false, true, 4, 1);
+}
 
 let views: FakeView[];
 let viewOptions: WebContentsViewConstructorOptions[];
@@ -295,6 +316,31 @@ describe("BrowserTabHost security", () => {
     ).toThrow(`at most ${BROWSER_MAX_TABS_PER_PROJECT}`);
   });
 
+  it("allows HTTP(S) navigation from every Electron 43 page-driven event shape", () => {
+    host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]?.webContents;
+    if (contents === undefined) throw new Error("expected WebContents");
+
+    const navigation = navigationDetails("https://example.com/next");
+    emitMainFrameNavigation(contents, "will-navigate", navigation);
+    expect(navigation.preventDefault).not.toHaveBeenCalled();
+
+    const redirect = navigationDetails("https://docs.example.com/final");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
+    expect(redirect.preventDefault).not.toHaveBeenCalled();
+
+    // Unlike the other two events, will-frame-navigate has no trailing legacy
+    // positional arguments in Electron 43.
+    const frameNavigation = navigationDetails("http://localhost:3000/frame");
+    contents.emit("will-frame-navigate", frameNavigation);
+    expect(frameNavigation.preventDefault).not.toHaveBeenCalled();
+  });
+
   it("refuses file, JavaScript, and custom-scheme navigation from both host and page", () => {
     const tab = host.open({
       url: "https://example.com",
@@ -310,16 +356,17 @@ describe("BrowserTabHost security", () => {
     expect(() => host.navigate(tab.tabId, "javascript:alert(1)")).toThrow();
     expect(() => host.navigate(tab.tabId, "volli-app://bundle/index.html")).toThrow();
 
-    const pageNavigation = { url: "file:///etc/passwd", preventDefault: vi.fn() };
-    contents?.emit("will-navigate", pageNavigation);
+    if (contents === undefined) throw new Error("expected WebContents");
+    const pageNavigation = navigationDetails("file:///etc/passwd");
+    emitMainFrameNavigation(contents, "will-navigate", pageNavigation);
     expect(pageNavigation.preventDefault).toHaveBeenCalledOnce();
 
-    const redirect = { url: "javascript:alert(1)", preventDefault: vi.fn() };
-    contents?.emit("will-redirect", redirect);
+    const redirect = navigationDetails("javascript:alert(1)");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
     expect(redirect.preventDefault).toHaveBeenCalledOnce();
 
-    const frameNavigation = { url: "custom://escape", preventDefault: vi.fn() };
-    contents?.emit("will-frame-navigate", frameNavigation);
+    const frameNavigation = navigationDetails("custom://escape");
+    contents.emit("will-frame-navigate", frameNavigation);
     expect(frameNavigation.preventDefault).toHaveBeenCalledOnce();
   });
 
@@ -343,13 +390,51 @@ describe("BrowserTabHost security", () => {
     });
     expect(views).toHaveLength(before);
 
-    const redirect = { url: BROWSER_START_URL, preventDefault: vi.fn() };
-    views[0]?.webContents.emit("will-redirect", redirect);
+    const redirect = navigationDetails(BROWSER_START_URL);
+    const contents = views[0]?.webContents;
+    if (contents === undefined) throw new Error("expected WebContents");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
     expect(redirect.preventDefault).toHaveBeenCalledOnce();
   });
 });
 
 describe("BrowserTabHost state", () => {
+  it("briefly renders a background tab for trusted agent input without replacing the visible tab", async () => {
+    const visible = host.open({
+      url: "https://example.com/visible",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const background = host.open({
+      url: "https://example.com/background",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+    });
+    host.show(visible.tabId);
+    vi.clearAllMocks();
+
+    const acted = vi.fn(async () => "acted");
+    await expect(host.withAgentInput(background.tabId, acted)).resolves.toBe("acted");
+
+    const backgroundView = views[1];
+    expect(acted).toHaveBeenCalledOnce();
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledOnce();
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(backgroundView);
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledOnce();
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(backgroundView);
+    expect(backgroundView?.setBounds.mock.calls).toEqual([
+      [{ ...BROWSER_DEFAULT_BOUNDS, x: 1_439, y: 0 }],
+      [BROWSER_DEFAULT_BOUNDS],
+    ]);
+
+    vi.clearAllMocks();
+    await host.withAgentInput(visible.tabId, async () => undefined);
+    expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
+    expect(fakeWindow.contentView.removeChildView).not.toHaveBeenCalled();
+  });
+
   it("pushes chrome state and bumps a tab-local generation on each main-frame navigation", () => {
     const tab = host.open({
       url: "https://example.com",

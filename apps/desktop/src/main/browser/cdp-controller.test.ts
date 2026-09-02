@@ -166,6 +166,40 @@ describe("BrowserTabController", () => {
     expect(page.sent).toContainEqual({ method: "Input.insertText", params: { text: "hello" } });
   });
 
+  it("presses Enter with the CDP text payload that triggers form defaults and restores typed focus", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    await controller.act({
+      generation: snapshot.generation,
+      kind: "type",
+      ref: "e1",
+      text: "search terms",
+    });
+    await controller.act({ generation: snapshot.generation, kind: "press", key: "Enter" });
+
+    expect(
+      page.sent.filter(
+        (call) =>
+          call.method === "DOM.focus" &&
+          (call.params as { backendNodeId?: number } | undefined)?.backendNodeId === 77,
+      ),
+    ).toHaveLength(2);
+    expect(page.sent).toContainEqual({
+      method: "Input.dispatchKeyEvent",
+      params: {
+        type: "keyDown",
+        modifiers: 0,
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        text: "\r",
+        unmodifiedText: "\r",
+      },
+    });
+  });
+
   it("refuses malformed action-specific input rather than silently defaulting it", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
     const controller = new BrowserTabController(page.transport);

@@ -521,6 +521,44 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
+  /**
+   * Gives CDP input a rendered target while an agent acts on a background tab.
+   *
+   * Chromium accepts DOM commands against an unattached WebContentsView, which
+   * is why snapshots and typing work in a background agent tab, but silently
+   * drops Input.dispatch* events. Attach the page as a one-pixel-wide sliver
+   * for the duration of those commands: it keeps the page's real viewport and
+   * trusted input/default-action path without replacing the Browser Tab the
+   * person currently has in front.
+   */
+  async withAgentInput<T>(tabId: string, action: () => Promise<T>): Promise<T> {
+    const entry = this.requireTab(tabId);
+    if (this.attached?.entry === entry) return action();
+
+    const window = this.deps.getWindow();
+    if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");
+    const page = browserSurfaceBounds(
+      entry.bounds,
+      entry.devToolsOpen && entry.devToolsView !== null,
+    ).page;
+    const windowWidth = window.getContentBounds().width;
+    // Add at its last real bounds first: Electron does not start routing input
+    // when a view enters the tree already clipped to the sliver. Moving it is
+    // synchronous, before Chromium paints another frame.
+    window.contentView.addChildView(entry.view);
+    entry.view.setBounds({ ...page, x: Math.max(0, windowWidth - 1), y: 0 });
+    try {
+      return await action();
+    } finally {
+      // The renderer may have selected this tab while input was in flight. In
+      // that case `show` adopted the attachment and its measured layout wins.
+      if (this.attached?.entry !== entry) {
+        if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
+        if (!entry.view.webContents.isDestroyed()) this.layout(entry);
+      }
+    }
+  }
+
   /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);

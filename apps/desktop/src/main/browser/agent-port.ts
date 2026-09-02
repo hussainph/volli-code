@@ -73,6 +73,7 @@ export interface AgentBrowserHost {
   back(tabId: string): BrowserTabState;
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
+  withAgentInput<T>(tabId: string, action: () => Promise<T>): Promise<T>;
   consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
 }
 
@@ -319,18 +320,32 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       const controller = await controllerFor(tab);
-      await controller.act(
-        {
-          generation: input.generation,
-          kind: input.kind,
-          ...(input.ref === undefined ? {} : { ref: input.ref }),
-          ...(input.text === undefined ? {} : { text: input.text }),
-          ...(input.key === undefined ? {} : { key: input.key }),
-          ...(input.direction === undefined ? {} : { direction: input.direction }),
-          ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
-        },
-        input.signal,
-      );
+      const act = (): Promise<void> =>
+        controller.act(
+          {
+            generation: input.generation,
+            kind: input.kind,
+            ...(input.ref === undefined ? {} : { ref: input.ref }),
+            ...(input.text === undefined ? {} : { text: input.text }),
+            ...(input.key === undefined ? {} : { key: input.key }),
+            ...(input.direction === undefined ? {} : { direction: input.direction }),
+            ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+          },
+          input.signal,
+        );
+      // Raw input is silently discarded by Chromium when a WebContentsView is
+      // not rendered. DOM-backed actions do not need staging; pointer, wheel,
+      // and keyboard actions do, including their default link/form behavior.
+      if (
+        input.kind === "click" ||
+        input.kind === "hover" ||
+        input.kind === "press" ||
+        input.kind === "scroll"
+      ) {
+        await options.host.withAgentInput(input.tabId, act);
+      } else {
+        await act();
+      }
       return snapshotOf(input.tabId, input.signal, "possible-navigation");
     },
     screenshot: async (input) => {

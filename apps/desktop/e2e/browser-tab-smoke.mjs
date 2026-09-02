@@ -43,6 +43,7 @@ const PROJECT = {
 const ISOLATION = "api:undefined;node:undefined;open:false";
 const START_TITLE = `Fixture Start | ${ISOLATION}`;
 const POPUP_TITLE = "Fixture Popup";
+const NAVIGATE_LINK_NAME = "Navigate to second fixture";
 
 /**
  * The fixture is intentionally owned by this process: no external network,
@@ -83,6 +84,8 @@ async function startFixtureServer() {
     if (path === "/start" || path === "/second") {
       const rootTitle =
         path === "/start" ? "Fixture Start" : `Fixture Second visit:${hits.get(path)}`;
+      const navigationLink =
+        path === "/start" ? `<a href="${origin}/second">${NAVIGATE_LINK_NAME}</a>` : "";
       const popupLink =
         path === "/second"
           ? `<a id="popup-link" href="${origin}/popup" target="_blank">Open managed popup</a>`
@@ -92,6 +95,7 @@ async function startFixtureServer() {
   <head><meta charset="utf-8"><title>${rootTitle}</title></head>
   <body>
     <h1>${rootTitle}</h1>
+    ${navigationLink}
     ${popupLink}
     <script>
       (() => {
@@ -441,10 +445,9 @@ async function main() {
 
   await must(
     3,
-    "address navigation updates the URL/title and enables Back only after loading settles",
+    "a real page link navigates, updates URL/title, and enables Back after loading settles",
     async () => {
-      await addressBar(page).fill(secondUrl);
-      await addressBar(page).press("Enter");
+      const click = await clickRemoteLink(app, startUrl, NAVIGATE_LINK_NAME);
       const title = await waitUntil(
         "the second fixture URL and history state",
         async () => {
@@ -466,7 +469,7 @@ async function main() {
       );
       return {
         ok: title.includes(ISOLATION),
-        detail: `title=${JSON.stringify(title)} back=enabled forward=disabled`,
+        detail: `title=${JSON.stringify(title)} back=enabled forward=disabled clickRef=${click.backendNodeId}`,
       };
     },
   );

@@ -100,8 +100,10 @@ const SELECT_OPTION_FUNCTION = `function(value) {
 }`;
 
 /** Keys `press` understands beyond single characters, in CDP's spellings. */
-const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number }> = {
-  enter: { key: "Enter", code: "Enter", keyCode: 13 },
+const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
+  // CDP needs Enter's text payload to run browser default actions such as form
+  // submission; rawKeyDown alone dispatches key listeners but not that action.
+  enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
   tab: { key: "Tab", code: "Tab", keyCode: 9 },
   escape: { key: "Escape", code: "Escape", keyCode: 27 },
   backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
@@ -130,6 +132,7 @@ export class BrowserTabController {
   #refs: ReadonlyMap<string, number> = new Map();
   #snapshotGeneration = -1;
   #nextRef = 1;
+  #focusedBackendNodeId: number | null = null;
 
   constructor(transport: CdpTransport, limits: ControllerLimits = {}) {
     this.#send = transport.send;
@@ -163,6 +166,7 @@ export class BrowserTabController {
     this.#refs = new Map();
     this.#snapshotGeneration = -1;
     this.#nextRef = 1;
+    this.#focusedBackendNodeId = null;
   }
 
   get generation(): number {
@@ -173,6 +177,7 @@ export class BrowserTabController {
     this.#disposeTransport?.();
     this.#refs = new Map();
     this.#snapshotGeneration = -1;
+    this.#focusedBackendNodeId = null;
   }
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
@@ -221,6 +226,7 @@ export class BrowserTabController {
         await this.#send("DOM.focus", { backendNodeId });
         signal?.throwIfAborted();
         await this.#send("Input.insertText", { text: request.text });
+        this.#focusedBackendNodeId = backendNodeId;
         return;
       }
       case "press":
@@ -256,6 +262,7 @@ export class BrowserTabController {
             "That ref is not a select element with the requested option: take a fresh snapshot and choose one it shows.",
           );
         }
+        this.#focusedBackendNodeId = backendNodeId;
         return;
       }
       case "scroll": {
@@ -345,6 +352,7 @@ export class BrowserTabController {
       button: "left",
       clickCount: 1,
     });
+    this.#focusedBackendNodeId = backendNodeId;
   }
 
   async #press(spec: string): Promise<void> {
@@ -376,12 +384,20 @@ export class BrowserTabController {
       code: `Key${keyPart.toUpperCase()}`,
       keyCode: keyPart.toUpperCase().charCodeAt(0),
     };
+    // A background WebContentsView loses native focus each time it leaves the
+    // window tree. Restore the last element this controller explicitly acted
+    // on after the host has staged the view and before keyboard input lands.
+    if (this.#focusedBackendNodeId !== null) {
+      await this.#send("DOM.focus", { backendNodeId: this.#focusedBackendNodeId });
+    }
+    const namedText = (modifiers & ~8) === 0 ? named?.text : undefined;
     await this.#send("Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
+      type: namedText === undefined ? "rawKeyDown" : "keyDown",
       modifiers,
       key: key.key,
       code: key.code,
       windowsVirtualKeyCode: key.keyCode,
+      ...(namedText === undefined ? {} : { text: namedText, unmodifiedText: namedText }),
     });
     // A printable single character also produces its char event, so text
     // inputs actually receive it the way a keyboard would deliver it.

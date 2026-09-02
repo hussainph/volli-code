@@ -56,15 +56,18 @@ function fakeHost(initial: BrowserTabState[]): {
   host: AgentBrowserHost;
   opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[];
   navigated: { tabId: string; url: string }[];
+  inputReady: string[];
 } {
   const tabs = new Map(initial.map((one) => [one.tabId, one]));
   const opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[] =
     [];
   const navigated: { tabId: string; url: string }[] = [];
+  const inputReady: string[] = [];
   let openCount = 0;
   return {
     opened,
     navigated,
+    inputReady,
     host: {
       list: (scope) =>
         [...tabs.values()]
@@ -95,6 +98,10 @@ function fakeHost(initial: BrowserTabState[]): {
       back: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       forward: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       reload: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
+      withAgentInput: async (tabId, action) => {
+        inputReady.push(tabId);
+        return action();
+      },
       consoleOf: () => ({ messages: [], truncated: false }),
     },
   };
@@ -104,6 +111,9 @@ function transportFor(): CdpTransport {
   return {
     send: async (method) => {
       if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+      if (method === "DOM.getBoxModel") {
+        return { model: { content: [100, 200, 110, 200, 110, 210, 100, 210] } };
+      }
       if (method === "Page.captureScreenshot") return { data: "cGl4ZWxz" };
       if (method === "Page.getLayoutMetrics") {
         return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
@@ -123,10 +133,12 @@ function port(input: {
 function portWithHost(input: { tabs?: BrowserTabState[]; ticketId?: string | null }): {
   port: ReturnType<typeof createAgentBrowserPort>;
   opened: ReturnType<typeof fakeHost>["opened"];
+  inputReady: ReturnType<typeof fakeHost>["inputReady"];
 } {
-  const { host, opened } = fakeHost(input.tabs ?? []);
+  const { host, opened, inputReady } = fakeHost(input.tabs ?? []);
   return {
     opened,
+    inputReady,
     port: createAgentBrowserPort({
       host,
       scope: { projectId: "p1", ticketId: input.ticketId === undefined ? "t1" : input.ticketId },
@@ -208,6 +220,41 @@ describe("createAgentBrowserPort", () => {
     await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
       "browser.unknown-tab",
     );
+  });
+
+  it("renders background tabs for raw input but not DOM-backed actions", async () => {
+    const scoped = portWithHost({
+      tabs: [state({ tabId: "agent-1", createdBy: "session", ticketId: "t1" })],
+    });
+    const snapshot = await scoped.port.snapshot({ tabId: "agent-1", signal });
+
+    const afterClick = await scoped.port.act({
+      tabId: "agent-1",
+      generation: snapshot.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(scoped.inputReady).toEqual(["agent-1"]);
+
+    const afterType = await scoped.port.act({
+      tabId: "agent-1",
+      generation: afterClick.generation,
+      kind: "type",
+      ref: "e2",
+      text: "background text",
+      signal,
+    });
+    expect(scoped.inputReady).toEqual(["agent-1"]);
+
+    await scoped.port.act({
+      tabId: "agent-1",
+      generation: afterType.generation,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+    expect(scoped.inputReady).toEqual(["agent-1", "agent-1"]);
   });
 
   it("keeps acting honest across the seam: the host's generation is the one refs are judged by", async () => {
