@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage",
-    "smoke": "vp test run --config vite.smoke.config.ts"
+    "smoke": "vp test run --config vite.smoke.config.ts",
+    "bench": "vp test run --config vite.bench.config.ts",
+    "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.74",
