@@ -64,6 +64,7 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
+  setBackgroundThrottling = vi.fn();
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -578,6 +579,49 @@ describe("BrowserTabHost native surface", () => {
     expect(views[0]?.setBounds).toHaveBeenCalledWith(bounds);
     expect(fakeWindow.contentView.addChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
     expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
+  });
+});
+
+describe("BrowserTabHost wakefulness", () => {
+  it("runs the engine at foreground pace while any agent hold is live, and restores throttling at the last release", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    const first = host.holdAwake(tab.tabId);
+    const second = host.holdAwake(tab.tabId);
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    // Releasing one hold twice is one release: the other Session's hold stands.
+    first();
+    first();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    second();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("treats a hold on an unknown tab and a release after close as nothing to do", () => {
+    expect(() => host.holdAwake("missing")()).not.toThrow();
+
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+    const release = host.holdAwake(tab.tabId);
+    host.close(tab.tabId);
+
+    // The tab is already forgotten; a late release owes its torn-down
+    // contents no throttling answer.
+    expect(() => release()).not.toThrow();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
   });
 });
 

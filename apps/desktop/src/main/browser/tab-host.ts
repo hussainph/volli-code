@@ -46,6 +46,8 @@ interface BrowserTabEntry {
   devToolsAttached: boolean;
   console: RuntimeBrowserConsoleMessage[];
   consoleTruncated: boolean;
+  /** Live agent holds against background throttling; see {@link BrowserTabHost.holdAwake}. */
+  wakeLeases: number;
 }
 
 /**
@@ -340,6 +342,7 @@ export class BrowserTabHost {
       devToolsAttached: false,
       console: [],
       consoleTruncated: false,
+      wakeLeases: 0,
     };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
@@ -550,6 +553,47 @@ export class BrowserTabHost {
    */
   webContentsOf(tabId: string): WebContentsView["webContents"] {
     return this.requireTab(tabId).view.webContents;
+  }
+
+  /**
+   * Keeps one tab's engine at foreground pace while an agent drives it
+   * (VC-252).
+   *
+   * A hidden Browser Tab is a detached WebContentsView, and Chromium answers
+   * detachment with background throttling: timers near 1Hz, no animation
+   * frames, no compositor output. That is the right resource policy for a tab
+   * nobody is using — and exactly wrong for a tab a Session keeps driving
+   * after the person switches to another workspace, where it stalls loads and
+   * starves snapshots and screenshots of the frames they wait on until the
+   * tab is shown again. The lease is the narrow door between the two:
+   * throttling stays Chromium's default for every tab, and only while at
+   * least one agent hold is live does this tab run unthrottled.
+   *
+   * Returns the release. Releasing twice releases once, and a hold on a tab
+   * that is unknown or has since closed releases into nothing — wakefulness
+   * is resource policy, never a user operation to fail.
+   */
+  holdAwake(tabId: string): () => void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return () => undefined;
+    entry.wakeLeases += 1;
+    if (entry.wakeLeases === 1) this.applyWakePolicy(entry);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // A closed tab was already forgotten; its contents are tearing down and
+      // owe no throttling answer.
+      if (this.tabs.get(tabId) !== entry) return;
+      entry.wakeLeases -= 1;
+      if (entry.wakeLeases === 0) this.applyWakePolicy(entry);
+    };
+  }
+
+  /** Foreground pace while agent holds are live; Chromium's own thrift once none are. */
+  private applyWakePolicy(entry: BrowserTabEntry): void {
+    const contents = entry.view.webContents;
+    if (!contents.isDestroyed()) contents.setBackgroundThrottling(entry.wakeLeases === 0);
   }
 
   /** Page console and renderer-failure evidence recorded from the moment the tab exists. */

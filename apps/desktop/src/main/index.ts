@@ -1072,6 +1072,10 @@ app.whenReady().then(async () => {
               scope,
               transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
               waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+              // Chromium throttles hidden tabs; the hold keeps a tab this
+              // Session drives at foreground pace across workspace switches
+              // (VC-252), and releases with the attachment.
+              holdAwake: (tabId) => host.holdAwake(tabId),
             });
           },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web

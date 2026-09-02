@@ -54,6 +54,7 @@ function state(overrides: Partial<BrowserTabState> & { tabId: string }): Browser
  */
 function fakeHost(initial: BrowserTabState[]): {
   host: AgentBrowserHost;
+  tabs: Map<string, BrowserTabState>;
   opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[];
   navigated: { tabId: string; url: string }[];
 } {
@@ -63,6 +64,7 @@ function fakeHost(initial: BrowserTabState[]): {
   const navigated: { tabId: string; url: string }[] = [];
   let openCount = 0;
   return {
+    tabs,
     opened,
     navigated,
     host: {
@@ -123,15 +125,27 @@ function port(input: {
 function portWithHost(input: { tabs?: BrowserTabState[]; ticketId?: string | null }): {
   port: ReturnType<typeof createAgentBrowserPort>;
   opened: ReturnType<typeof fakeHost>["opened"];
+  hostTabs: Map<string, BrowserTabState>;
+  /** Every hold, wait and release, in the order the port performed them. */
+  wakeEvents: string[];
 } {
-  const { host, opened } = fakeHost(input.tabs ?? []);
+  const { host, opened, tabs } = fakeHost(input.tabs ?? []);
+  const wakeEvents: string[] = [];
   return {
     opened,
+    hostTabs: tabs,
+    wakeEvents,
     port: createAgentBrowserPort({
       host,
       scope: { projectId: "p1", ticketId: input.ticketId === undefined ? "t1" : input.ticketId },
       transportFor,
-      waitForLoad: async () => undefined,
+      waitForLoad: async (tabId) => {
+        wakeEvents.push(`wait ${tabId}`);
+      },
+      holdAwake: (tabId) => {
+        wakeEvents.push(`hold ${tabId}`);
+        return () => wakeEvents.push(`release ${tabId}`);
+      },
     }),
   };
 }
@@ -359,5 +373,39 @@ describe("createAgentBrowserPort", () => {
       width: 800,
       height: 600,
     });
+  });
+
+  it("holds a driven tab awake before waiting on its load, once, and releases when the attachment ends", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+
+    await driven.port.snapshot({ tabId: "user-1", signal });
+    await driven.port.snapshot({ tabId: "user-1", signal });
+
+    // The hold lands before the load wait: a hidden tab only finishes loading
+    // at foreground pace, so waiting first would burn the whole bound.
+    expect(driven.wakeEvents).toEqual(["hold user-1", "wait user-1", "wait user-1"]);
+
+    driven.port.dispose?.();
+    expect(driven.wakeEvents).toEqual([
+      "hold user-1",
+      "wait user-1",
+      "wait user-1",
+      "release user-1",
+    ]);
+  });
+
+  it("releases its hold on a tab that has left the Session's scope", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+    await driven.port.snapshot({ tabId: "user-1", signal });
+
+    // The person closes the tab; the host's registry no longer lists it.
+    driven.hostTabs.delete("user-1");
+
+    await expect(driven.port.snapshot({ tabId: "user-1", signal })).rejects.toThrow(BrowserRefusal);
+    expect(driven.wakeEvents).toEqual(["hold user-1", "wait user-1", "release user-1"]);
   });
 });

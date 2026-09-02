@@ -228,4 +228,29 @@ describe("BrowserTabController", () => {
 
     expect(shot).toEqual({ base64Png: "aGVsbG8=", width: 800, height: 600 });
   });
+
+  it("fails a command the engine never answers instead of wedging the call", async () => {
+    // A throttled, crashed or torn-down engine can hold a debugger command
+    // open forever; the caller must get one readable failure, not a hang.
+    const controller = new BrowserTabController(
+      { send: () => new Promise<never>(() => undefined) },
+      { maxCommandMs: 20 },
+    );
+
+    await expect(controller.snapshot()).rejects.toThrow(
+      "did not answer Accessibility.getFullAXTree within 20ms",
+    );
+  });
+
+  it("withdraws an unanswered command as soon as its call is aborted", async () => {
+    const controller = new BrowserTabController({
+      send: () => new Promise<never>(() => undefined),
+    });
+    const abort = new AbortController();
+
+    const pending = controller.snapshot(abort.signal);
+    abort.abort(new Error("withdrawn"));
+
+    await expect(pending).rejects.toThrow("withdrawn");
+  });
 });
