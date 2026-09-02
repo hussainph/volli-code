@@ -38,7 +38,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { SessionComposer, type ComposerModel } from "@renderer/components/chat/composer-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
 import {
   Tooltip,
@@ -218,17 +218,24 @@ function ShimmerRing({
 }
 
 /**
- * Hover coordination for the popover mode: ONE cluster's card at a time,
- * switched instantly. Radix keeps each popover its own root, so two shells
- * animating independently overlap during a hand-off; routing hover through
- * shared state means entering B closes A in the same frame, and the only
- * grace period is leaving to nothing (140ms, so crossing the gap between
- * clusters does not flicker the card).
+ * Hover + pin coordination for the popover mode: ONE cluster's card at a
+ * time, switched instantly. Radix keeps each popover its own root, so two
+ * shells animating independently overlap during a hand-off; routing state
+ * through this context means entering B closes A in the same frame. Hover is
+ * the GLANCE channel (140ms leave-grace so crossing the gap between clusters
+ * does not flicker the card); pin is the WORK channel — a click holds the
+ * card open regardless of the pointer, which is what lets a popover grow
+ * real controls (VC-249's promote-to-pane buttons for tabs and subagents)
+ * instead of staying a read-only caption that dies under the cursor.
  */
 interface HoverCoordination {
   hovered: string | null;
+  pinned: string | null;
   enter(id: string): void;
   leave(id: string): void;
+  togglePin(id: string): void;
+  /** Outside click / Escape: clear BOTH channels at once, no grace. */
+  dismiss(id: string): void;
 }
 
 const HoverContext = React.createContext<HoverCoordination | null>(null);
@@ -254,23 +261,45 @@ function ClusterShell({
     );
   }
   if (mode === "popover" && coordination) {
-    const open = coordination.hovered === id;
+    const pinned = coordination.pinned === id;
+    const open = pinned || coordination.hovered === id;
     return (
       <Popover
         open={open}
         onOpenChange={(next) => {
-          if (!next) coordination.leave(id);
+          // Only dismissals arrive here (outside click, Escape) — opening
+          // belongs to the anchor span. Dismiss clears BOTH channels: killing
+          // just the pin would let a still-hovering pointer reopen the card in
+          // the same frame Escape closed it.
+          if (!next) coordination.dismiss(id);
         }}
       >
-        <PopoverTrigger asChild>
+        {/* PopoverAnchor, NOT PopoverTrigger: Radix's trigger owns click as
+            open/close toggle, which would race the pin click (one handler
+            pinning while the other closes). The anchor is positioning-only,
+            so hover and pin stay the only two doors. */}
+        <PopoverAnchor asChild>
           <span
-            className="flex items-center"
+            role="button"
+            tabIndex={0}
+            aria-expanded={open}
+            className={cn(
+              "-mx-1 flex items-center rounded-full px-1 transition-colors",
+              open && "bg-muted",
+            )}
             onMouseEnter={() => coordination.enter(id)}
             onMouseLeave={() => coordination.leave(id)}
+            onClick={() => coordination.togglePin(id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                coordination.togglePin(id);
+              }
+            }}
           >
             {children}
           </span>
-        </PopoverTrigger>
+        </PopoverAnchor>
         <PopoverContent
           side="top"
           align="center"
@@ -533,16 +562,20 @@ function ShellsCluster({
         </div>
       }
     >
-      <motion.span layout {...clusterPresence(reduce)} className="relative flex items-center">
-        <TerminalWindowIcon className="size-3.5 text-muted-foreground" />
-        {running > 0 ? (
-          <span
-            className={cn(
-              "absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary",
-              reduce ? "" : "animate-pulse",
-            )}
-          />
-        ) : null}
+      {/* State lives IN the glyph — fill + primary while running, outline +
+          muted at rest. The corner badge died of geometry: a dot needs a
+          filled shape to sit on, and a line icon's corner gives it nothing
+          (the weird overlap the live round caught). The agent chips keep
+          their badges — they are filled disks. */}
+      <motion.span layout {...clusterPresence(reduce)} className="flex items-center">
+        <TerminalWindowIcon
+          weight={running > 0 ? "fill" : "regular"}
+          className={cn(
+            "size-3.5",
+            running > 0 ? "text-primary" : "text-muted-foreground",
+            running > 0 && !reduce && "animate-pulse",
+          )}
+        />
       </motion.span>
     </ClusterShell>
   );
@@ -624,6 +657,7 @@ function ActivityIsland({
   const spring = islandSpring(dials, reduce);
 
   const [hoveredCluster, setHoveredCluster] = React.useState<string | null>(null);
+  const [pinnedCluster, setPinnedCluster] = React.useState<string | null>(null);
   const leaveTimer = React.useRef<number | null>(null);
   React.useEffect(
     () => () => {
@@ -634,6 +668,7 @@ function ActivityIsland({
   const coordination = React.useMemo<HoverCoordination>(
     () => ({
       hovered: hoveredCluster,
+      pinned: pinnedCluster,
       enter(id) {
         if (leaveTimer.current !== null) {
           window.clearTimeout(leaveTimer.current);
@@ -647,9 +682,46 @@ function ActivityIsland({
           setHoveredCluster((current) => (current === id ? null : current));
         }, 140);
       },
+      togglePin(id) {
+        setPinnedCluster((current) => (current === id ? null : id));
+      },
+      dismiss(id) {
+        if (leaveTimer.current !== null) {
+          window.clearTimeout(leaveTimer.current);
+          leaveTimer.current = null;
+        }
+        setPinnedCluster((current) => (current === id ? null : current));
+        setHoveredCluster((current) => (current === id ? null : current));
+      },
     }),
-    [hoveredCluster],
+    [hoveredCluster, pinnedCluster],
   );
+
+  /** Visible clusters in reading order — the divider rule needs the LIST,
+      not four independent conditionals. */
+  const clusterNodes: { key: string; node: React.ReactNode }[] = [];
+  if (clustersVisible) {
+    if (tabs.length > 0)
+      clusterNodes.push({
+        key: "tabs",
+        node: <TabsCluster tabs={tabs} dials={dials} reduce={reduce} />,
+      });
+    if (agents.length > 0)
+      clusterNodes.push({
+        key: "agents",
+        node: <AgentsCluster agents={agents} dials={dials} reduce={reduce} />,
+      });
+    if (plan)
+      clusterNodes.push({
+        key: "plan",
+        node: <PlanCluster plan={plan} dials={dials} reduce={reduce} />,
+      });
+    if (shells.length > 0)
+      clusterNodes.push({
+        key: "shells",
+        node: <ShellsCluster shells={shells} dials={dials} reduce={reduce} />,
+      });
+  }
 
   return (
     <HoverContext.Provider value={coordination}>
@@ -740,48 +812,27 @@ function ActivityIsland({
                 style={{ borderRadius: 999 }}
                 className="flex h-8 items-center gap-2 border border-border bg-card px-2 shadow-raised"
               >
-                {clustersVisible ? (
+                {/* Dividers travel WITH their cluster — each keyed wrapper
+                    carries its own leading rule, so membership changes stay one
+                    presence animation. The first cluster never has one; when
+                    the first LEAVES, its successor's rule vanishes by
+                    re-render rather than animation — an instant 1px change,
+                    cheaper than choreographing divider presence separately. */}
+                {clusterNodes.length > 0 ? (
                   <AnimatePresence mode="popLayout" initial={false}>
-                    {tabs.length > 0 ? (
+                    {clusterNodes.map(({ key, node }, index) => (
                       <motion.span
-                        key="tabs"
+                        key={key}
                         layout
-                        className="flex shrink-0 items-center"
+                        className="flex shrink-0 items-center gap-2"
                         {...clusterPresence(reduce)}
                       >
-                        <TabsCluster tabs={tabs} dials={dials} reduce={reduce} />
+                        {index > 0 ? (
+                          <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
+                        ) : null}
+                        {node}
                       </motion.span>
-                    ) : null}
-                    {agents.length > 0 ? (
-                      <motion.span
-                        key="agents"
-                        layout
-                        className="flex shrink-0 items-center"
-                        {...clusterPresence(reduce)}
-                      >
-                        <AgentsCluster agents={agents} dials={dials} reduce={reduce} />
-                      </motion.span>
-                    ) : null}
-                    {plan ? (
-                      <motion.span
-                        key="plan"
-                        layout
-                        className="flex shrink-0 items-center"
-                        {...clusterPresence(reduce)}
-                      >
-                        <PlanCluster plan={plan} dials={dials} reduce={reduce} />
-                      </motion.span>
-                    ) : null}
-                    {shells.length > 0 ? (
-                      <motion.span
-                        key="shells"
-                        layout
-                        className="flex shrink-0 items-center"
-                        {...clusterPresence(reduce)}
-                      >
-                        <ShellsCluster shells={shells} dials={dials} reduce={reduce} />
-                      </motion.span>
-                    ) : null}
+                    ))}
                   </AnimatePresence>
                 ) : null}
 
