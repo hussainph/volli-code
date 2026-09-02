@@ -570,6 +570,23 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([valid])).toBe(true);
     });
 
+    it("accepts a non-empty multi-ticket move payload", () => {
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketIds: ["t1", "t2"] }])).toBe(true);
+    });
+
+    it("rejects an empty multi-ticket selection", () => {
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketIds: [] }])).toBe(false);
+    });
+
+    it("rejects any payload carrying both move discriminators, even when one arm is invalid", () => {
+      expect(guard([{ ...valid, ticketIds: ["t2"] }])).toBe(false);
+      expect(guard([{ ...valid, ticketIds: [] }])).toBe(false);
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketId: undefined, ticketIds: ["t2"] }])).toBe(false);
+    });
+
     it("rejects a status outside the ticket vocabulary", () => {
       expect(guard([{ ...valid, toStatus: "review" }])).toBe(false);
     });

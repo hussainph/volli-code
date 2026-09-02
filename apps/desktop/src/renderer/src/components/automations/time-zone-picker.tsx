@@ -23,6 +23,7 @@
  */
 import * as React from "react";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -33,6 +34,7 @@ import {
   CommandList,
 } from "@renderer/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { cn } from "@renderer/lib/utils";
 
 /**
  * Every zone this build knows, read once per module rather than per render:
@@ -55,9 +57,11 @@ function timeZoneCatalog(value: string): readonly string[] {
 export function TimeZonePicker({
   value,
   onChange,
+  className,
 }: {
   value: string;
   onChange(timeZone: string): void;
+  className?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const zones = React.useMemo(() => timeZoneCatalog(value), [value]);
@@ -70,8 +74,9 @@ export function TimeZonePicker({
           size="sm"
           aria-label="Time zone"
           title={value}
-          className="max-w-52 shrink-0"
+          className={cn("max-w-52 shrink-0", className)}
         >
+          <GlobeIcon />
           <span className="truncate">{value}</span>
         </Button>
       </PopoverTrigger>

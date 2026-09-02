@@ -14,6 +14,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { motion } from "motion/react";
 import {
   displayTicketId,
   EMPTY_TICKET_FILTER,
@@ -30,7 +31,14 @@ import {
 
 import { useArmedRunStore } from "@renderer/components/automations/armed-run";
 import type { DeliberateMoveChoice } from "@renderer/components/automations/armed-move-model";
-import { resolveDrop, ticketPosition } from "@renderer/components/board/board-dnd";
+import {
+  columnDroppableId,
+  isTicketDragData,
+  resolveDrop,
+  resolveGroupDrop,
+  ticketPosition,
+  type DropTarget,
+} from "@renderer/components/board/board-dnd";
 import { BoardColumn } from "@renderer/components/board/board-column";
 import {
   MOVE_ONLY_ROW,
@@ -54,6 +62,10 @@ import {
 import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { BoardHeader } from "@renderer/components/board/board-header";
 import { BoardListView, TicketRowContent } from "@renderer/components/board/board-list-view";
+import {
+  ticketSelectionAfterClick,
+  type TicketSelectionGesture,
+} from "@renderer/components/board/board-selection";
 import { CollapsedColumnRail } from "@renderer/components/board/collapsed-column-rail";
 import {
   BoardSessionActivityProvider,
@@ -77,16 +89,20 @@ import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
- * Everything alive only while a card is mid-drag. The preview is a local
- * snapshot the drag mutates (via the shared moveTicket op) so the store —
- * and its localStorage persist — is written exactly once, on drop; cancel
- * simply discards the snapshot. The hidden set is frozen at drag start so
- * columns never collapse or expand under the pointer.
+ * Everything alive only while a card is mid-drag. A one-card preview mutates
+ * its local snapshot via the shared moveTicket op; a group deliberately leaves
+ * measured source rects still and previews in the detached overlay (see
+ * handleDragOver). Either way the store is written exactly once on drop, and
+ * cancel discards the state. Column topology is frozen at drag start.
  */
 interface DragState {
-  ticket: Ticket;
+  activeTicket: Ticket;
+  selectedTickets: Ticket[];
+  ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /** Final slot in the preview, ready for the atomic persistence call. */
+  drop: DropTarget | null;
 }
 
 // Precise pointer hits first (narrow collapsed pills, tall columns), corner
@@ -104,6 +120,12 @@ const boardCollision: CollisionDetection = (args) => {
 const EMPTY_TICKETS: Ticket[] = [];
 const EMPTY_LABELS: readonly Label[] = [];
 const NO_STATUSES: readonly TicketStatus[] = [];
+const NO_TICKET_IDS: readonly string[] = [];
+
+function ticketSlotElement(ticketId: string): HTMLElement | null {
+  const slots = document.querySelectorAll<HTMLElement>("[data-board-ticket-slot]");
+  return [...slots].find((slot) => slot.dataset.boardTicketSlot === ticketId) ?? null;
+}
 
 /**
  * The column under the pointer, and the picker row under it when the pointer is
@@ -152,49 +174,92 @@ function sameColumn(previous: readonly Ticket[], next: readonly Ticket[]): boole
  * whole subtree every time, which is the exact class of churn the provider
  * exists to stop.
  */
+const CLUSTER_SPRING = { type: "spring", duration: 0.5, bounce: 0.2 } as const;
+
 function DragOverlayBody({
-  ticket,
+  activeTicket,
+  tickets,
   ticketPrefix,
   projectLabels,
   listView,
+  reducedMotion,
 }: {
-  ticket: Ticket;
+  activeTicket: Ticket;
+  tickets: readonly Ticket[];
   ticketPrefix: string;
   projectLabels: readonly Label[];
   listView: boolean;
+  reducedMotion: boolean;
 }) {
-  const sessionActivity = useTicketActivity(ticket.id);
+  const sessionActivity = useTicketActivity(activeTicket.id);
+  // Two backing surfaces are enough to communicate "a stack"; the count badge
+  // carries the exact size without mounting an unbounded overlay subtree.
+  const backing = tickets.filter((ticket) => ticket.id !== activeTicket.id).slice(0, 2);
 
-  // Row-shaped overlay sized to the active row by dnd-kit; a lifted surface
-  // (bg + shadow) instead of the card's scale-up.
-  //
-  // `--shadow-card` rather than a black alpha: the elevation set is solved per
-  // mode (a near-black in dark, a warm brown against the light canvas), and a
-  // card being dragged is a card — the same tier the board's cards already sit
-  // at, one step further off.
-  if (listView) {
-    return (
-      <div className="cursor-grabbing overflow-hidden rounded-md bg-card shadow-card">
+  const content = (ticket: Ticket, active: boolean) =>
+    listView ? (
+      <div className="overflow-hidden rounded-md bg-card shadow-card">
         <TicketRowContent
           ticket={ticket}
           ticketPrefix={ticketPrefix}
           projectLabels={projectLabels}
-          sessionActivity={sessionActivity}
+          sessionActivity={active ? sessionActivity : null}
+        />
+      </div>
+    ) : (
+      <div className="rounded-lg shadow-card">
+        <TicketCardContent
+          ticket={ticket}
+          ticketPrefix={ticketPrefix}
+          projectLabels={projectLabels}
+          sessionActivity={active ? sessionActivity : null}
         />
       </div>
     );
-  }
 
-  // The overlay carries the ring too: picking a card up must not make its agent
-  // look like it stopped.
   return (
-    <div className="scale-[1.03] cursor-grabbing rounded-lg shadow-card">
-      <TicketCardContent
-        ticket={ticket}
-        ticketPrefix={ticketPrefix}
-        projectLabels={projectLabels}
-        sessionActivity={sessionActivity}
-      />
+    <div className="relative cursor-grabbing">
+      {backing.toReversed().map((ticket, index) => {
+        // Spacing-ladder geometry: the cards begin one component inset apart,
+        // then cluster to one 4px step. Only transform + opacity animate.
+        const depth = backing.length - index;
+        const clusteredOffset = depth * 4;
+        const spreadOffset = depth * 16;
+        return (
+          <motion.div
+            key={ticket.id}
+            aria-hidden
+            className="absolute inset-0"
+            initial={
+              reducedMotion
+                ? false
+                : {
+                    opacity: 0,
+                    transform: `translate3d(${spreadOffset}px, ${spreadOffset}px, 0)`,
+                  }
+            }
+            animate={{
+              opacity: 0.7,
+              transform: `translate3d(${clusteredOffset}px, ${clusteredOffset}px, 0)`,
+            }}
+            transition={CLUSTER_SPRING}
+          >
+            {content(ticket, false)}
+          </motion.div>
+        );
+      })}
+      <div className="relative">{content(activeTicket, true)}</div>
+      {tickets.length > 1 ? (
+        <motion.span
+          className="absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-primary text-ui font-medium text-primary-foreground shadow-raised"
+          initial={reducedMotion ? false : { opacity: 0, transform: "scale(0.95)" }}
+          animate={{ opacity: 1, transform: "scale(1)" }}
+          transition={CLUSTER_SPRING}
+          aria-label={`${tickets.length} tickets selected`}
+        >
+          {tickets.length}
+        </motion.span>
+      ) : null}
     </div>
   );
 }
@@ -238,13 +303,44 @@ export const Board = React.memo(function Board({
     (state) => state.byProject[projectId]?.boardSort ?? DEFAULT_WORKSPACE_UI.boardSort,
   );
   const [drag, setDrag] = React.useState<DragState | null>(null);
-  // Selection is store-backed (session-only), not component state, so other
-  // surfaces — the sidebar's Active Sessions — can select a card and have the
-  // board reflect it. Board behavior is unchanged from the useState version.
-  const selectedId = useBoardStore((state) => state.selectedByProject[projectId] ?? null);
+  const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
+  // Selection is store-backed (session-only), so sidebar/detail navigation can
+  // still collapse it to one card while board gestures may hold several.
+  const selectedIds = useBoardStore((state) => state.selectedByProject[projectId]) ?? NO_TICKET_IDS;
   const selectTicket = useBoardStore((state) => state.selectTicket);
+  const selectTickets = useBoardStore((state) => state.selectTickets);
+  const selectionAnchor = React.useRef<string | null>(selectedIds.at(-1) ?? null);
+  React.useEffect(() => {
+    if (selectedIds.length <= 1) selectionAnchor.current = selectedIds[0] ?? null;
+  }, [selectedIds]);
   const [expandedEmptyStatus, setExpandedEmptyStatus] = React.useState<TicketStatus | null>(null);
   const reducedMotion = useReducedMotion();
+  React.useLayoutEffect(() => {
+    const sourceRects = pendingSlotAnimation.current;
+    if (sourceRects === null) return;
+    pendingSlotAnimation.current = null;
+    if (reducedMotion) return;
+
+    for (const [ticketId, source] of sourceRects) {
+      const slot = ticketSlotElement(ticketId);
+      if (slot === null) continue;
+      const destination = slot.getBoundingClientRect();
+      const dx = source.left - destination.left;
+      const dy = source.top - destination.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      const easing = getComputedStyle(slot).getPropertyValue("--ease-swift").trim();
+      // Web Animations does not resolve `var(...)` in its options dictionary;
+      // read the canonical motion token from the element instead. If a future
+      // shell omits it, skip the flourish rather than throwing during layout.
+      if (easing === "") continue;
+      for (const animation of slot.getAnimations()) animation.cancel();
+      slot.dataset.boardSlotAnimated = "true";
+      slot.animate(
+        [{ transform: `translate3d(${dx}px, ${dy}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
+        { duration: 200, easing },
+      );
+    }
+  }, [storeTickets, reducedMotion]);
 
   /* ------------------------------------------- the ⌥ drag picker (VC-132) */
 
@@ -415,18 +511,21 @@ export const Board = React.memo(function Board({
   }, [projectId]);
 
   React.useEffect(() => {
-    if (selectedId === null) return;
+    if (selectedIds.length === 0) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented || dragging) return;
+      // During a drag, Escape belongs to dnd-kit's cancellation path and keeps
+      // the selected group intact. At rest it remains the board deselect key.
       // An Escape aimed at a focused control — the add-card composer, the ⌘K
       // search pill, an open context menu/dialog — is that control's dismissal,
       // not a board deselect; it still bubbles to window, so filter it out here.
       if (isEscapeExempt(event.target)) return;
+      selectionAnchor.current = null;
       selectTicket(projectId, null);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, projectId, selectTicket]);
+  }, [selectedIds.length, projectId, selectTicket, dragging]);
 
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after real pointer travel. Keyboard drags come free
@@ -485,6 +584,19 @@ export const Board = React.memo(function Board({
     previousSorted.current = sorted;
     return sorted;
   }, [groups, boardSort]);
+  const selectionOrder = React.useMemo(
+    () => TICKET_STATUSES.flatMap((status) => sortedGroups[status].map((ticket) => ticket.id)),
+    [sortedGroups],
+  );
+  const visibleSelectedIds = React.useMemo(() => {
+    const selected = new Set(selectedIds);
+    return selectionOrder.filter((id) => selected.has(id));
+  }, [selectedIds, selectionOrder]);
+  // Once dragging, freeze the payload and placeholder set exactly as topology
+  // is frozen. Before a drag, every selected card advertises the visible group
+  // through dnd-kit's active data for future board-adjacent drop targets.
+  const groupDragIds = drag?.ticketIds ?? visibleSelectedIds;
+  const draggingIds = drag?.ticketIds ?? NO_TICKET_IDS;
   // Memoized for the same reason the sorted groups are: both are props, and a
   // fresh array on every drag-over defeats the children's memos. `hidden`
   // keeps its identity ACROSS drag start too — the drag freezes the very array
@@ -523,12 +635,32 @@ export const Board = React.memo(function Board({
   const boardBare = boardEmpty && shown.length === 0;
 
   const handleSelect = React.useCallback(
-    (ticketId: string | null) => selectTicket(projectId, ticketId),
-    [selectTicket, projectId],
+    (ticketId: string, gesture: TicketSelectionGesture) => {
+      const clicked = storeTickets.find((ticket) => ticket.id === ticketId);
+      if (!clicked) return;
+      const next = ticketSelectionAfterClick(
+        selectedIds,
+        ticketId,
+        {
+          allIds: storeTickets
+            .filter((ticket) => ticket.status === clicked.status)
+            .map((ticket) => ticket.id),
+          visibleIds: sortedGroups[clicked.status].map((ticket) => ticket.id),
+        },
+        selectionAnchor.current,
+        gesture,
+      );
+      selectionAnchor.current = next.anchorId;
+      selectTickets(projectId, next.selectedIds);
+    },
+    [projectId, selectedIds, selectTickets, sortedGroups, storeTickets],
   );
   // Click empty canvas to clear selection — pan-aware (a drag past slop is not
   // a click). Lives next to handleSelect so the deselect closure stays stable.
-  const handleCanvasBackgroundClick = React.useCallback(() => handleSelect(null), [handleSelect]);
+  const handleCanvasBackgroundClick = React.useCallback(() => {
+    selectionAnchor.current = null;
+    selectTicket(projectId, null);
+  }, [projectId, selectTicket]);
   const { panning, canvasRef, canvasProps } = useBoardCanvasPan(
     handleCanvasBackgroundClick,
     boardView === "board",
@@ -549,11 +681,47 @@ export const Board = React.memo(function Board({
   );
 
   function handleDragStart({ active, activatorEvent }: DragStartEvent) {
-    const ticket = storeTickets.find((candidate) => candidate.id === String(active.id));
-    if (!ticket) return;
-    selectTicket(projectId, null);
+    const activeId = String(active.id);
+    const activeTicket = storeTickets.find((ticket) => ticket.id === activeId);
+    if (!activeTicket) return;
+
+    const payload = isTicketDragData(active.data.current) ? active.data.current : null;
+    const requestedIds =
+      payload?.projectId === projectId && payload.ticketIds.includes(activeId)
+        ? payload.ticketIds
+        : [activeId];
+    const requested = new Set(requestedIds);
+    const startingGroups = groupTicketsByStatus(storeTickets);
+    const ticketIds = TICKET_STATUSES.flatMap((status) =>
+      startingGroups[status]
+        .filter((ticket) => requested.has(ticket.id))
+        .map((ticket) => ticket.id),
+    );
+    const selectedTickets = ticketIds
+      .map((ticketId) => storeTickets.find((ticket) => ticket.id === ticketId))
+      .filter((ticket): ticket is Ticket => ticket !== undefined);
+    if (selectedTickets.length === 0) return;
+
+    // Starting from an unselected card collapses selection to that card. A
+    // selected card keeps its whole advertised group selected and draggable.
+    if (!selectedIds.includes(activeId)) {
+      selectionAnchor.current = activeId;
+      selectTicket(projectId, activeId);
+    } else {
+      // A filter may have hidden part of an older selection. The advertised
+      // payload is the visible group, so make the visible group the honest
+      // selection before lifting it.
+      selectTickets(projectId, ticketIds);
+    }
     setExpandedEmptyStatus(null);
-    setDrag({ ticket, preview: storeTickets, hiddenAtStart: hidden });
+    setDrag({
+      activeTicket,
+      selectedTickets,
+      ticketIds,
+      preview: storeTickets,
+      hiddenAtStart: hidden,
+      drop: null,
+    });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
     // The activator event is the only place that fact exists.
     applyPicker({
@@ -562,12 +730,40 @@ export const Board = React.memo(function Board({
     });
   }
 
-  function handleDragOver({ active, over }: DragOverEvent) {
+  function handleDragOver({ over }: DragOverEvent) {
     if (!over) return;
-    const activeId = String(active.id);
     const overId = String(over.id);
     setDrag((current) => {
       if (!current) return current;
+
+      if (current.ticketIds.length > 1) {
+        // Returning the pointer to any selected source card means "put the
+        // group back". Clear a previously-resolved destination rather than
+        // committing the last column the pointer happened to cross.
+        if (current.ticketIds.includes(overId)) {
+          return current.drop === null ? current : { ...current, drop: null };
+        }
+        const drop = resolveGroupDrop(
+          current.preview,
+          current.ticketIds,
+          current.activeTicket.id,
+          overId,
+        );
+        if (!drop) return current;
+        if (drop.toStatus === current.drop?.toStatus && drop.toIndex === current.drop.toIndex) {
+          return current;
+        }
+        // Do not move several mounted sortables while dnd-kit is measuring the
+        // active drag. That changes several observed rects in one layout pass
+        // and triggers its React-185 measurement loop. The detached overlay is
+        // the group preview; source cards stay as dimmed placeholders until the
+        // gesture ends, then the atomic board op lays the group out once.
+        return { ...current, drop };
+      }
+
+      // Keep the proven one-card preview path byte-for-byte in spirit: moving
+      // one observed sortable is what dnd-kit's multi-container recipe expects.
+      const activeId = current.ticketIds[0]!;
       const target = resolveDrop(current.preview, activeId, overId);
       if (!target) return current;
       const next = moveTicket(
@@ -577,42 +773,89 @@ export const Board = React.memo(function Board({
         target.toIndex,
         Date.now(),
       );
-      return next === current.preview ? current : { ...current, preview: next };
+      const drop = ticketPosition(next, activeId);
+      if (
+        next === current.preview &&
+        drop?.toStatus === current.drop?.toStatus &&
+        drop?.toIndex === current.drop?.toIndex
+      ) {
+        return current;
+      }
+      return { ...current, preview: next, drop };
     });
   }
 
-  function handleDragEnd({ active, over }: DragEndEvent) {
-    if (drag) {
-      const finalPosition = ticketPosition(drag.preview, String(active.id));
-      // Released over no droppable at all → the board's ordinary no-target
-      // release, not a commit of whatever the last hovered preview position
-      // happened to be. (Rare with the closestCorners fallback, but a stray
-      // status change is consequential once Doing boots an agent.) A release
-      // with the picker OPEN is not that case: the picker, not the pointer, is
-      // what it obeys — see `dragPickerRelease`.
-      const releaseStatus = over === null || !finalPosition ? null : finalPosition.toStatus;
-      const release = dragPickerRelease(pickerRef.current, releaseStatus);
-      if (release !== null) {
-        // Landing on the column the board already previewed keeps the exact
-        // slot the preview shows. A picked column the pointer is no longer
-        // over has no previewed slot, so the card lands at its end.
-        const toIndex =
-          finalPosition && release.status === finalPosition.toStatus
-            ? finalPosition.toIndex
-            : drag.preview.filter((ticket) => ticket.status === release.status).length;
-        void useBoardStore
-          .getState()
-          .moveTicket(
-            projectId,
-            String(active.id),
-            release.status,
-            toIndex,
-            deliberateChoice(release.status, release.choice),
-          );
-      }
-    }
+  function handleDragEnd({ over }: DragEndEvent) {
+    const completed = drag;
+    // With the picker closed, releasing over no droppable cancels instead of
+    // committing the last crossed column. With it open, the named picker row
+    // owns the landing even if the pointer slips off during release.
+    const releaseStatus =
+      completed === null || over === null ? null : (completed.drop?.toStatus ?? null);
+    const release = dragPickerRelease(pickerRef.current, releaseStatus);
     applyPicker({ kind: "drag-end" });
+
+    if (completed === null || release === null) {
+      setDrag(null);
+      return;
+    }
+
+    // Keep an exact previewed slot when the release names that column. A picker
+    // may instead name another column; that unpreviewed landing appends after
+    // removing the active group, matching the one-card picker behavior.
+    const drop =
+      completed.drop !== null && release.status === completed.drop.toStatus
+        ? completed.drop
+        : completed.ticketIds.length > 1
+          ? resolveGroupDrop(
+              completed.preview,
+              completed.ticketIds,
+              completed.activeTicket.id,
+              columnDroppableId(release.status),
+            )
+          : {
+              toStatus: release.status,
+              toIndex: completed.preview.filter(
+                (ticket) =>
+                  ticket.status === release.status && ticket.id !== completed.activeTicket.id,
+              ).length,
+            };
+    const choice = deliberateChoice(release.status, release.choice);
+    const sourceRects =
+      !reducedMotion && completed.ticketIds.length > 1
+        ? new Map(
+            completed.ticketIds.flatMap((ticketId) => {
+              const slot = ticketSlotElement(ticketId);
+              return slot === null ? [] : [[ticketId, slot.getBoundingClientRect()] as const];
+            }),
+          )
+        : null;
     setDrag(null);
+    if (drop === null) return;
+
+    if (completed.ticketIds.length === 1) {
+      void useBoardStore
+        .getState()
+        .moveTicket(projectId, completed.ticketIds[0]!, drop.toStatus, drop.toIndex, choice);
+      return;
+    }
+
+    // Let dnd-kit tear down its measurement observers before the atomic group
+    // changes parents. The board's layout effect consumes the captured source
+    // rects immediately after the destination DOM commits, before it paints.
+    window.requestAnimationFrame(() => {
+      pendingSlotAnimation.current = sourceRects;
+      void useBoardStore
+        .getState()
+        .moveTickets(projectId, completed.ticketIds, drop.toStatus, drop.toIndex, choice);
+      // The IPC response can beat React's concurrent commit; clearing in the
+      // Promise's finally would then erase the FLIP input before the layout
+      // effect sees it. The effect clears eagerly, and this is only a stale-ref
+      // fallback for a no-op/unmount path.
+      window.setTimeout(() => {
+        if (pendingSlotAnimation.current === sourceRects) pendingSlotAnimation.current = null;
+      }, 1_000);
+    });
   }
 
   /**
@@ -684,7 +927,9 @@ export const Board = React.memo(function Board({
                 emptyDropStatuses={emptyDropStatuses}
                 boardEmpty={boardEmpty}
                 dragActive={drag !== null}
-                selectedId={selectedId}
+                selectedIds={selectedIds}
+                draggingIds={draggingIds}
+                groupDragIds={groupDragIds}
                 onSelect={handleSelect}
                 onOpen={handleOpen}
               />
@@ -696,7 +941,7 @@ export const Board = React.memo(function Board({
                 // component that has to know a drag is live: the picker smoke,
                 // which cannot start reading a panel before dnd-kit has
                 // actually activated (`automations-picker-smoke.mjs`).
-                data-board-drag={drag === null ? undefined : drag.ticket.id}
+                data-board-drag={drag === null ? undefined : drag.activeTicket.id}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (Trello-style mouse pan). Scrollbar is
@@ -725,7 +970,9 @@ export const Board = React.memo(function Board({
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
-                    selectedId={selectedId}
+                    selectedIds={selectedIds}
+                    draggingIds={draggingIds}
+                    groupDragIds={groupDragIds}
                     onSelect={handleSelect}
                     onOpen={handleOpen}
                     composerInitiallyOpen={expandedEmptyStatus === status}
@@ -762,28 +1009,28 @@ export const Board = React.memo(function Board({
                 // A picked release lands where the PICKER says, which is not
                 // necessarily where the card is: animating the card into the
                 // slot it was hovering would draw the wrong landing.
-                reducedMotion || isPickerOpen(picker)
+                reducedMotion || isPickerOpen(picker) || (drag?.ticketIds.length ?? 0) > 1
                   ? null
                   : { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
               }
             >
               {drag ? (
                 isPickerOpen(picker) ? (
-                  // The card gives way over the panel rather than moving out of
-                  // it: a full card is the single worst thing that could sit on
-                  // top of a list asking to be read. It shrinks to one line
-                  // carrying the ref — the identity, never elided — and stops
-                  // being the biggest thing on screen at the exact moment it
-                  // stops being the thing being read.
+                  // The cluster gives way over the panel rather than covering
+                  // the choices. Keep its identity and group size visible in
+                  // one compact line while the picker is the thing being read.
                   <div className="w-fit rounded-md border border-border bg-card px-2 py-1 font-mono text-label text-muted-foreground shadow-overlay">
-                    {displayTicketId(ticketPrefix, drag.ticket.ticketNumber)}
+                    {displayTicketId(ticketPrefix, drag.activeTicket.ticketNumber)}
+                    {drag.ticketIds.length > 1 ? ` +${drag.ticketIds.length - 1}` : ""}
                   </div>
                 ) : (
                   <DragOverlayBody
-                    ticket={drag.ticket}
+                    activeTicket={drag.activeTicket}
+                    tickets={drag.selectedTickets}
                     ticketPrefix={ticketPrefix}
                     projectLabels={projectLabels}
                     listView={boardView === "list"}
+                    reducedMotion={reducedMotion}
                   />
                 )
               ) : null}

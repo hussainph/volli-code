@@ -13,6 +13,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "adopted",
       interactiveProvenance: "already-complete",
       cwd: "/work/volli",
+      projectRoot: "/work/volli",
       isExecutable: (path) =>
         Promise.resolve(
           ["/opt/homebrew/bin/gh", "/opt/homebrew/bin/node", "/opt/homebrew/bin/pnpm"].includes(
@@ -73,6 +74,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "adopted",
       interactiveProvenance: "adopted",
       cwd: "/work/py",
+      projectRoot: "/work/py",
       isExecutable: async () => false,
       pathExists: (path) => path === "/work/py/.git",
     });
@@ -86,6 +88,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "probe-failed",
       interactiveProvenance: "pending",
       cwd: "/work/volli",
+      projectRoot: "/work/volli",
       isExecutable: async () => false,
       pathExists: () => false,
     });
@@ -102,6 +105,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "probe-failed",
       interactiveProvenance: "adopted",
       cwd: "/work/volli",
+      projectRoot: "/work/volli",
       isExecutable: async () => false,
       pathExists: () => false,
     });
@@ -117,6 +121,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "adopted",
       interactiveProvenance: "pending",
       cwd: "/work/volli",
+      projectRoot: "/work/volli",
       isExecutable: async () => false,
       pathExists: () => false,
     });
@@ -144,6 +149,7 @@ describe("buildSessionEnvReport", () => {
       provenance: "already-complete",
       interactiveProvenance: "already-complete",
       cwd: "/",
+      projectRoot: "/",
       isExecutable: (path) => {
         seen.push(path);
         return Promise.resolve(false);
@@ -182,6 +188,24 @@ describe("readWorkspaceEnvironment", () => {
       dependencies: null,
       installCommand: null,
     });
+  });
+
+  it("does not let a parent manifest answer for a non-git project", () => {
+    const asked: string[] = [];
+    const present = new Set(["/Users/me/package.json", "/Users/me/node_modules"]);
+
+    expect(
+      readWorkspaceEnvironment("/Users/me/projects/empty", (path) => {
+        asked.push(path);
+        return present.has(path);
+      }),
+    ).toEqual({ dependencies: null, installCommand: null });
+    // The pair shares one memo and one boundary: neither a duplicate stat nor
+    // an ancestor above the registered workspace can slip through.
+    expect(asked).toEqual([
+      "/Users/me/projects/empty/.git",
+      "/Users/me/projects/empty/package.json",
+    ]);
   });
 
   it("reads the real filesystem when no seam is supplied", () => {

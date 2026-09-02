@@ -180,6 +180,7 @@ import type {
   TicketIdInput,
   TicketLatestSignalsResult,
   TicketMoveInput,
+  TicketMoveManyInput,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
@@ -448,8 +449,11 @@ const api = {
   tickets: {
     create: (input: TicketCreateInput): Promise<TicketResult> =>
       invoke("volli:ticket-create", input),
-    /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
+    /** Runs the shared one-card board move + persists it; resolves with the project's full authoritative ticket list. */
     move: (input: TicketMoveInput): Promise<TicketsResult> => invoke("volli:ticket-move", input),
+    /** Persists a selected card group atomically; the group stays contiguous at the destination. */
+    moveMany: (input: TicketMoveManyInput): Promise<TicketsResult> =>
+      invoke("volli:ticket-move", input),
     /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
     setPriority: (input: TicketSetPriorityInput): Promise<TicketResult> =>
       invoke("volli:ticket-set-priority", input),

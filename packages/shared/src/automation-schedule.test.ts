@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  AUTOMATION_SCHEDULE_PRESET_LABELS,
   AUTOMATION_SCHEDULE_PRESETS,
   AUTOMATION_SCHEDULE_STAGGER_MS,
   hostTimeZone,
   isScheduleTimeZone,
   nextScheduleOccurrence,
   parseAutomationSchedule,
+  SCHEDULE_WEEKDAY_LABELS,
   SCHEDULE_WEEKDAYS,
   schedulePhrase,
   scheduleSentence,
@@ -121,11 +123,11 @@ describe("isScheduleTimeZone / hostTimeZone", () => {
 describe("the sentence", () => {
   it("reads as the row it is authored in", () => {
     expect(schedulePhrase({ preset: "hourly", minute: 5, timeZone: LONDON })).toBe(
-      "Every hour at :05",
+      "Hourly at :05 past the hour",
     );
     expect(schedulePhrase(daily())).toBe("Every day at 21:30");
     expect(schedulePhrase({ preset: "weekdays", hour: 9, minute: 0, timeZone: LONDON })).toBe(
-      "Every weekday at 09:00",
+      "Mon–Fri at 09:00",
     );
     expect(
       schedulePhrase({
@@ -135,18 +137,25 @@ describe("the sentence", () => {
         minute: 5,
         timeZone: LONDON,
       }),
-    ).toBe("Every Wednesday at 08:05");
+    ).toBe("Weekly on Wednesday at 08:05");
     expect(scheduleSentence(daily())).toBe("Every day at 21:30 Europe/London");
     expect(scheduleTimeLabel({ preset: "hourly", minute: 0, timeZone: LONDON })).toBe(":00");
   });
 
   it("names every preset and every weekday", () => {
     expect(AUTOMATION_SCHEDULE_PRESETS).toEqual(["hourly", "daily", "weekdays", "weekly"]);
+    expect(AUTOMATION_SCHEDULE_PRESET_LABELS).toEqual({
+      hourly: "Hourly",
+      daily: "Every day",
+      weekdays: "Mon–Fri",
+      weekly: "Weekly",
+    });
     expect(SCHEDULE_WEEKDAYS).toHaveLength(7);
+    expect(SCHEDULE_WEEKDAY_LABELS.wednesday).toBe("Wednesday");
     for (const weekday of SCHEDULE_WEEKDAYS) {
       expect(
         schedulePhrase({ preset: "weekly", weekday, hour: 0, minute: 1, timeZone: LONDON }),
-      ).toMatch(/^Every [A-Z][a-z]+ at 00:01$/);
+      ).toMatch(/^Weekly on [A-Z][a-z]+ at 00:01$/);
     }
   });
 });

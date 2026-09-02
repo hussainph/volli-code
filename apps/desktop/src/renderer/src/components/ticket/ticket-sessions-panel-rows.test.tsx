@@ -119,6 +119,7 @@ const noop = (): void => {};
 function panel(): string {
   return renderToStaticMarkup(
     <TicketSessionsPanel
+      projectId="project-1"
       ticketId="ticket-6"
       creating={false}
       onNewSession={noop}

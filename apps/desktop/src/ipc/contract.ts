@@ -194,7 +194,7 @@ export interface TicketCreateInput {
   baseBranch?: string | null;
 }
 
-/** `volli:ticket-move` — runs the shared board move + persists it. */
+/** One-card form of `volli:ticket-move`. */
 export interface TicketMoveInput {
   projectId: string;
   ticketId: string;
@@ -203,6 +203,20 @@ export interface TicketMoveInput {
   /** The Option-drag target, when that gesture supplied this renderer move. */
   choice?: DeliberateMoveChoice;
 }
+
+/** Multi-card form of `volli:ticket-move`; persisted atomically in one board transaction. */
+export interface TicketMoveManyInput {
+  projectId: string;
+  ticketIds: string[];
+  toStatus: TicketStatus;
+  /** Destination slot after the selected tickets have been removed. */
+  toIndex: number;
+  /** The Option-drag target applied to every Ticket in this deliberate group move. */
+  choice?: DeliberateMoveChoice;
+}
+
+/** `volli:ticket-move` accepts a single card or one selected card group. */
+export type TicketMoveRequest = TicketMoveInput | TicketMoveManyInput;
 
 export interface TicketSetPriorityInput {
   ticketId: string;
@@ -576,7 +590,7 @@ export interface VolliDataIpcContract {
   "volli:project-reorder": { args: [orderedIds: string[]]; result: ProjectMutationResult };
 
   "volli:ticket-create": { args: [input: TicketCreateInput]; result: TicketResult };
-  "volli:ticket-move": { args: [input: TicketMoveInput]; result: TicketsResult };
+  "volli:ticket-move": { args: [input: TicketMoveRequest]; result: TicketsResult };
   /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
   "volli:ticket-set-priority": { args: [input: TicketSetPriorityInput]; result: TicketResult };
   "volli:ticket-update": { args: [input: TicketUpdateInput]; result: TicketResult };
