@@ -150,26 +150,61 @@ function islandSpring(dials: Dials, reduce: boolean) {
  * both the OS preference and the force dial stop the rotation rather than the
  * indicator.
  */
+/**
+ * The heartbeat owns a FIXED 14px slot whether working or settled — the arc
+ * collapses into the resting dot inside the same box. The first cut returned a
+ * 6px dot or a 14px arc from the same position, so settling shifted every
+ * cluster leftward and the pill read as misaligned (the thing VC-248's first
+ * live round caught). Spin stays a CSS animation on the inner svg so Motion's
+ * scale on the wrapper never fights the keyframed transform.
+ */
 function Heartbeat({ working, reduce }: { working: boolean; reduce: boolean }) {
-  if (!working) return <span className="size-1.5 shrink-0 rounded-full bg-primary/70" />;
   return (
-    <svg
-      viewBox="0 0 16 16"
-      className={cn("size-3.5 shrink-0 text-primary", reduce ? "" : "animate-spin")}
+    <span
       role="img"
-      aria-label="Agent working"
+      aria-label={working ? "Agent working" : "Agent settled"}
+      className="relative flex size-3.5 shrink-0 items-center justify-center"
     >
-      <circle
-        cx="8"
-        cy="8"
-        r="5.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray="24 10.6"
-      />
-    </svg>
+      <AnimatePresence initial={false}>
+        {working ? (
+          <motion.span
+            key="arc"
+            initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.4 }}
+            transition={{ duration: 0.18, ease: EASE_OUT }}
+            className="absolute inset-0"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              className={cn("block size-3.5 text-primary", reduce ? "" : "animate-spin")}
+            >
+              <circle
+                cx="8"
+                cy="8"
+                r="5.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeDasharray="24 10.6"
+              />
+            </svg>
+          </motion.span>
+        ) : (
+          <motion.span
+            key="dot"
+            initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.5 }}
+            transition={{ duration: 0.18, ease: EASE_OUT }}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            <span className="size-1.5 rounded-full bg-primary/70" />
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </span>
   );
 }
 
@@ -280,7 +315,7 @@ function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; re
               <svg
                 viewBox="0 0 20 20"
                 className={cn(
-                  "absolute -inset-0.5 size-5 text-primary",
+                  "absolute -inset-0.5 block size-5 text-primary",
                   reduce ? "" : "animate-spin",
                 )}
               >
@@ -311,8 +346,13 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 function AgentRing({ agent, reduce }: { agent: AgentSim; reduce: boolean }) {
   return (
-    <motion.span key={agent.id} layout {...clusterPresence(reduce)} className="relative size-4">
-      <svg viewBox="0 0 16 16" className="size-4 -rotate-90">
+    <motion.span
+      key={agent.id}
+      layout
+      {...clusterPresence(reduce)}
+      className="relative flex size-4 shrink-0 items-center justify-center"
+    >
+      <svg viewBox="0 0 16 16" className="block size-4 -rotate-90">
         <circle
           cx="8"
           cy="8"
@@ -582,22 +622,42 @@ function ActivityIsland({
               {clustersVisible ? (
                 <AnimatePresence mode="popLayout" initial={false}>
                   {tabs.length > 0 ? (
-                    <motion.span key="tabs" layout {...clusterPresence(reduce)}>
+                    <motion.span
+                      key="tabs"
+                      layout
+                      className="flex shrink-0 items-center"
+                      {...clusterPresence(reduce)}
+                    >
                       <TabsCluster tabs={tabs} dials={dials} reduce={reduce} />
                     </motion.span>
                   ) : null}
                   {agents.length > 0 ? (
-                    <motion.span key="agents" layout {...clusterPresence(reduce)}>
+                    <motion.span
+                      key="agents"
+                      layout
+                      className="flex shrink-0 items-center"
+                      {...clusterPresence(reduce)}
+                    >
                       <AgentsCluster agents={agents} dials={dials} reduce={reduce} />
                     </motion.span>
                   ) : null}
                   {plan ? (
-                    <motion.span key="plan" layout {...clusterPresence(reduce)}>
+                    <motion.span
+                      key="plan"
+                      layout
+                      className="flex shrink-0 items-center"
+                      {...clusterPresence(reduce)}
+                    >
                       <PlanCluster plan={plan} dials={dials} reduce={reduce} />
                     </motion.span>
                   ) : null}
                   {shells.length > 0 ? (
-                    <motion.span key="shells" layout {...clusterPresence(reduce)}>
+                    <motion.span
+                      key="shells"
+                      layout
+                      className="flex shrink-0 items-center"
+                      {...clusterPresence(reduce)}
+                    >
                       <ShellsCluster shells={shells} dials={dials} reduce={reduce} />
                     </motion.span>
                   ) : null}
@@ -630,7 +690,7 @@ function ActivityIsland({
                     animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                     exit={reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }}
                     transition={reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }}
-                    className="max-w-56 truncate pr-1 text-ui text-muted-foreground"
+                    className="max-w-56 truncate text-ui text-muted-foreground"
                   >
                     {slotText}
                   </motion.span>
