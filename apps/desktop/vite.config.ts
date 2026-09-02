@@ -275,6 +275,26 @@ export default defineConfig(({ mode }) => ({
         // gesture; which tab ended up where is arithmetic, and an off-by-one
         // in it is a tab that lands one slot from where it was let go.
         "src/components/ui/tab-reorder.ts",
+        // Split view's two pure modules (VC-202), enrolled for the same reason
+        // the tab-strip trio above is. The partition is the last step between
+        // "which pane holds this tab" and the strip that draws it — an
+        // off-by-one there draws one pane's tabs in another pane. The viewport
+        // registry is module state with several live entries, and what it gets
+        // wrong is a terminal drawn over the wrong box or not drawn at all,
+        // which no view test would catch.
+        "src/components/split/split-tab-partition.ts",
+        "src/components/split/terminal-viewport-registry.ts",
+        // And what a drop on the plane MEANS (VC-202 §4) — the same argument
+        // `tab-reorder.ts` makes one scope down. Three things nobody could see
+        // were wrong from a screenshot: which zone a pointer is in, whether a
+        // dragged Session may land on this surface at all (a ticket-A chat must
+        // not open on Home), and which store write a drop is.
+        "src/components/split/split-drop.ts",
+        // …and the routing between that meaning and the store twin that writes
+        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // cannot answer the same drop differently. Its wrong answer is a drop
+        // that lands somewhere other than where the zone said it would.
+        "src/components/split/split-surface-drop.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
@@ -285,6 +305,11 @@ export default defineConfig(({ mode }) => ({
         "src/lib/chat-open-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
+        // The split chords (VC-202 §5), in the gate for the same reason the
+        // line above is: a chord predicate that is one modifier off answers to
+        // a keypress somebody meant for something else, and its own surface
+        // gate decides whether a keystroke may rearrange a persisted layout.
+        "src/lib/split-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         // Which rail ⌥⌘B is talking about (VC-55) — the same chrome-predicate
         // shape as its two neighbours here, and gated for the same reason: it
