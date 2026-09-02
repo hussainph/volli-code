@@ -40,7 +40,6 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
-import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   Tooltip,
   TooltipContent,
@@ -91,6 +90,7 @@ interface Flash {
 
 type Grammar = "clusters-now" | "now-only" | "clusters-only";
 type HoverMode = "none" | "tooltip" | "popover";
+type NowTextMode = "quiet" | "payload" | "loud";
 
 interface Dials {
   grammar: Grammar;
@@ -101,6 +101,8 @@ interface Dials {
   /** Seconds a now-slot flash holds before receding. */
   flashHold: number;
   hover: HoverMode;
+  /** Voice of the now channel: all quiet, quiet event + bold payload, all loud. */
+  nowText: NowTextMode;
   heartbeat: boolean;
   forceReduced: boolean;
 }
@@ -111,7 +113,11 @@ const DEFAULT_DIALS: Dials = {
   bounce: 0.2,
   flashHold: 1.6,
   hover: "popover",
-  heartbeat: true,
+  nowText: "payload",
+  // Off by default since the swap round: the globe's arc, the chips' arcs and
+  // the shell pulse each sign their own life now, and a third pill-level tier
+  // read as an unexplained blank slot when idle. The dial keeps it auditionable.
+  heartbeat: false,
   forceReduced: false,
 };
 
@@ -321,15 +327,17 @@ function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; re
           per tab lives in the popover. While any tab is loading, the browser's
           own idiom — an arc — orbits the globe. */}
       <span className="flex items-center gap-1">
-        <span className="relative flex size-5 shrink-0 items-center justify-center">
+        {/* The wrapper is exactly the glyph's box — a permanent size-5 stage
+            for the arc left 6px of dead air beside the globe whenever nothing
+            was loading. The arc overhangs via negative inset instead, which
+            costs nothing while absent. */}
+        <span className="relative flex shrink-0 items-center justify-center">
           <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
           {tabs.some((tab) => tab.state === "loading") ? (
             <svg
               viewBox="0 0 20 20"
-              className={cn(
-                "absolute inset-0 block size-5 text-primary",
-                reduce ? "" : "animate-spin",
-              )}
+              style={{ inset: -3 }}
+              className={cn("absolute block size-5 text-primary", reduce ? "" : "animate-spin")}
             >
               <circle
                 cx="10"
@@ -438,42 +446,22 @@ function AgentsCluster({
         </div>
       }
     >
-      {/* Orbs lead as the life sign — breathing while any subagent works,
-          resting as still dots when settled — and the toned chips carry
-          identity, stacked with overlap and capped at four so the width stays
-          bounded however many spawn. */}
-      <span className="flex items-center gap-1">
-        {/* The forced-reduced dial must still the orbs too — ThinkingOrbs only
-            honors the real OS preference — so under `reduce` the working state
-            keeps its color but loses its pulse. */}
-        {working > 0 && !reduce ? (
-          <ThinkingOrbs className="text-primary" />
-        ) : (
-          <span
-            aria-hidden
-            className={cn(
-              "flex shrink-0 items-center gap-0.5",
-              working > 0 ? "text-primary" : "text-muted-foreground",
-            )}
-          >
-            <span className="size-1 rounded-full bg-current" />
-            <span className="size-1 rounded-full bg-current" />
-            <span className="size-1 rounded-full bg-current" />
-          </span>
-        )}
-        <span className="flex items-center">
-          {agents.slice(0, 4).map((agent, index) => (
-            <AgentDot
-              key={agent.id}
-              agent={agent}
-              reduce={reduce}
-              className={cn("ring-2 ring-card", index > 0 && "-ml-1")}
-            />
-          ))}
-          {agents.length > 4 ? (
-            <span className="ml-1 text-label text-muted-foreground">+{agents.length - 4}</span>
-          ) : null}
-        </span>
+      {/* Chips only. Identity IS this cluster — the people idiom needs no
+          namespace glyph — and each chip's arc is its own working state. The
+          orbs went the way of the count: one life-sign per tier, and having
+          heartbeat + orbs + arcs meant the same fact told three times. */}
+      <span className="flex items-center">
+        {agents.slice(0, 4).map((agent, index) => (
+          <AgentDot
+            key={agent.id}
+            agent={agent}
+            reduce={reduce}
+            className={cn("ring-2 ring-card", index > 0 && "-ml-1")}
+          />
+        ))}
+        {agents.length > 4 ? (
+          <span className="ml-1 text-label text-muted-foreground">+{agents.length - 4}</span>
+        ) : null}
       </span>
     </ClusterShell>
   );
@@ -576,6 +564,36 @@ function summaryLine(tabs: TabSim[], agents: AgentSim[], plan: PlanSim | null): 
   } else if (agents.length > 0) parts.push("agents settled");
   if (plan) parts.push(`plan ${plan.done}/${plan.total}`);
   return parts.join(" · ");
+}
+
+/**
+ * The now channel's voice. Every flash shares one grammar — "event · payload"
+ * — so weight can articulate it instead of decorating it: the event class
+ * stays quiet and the payload (the thing that actually changed) carries the
+ * emphasis. `quiet` and `loud` are the flat registers on either side, as
+ * dials to argue against.
+ */
+function FlashText({ text, mode }: { text: string; mode: NowTextMode }) {
+  const split = text.indexOf(" · ");
+  if (mode !== "payload" || split === -1) {
+    return (
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          mode === "loud" ? "font-medium text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {text}
+      </span>
+    );
+  }
+  return (
+    <span className="min-w-0 truncate text-muted-foreground">
+      {text.slice(0, split)}
+      {" · "}
+      <span className="font-medium text-foreground">{text.slice(split + 3)}</span>
+    </span>
+  );
 }
 
 function ActivityIsland({
@@ -707,11 +725,9 @@ function ActivityIsland({
                               }
                         }
                         style={{ originY: 1 }}
-                        className="flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
+                        className="flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 text-ui shadow-raised"
                       >
-                        <span className="truncate text-ui text-muted-foreground">
-                          {bubble.text}
-                        </span>
+                        <FlashText text={bubble.text} mode={dials.nowText} />
                       </motion.span>
                     ) : null}
                   </AnimatePresence>
@@ -783,9 +799,13 @@ function ActivityIsland({
                       animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                       exit={reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }}
                       transition={reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }}
-                      className="max-w-56 truncate text-ui text-muted-foreground"
+                      className="flex max-w-56 items-center text-ui"
                     >
-                      {inlineText}
+                      {flash ? (
+                        <FlashText text={inlineText} mode={dials.nowText} />
+                      ) : (
+                        <span className="min-w-0 truncate text-muted-foreground">{inlineText}</span>
+                      )}
                     </motion.span>
                   ) : null}
                 </AnimatePresence>
@@ -1184,6 +1204,19 @@ export default function ActivityIslandPlayground() {
                   { key: "popover", label: "Popover" },
                 ]}
                 onChange={(hover) => setDials((current) => ({ ...current, hover }))}
+              />
+            </Dial>
+            <Dial label="Now text">
+              <Segmented
+                ariaLabel="Now channel text voice"
+                value={dials.nowText}
+                size="sm"
+                options={[
+                  { key: "quiet", label: "Quiet" },
+                  { key: "payload", label: "Payload" },
+                  { key: "loud", label: "Loud" },
+                ]}
+                onChange={(nowText) => setDials((current) => ({ ...current, nowText }))}
               />
             </Dial>
             <Slider
