@@ -27,7 +27,12 @@
  * contract is the migration effort's question, not this scratch's.
  */
 import * as React from "react";
-import { ListChecksIcon, PlayIcon, TerminalWindowIcon } from "@phosphor-icons/react";
+import {
+  GlobeSimpleIcon,
+  ListChecksIcon,
+  PlayIcon,
+  TerminalWindowIcon,
+} from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { SessionComposer, type ComposerModel } from "@renderer/components/chat/composer-ui";
@@ -35,6 +40,8 @@ import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { Spinner } from "@renderer/components/ui/spinner";
+import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   Tooltip,
   TooltipContent,
@@ -103,7 +110,7 @@ const DEFAULT_DIALS: Dials = {
   duration: 0.5,
   bounce: 0.2,
   flashHold: 1.6,
-  hover: "tooltip",
+  hover: "popover",
   heartbeat: true,
   forceReduced: false,
 };
@@ -208,6 +215,22 @@ function Heartbeat({ working, reduce }: { working: boolean; reduce: boolean }) {
   );
 }
 
+/**
+ * Hover coordination for the popover mode: ONE cluster's card at a time,
+ * switched instantly. Radix keeps each popover its own root, so two shells
+ * animating independently overlap during a hand-off; routing hover through
+ * shared state means entering B closes A in the same frame, and the only
+ * grace period is leaving to nothing (140ms, so crossing the gap between
+ * clusters does not flicker the card).
+ */
+interface HoverCoordination {
+  hovered: string | null;
+  enter(id: string): void;
+  leave(id: string): void;
+}
+
+const HoverContext = React.createContext<HoverCoordination | null>(null);
+
 /** One cluster's hover shell: nothing, a one-line tooltip, or a rich status popover. */
 function ClusterShell({
   mode,
@@ -215,14 +238,8 @@ function ClusterShell({
   detail,
   children,
 }: React.PropsWithChildren<{ mode: HoverMode; line: string; detail: React.ReactNode }>) {
-  const [open, setOpen] = React.useState(false);
-  const closeTimer = React.useRef<number | null>(null);
-  React.useEffect(
-    () => () => {
-      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-    },
-    [],
-  );
+  const id = React.useId();
+  const coordination = React.useContext(HoverContext);
 
   if (mode === "tooltip") {
     return (
@@ -234,29 +251,32 @@ function ClusterShell({
       </Tooltip>
     );
   }
-  if (mode === "popover") {
-    const hold = () => {
-      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-      setOpen(true);
-    };
-    const release = () => {
-      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-      closeTimer.current = window.setTimeout(() => setOpen(false), 140);
-    };
+  if (mode === "popover" && coordination) {
+    const open = coordination.hovered === id;
     return (
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) coordination.leave(id);
+        }}
+      >
         <PopoverTrigger asChild>
-          <span className="flex items-center" onMouseEnter={hold} onMouseLeave={release}>
+          <span
+            className="flex items-center"
+            onMouseEnter={() => coordination.enter(id)}
+            onMouseLeave={() => coordination.leave(id)}
+          >
             {children}
           </span>
         </PopoverTrigger>
         <PopoverContent
           side="top"
+          align="center"
           sideOffset={10}
-          className="w-64 p-2"
+          className="w-64 p-2 data-[state=closed]:duration-75"
           onOpenAutoFocus={(event) => event.preventDefault()}
-          onMouseEnter={hold}
-          onMouseLeave={release}
+          onMouseEnter={() => coordination.enter(id)}
+          onMouseLeave={() => coordination.leave(id)}
         >
           {detail}
         </PopoverContent>
@@ -296,46 +316,37 @@ function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; re
         </div>
       }
     >
-      <span className="flex items-center">
-        {tabs.slice(0, 4).map((tab, index) => (
-          <motion.span
-            key={tab.id}
-            layout
-            {...clusterPresence(reduce)}
-            className={cn(
-              "relative flex size-4 items-center justify-center rounded-full ring-2 ring-card",
-              index > 0 && "-ml-1",
-            )}
-            style={{ backgroundColor: tab.tone, borderRadius: 999 }}
-          >
-            <span className="text-label leading-none font-semibold text-white">
-              {tab.host.charAt(0).toUpperCase()}
-            </span>
-            {tab.state === "loading" ? (
-              <svg
-                viewBox="0 0 20 20"
-                className={cn(
-                  "absolute -inset-0.5 block size-5 text-primary",
-                  reduce ? "" : "animate-spin",
-                )}
-              >
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="8.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeDasharray="12 41"
-                />
-              </svg>
-            ) : null}
-          </motion.span>
-        ))}
-        {tabs.length > 4 ? (
-          <span className="ml-1 text-label text-muted-foreground">+{tabs.length - 4}</span>
-        ) : null}
+      <span className="flex items-center gap-1">
+        {/* The namespace glyph leads, so the chips read as “browser: …” rather
+            than as avatars — and the chips are rounded SQUARES for the same
+            reason: circles + letters is the people idiom, squares + letters is
+            the favicon idiom. */}
+        <GlobeSimpleIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="flex items-center">
+          {tabs.slice(0, 4).map((tab, index) => (
+            <motion.span
+              key={tab.id}
+              layout
+              {...clusterPresence(reduce)}
+              className={cn(
+                "relative flex size-4 shrink-0 items-center justify-center rounded-sm ring-2 ring-card",
+                index > 0 && "-ml-1",
+              )}
+              style={{ backgroundColor: tab.tone, borderRadius: 4 }}
+            >
+              {tab.state === "loading" ? (
+                <Spinner className="size-3 text-white" />
+              ) : (
+                <span className="text-label leading-none font-semibold text-white">
+                  {tab.host.charAt(0).toUpperCase()}
+                </span>
+              )}
+            </motion.span>
+          ))}
+          {tabs.length > 4 ? (
+            <span className="ml-1 text-label text-muted-foreground">+{tabs.length - 4}</span>
+          ) : null}
+        </span>
       </span>
     </ClusterShell>
   );
@@ -454,10 +465,34 @@ function AgentsCluster({
         </div>
       }
     >
+      {/* Grouped, fixed-width, and AGNOSTIC: orbs breathing while any subagent
+          works, resting as three still dots when all have settled — the same
+          life-vs-rest drawing the heartbeat uses. Per-agent rings live in the
+          popover, where there is room for names; five subagents cost the same
+          pill width as one. */}
       <span className="flex items-center gap-1">
-        {agents.map((agent) => (
-          <AgentRing key={agent.id} agent={agent} reduce={reduce} />
-        ))}
+        {/* The forced-reduced dial must still the orbs too — ThinkingOrbs only
+            honors the real OS preference — so under `reduce` the working state
+            keeps its color but loses its pulse. */}
+        {working > 0 && !reduce ? (
+          <ThinkingOrbs className="text-primary" />
+        ) : (
+          <span
+            aria-hidden
+            className={cn(
+              "flex shrink-0 items-center gap-0.5",
+              working > 0 ? "text-primary" : "text-muted-foreground",
+            )}
+          >
+            <span className="size-1 rounded-full bg-current" />
+            <span className="size-1 rounded-full bg-current" />
+            <span className="size-1 rounded-full bg-current" />
+          </span>
+        )}
+        <span className="text-label font-medium tabular-nums text-foreground">{agents.length}</span>
+        {agents.some((agent) => agent.state === "failed") ? (
+          <span className="size-1.5 shrink-0 rounded-full bg-destructive" />
+        ) : null}
       </span>
     </ClusterShell>
   );
@@ -586,121 +621,187 @@ function ActivityIsland({
     shells.some((shell) => shell.state === "running");
 
   const clustersVisible = dials.grammar !== "now-only";
-  const slotText =
-    dials.grammar === "clusters-only"
-      ? null
-      : (flash?.text ?? (dials.grammar === "now-only" ? summaryLine(tabs, agents, plan) : null));
-  const slotKey = flash ? `flash-${flash.id}` : `summary-${slotText ?? ""}`;
+  /** clusters-now sends the channel to the bubble; now-only keeps it inline. */
+  const bubble = dials.grammar === "clusters-now" ? flash : null;
+  const inlineText =
+    dials.grammar === "now-only" ? (flash?.text ?? summaryLine(tabs, agents, plan)) : null;
+  const inlineKey = flash ? `flash-${flash.id}` : `summary-${inlineText ?? ""}`;
   const spring = islandSpring(dials, reduce);
 
+  const [hoveredCluster, setHoveredCluster] = React.useState<string | null>(null);
+  const leaveTimer = React.useRef<number | null>(null);
+  React.useEffect(
+    () => () => {
+      if (leaveTimer.current !== null) window.clearTimeout(leaveTimer.current);
+    },
+    [],
+  );
+  const coordination = React.useMemo<HoverCoordination>(
+    () => ({
+      hovered: hoveredCluster,
+      enter(id) {
+        if (leaveTimer.current !== null) {
+          window.clearTimeout(leaveTimer.current);
+          leaveTimer.current = null;
+        }
+        setHoveredCluster(id);
+      },
+      leave(id) {
+        if (leaveTimer.current !== null) window.clearTimeout(leaveTimer.current);
+        leaveTimer.current = window.setTimeout(() => {
+          setHoveredCluster((current) => (current === id ? null : current));
+        }, 140);
+      },
+    }),
+    [hoveredCluster],
+  );
+
   return (
-    <div className="flex justify-center pb-2">
-      <AnimatePresence initial={false}>
-        {populated ? (
-          <motion.div
-            key="island"
-            initial={
-              reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(10px) scale(0.95)" }
-            }
-            animate={{ opacity: 1, transform: "translateY(0px) scale(1)" }}
-            exit={
-              reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
-            }
-            transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
-            className="will-change-transform"
-          >
+    <HoverContext.Provider value={coordination}>
+      <div className="flex justify-center pb-2">
+        <AnimatePresence initial={false}>
+          {populated ? (
             <motion.div
-              layout
-              transition={spring}
-              style={{ borderRadius: 999 }}
+              key="island"
+              initial={
+                reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(10px) scale(0.95)" }
+              }
+              animate={{ opacity: 1, transform: "translateY(0px) scale(1)" }}
+              exit={
+                reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
+              }
+              transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
               role="status"
               aria-label="Agent activity"
-              className="flex h-8 items-center gap-2 border border-border bg-card px-2 shadow-raised"
+              className="relative will-change-transform"
             >
-              {dials.heartbeat ? <Heartbeat working={working} reduce={reduce} /> : null}
+              {/* The now-channel: a drop breaks out of the pill upward — mitosis —
+                hangs while the message reads, and is reabsorbed. `mode="wait"`
+                IS the metaphor: a new event waits for the old drop to return
+                before the next one emerges. The wrapper carries no transform of
+                its own (flex-centering, not translate), because Motion owns
+                `transform` on the drop. */}
+              {dials.grammar === "clusters-now" ? (
+                <span className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center pb-2">
+                  <AnimatePresence initial={false} mode="wait">
+                    {bubble ? (
+                      <motion.span
+                        key={bubble.id}
+                        initial={
+                          reduce
+                            ? { opacity: 0 }
+                            : { opacity: 0, y: 18, scale: 0.4, filter: "blur(3px)" }
+                        }
+                        animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+                        exit={
+                          reduce
+                            ? { opacity: 0, transition: { duration: 0.1 } }
+                            : {
+                                opacity: 0,
+                                y: 16,
+                                scale: 0.35,
+                                filter: "blur(3px)",
+                                transition: { duration: 0.16, ease: EASE_OUT },
+                              }
+                        }
+                        transition={
+                          reduce
+                            ? { duration: 0.15 }
+                            : {
+                                y: spring,
+                                scale: spring,
+                                opacity: { duration: 0.18, ease: EASE_OUT },
+                                filter: { duration: 0.18, ease: EASE_OUT },
+                              }
+                        }
+                        className="flex h-7 max-w-72 items-center rounded-full border border-border bg-card px-2 shadow-raised"
+                      >
+                        <span className="truncate text-ui text-muted-foreground">
+                          {bubble.text}
+                        </span>
+                      </motion.span>
+                    ) : null}
+                  </AnimatePresence>
+                </span>
+              ) : null}
+              <motion.div
+                layout
+                transition={spring}
+                style={{ borderRadius: 999 }}
+                className="flex h-8 items-center gap-2 border border-border bg-card px-2 shadow-raised"
+              >
+                {dials.heartbeat ? <Heartbeat working={working} reduce={reduce} /> : null}
 
-              {clustersVisible ? (
-                <AnimatePresence mode="popLayout" initial={false}>
-                  {tabs.length > 0 ? (
+                {clustersVisible ? (
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    {tabs.length > 0 ? (
+                      <motion.span
+                        key="tabs"
+                        layout
+                        className="flex shrink-0 items-center"
+                        {...clusterPresence(reduce)}
+                      >
+                        <TabsCluster tabs={tabs} dials={dials} reduce={reduce} />
+                      </motion.span>
+                    ) : null}
+                    {agents.length > 0 ? (
+                      <motion.span
+                        key="agents"
+                        layout
+                        className="flex shrink-0 items-center"
+                        {...clusterPresence(reduce)}
+                      >
+                        <AgentsCluster agents={agents} dials={dials} reduce={reduce} />
+                      </motion.span>
+                    ) : null}
+                    {plan ? (
+                      <motion.span
+                        key="plan"
+                        layout
+                        className="flex shrink-0 items-center"
+                        {...clusterPresence(reduce)}
+                      >
+                        <PlanCluster plan={plan} dials={dials} reduce={reduce} />
+                      </motion.span>
+                    ) : null}
+                    {shells.length > 0 ? (
+                      <motion.span
+                        key="shells"
+                        layout
+                        className="flex shrink-0 items-center"
+                        {...clusterPresence(reduce)}
+                      >
+                        <ShellsCluster shells={shells} dials={dials} reduce={reduce} />
+                      </motion.span>
+                    ) : null}
+                  </AnimatePresence>
+                ) : null}
+
+                {/* Inline ticker — now-only grammar only; clusters-now sends the
+                  channel to the bubble above. NO `layout` prop and no string
+                  transforms on these spans — `layout` owns transform, so a
+                  string-transform exit never resolves and AnimatePresence
+                  keeps the zombie forever (the accumulating-flashes bug). */}
+                <AnimatePresence initial={false} mode="wait">
+                  {inlineText ? (
                     <motion.span
-                      key="tabs"
-                      layout
-                      className="flex shrink-0 items-center"
-                      {...clusterPresence(reduce)}
+                      key={inlineKey}
+                      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 7, filter: "blur(4px)" }}
+                      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                      exit={reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }}
+                      transition={reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }}
+                      className="max-w-56 truncate text-ui text-muted-foreground"
                     >
-                      <TabsCluster tabs={tabs} dials={dials} reduce={reduce} />
-                    </motion.span>
-                  ) : null}
-                  {agents.length > 0 ? (
-                    <motion.span
-                      key="agents"
-                      layout
-                      className="flex shrink-0 items-center"
-                      {...clusterPresence(reduce)}
-                    >
-                      <AgentsCluster agents={agents} dials={dials} reduce={reduce} />
-                    </motion.span>
-                  ) : null}
-                  {plan ? (
-                    <motion.span
-                      key="plan"
-                      layout
-                      className="flex shrink-0 items-center"
-                      {...clusterPresence(reduce)}
-                    >
-                      <PlanCluster plan={plan} dials={dials} reduce={reduce} />
-                    </motion.span>
-                  ) : null}
-                  {shells.length > 0 ? (
-                    <motion.span
-                      key="shells"
-                      layout
-                      className="flex shrink-0 items-center"
-                      {...clusterPresence(reduce)}
-                    >
-                      <ShellsCluster shells={shells} dials={dials} reduce={reduce} />
+                      {inlineText}
                     </motion.span>
                   ) : null}
                 </AnimatePresence>
-              ) : null}
-
-              {/* The divider and the ticker are separate presences: the ticker
-                  swaps under `wait`, and a divider inside it would blink through
-                  every swap. NO `layout` prop and no string transforms on the
-                  ticker spans — `layout` owns transform, so a string-transform
-                  exit never resolves and AnimatePresence keeps the zombie
-                  forever (the accumulating-flashes bug this replaced). */}
-              <AnimatePresence initial={false}>
-                {clustersVisible && slotText ? (
-                  <motion.span
-                    key="slot-divider"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12 }}
-                    className="h-3 w-px shrink-0 bg-border"
-                  />
-                ) : null}
-              </AnimatePresence>
-              <AnimatePresence initial={false} mode="wait">
-                {slotText ? (
-                  <motion.span
-                    key={slotKey}
-                    initial={reduce ? { opacity: 0 } : { opacity: 0, y: 7, filter: "blur(4px)" }}
-                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                    exit={reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }}
-                    transition={reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }}
-                    className="max-w-56 truncate text-ui text-muted-foreground"
-                  >
-                    {slotText}
-                  </motion.span>
-                ) : null}
-              </AnimatePresence>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </div>
+          ) : null}
+        </AnimatePresence>
+      </div>
+    </HoverContext.Provider>
   );
 }
 
