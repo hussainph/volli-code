@@ -8,33 +8,42 @@ Volli opts out of Pi's default. This note is the baseline VC-245 asks for
 before any Code Mode work: what does flipping that line actually buy, and what
 does it cost?
 
-**Evidence:** `packages/agent-runtime/bench/parallel-tools/`, run with
-`pnpm -C packages/agent-runtime run bench`. Pi's real `Agent`, its real
-batching, preflight, `beforeToolCall` gate and result ordering all run
-unmodified. Only the provider call and the tools are faked, and the tool
-latencies are measured rather than guessed (`bench:probe`). No provider is
-reached and no money is spent.
+**Evidence, two lanes:**
+
+- **Offline** — `packages/agent-runtime/bench/parallel-tools/`, run with
+  `pnpm -C packages/agent-runtime run bench`. Pi's real `Agent`, its real
+  batching, preflight, `beforeToolCall` gate and result ordering all run
+  unmodified. Only the provider call and the tools are faked, and the tool
+  latencies are measured rather than guessed (`bench:probe`). Reaches no
+  provider, spends nothing.
+- **Live** — `bench:live`, gated behind `PI_LIVE_BENCH=1`. Real models against
+  Volli's real composed system prompt, measuring the one thing the offline
+  lane cannot: how often a model actually batches. ~$0.64 total spend across
+  claude-haiku-4-5 and claude-sonnet-4-5.
 
 ---
 
 ## The short answer
 
-Parallel mode is **a scheduler change and nothing else**. It saves
-**23–51% of turn wall-clock on turns where the model batches its tool calls**,
-and it saves **exactly zero tokens, zero model calls and zero dollars** — in
-every scenario, in both modes, those three numbers were identical.
+**Volli is currently paying the full token cost of batching while throwing away
+all of its time benefit, and the fix is one line.**
 
-That makes it a real but narrow win, and it is **not** the thing that answers
-the token half of VC-245. Two separate levers came out of the measurement:
+Models already batch independent tool calls without being asked — measured at
+**100% of independent-task replies on both haiku and sonnet**. So Volli already
+gets the token saving that batching produces. It then executes those batches
+one call at a time, which discards the 23–51% of turn wall-clock that the same
+batch would have saved under Pi's default.
 
-| Lever | Saves time | Saves tokens | Works today |
+| Lever | Saves time | Saves tokens | Headroom left |
 |---|---|---|---|
-| `toolExecution: "parallel"` | yes, 23–51% of batched turns | **no, zero** | one-line flag |
-| Getting the model to **batch** at all | only in parallel mode | **yes, substantially** | prompt-level, no flag needed |
-| Code Mode (not measured here) | yes | yes | large build |
+| `toolExecution: "parallel"` | **yes, 23–51% of batched turns** | no, exactly zero | **all of it — unharvested today** |
+| Getting the model to batch | only under parallel mode | yes | **none — already ~100%** |
+| Code Mode (not measured here) | yes | yes | unknown, large build |
 
-The second row is the surprise, and it is the cheaper half. See
-[Batching is the token lever](#batching-is-the-token-lever-not-the-mode).
+The middle row was my initial reading and the live lane refuted it: there is no
+prompt-level token win available, because the models are already doing it. The
+remaining token question belongs entirely to Code Mode. The remaining *time*
+win is sitting behind a one-line flag.
 
 ---
 
@@ -95,6 +104,32 @@ The saving is `(n-1) × latency`, as expected. It is only worth reaching for on
 tools in the hundreds of milliseconds — browser, web fetch, web search. It is
 worth nothing on `read`/`edit`/`write`, which measured at 0.1ms.
 
+## Live batch rate
+
+Volli's real composed system prompt, latency-only stand-in tools, two trials
+per cell. Arm B adds one sentence permitting batching of independent calls.
+
+| model | arm | batched replies | overlappable calls | model calls | input tok |
+|---|---|---|---|---|---|
+| haiku-4-5 | A: as shipped | 100% | 65% | 2.8 | 4165 |
+| haiku-4-5 | B: + permission | 100% | 65% | 2.6 | 3937 |
+| sonnet-4-5 | A: as shipped | 100% | 65% | 2.9 | — |
+| sonnet-4-5 | B: + permission | 97% | 64% | 2.9 | — |
+
+Independent tasks only. The sonnet token column is omitted because that run
+predates the cache-aware token fix; its batch-rate figures are unaffected.
+
+Per-task, arm A, haiku:
+
+| task | shape | batched replies | tool time seq → par |
+|---|---|---|---|
+| four-tabs-enumerated | independent | 100% | 3600ms → 900ms |
+| three-searches-enumerated | independent | 100% | 1200ms → 400ms |
+| implicit-config-check | independent | 100% | 6ms → 2ms |
+| implicit-research | independent | 100% | 4200ms → 2350ms |
+| dependent-chain | **dependent** | **0%** | 4ms → 4ms |
+| single-call-control | single | 0% | 2ms → 2ms |
+
 ---
 
 ## Six findings
@@ -110,35 +145,55 @@ pressure moves.
 Any claim that parallel execution saves tokens is wrong. That is Code Mode's
 job, and it remains unproven.
 
-### 2. The entire win is conditional on the model batching.
+### 2. The win is conditional on batching — and models already batch, at ~100%.
 
-`browser-tabs-batched` and `browser-tabs-unbatched` do the same four tab reads.
-The first saves 2.7s; the second saves **2ms**. The difference is not the mode
-— both ran in parallel mode — it is whether the four calls arrived in one
-assistant reply or four.
+Offline, `browser-tabs-batched` and `browser-tabs-unbatched` do the same four
+tab reads. The first saves 2.7s; the second saves **2ms**. The difference is
+not the mode — both ran in parallel mode — it is whether the four calls
+arrived in one assistant reply or four. So the flag is worth exactly the
+fraction of real turns where the model emits two or more independent calls in
+one reply.
 
-So the flag is worth exactly *the fraction of real turns where the model emits
-two or more independent calls in one reply*. **This bench cannot measure that
-number**; only real models can. It is the single biggest open input to the
-decision.
+The live lane measured that fraction against Volli's own system prompt:
 
-### 3. Batching is the token lever, not the mode.
+| model | batched replies (independent tasks) | overlappable calls | dependent-chain control |
+|---|---|---|---|
+| claude-haiku-4-5 | **100%** | 65% | **0%** |
+| claude-sonnet-4-5 | **100%** | 65% | **0%** |
 
-The two browser scenarios needed **2 model calls vs 5** for identical work.
-At the bench's fixed 1,060 tokens per reply that is 2,120 vs 5,300 tokens.
+"Overlappable calls" is `(calls - replies) / calls` — the share of tool calls
+that arrived alongside another and could therefore have run concurrently.
+Across the whole task set, roughly **two thirds of tool calls are already
+arriving in overlappable batches** and Volli is running every one of them
+serially.
 
-The real gap is *wider* than that: the bench charges a constant per reply,
-whereas a real extra round trip re-sends a context that has itself grown. The
-ratio is the honest part; the absolute numbers are a modelling artefact and
-should not be quoted.
+The rate held on naturally-phrased tasks, not just enumerated ones. "Do our
+package.json, tsconfig.json and README.md still agree about the version?"
+never names three reads, and both models batched three reads anyway.
 
-This is the important strategic point. **Batching saves tokens whether or not
-the flag is flipped** — sequential mode still executes a batch, just one call
-at a time. And Volli's system prompt currently says nothing about batching in
-either direction. So there is a cheap, token-positive, flag-independent change
-available: tell the model it may issue independent read-only calls together.
-Flipping the flag is what converts that saving from tokens-only into
-tokens-and-time.
+### 3. There is no token headroom in batching. That was my error, and the live lane caught it.
+
+Offline, the two browser scenarios needed **2 model calls vs 5** for identical
+work, which made batching look like a large, cheap, flag-independent token win
+— and Volli's system prompt says nothing about batching in either direction,
+so the win looked available.
+
+It is not available, because it is already taken. Arm B added one sentence
+giving explicit permission to batch independent calls. It changed nothing:
+
+| arm | batched replies | overlappable calls | model calls | input tokens |
+|---|---|---|---|---|
+| A: Volli prompt as shipped | 100% | 65% | 2.8 | 4165 |
+| B: + batch permission | 100% | 65% | 2.6 | 3937 |
+
+Within noise on every axis, on both models. **Do not ship the nudge** — it
+buys nothing and costs a sentence in every system prompt forever.
+
+The consequence for VC-245 is the important part: since batching is already
+saturated and the mode is token-neutral, **no token saving is reachable
+without Code Mode**. Code Mode's case rests entirely on keeping intermediate
+results out of context, and it must be judged against a baseline that already
+batches at 100%.
 
 ### 4. The obvious safety lever is a trap.
 
@@ -175,38 +230,96 @@ Completion order can differ from persisted order in parallel mode — that is
 what the activity stream observes, and it is the one place a reader could see
 results "out of order".
 
+### 7. Models decline to batch calls that depend on each other.
+
+The live set includes a control that *must not* batch: read `package.json`,
+find the path under its `main` field, then read that file. A model that
+batched there would be issuing a call on a result it does not yet have, and
+parallel mode would execute that mistake concurrently instead of catching it.
+
+Both models batched it **0% of the time**, in both arms. The hazard parallel
+mode would amplify is one the models are not producing.
+
+This is evidence, not a guarantee — six tasks, two models, one provider. It
+does mean the risk of flipping the flag sits in *our* tools tolerating
+concurrency, not in the model asking for nonsense.
+
 ---
 
 ## What this does not answer
 
-1. **Real batch rate per model and provider.** Finding 2 makes this decisive.
-   Needs a live-model lane (`smoke/`-style, spends money).
-2. **Whether Volli's tools tolerate concurrency.** A quick read suggests
+1. **Whether Volli's tools tolerate concurrency.** This is now the only thing
+   standing between the measurement and the flag. A quick read suggests
    `ScopedExecutionEnv` is fine (per-call `mkdtemp`, own child process,
    readonly `cwd`), and that browser tools are the live hazard: refs are valid
    only for a snapshot `generation`, so two concurrent `browser_act` calls on
    one tab can race. Reads across *different* tabs look safe. This needs a
-   real audit before the flag moves, not a skim.
-3. **Code Mode itself.** Untouched by this note. Findings 1 and 3 sharpen what
-   it would have to justify: it must beat *batching plus parallel mode*, not
-   beat today's sequential baseline.
+   real audit, not a skim.
+2. **Other providers.** Both live models were Anthropic. OpenAI- and
+   Gemini-backed Sessions may batch at different rates; the lane takes
+   `PI_BENCH_MODEL`, so this is a cheap follow-up rather than new work.
+3. **Code Mode itself.** Untouched by this note. Findings 1–3 sharpen what it
+   would have to justify: it must beat *a 100%-batching model under parallel
+   mode*, not beat today's sequential baseline.
 
-## Suggested next steps
+## Recommendation
 
-- Measure real batch rate across the models Volli ships against. Cheap, and it
-  converts finding 2 from an unknown into a number.
-- Audit tool concurrency safety, browser tools first.
-- Consider the prompt change independently of the flag — it is the
-  token-positive half and carries none of the concurrency risk.
-- Only then decide on the flag, and only then judge Code Mode against the new
-  baseline.
+**Flip `toolExecution` to `"parallel"`, gated on a tool concurrency audit.**
+The measurement is unusually clean: the win is large (23–51% of turn time),
+free in tokens, available on two thirds of tool calls today, requires no
+prompt change, and the models already decline to batch the dependent calls
+that would make concurrency unsafe.
+
+Ordered next steps:
+
+1. **Audit tool concurrency safety**, browser tools first (`generation` races
+   on one tab), then anything holding process-wide or Session-wide state.
+   This is the blocker.
+2. **Flip the flag** behind that audit. Note that per-tool
+   `executionMode: "sequential"` is not the escape hatch it looks like
+   (finding 4) — if some tool must not overlap, the answer is batch
+   eligibility, not a per-tool marking.
+3. **Do not ship the batch nudge.** Measured as a no-op on both models.
+4. **Re-baseline Code Mode against parallel mode**, not against today's
+   sequential behaviour, before spending more on it. Its remaining
+   justification is tokens, and tokens is the axis the flag does not touch.
 
 ## Reproducing
 
+Offline — free, reaches nothing, ~4 minutes:
+
 ```
-pnpm -C packages/agent-runtime run bench:probe   # re-measure latencies
-pnpm -C packages/agent-runtime run bench         # ~4 min, prints the tables
+pnpm -C packages/agent-runtime run bench:probe   # re-measure tool latencies
+pnpm -C packages/agent-runtime run bench         # prints the tables, asserts the invariants
 ```
 
-The bench is out of the default `test` lane because it sleeps for real time.
-It reaches no provider and costs nothing.
+Live — spends money, needs the developer's own Pi credentials, ~3 minutes and
+about $0.13 per model at two trials:
+
+```
+PI_LIVE_BENCH=1 pnpm -C packages/agent-runtime run bench:live
+PI_LIVE_BENCH=1 PI_BENCH_MODEL=anthropic/claude-sonnet-4-5 PI_BENCH_TRIALS=2 \
+  pnpm -C packages/agent-runtime run bench:live
+```
+
+Both are out of the default `test` lane: the offline bench because it sleeps
+for real time, the live lane because it costs money and is skipped unless
+`PI_LIVE_BENCH=1`.
+
+## Measurement caveats
+
+- Browser (900ms) and provider (1400ms) latencies in the offline bench are
+  **declared assumptions**, not measurements; the sensitivity sweep is there so
+  the conclusion does not depend on either. Every other latency was measured.
+- The live lane's tools are latency-only stand-ins with honest names and
+  descriptions. No page is fetched and no Session is started, so batching is
+  measured against realistic tool *shapes* rather than realistic tool *results*.
+- Live wall-clock is reported as a modelled counterfactual: each trial runs
+  once in parallel mode, and the sequential number is computed from the same
+  measured latencies. This is exact for latency-only tools and avoids paying
+  for a second run, and it rests on the offline finding that the model cannot
+  observe the execution mode.
+- Live token accounting sums `input + cacheRead + cacheWrite`. Counting
+  `usage.input` alone understates a cached turn by orders of magnitude on
+  Anthropic — a cached sonnet turn reports single-digit `input` for a prompt of
+  thousands of tokens.

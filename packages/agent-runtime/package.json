@@ -15,6 +15,7 @@
     "test:coverage": "vp test run --coverage",
     "smoke": "vp test run --config vite.smoke.config.ts",
     "bench": "vp test run --config vite.bench.config.ts",
+    "bench:live": "vp test run --config vite.bench-live.config.ts",
     "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },
   "dependencies": {
