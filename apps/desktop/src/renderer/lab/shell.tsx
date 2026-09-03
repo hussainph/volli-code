@@ -20,8 +20,8 @@
  */
 import * as React from "react";
 
-import { installFakeApi } from "./fake-api";
-import { isScratchModule, slugFromPath, type ScratchModule } from "./scratch";
+import { isScratchModule, slugFromPath } from "./scratch";
+import { activateScratch, type Scratch } from "./scratch-setup";
 import { LabThemeToolbar, useLabThemeController, type LabThemeController } from "./theme-toolbar";
 
 /**
@@ -43,10 +43,6 @@ import { LabThemeToolbar, useLabThemeController, type LabThemeController } from 
 const modules = import.meta.glob(["./scratches/*.tsx", "!./scratches/*.test.tsx"], {
   eager: true,
 });
-
-interface Scratch extends ScratchModule {
-  slug: string;
-}
 
 const scratches: Scratch[] = Object.entries(modules)
   .flatMap(([path, module]) =>
@@ -83,17 +79,6 @@ function useHashSlug(): string {
  * state. The ref guard is what keeps it idempotent, which is also what makes
  * it safe under StrictMode's double render.
  */
-export function activateScratch(active: Scratch | null, reapplyTheme: () => void): void {
-  if (active === null) return;
-  // Installed wholesale, never merged: the previous scratch's stubs must not
-  // survive into this one.
-  installFakeApi(active.api ?? {});
-  active.seed?.();
-  // A scratch may reset the shared theme store while seeding (seedApp does).
-  // The Lab choice wins after that isolated setup and before the scratch paints.
-  reapplyTheme();
-}
-
 function useScratchSetup(active: Scratch | null, reapplyTheme: () => void): void {
   const applied = React.useRef<string | null>(null);
   if (active !== null && applied.current !== active.slug) {

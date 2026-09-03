@@ -69,7 +69,6 @@ describe("CanvasEditor", () => {
     const commitPreview = vi.fn(async () => true);
     useThemeStore.setState({ preview: DEFAULT_CANVAS, commitPreview });
     const document = await mountEditor({
-      scope: GLOBAL,
       canvas: DEFAULT_CANVAS,
       resolved: "dark",
       onCanvasChange,
@@ -103,7 +102,6 @@ describe("CanvasEditor", () => {
   it("restores a memory-only host's chosen canvas when Escape abandons a draft", async () => {
     useThemeStore.setState({ preview: DEFAULT_CANVAS });
     const document = await mountEditor({
-      scope: GLOBAL,
       canvas: DEFAULT_CANVAS,
       resolved: "dark",
       onCanvasChange: vi.fn(),
@@ -124,7 +122,6 @@ describe("CanvasEditor", () => {
   it("restores a memory-only host's chosen canvas when the editor unmounts mid-edit", async () => {
     useThemeStore.setState({ preview: DEFAULT_CANVAS });
     const document = await mountEditor({
-      scope: GLOBAL,
       canvas: DEFAULT_CANVAS,
       resolved: "dark",
       onCanvasChange: vi.fn(),

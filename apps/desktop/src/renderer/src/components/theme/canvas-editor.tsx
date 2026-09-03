@@ -787,20 +787,19 @@ function WaveSlider({
 /**
  * The editor itself.
  *
- * `canvas` is what the host has accepted: a scope's stored canvas in Settings,
- * or the Lab controller's chosen canvas in a memory-only host. What the controls
- * render from is `live` — the running preview when there is one — and the
- * difference between those two is the whole of "the colour dragging felt
+ * `canvas` is what the host has accepted: a scope's stored canvas, or a
+ * memory-only host's chosen canvas. What the controls render from is `live` —
+ * the running preview when there is one — and the difference between those two
+ * is the whole of "the colour dragging felt
  * unstable".
  *
  * Rendered from the accepted canvas alone, an orb does not move while you drag
- * it. The window behind Settings repaints, because that goes to the DOM
+ * it. The window behind the editor repaints, because that goes to the DOM
  * directly, but the pad's own orb is a React `style` fed a value the drag never
  * changes, so it sits still under the pointer for the length of the gesture and
- * then teleports
- * to the drop point when the release commits. Every relative control had the
- * same fault: a held arrow key re-applied one step to the same stored anchor
- * forever.
+ * then teleports to the drop point when the release settles. Every relative
+ * control had the same fault: a held arrow key re-applied one step to the
+ * accepted anchor forever.
  *
  * The feedback loop this was guarding against is real but narrower than it
  * looks. `padAnchor` positions from where the pointer IS, minus a grab offset
@@ -811,15 +810,8 @@ function WaveSlider({
  * The store is read imperatively for every write, so no handler closes over a
  * snapshot that a concurrent hydrate has already replaced.
  */
-export function CanvasEditor({
-  scope,
-  canvas,
-  resolved,
-  mode,
-  onCanvasChange,
-}: {
-  scope: ThemeScope;
-  /** The host's accepted canvas — stored in Settings, memory-only in the Lab. */
+interface CanvasEditorBaseProps {
+  /** The host's accepted canvas — stored when scoped, otherwise memory-only. */
   canvas: Canvas;
   /** What that canvas renders as right now, `auto` already answered. */
   resolved: ResolvedAppearance;
@@ -831,21 +823,33 @@ export function CanvasEditor({
    * page keeps mode on its own overridable row and passes nothing.
    */
   mode?: React.ReactNode;
-  /**
-   * Memory-only hosts can adopt a finished preview themselves. Omitted in
-   * Settings, where the existing scoped persistence behavior remains the
-   * default.
-   */
-  onCanvasChange?(canvas: Canvas): void;
-}) {
+}
+
+type CanvasEditorProps = CanvasEditorBaseProps &
+  (
+    | {
+        /** Settings' persistence target. Mutually exclusive with a memory-only host. */
+        scope: ThemeScope;
+        onCanvasChange?: undefined;
+      }
+    | {
+        scope?: undefined;
+        /** Adopts a finished preview without calling any persistence action. */
+        onCanvasChange(canvas: Canvas): void;
+      }
+  );
+
+export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: CanvasEditorProps) {
   // The memory-only host's accepted canvas is separate from the store preview:
   // the latter may currently be a half-typed colour or an in-flight drag. Refs
   // let the unmount cleanup restore the latest accepted value without turning
   // every accepted prop update into an effect cleanup of the previous one.
   const chosenCanvas = React.useRef(canvas);
-  const memoryHost = React.useRef(onCanvasChange);
-  chosenCanvas.current = canvas;
-  memoryHost.current = onCanvasChange;
+  const adoptCanvas = React.useRef(onCanvasChange);
+  React.useLayoutEffect(() => {
+    chosenCanvas.current = canvas;
+    adoptCanvas.current = onCanvasChange;
+  }, [canvas, onCanvasChange]);
 
   /**
    * The canvas an edit builds on: the running preview when there is one, the
@@ -867,7 +871,7 @@ export function CanvasEditor({
   /** End of a gesture: what is painted becomes what the host owns. */
   const settle = React.useCallback((): void => {
     const store = useThemeStore.getState();
-    const adopt = memoryHost.current;
+    const adopt = adoptCanvas.current;
     if (adopt !== undefined) {
       if (store.preview !== null) {
         // Synchronous, so closing in the same turn still restores this choice
@@ -877,6 +881,9 @@ export function CanvasEditor({
       }
       return;
     }
+    // The prop union makes this unreachable for a typed caller, and the runtime
+    // guard keeps an accidentally malformed memory-only mount non-persisting.
+    if (scope === undefined) return;
     // Failure is surfaced and rolled back by the store's own write path; the
     // boolean is only interesting to a caller that wanted to chain, and nothing
     // here does.
@@ -901,7 +908,7 @@ export function CanvasEditor({
    */
   const abandon = React.useCallback((): void => {
     const store = useThemeStore.getState();
-    if (memoryHost.current === undefined) store.cancelPreview();
+    if (adoptCanvas.current === undefined) store.cancelPreview();
     else store.startPreview(chosenCanvas.current);
   }, []);
 

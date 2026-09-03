@@ -28,13 +28,13 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 let controller: LabThemeController | null = null;
 
-async function mountController(toolbar = false): Promise<void> {
+async function mountController(toolbar = false, floating = false): Promise<void> {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   function Probe() {
     controller = useLabThemeController();
-    return toolbar ? <LabThemeToolbar controller={controller} /> : null;
+    return toolbar ? <LabThemeToolbar controller={controller} floating={floating} /> : null;
   }
   await act(async () => root?.render(<Probe />));
 }
@@ -115,8 +115,23 @@ describe("LabThemeToolbar", () => {
 
     await act(async () => trigger.click());
 
+    expect(document.querySelector('[role="dialog"][aria-label="Lab theme editor"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="canvas-pad"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="lab-appearance-choice"]')).not.toBeNull();
+  });
+
+  it("keeps the full-window scratch control and editor above app stacking contexts", async () => {
+    await mountController(true, true);
+    const toolbar = document.querySelector('[data-testid="lab-theme-toolbar"]');
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Lab theme"]');
+    if (trigger === null) throw new Error("missing Lab theme trigger");
+
+    expect(toolbar?.getAttribute("class")).toContain("fixed");
+    expect(toolbar?.getAttribute("class")).toContain("z-[10000]");
+    await act(async () => trigger.click());
+    expect(
+      document.querySelector('[data-slot="popover-content"]')?.getAttribute("class"),
+    ).toContain("z-[10001]");
   });
 
   it("keeps a full non-saving choice active after closing and reopening", async () => {

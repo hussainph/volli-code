@@ -3,8 +3,8 @@ import { DEFAULT_CANVAS, type Canvas } from "@volli/shared";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useThemeStore } from "@renderer/stores/theme";
-import type { ScratchModule } from "./scratch";
-import { activateScratch } from "./shell";
+import { seedApp } from "./seed";
+import { activateScratch, type Scratch } from "./scratch-setup";
 
 const CHOSEN: Canvas = {
   stops: [
@@ -26,13 +26,13 @@ beforeEach(() => {
 describe("activateScratch", () => {
   it("reapplies the Lab choice after the scratch's setup resets shared stores", () => {
     const order: string[] = [];
-    const scratch: ScratchModule & { slug: string } = {
+    const scratch: Scratch = {
       slug: "seeded",
       title: "Seeded scratch",
       default: () => null,
       seed: () => {
         order.push("scratch setup");
-        useThemeStore.setState({ preview: null, previewAppearance: null });
+        seedApp();
       },
     };
 

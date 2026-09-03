@@ -14,9 +14,8 @@ import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/c
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
-import { useThemeStore, type ThemeScope } from "@renderer/stores/theme";
+import { useThemeStore } from "@renderer/stores/theme";
 
-const LAB_SCOPE: ThemeScope = { kind: "global" };
 const SYSTEM_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 
 export interface LabThemeController {
@@ -116,7 +115,6 @@ export function LabThemeToolbar({
           className="z-[10001] w-[44rem] max-w-[calc(100vw-24px)] p-3"
         >
           <CanvasEditor
-            scope={LAB_SCOPE}
             canvas={controller.canvas}
             resolved={resolved}
             onCanvasChange={controller.setCanvas}
