@@ -25,6 +25,7 @@ import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsI
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import * as React from "react";
+import { toast } from "sonner";
 import {
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
@@ -41,6 +42,10 @@ import {
 } from "@volli/shared";
 
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
+import {
+  refreshOutcome,
+  type RefreshOutcome,
+} from "@renderer/components/pages/model-access-refresh-model";
 import {
   Cell,
   DataTable,
@@ -119,27 +124,44 @@ export function ModelAccessSettings({
   const [compaction, setCompaction] = React.useState<CompactionPolicy>(DEFAULT_COMPACTION_POLICY);
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  // Sign-in/out bumps the shared client revision while its explicit onChanged
+  // refresh may still be in flight. Only the latest inspection may project
+  // into this pane; otherwise a pre-sign-out snapshot can arrive last and put
+  // Sign out back beside the newly correct Sign in button.
+  const loadGeneration = React.useRef(0);
 
   const load = React.useCallback(
     async (refresh = false) => {
       if (!client) return;
+      const generation = ++loadGeneration.current;
       setLoading(true);
       try {
-        const [access, configured, curated, policy] = await Promise.all([
-          client.inspect({ refresh }),
+        // A refresh may retire or rename ids, and main repairs defaults and
+        // visibility as it applies the complete lists. Those preferences are
+        // therefore read only after the inspection settles; folding them into
+        // one Promise.all would race the repair and leave this visit showing
+        // the stale value until the pane is reopened. An ordinary open has no
+        // repair to wait for, so it still asks for everything at once.
+        const access = refresh ? await client.inspect({ refresh: true }) : undefined;
+        const [opened, configured, curated, policy] = await Promise.all([
+          access ?? client.inspect({ refresh: false }),
           client.defaults(),
           client.hiddenModels(),
           client.compactionPolicy(),
         ]);
-        setModels(access.models);
-        setProviders(access.providers);
+        if (generation !== loadGeneration.current) return;
+        setModels(opened.models);
+        setProviders(opened.providers);
         setDefaults(configured);
         setHidden(curated);
         setCompaction(policy);
+        if (opened.refresh !== undefined) announceRefresh(refreshOutcome(opened.refresh));
       } catch (error) {
-        toastError(`Couldn't load models: ${errorMessage(error)}`);
+        if (generation === loadGeneration.current) {
+          toastError(`Couldn't load models: ${errorMessage(error)}`);
+        }
       } finally {
-        setLoading(false);
+        if (generation === loadGeneration.current) setLoading(false);
       }
     },
     [client],
@@ -580,6 +602,14 @@ export function providerLabelFor(
 
 function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): string {
   return JSON.stringify([model.providerId, model.modelId]);
+}
+
+/** Say one refresh outcome at the volume its kind earns. */
+function announceRefresh(outcome: RefreshOutcome): void {
+  if (outcome.kind === "failed") toastError(outcome.message);
+  else if (outcome.kind === "issues") toast.warning(outcome.message);
+  else if (outcome.kind === "changed") toast.success(outcome.message);
+  else toast.info(outcome.message);
 }
 
 function errorMessage(error: unknown): string {

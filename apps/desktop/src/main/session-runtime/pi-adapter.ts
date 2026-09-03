@@ -316,6 +316,8 @@ export interface PiAdapterOptions {
   credentials?: PiRuntimeHostOptions["credentials"];
   /** Completion of the injected collection's persisted catalog restore. */
   catalogReady?: PiRuntimeHostOptions["catalogReady"];
+  /** Credential-independent public catalogs attached to the collection. */
+  catalogs?: PiRuntimeHostOptions["catalogs"];
   /**
    * Injectable execution environment factory. Defaults to Pi's own
    * `piExecutionEnv`; main supplies one that prepends Volli's CLI bin dir
@@ -527,6 +529,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
     ...(options.catalogReady === undefined ? {} : { catalogReady: options.catalogReady }),
+    ...(options.catalogs === undefined ? {} : { catalogs: options.catalogs }),
     ...(options.executionEnvFactory === undefined
       ? {}
       : { executionEnvFactory: options.executionEnvFactory }),

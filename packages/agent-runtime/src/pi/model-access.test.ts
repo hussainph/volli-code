@@ -11,6 +11,7 @@ import type { ModelAccessProvider } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { inspectPiModelAccess, PROBE_TIMEOUT_MS } from "./model-access";
+import type { RefreshableCatalogs } from "./model-catalog";
 
 // --- fixtures --------------------------------------------------------------
 //
@@ -103,6 +104,22 @@ function providersById(
 
 /** Drain the microtask queue so every probe has reached its first await. */
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+function catalogs(
+  refresh: RefreshableCatalogs["refresh"],
+  providerIds: readonly string[] = [],
+): RefreshableCatalogs {
+  return {
+    providerIds,
+    restore: async () => ({
+      aborted: false,
+      errors: new Map(),
+      rejectedByProvider: new Map(),
+      refreshedProviderIds: [],
+    }),
+    refresh,
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -296,6 +313,219 @@ describe("inspectPiModelAccess abort", () => {
     await expect(snapshot).rejects.toThrow(/abort/i);
     // The caller's cancellation reached the in-flight probe, not just a wrapper.
     expect(probeSignal?.aborted).toBe(true);
+  });
+});
+
+describe("inspectPiModelAccess public/native refresh phases", () => {
+  it("probes each provider once across the preflight and the snapshot", async () => {
+    // The preflight decides which feeds a refresh should reach; the snapshot
+    // needs the same credential answer. A catalog refresh cannot change it, so
+    // asking twice would only buy a second OAuth round-trip per provider.
+    let checkAuth = 0;
+    let getAvailable = 0;
+    const models = fakeModels([
+      {
+        provider: provider("connected"),
+        checkAuth: async () => {
+          checkAuth++;
+          return { type: "oauth" };
+        },
+        getAvailable: async () => {
+          getAvailable++;
+          return [model("connected", "m")];
+        },
+        known: [model("connected", "m")],
+      },
+    ]);
+
+    const result = await inspectPiModelAccess(
+      {
+        models,
+        credentials: null,
+        catalogs: catalogs(
+          async () => ({
+            aborted: false,
+            errors: new Map(),
+            rejectedByProvider: new Map([["connected", 0]]),
+            refreshedProviderIds: ["connected"],
+          }),
+          ["connected"],
+        ),
+      },
+      () => 0,
+      { refresh: true },
+    );
+
+    expect({ checkAuth, getAvailable }).toEqual({ checkAuth: 1, getAvailable: 1 });
+    expect(providersById(result.providers).connected?.state).toBe("available");
+  });
+
+  it("carries a preflight credential failure into the snapshot without re-asking", async () => {
+    const secret = "sk-live-should-never-surface";
+    let checkAuth = 0;
+    const models = fakeModels([
+      {
+        provider: provider("broken"),
+        checkAuth: async () => {
+          checkAuth++;
+          throw new Error(secret);
+        },
+        getAvailable: async () => [],
+        known: [model("broken", "m")],
+      },
+    ]);
+
+    const result = await inspectPiModelAccess(
+      {
+        models,
+        credentials: null,
+        catalogs: catalogs(
+          async () => ({
+            aborted: false,
+            errors: new Map(),
+            rejectedByProvider: new Map(),
+            refreshedProviderIds: [],
+          }),
+          ["broken"],
+        ),
+      },
+      () => 0,
+      { refresh: true },
+    );
+
+    expect(checkAuth).toBe(1);
+    const broken = providersById(result.providers).broken;
+    expect(broken?.state).toBe("unavailable");
+    expect(broken?.recovery).toEqual({ kind: "retry" });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("treats a preflight that times out as a provider it cannot reach", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(async () => ({
+      aborted: false,
+      errors: new Map<string, Error>(),
+      rejectedByProvider: new Map<string, number>(),
+      refreshedProviderIds: [] as readonly string[],
+    }));
+    const models = fakeModels([
+      { provider: provider("hung"), checkAuth: forever, getAvailable: forever },
+    ]);
+
+    const snapshot = inspectPiModelAccess(
+      { models, credentials: null, catalogs: catalogs(refresh, ["hung"]) },
+      () => 0,
+      { refresh: true },
+    );
+    // Two bounds in sequence: the preflight's, then the snapshot probe's.
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+    const resolved = await snapshot;
+
+    // No credential resolved, so no public feed was asked for on its behalf.
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ providers: [] }));
+    const hung = providersById(resolved.providers).hung;
+    expect(hung?.state).toBe("unavailable");
+    expect(hung?.recovery).toEqual({ kind: "retry" });
+  });
+
+  it("honors cancellation reported by the credential-independent public phase", async () => {
+    const models = fakeModels([
+      {
+        provider: provider("connected"),
+        checkAuth: async () => ({ type: "oauth" }),
+        getAvailable: async () => [model("connected", "m")],
+      },
+    ]);
+
+    await expect(
+      inspectPiModelAccess(
+        {
+          models,
+          credentials: null,
+          catalogs: catalogs(
+            async () => ({
+              aborted: true,
+              errors: new Map(),
+              rejectedByProvider: new Map(),
+              refreshedProviderIds: [],
+            }),
+            ["connected"],
+          ),
+        },
+        () => 0,
+        { refresh: true },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("runs connected native providers beside public catalogs and reports their success", async () => {
+    const dynamic = {
+      ...provider("native"),
+      refreshModels: async () => undefined,
+    } as Provider;
+    const models = fakeModels([
+      {
+        provider: dynamic,
+        checkAuth: async () => ({ type: "oauth" }),
+        getAvailable: async () => [model("native", "m")],
+        known: [model("native", "m")],
+      },
+    ]);
+    const refresh = vi.spyOn(models, "refresh").mockResolvedValue({
+      aborted: false,
+      errors: new Map(),
+    });
+
+    const result = await inspectPiModelAccess(
+      {
+        models,
+        credentials: null,
+        catalogs: catalogs(async () => ({
+          aborted: false,
+          errors: new Map(),
+          rejectedByProvider: new Map(),
+          refreshedProviderIds: [],
+        })),
+      },
+      () => 0,
+      { refresh: true },
+    );
+
+    expect(refresh).toHaveBeenCalledWith({ force: true, providers: ["native"] });
+    expect(result.refresh?.refreshedProviderIds).toEqual(["native"]);
+  });
+
+  it("honors cancellation reported by Pi's native phase", async () => {
+    const dynamic = {
+      ...provider("native"),
+      refreshModels: async () => undefined,
+    } as Provider;
+    const models = fakeModels([
+      {
+        provider: dynamic,
+        checkAuth: async () => ({ type: "oauth" }),
+        getAvailable: async () => [],
+      },
+    ]);
+    vi.spyOn(models, "refresh").mockResolvedValue({ aborted: true, errors: new Map() });
+
+    await expect(
+      inspectPiModelAccess(
+        {
+          models,
+          credentials: null,
+          catalogs: catalogs(async () => ({
+            aborted: false,
+            errors: new Map(),
+            rejectedByProvider: new Map(),
+            refreshedProviderIds: [],
+          })),
+        },
+        () => 0,
+        { refresh: true },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 

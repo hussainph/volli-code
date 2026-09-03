@@ -43,6 +43,7 @@ import {
   attachRefreshableCatalog,
   modelsDevCatalogSource,
   PiFileModelsStore,
+  type RefreshableCatalogs,
 } from "./model-catalog";
 
 /** The file Pi keeps its credentials in, inside its agent directory. */
@@ -143,35 +144,46 @@ export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAc
   // restart. The wrapping is what makes "Refresh models" mean something — pi's
   // built-in catalogs are frozen at publish time, and an unwrapped provider
   // has no `refreshModels` for the button to reach (see `model-catalog.ts`).
-  const models = builtinModels({
-    credentials,
-    modelsStore: new PiFileModelsStore(piModelsFilePath(options)),
+  const modelsStore = new PiFileModelsStore(piModelsFilePath(options));
+  const models = builtinModels({ credentials, modelsStore });
+  const catalogs = attachRefreshableCatalog(models, modelsDevCatalogSource(), {
+    store: modelsStore,
   });
-  attachRefreshableCatalog(models, modelsDevCatalogSource());
   // Start restoration eagerly, but make its completion part of the returned
   // access value. Every product path that can read or execute a model awaits
-  // this promise, so a model that exists only in the persisted overlay is
+  // this promise, so a model that exists only in the persisted list is
   // present before the first lookup after restart, and a restore failure
   // reaches the caller waiting on that operation instead of being discarded.
-  const catalogReady = restoreCatalogs(models);
-  return { models, credentials, catalogReady };
+  const catalogReady = restoreCatalogs(models, catalogs);
+  return { models, credentials, catalogReady, catalogs };
 }
 
-async function restoreCatalogs(models: Models): Promise<void> {
-  const restored = await models.refresh({ allowNetwork: false });
-  if (restored.errors.size > 0) {
-    const providers = [...restored.errors.keys()].toSorted().join(", ");
+async function restoreCatalogs(models: Models, catalogs: RefreshableCatalogs): Promise<void> {
+  const [publicCatalogs, nativeCatalogs] = await Promise.all([
+    catalogs.restore(),
+    models.refresh({
+      allowNetwork: false,
+      providers: models
+        .getProviders()
+        .filter((provider) => !catalogs.providerIds.includes(provider.id))
+        .map((provider) => provider.id),
+    }),
+  ]);
+  const errors = new Map([...publicCatalogs.errors, ...nativeCatalogs.errors]);
+  if (errors.size > 0) {
+    const providers = [...errors.keys()].toSorted().join(", ");
     // Provider ids only. A credential or provider error may contain a response
     // body, and startup diagnostics have no reason to carry those bytes.
     throw new Error(`Could not restore model catalogs for: ${providers}.`);
   }
 }
 
-/** Pi's providers, the credential store, and completion of local catalog restore. */
+/** Pi's providers, stores, public catalogs, and completion of local restore. */
 export interface PiModelAccess {
   models: Models;
   credentials: CredentialStore;
   catalogReady: Promise<void>;
+  catalogs: RefreshableCatalogs;
 }
 
 /**
