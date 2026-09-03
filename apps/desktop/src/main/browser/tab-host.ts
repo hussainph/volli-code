@@ -1,5 +1,6 @@
 import type {
   BrowserWindow,
+  NativeImage,
   Rectangle,
   Session,
   WebContentsView,
@@ -9,7 +10,12 @@ import type {
 import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
-import type { BrowserTabCreatedBy, BrowserTabState } from "../../ipc/contract";
+import type {
+  BrowserTabBounds,
+  BrowserTabCaptureFrame,
+  BrowserTabCreatedBy,
+  BrowserTabState,
+} from "../../ipc/contract";
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
@@ -82,6 +88,17 @@ export const BROWSER_MAX_TABS_PER_PROJECT = 32;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
+
+/**
+ * Stand-in pixels are JPEG, not PNG, and this is a latency decision rather than
+ * a size one. An overlay cannot appear until the capture returns, so the
+ * encode sits on the critical path — and PNG's cost rises with image entropy,
+ * so a dense page pays far more than a plain one and the wait becomes
+ * unpredictable. Measured on the smoke fixture: PNG 20-52ms against JPEG
+ * 11-17ms, and the gap widens with real content. Quality 80 is invisible on a
+ * frame that exists to sit still behind a menu.
+ */
+const BROWSER_CAPTURE_JPEG_QUALITY = 80;
 const BROWSER_DEVTOOLS_RATIO = 0.42;
 const BROWSER_DEVTOOLS_DIVIDER_PX = 1;
 
@@ -524,6 +541,53 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
+  /**
+   * Captures inert fallback pixels before the renderer hides this native plane
+   * for one of its overlays.
+   *
+   * A WebContentsView always composites above the BrowserWindow renderer. The
+   * live view therefore has to detach before a dialog or menu can cover it, but
+   * detaching without a replacement exposes an empty (usually black) native
+   * hole. These frames let the renderer paint the last visible page underneath
+   * its overlay instead. Only PNG pixels cross the boundary — never remote DOM,
+   * script, storage, or a WebContents handle.
+   */
+  async capture(tabId: string): Promise<BrowserTabCaptureFrame[]> {
+    const entry = this.requireTab(tabId);
+    const encode = (image: NativeImage): string =>
+      `data:image/jpeg;base64,${image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY).toString("base64")}`;
+    const split = browserSurfaceBounds(
+      entry.bounds,
+      entry.devToolsOpen && entry.devToolsView !== null,
+    );
+    // One place that knows the window→plane coordinate change, so the page and
+    // DevTools frames can never drift apart on it.
+    const planeRelative = (surface: Rectangle): BrowserTabBounds => ({
+      x: surface.x - entry.bounds.x,
+      y: surface.y - entry.bounds.y,
+      width: surface.width,
+      height: surface.height,
+    });
+    const pending: Promise<BrowserTabCaptureFrame>[] = [
+      entry.view.webContents.capturePage().then((image) => ({
+        kind: "page" as const,
+        dataUrl: encode(image),
+        bounds: planeRelative(split.page),
+      })),
+    ];
+    const devToolsBounds = split.devTools;
+    if (devToolsBounds !== null && entry.devToolsView !== null) {
+      pending.push(
+        entry.devToolsView.webContents.capturePage().then((image) => ({
+          kind: "devtools" as const,
+          dataUrl: encode(image),
+          bounds: planeRelative(devToolsBounds),
+        })),
+      );
+    }
+    return Promise.all(pending);
+  }
+
   /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
@@ -537,9 +601,24 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
-  /** Detaches the named page and DevTools when its workspace surface is no longer visible. */
+  /**
+   * Detaches the named page and DevTools when its workspace surface is no
+   * longer visible.
+   *
+   * Alone among the tab operations this one tolerates an unknown id, because
+   * hiding asks for an end state rather than an action: a tab that no longer
+   * exists has no native surface attached, which is exactly what the caller
+   * wanted. The renderer's plane controller emits one last hide as its React
+   * surface unmounts, and a closed tab is the ordinary reason that surface went
+   * away — `close` detaches and forgets the entry before the renderer hears
+   * about it. Throwing there reported a failure for work already done. Every
+   * other door still requires a live tab: `show`, `navigate`, and the rest
+   * cannot do anything meaningful without one, so an unknown id is a real
+   * fault.
+   */
   hide(tabId: string): void {
-    const entry = this.requireTab(tabId);
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return;
     if (this.attached?.entry !== entry) return;
     this.detachEntry(entry, this.attached.window);
     this.attached = null;

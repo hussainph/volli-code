@@ -487,6 +487,7 @@ function ActiveBand({
         <ActiveBandRow
           key={row.id}
           row={row}
+          projectId={project.id}
           ticketPrefix={project.ticketPrefix}
           now={now}
           selected={row.id === selectedId}
@@ -528,6 +529,7 @@ function PreviousBand({
     <PreviousBandRow
       key={previous.id}
       row={previous}
+      projectId={project.id}
       ticketPrefix={project.ticketPrefix}
       now={now}
       selected={previous.id === selectedId}

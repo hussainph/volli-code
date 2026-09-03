@@ -22,6 +22,16 @@ import type { BrowserTabHost } from "./tab-host";
  * docs/BOUNDARIES.md #5: Browser Tabs are ephemeral machine resources like PTY
  * planes, and bounds/show/hide are Electron-window placement commands. No
  * Browser command writes product history or an id a future host must reconcile.
+ *
+ * `capture` is the one channel here that READS page content rather than placing
+ * a window, so it does not inherit that argument for free. It keeps it for a
+ * different reason: pixels are a capability of the HOST that owns the native
+ * view, not of the client that draws beside it. A Browser Tab is an agent
+ * surface first and a viewing surface second — a Session reaching a page
+ * through the Browser port needs its pixels wherever that page is hosted, and
+ * this renderer's overlay freeze is simply the first consumer of the same read.
+ * So the frame belongs on the host's API when a host becomes a server, and
+ * nothing here assumes the client shares its machine.
  */
 export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
   const handlers: IpcHandlerTable<BrowserIpcChannel> = {
@@ -61,6 +71,10 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       host.setBounds(input.tabId, input.bounds);
       return { ok: true };
     },
+    "volli:browser-capture": async (input: BrowserTabIdInput) => ({
+      ok: true,
+      frames: await host.capture(input.tabId),
+    }),
     "volli:browser-show": (input: BrowserTabIdInput): Result => {
       host.show(input.tabId);
       return { ok: true };

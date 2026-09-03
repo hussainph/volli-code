@@ -46,6 +46,11 @@ import {
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
+import {
+  attachRefreshableCatalog,
+  modelsDevCatalogSource,
+  PiFileModelsStore,
+} from "./model-catalog";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createSessionTools } from "./tools";
 import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
@@ -799,7 +804,276 @@ describe("model access", () => {
     expect(JSON.stringify(access)).not.toMatch(/api-secret|MIXED_API_KEY|oauth-secret/);
   });
 
-  it("turns a failed explicit catalog refresh into sanitized retry recovery", async () => {
+  it("waits for an injected persisted catalog before the first inspection", async () => {
+    const faux = fauxProvider({ provider: "restored", models: [{ id: "persisted-model" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    vi.spyOn(models, "getAvailable").mockResolvedValue([]);
+    const gate = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogReady: gate.promise,
+    });
+
+    const pending = runtime.inspectModelAccess();
+    await Promise.resolve();
+    expect(checkAuth).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await expect(pending).resolves.toMatchObject({
+      models: [expect.objectContaining({ modelId: "persisted-model" })],
+    });
+  });
+
+  it("surfaces a persisted-catalog restoration failure before probing providers", async () => {
+    const models = createModels();
+    const checkAuth = vi.spyOn(models, "checkAuth");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogReady: Promise.reject(new Error("catalog restore failed")),
+    });
+
+    await expect(runtime.inspectModelAccess()).rejects.toThrow(/catalog restore failed/);
+    expect(checkAuth).not.toHaveBeenCalled();
+  });
+
+  it("admits a provider model absent from Pi after one production-path refresh", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [
+        { id: "acme-stable", name: "Acme Stable", reasoning: true },
+        { id: "acme-unlisted", name: "Acme Unlisted", reasoning: true },
+      ],
+    });
+    const [stable, unlisted] = faux.models;
+    const protocol = {
+      api: "openai-completions" as const,
+      baseUrl: "https://acme.test/v1",
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens" as const,
+      },
+      thinkingLevelMap: {
+        off: "none",
+        low: "low",
+        medium: "medium",
+        high: "high",
+      },
+    };
+    const baseline = [
+      { ...stable!, ...protocol },
+      { ...unlisted!, ...protocol },
+    ] satisfies readonly Model<"openai-completions">[];
+    const configuredProvider = {
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Acme API key",
+          resolve: async () => ({ auth: { apiKey: "configured" } }),
+        },
+      },
+      getModels: () => baseline,
+    };
+    const models = createModels();
+    models.setProvider(configuredProvider);
+    const entry = {
+      family: "acme-reasoner",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 128_000, output: 16_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        new Response(
+          JSON.stringify({
+            acme: {
+              npm: "@ai-sdk/openai-compatible",
+              api: "https://acme.test/v1",
+              models: {
+                "acme-stable": { ...entry, id: "acme-stable", name: "Acme Stable" },
+                "acme-pipeline": { ...entry, id: "acme-pipeline", name: "Acme Pipeline" },
+                "acme-unsafe": {
+                  ...entry,
+                  id: "acme-unsafe",
+                  name: "Acme Unsafe",
+                  tool_call: false,
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )) as typeof fetch,
+    });
+    const modelsFile = join(mkdtempSync(join(tmpdir(), "volli-catalog-")), "models.json");
+    const catalogs = attachRefreshableCatalog(models, source, {
+      store: new PiFileModelsStore(modelsFile),
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogs,
+      catalogReady: catalogs.restore().then(() => undefined),
+    });
+
+    const access = await runtime.inspectModelAccess({ refresh: true });
+
+    expect(access.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "acme",
+          modelId: "acme-pipeline",
+          label: "Acme Pipeline",
+          state: "available",
+        }),
+      ]),
+    );
+    // `acme-unlisted` is absent from the feed but present in pi's baseline, so
+    // it stays: the feed may only take away what it gave.
+    expect(access.models.map((model) => model.modelId)).toContain("acme-unlisted");
+    expect(access.refresh).toEqual({
+      added: 1,
+      removed: 0,
+      rejected: 1,
+      refreshedProviderIds: ["acme"],
+      failedProviderIds: [],
+    });
+
+    let executed: Model<string> | undefined;
+    const restartedModels = createModels();
+    restartedModels.setProvider({
+      ...configuredProvider,
+      streamSimple: ((model, _context, _options) => {
+        executed = model;
+        const stream = createAssistantMessageEventStream();
+        const message = baseMessage(model);
+        message.content.push({ type: "text", text: "pipeline reached" });
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+        return stream;
+      }) as typeof configuredProvider.streamSimple,
+    });
+    const restartedCatalogs = attachRefreshableCatalog(restartedModels, source, {
+      store: new PiFileModelsStore(modelsFile),
+    });
+    const restarted = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/restarted-sessions",
+      models: restartedModels,
+      catalogs: restartedCatalogs,
+      catalogReady: restartedCatalogs.restore().then(() => undefined),
+    });
+
+    const restored = await restarted.inspectModelAccess();
+    expect(restored.models.map((model) => model.modelId)).toContain("acme-pipeline");
+    await restarted.completeUtility({
+      model: { providerId: "acme", modelId: "acme-pipeline", reasoningLevel: "low" },
+      systemPrompt: "Use the pipeline.",
+      user: "hello",
+    });
+    expect(executed).toMatchObject({
+      id: "acme-pipeline",
+      api: "openai-completions",
+      provider: "acme",
+      baseUrl: "https://acme.test/v1",
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
+      },
+      // Narrowed to what the new model's own row declares. The sibling maps
+      // `off` to the provider string "none", but this row's effort ladder is
+      // low/medium/high, so that rung is withheld rather than assumed.
+      thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" },
+    });
+  });
+
+  it("retires a refreshed-only model once the source stops listing it", async () => {
+    // The other half of the removal policy. `acme-pipeline` exists only because
+    // the feed listed it, so the feed dropping it is the removal signal — and
+    // the default naming it must not survive as a dangling choice.
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-stable", name: "Acme Stable", reasoning: true }],
+    });
+    const protocol = {
+      api: "openai-completions" as const,
+      baseUrl: "https://acme.test/v1",
+      reasoning: true,
+      compat: { supportsStore: false, maxTokensField: "max_tokens" as const },
+    };
+    const baseline = [
+      { ...faux.models[0]!, ...protocol },
+    ] satisfies readonly Model<"openai-completions">[];
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      auth: {
+        apiKey: {
+          name: "Acme API key",
+          resolve: async () => ({ auth: { apiKey: "configured" } }),
+        },
+      },
+      getModels: () => baseline,
+    });
+    const entry = {
+      family: "acme",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 128_000, output: 16_000 },
+      cost: { input: 1, output: 2 },
+    };
+    let listPipeline = true;
+    const source = modelsDevCatalogSource({
+      memoMs: 0,
+      fetchFn: (async () =>
+        new Response(
+          JSON.stringify({
+            acme: {
+              models: {
+                "acme-stable": { ...entry, name: "Acme Stable" },
+                ...(listPipeline ? { "acme-pipeline": { ...entry, name: "Acme Pipeline" } } : {}),
+              },
+            },
+          }),
+          { status: 200 },
+        )) as typeof fetch,
+    });
+    const modelsFile = join(mkdtempSync(join(tmpdir(), "volli-catalog-")), "models.json");
+    const catalogs = attachRefreshableCatalog(models, source, {
+      store: new PiFileModelsStore(modelsFile),
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      catalogs,
+      catalogReady: catalogs.restore().then(() => undefined),
+    });
+
+    const admitted = await runtime.inspectModelAccess({ refresh: true });
+    expect(admitted.models.map((model) => model.modelId)).toContain("acme-pipeline");
+
+    listPipeline = false;
+    const retired = await runtime.inspectModelAccess({ refresh: true });
+
+    expect(retired.models.map((model) => model.modelId)).toEqual(["acme-stable"]);
+    expect(retired.refresh).toMatchObject({ added: 0, removed: 1, failedProviderIds: [] });
+  });
+
+  it("keeps usable stale models available when an explicit catalog refresh fails", async () => {
     const faux = fauxProvider({
       provider: "dynamic",
       models: [{ id: "stale-model" }],
@@ -829,7 +1103,7 @@ describe("model access", () => {
       {
         id: "dynamic",
         label: "dynamic",
-        state: "unavailable",
+        state: "available",
         accountLabel: null,
         billingSource: "unknown",
         recovery: { kind: "retry" },
@@ -837,7 +1111,7 @@ describe("model access", () => {
         hasStoredCredential: false,
       },
     ]);
-    expect(access.models[0]?.state).toBe("unavailable");
+    expect(access.models[0]?.state).toBe("available");
     expect(JSON.stringify(access)).not.toContain("refresh-secret");
   });
 

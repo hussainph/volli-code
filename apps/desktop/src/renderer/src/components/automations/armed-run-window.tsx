@@ -79,6 +79,10 @@ export function ArmedRunWindows() {
       // not interrupt — the Cancel button is reachable for the whole window.
       role="status"
       aria-live="polite"
+      // Floating chrome drawn inside the app root, where the portal test in
+      // `browser-plane-freeze.ts` cannot see it: say so, or a Browser Tab's
+      // native view composites straight over this countdown.
+      data-native-plane-overlay=""
     >
       {windows.map((window) => (
         <ArmedRunCard key={window.id} window={window} now={now} />

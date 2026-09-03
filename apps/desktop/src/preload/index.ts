@@ -53,6 +53,7 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
   BrowserTabListResult,
@@ -179,6 +180,7 @@ import type {
   TicketIdInput,
   TicketLatestSignalsResult,
   TicketMoveInput,
+  TicketMoveManyInput,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
@@ -380,8 +382,9 @@ const api = {
    * operation names Volli's opaque tab id — no Chromium index, partition,
    * preload, or WebContents id crosses here — and provenance is main's to
    * stamp: a renderer-opened tab is always a `user` tab. The native surface
-   * itself is painted by main behind the renderer's measured plane; this door
-   * only steers it.
+   * itself is painted by main behind the renderer's measured plane. The one
+   * pixel read is `capture`: an inert fallback frame used only while renderer
+   * overlays must sit above a native child view.
    */
   browser: {
     open: (input: BrowserTabOpenInput): Promise<BrowserTabResult> =>
@@ -399,6 +402,8 @@ const api = {
       invoke("volli:browser-reload", input),
     setBounds: (input: BrowserTabSetBoundsInput): Promise<Result> =>
       invoke("volli:browser-set-bounds", input),
+    capture: (input: BrowserTabIdInput): Promise<BrowserTabCaptureResult> =>
+      invoke("volli:browser-capture", input),
     show: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-show", input),
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
@@ -444,8 +449,11 @@ const api = {
   tickets: {
     create: (input: TicketCreateInput): Promise<TicketResult> =>
       invoke("volli:ticket-create", input),
-    /** Runs the shared board move + persists it; resolves with the project's full authoritative ticket list. */
+    /** Runs the shared one-card board move + persists it; resolves with the project's full authoritative ticket list. */
     move: (input: TicketMoveInput): Promise<TicketsResult> => invoke("volli:ticket-move", input),
+    /** Persists a selected card group atomically; the group stays contiguous at the destination. */
+    moveMany: (input: TicketMoveManyInput): Promise<TicketsResult> =>
+      invoke("volli:ticket-move", input),
     /** Resolves with just the mutated ticket (patched into the list by id), not the whole project. */
     setPriority: (input: TicketSetPriorityInput): Promise<TicketResult> =>
       invoke("volli:ticket-set-priority", input),

@@ -16,6 +16,8 @@
  * unit-testable and the seams stay visible.
  */
 
+import { pathContains } from "./agent-surface";
+
 /**
  * The tools a session's PATH is MEASURED for — what `volli identify` reports
  * and `volli doctor` looks up, not what a project needs. Measuring is cheap
@@ -194,12 +196,19 @@ function joinPath(directory: string, name: string): string {
   return directory.endsWith("/") ? `${directory}${name}` : `${directory}/${name}`;
 }
 
-/** The directory above `path`, or `path` itself when there is none to walk into. */
+/** One spelling for directory comparisons: no trailing slash except at `/`. */
+function normalizeDirectory(path: string): string {
+  let normalized = path;
+  while (normalized.length > 1 && normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+/** The directory above an absolute `path`. */
 function parentDirectory(path: string): string {
-  const withoutSlash = path.endsWith("/") ? path.slice(0, -1) : path;
-  const cut = withoutSlash.lastIndexOf("/");
-  if (cut === -1) return path;
-  return cut === 0 ? "/" : withoutSlash.slice(0, cut);
+  const cut = path.lastIndexOf("/");
+  return cut <= 0 ? "/" : path.slice(0, cut);
 }
 
 /** One step of a workspace walk: the directory, and whether it ended the walk. */
@@ -211,31 +220,65 @@ interface WorkspaceAncestor {
 
 /**
  * The ancestors a workspace question may consult: `cwd` up to and including
- * the repository root, or the filesystem root when no repository encloses
- * `cwd`. The `.git` marker (a directory in a primary checkout, a file in a
- * linked worktree) is the boundary because a session's workspace facts are
- * facts about its checkout: the directories above a repository belong to
- * other projects, and a stray `~/package.json` beside a `~/node_modules`
- * must never answer for a worktree that has neither — the false "installed"
- * an unbounded walk produces.
+ * the first of two boundaries. A `.git` marker is the inner boundary (a
+ * directory in a primary checkout, a file in a linked worktree), while
+ * `projectRoot` is the mandatory outer boundary for a non-repository project.
+ * No filesystem ancestor outside that root can answer for the project.
  *
- * The boundary is REPORTED rather than merely acted on, because one caller
- * ({@link isGitRepository}) wants the marker itself. Asking again from the
- * outside would stat every `.git` twice for one answer the walk already had.
+ * When `cwd` is outside `projectRoot` — for example, `identify --project` from
+ * another directory — measurement starts at the project root rather than
+ * consulting the unrelated cwd. Directory spellings are normalized here so a
+ * trailing slash cannot step over the boundary.
+ *
+ * The repository boundary is REPORTED rather than merely acted on, because
+ * one caller ({@link isGitRepository}) wants the marker itself. Asking again
+ * from the outside would stat every `.git` twice for one answer the walk
+ * already had.
  */
 function* workspaceAncestors(
   cwd: string,
+  projectRoot: string,
   pathExists: (path: string) => boolean,
 ): Generator<WorkspaceAncestor> {
-  let directory = cwd;
+  const root = normalizeDirectory(projectRoot);
+  const start = normalizeDirectory(cwd);
+  let directory = pathContains(root, start) ? start : root;
   for (;;) {
     const isRepositoryRoot = pathExists(joinPath(directory, ".git"));
     yield { directory, isRepositoryRoot };
-    if (isRepositoryRoot) return;
-    const parent = parentDirectory(directory);
-    if (parent === directory) return;
-    directory = parent;
+    if (isRepositoryRoot || directory === root) return;
+    directory = parentDirectory(directory);
   }
+}
+
+/**
+ * The outer boundary a caller adopts when nothing registered one for it.
+ *
+ * Main always knows the project a measurement is scoped to and passes that
+ * root itself. The CLI does not: `volli doctor` and the degraded `identify`
+ * measure the directory this process happens to stand in, and the app that
+ * could name its project may not even be running. Bounding those at the cwd
+ * would answer a different question than the one asked — a session in
+ * `packages/shared` of a pnpm monorepo would stop before the root that holds
+ * the lockfile and the `node_modules`, and report npm and a missing install
+ * for a workspace that has neither problem.
+ *
+ * So the marker decides: the enclosing repository root when `cwd` is inside a
+ * checkout, `cwd` itself when no repository encloses it. `.git` keeps doing
+ * the work it always did for a package subdirectory, and the folder the
+ * unbounded walk used to escape — the one no repository encloses — now
+ * answers only for itself instead of walking to `/`.
+ *
+ * A home directory that is itself a checkout still bounds the folders beneath
+ * it, exactly as it did before this boundary existed. That is the residual
+ * case a search for a marker cannot close and a registered root can, which is
+ * why every caller that HAS a root passes it instead of calling this.
+ */
+export function enclosingWorkspaceRoot(cwd: string, pathExists: (path: string) => boolean): string {
+  for (const { directory, isRepositoryRoot } of workspaceAncestors(cwd, "/", pathExists)) {
+    if (isRepositoryRoot) return directory;
+  }
+  return normalizeDirectory(cwd);
 }
 
 /**
@@ -273,22 +316,23 @@ export async function resolveSessionEnvTools(
 /**
  * Whether the workspace a session stands in has its dependencies installed.
  *
- * Walks from the session cwd up to the repository boundary (see
- * {@link workspaceAncestors}), because a session can start in a package
+ * Walks from the session cwd up to the repository or project-root boundary
+ * (see {@link workspaceAncestors}), because a session can start in a package
  * subdirectory of a pnpm workspace: the workspace root may be the only
  * ancestor that carries `node_modules`, and the root's answer is the truth.
- * `installed` when any manifest-bearing ancestor inside the repository has
+ * `installed` when any manifest-bearing ancestor inside those boundaries has
  * its `node_modules`; `absent` when one has a manifest but none has its
  * dependencies (the worktree-provisioning coin flip the contract declares);
- * `null` when no ancestor is a package workspace at all — the honest third
- * answer for a directory an install command has nothing to say about.
+ * `null` when no bounded ancestor is a package workspace at all — the honest
+ * third answer for a directory an install command has nothing to say about.
  */
 export function workspaceDependenciesStatus(
   cwd: string,
+  projectRoot: string,
   pathExists: (path: string) => boolean,
 ): WorkspaceDependenciesStatus {
   let sawManifest = false;
-  for (const { directory } of workspaceAncestors(cwd, pathExists)) {
+  for (const { directory } of workspaceAncestors(cwd, projectRoot, pathExists)) {
     if (pathExists(joinPath(directory, "package.json"))) {
       sawManifest = true;
       if (pathExists(joinPath(directory, "node_modules"))) return "installed";
@@ -313,8 +357,8 @@ const LOCKFILE_PACKAGE_MANAGERS: ReadonlyArray<
 
 /**
  * The package manager the workspace enclosing `cwd` names, judged by the
- * lockfile beside its manifests — the same repository-bounded walk as
- * {@link workspaceDependenciesStatus}, so every workspace answer describes
+ * lockfile beside its manifests — the same repository-and-project-bounded walk
+ * as {@link workspaceDependenciesStatus}, so every workspace answer describes
  * the same workspace. The nearest manifest's lockfile wins. `null` when no
  * ancestor is a package workspace at all; `npm` when a manifest exists but
  * no lockfile names a manager, because a bare manifest is npm's to install.
@@ -327,10 +371,11 @@ const LOCKFILE_PACKAGE_MANAGERS: ReadonlyArray<
  */
 export function workspacePackageManager(
   cwd: string,
+  projectRoot: string,
   pathExists: (path: string) => boolean,
 ): WorkspacePackageManager | null {
   let sawManifest = false;
-  for (const { directory } of workspaceAncestors(cwd, pathExists)) {
+  for (const { directory } of workspaceAncestors(cwd, projectRoot, pathExists)) {
     if (!pathExists(joinPath(directory, "package.json"))) continue;
     sawManifest = true;
     for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
@@ -347,24 +392,29 @@ export function workspacePackageManager(
  */
 export function workspaceInstallCommand(
   cwd: string,
+  projectRoot: string,
   pathExists: (path: string) => boolean,
 ): string | null {
-  const manager = workspacePackageManager(cwd, pathExists);
+  const manager = workspacePackageManager(cwd, projectRoot, pathExists);
   return manager === null ? null : `${manager} install`;
 }
 
 /**
- * Whether `cwd` stands inside a git repository — the `.git` marker that
- * bounds every workspace walk, taken from the walk rather than re-statted. A
- * file in a linked worktree, a directory in a primary checkout; existence is
- * the test either way.
+ * Whether `cwd` stands inside a git repository — the `.git` marker that may
+ * end a workspace walk before its project-root boundary, taken from the walk
+ * rather than re-statted. A file in a linked worktree, a directory in a
+ * primary checkout; existence is the test either way.
  *
  * Module-private: the repository question reaches the outside world as part
  * of {@link requiredSessionEnvTools}'s answer, and a second exported spelling
  * of it would be one more thing to keep in step.
  */
-function isGitRepository(cwd: string, pathExists: (path: string) => boolean): boolean {
-  for (const { isRepositoryRoot } of workspaceAncestors(cwd, pathExists)) {
+function isGitRepository(
+  cwd: string,
+  projectRoot: string,
+  pathExists: (path: string) => boolean,
+): boolean {
+  for (const { isRepositoryRoot } of workspaceAncestors(cwd, projectRoot, pathExists)) {
     if (isRepositoryRoot) return true;
   }
   return false;
@@ -403,11 +453,12 @@ const MANAGER_IMPLICATIONS: Record<WorkspacePackageManager, readonly RequirableS
  */
 export function requiredSessionEnvTools(
   cwd: string,
+  projectRoot: string,
   pathExists: (path: string) => boolean,
 ): readonly RequirableSessionEnvTool[] {
   const required = new Set<RequirableSessionEnvTool>();
-  if (isGitRepository(cwd, pathExists)) required.add("git");
-  const manager = workspacePackageManager(cwd, pathExists);
+  if (isGitRepository(cwd, projectRoot, pathExists)) required.add("git");
+  const manager = workspacePackageManager(cwd, projectRoot, pathExists);
   if (manager !== null) {
     for (const implied of MANAGER_IMPLICATIONS[manager]) required.add(implied);
   }

@@ -171,7 +171,17 @@ export default defineConfig(({ mode }) => ({
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
+        // WHEN a Browser Tab's native plane may detach (VC-251). Not view glue:
+        // a WebContentsView composites above the window, so this rule decides
+        // whether a person gets an operable overlay or stares at a black
+        // rectangle — and its first version matched any `[role="listbox"]`,
+        // which a permanent Change Set list satisfied forever. Each transition
+        // is gated because none of them is visible in a screenshot.
+        "src/components/browser/browser-plane-freeze.ts",
         "src/components/board/board-dnd.ts",
+        // Desktop selection gestures are board policy, not view glue: modifier
+        // toggles may span columns while Shift ranges stay in one visual column.
+        "src/components/board/board-selection.ts",
         // The ⌥-drag picker's whole decision surface (VC-132): whether a column
         // is expanded into landing targets, which row a release obeys, and what
         // that release chose. Gated for `armed-move-model.ts`'s reason one file
@@ -190,6 +200,11 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
+        // to, where it truncates behind "Show all", and the Ticket-priority
+        // score wrapped around cmdk's matcher. One shared filter scores both
+        // the slice and mounted rows so the two passes cannot drift.
+        "src/components/command-palette-search.ts",
         // Quick-open's three decisions (VC-190): which checkout ⌘P searches,
         // what a query matches, and whether an invocation previews or pins.
         // Pure `.ts` beside the overlay for the gate's sake — a scope that
@@ -228,6 +243,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
+        // What one press of Refresh models is allowed to SAY (VC-244). In the
+        // gate because "nothing appeared" reads the same whether the catalog
+        // was already current, a provider was unreachable, or a model was
+        // withheld as unsafe — and only this classification tells them apart.
+        "src/components/pages/model-access-refresh-model.ts",
         "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
@@ -270,6 +290,26 @@ export default defineConfig(({ mode }) => ({
         // gesture; which tab ended up where is arithmetic, and an off-by-one
         // in it is a tab that lands one slot from where it was let go.
         "src/components/ui/tab-reorder.ts",
+        // Split view's two pure modules (VC-202), enrolled for the same reason
+        // the tab-strip trio above is. The partition is the last step between
+        // "which pane holds this tab" and the strip that draws it — an
+        // off-by-one there draws one pane's tabs in another pane. The viewport
+        // registry is module state with several live entries, and what it gets
+        // wrong is a terminal drawn over the wrong box or not drawn at all,
+        // which no view test would catch.
+        "src/components/split/split-tab-partition.ts",
+        "src/components/split/terminal-viewport-registry.ts",
+        // And what a drop on the plane MEANS (VC-202 §4) — the same argument
+        // `tab-reorder.ts` makes one scope down. Three things nobody could see
+        // were wrong from a screenshot: which zone a pointer is in, whether a
+        // dragged Session may land on this surface at all (a ticket-A chat must
+        // not open on Home), and which store write a drop is.
+        "src/components/split/split-drop.ts",
+        // …and the routing between that meaning and the store twin that writes
+        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // cannot answer the same drop differently. Its wrong answer is a drop
+        // that lands somewhere other than where the zone said it would.
+        "src/components/split/split-surface-drop.ts",
         // Same shape: the wheel-detach decision for the conversation (VC-32)
         // is a pure `.ts` beside `ui/ai-elements/conversation.tsx` so the
         // gate can reach it; the `.tsx` glue that calls it stays outside.
@@ -280,6 +320,11 @@ export default defineConfig(({ mode }) => ({
         "src/lib/chat-open-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
+        // The split chords (VC-202 §5), in the gate for the same reason the
+        // line above is: a chord predicate that is one modifier off answers to
+        // a keypress somebody meant for something else, and its own surface
+        // gate decides whether a keystroke may rearrange a persisted layout.
+        "src/lib/split-shortcut.ts",
         "src/lib/new-ticket-shortcut.ts",
         // Which rail ⌥⌘B is talking about (VC-55) — the same chrome-predicate
         // shape as its two neighbours here, and gated for the same reason: it

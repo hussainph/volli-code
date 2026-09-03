@@ -60,12 +60,19 @@ export class BrowserPlaneController {
     this.run(this.gateway.setBounds({ tabId: this.tabId, bounds }), "place Browser Tab");
   }
 
-  setVisible(visible: boolean): void {
-    if (this.disposed) return;
+  /**
+   * Answers when main has acted, not when React decided. A caller restoring the
+   * plane from under frozen pixels has to know the native view is actually back
+   * before it stops painting them, or it paints the themed background into the
+   * gap — the flicker that made overlays worse than the hole they replaced.
+   * Already-in-that-state settles at once: there is nothing to wait for.
+   */
+  setVisible(visible: boolean): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     const next = visible ? "visible" : "hidden";
-    if (this.visibility === next) return;
+    if (this.visibility === next) return Promise.resolve();
     this.visibility = next;
-    this.run(
+    return this.run(
       visible ? this.gateway.show({ tabId: this.tabId }) : this.gateway.hide({ tabId: this.tabId }),
       visible ? "show Browser Tab" : "hide Browser Tab",
     );
@@ -84,8 +91,12 @@ export class BrowserPlaneController {
     this.disposed = true;
   }
 
-  private run(operation: Promise<Result>, label: string, reportAfterDispose = false): void {
-    void operation
+  private run(
+    operation: Promise<Result>,
+    label: string,
+    reportAfterDispose = false,
+  ): Promise<void> {
+    return operation
       .then((result) => {
         if ((!this.disposed || reportAfterDispose) && !result.ok) {
           this.onError(`Could not ${label}: ${result.error}`);

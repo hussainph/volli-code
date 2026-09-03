@@ -181,6 +181,7 @@ export function TicketRail({
                 The rail never authors: this block runs and links to the page. */}
             <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
             <TicketSessionsPanel
+              projectId={projectId}
               ticketId={ticket.id}
               creating={creating}
               onNewSession={onNewSession}

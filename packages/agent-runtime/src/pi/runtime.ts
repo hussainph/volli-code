@@ -81,6 +81,7 @@ import {
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
+import type { RefreshableCatalogs } from "./model-catalog";
 import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
@@ -148,6 +149,14 @@ export interface PiRuntimeHostOptions {
    * no store, which reads as "cannot tell" rather than as an empty profile.
    */
   credentials?: CredentialStore;
+  /**
+   * Completion of local catalog restoration for an injected collection.
+   * Main passes this with the `piOwnedModelAccess` pair; scripted collections
+   * omit it because they have no persisted catalog.
+   */
+  catalogReady?: Promise<void>;
+  /** Credential-independent public catalogs attached to the injected collection. */
+  catalogs?: RefreshableCatalogs;
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
   /**
@@ -200,6 +209,8 @@ interface PiRuntimeHost {
   sessionDataDir: string;
   models: Models;
   credentials: CredentialStore | null;
+  catalogReady: Promise<void>;
+  catalogs?: RefreshableCatalogs;
   now: () => number;
   executionEnvFactory: (
     workspacePath: string,
@@ -222,7 +233,12 @@ interface PiRuntimeHost {
 function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource {
   const models = options.models;
   if (models === undefined) return piOwnedModelAccess();
-  return { models, credentials: options.credentials ?? null };
+  return {
+    models,
+    credentials: options.credentials ?? null,
+    catalogReady: options.catalogReady,
+    catalogs: options.catalogs,
+  };
 }
 
 /**
@@ -238,6 +254,8 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     sessionDataDir: options.sessionDataDir,
     models: access.models,
     credentials: access.credentials,
+    catalogReady: access.catalogReady ?? Promise.resolve(),
+    ...(access.catalogs === undefined ? {} : { catalogs: access.catalogs }),
     now: options.now ?? Date.now,
     // Wrapped rather than passed by reference: `piExecutionEnv`'s second
     // parameter is its options bag, and handing it the identity positionally
@@ -250,9 +268,24 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   };
   return {
     inspectModelAccess: (input) =>
-      inspectPiModelAccess({ models: host.models, credentials: host.credentials }, host.now, input),
-    startSession: (spec) => attachSession(host, spec),
-    completeUtility: (input) => runUtilityCompletion(host, input),
+      inspectPiModelAccess(
+        {
+          models: host.models,
+          credentials: host.credentials,
+          catalogReady: host.catalogReady,
+          catalogs: host.catalogs,
+        },
+        host.now,
+        input,
+      ),
+    startSession: async (spec) => {
+      await host.catalogReady;
+      return attachSession(host, spec);
+    },
+    completeUtility: async (input) => {
+      await host.catalogReady;
+      return runUtilityCompletion(host, input);
+    },
   };
 }
 

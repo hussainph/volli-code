@@ -6,9 +6,11 @@ import type {
   ModelAccessRecovery,
   ModelAccessSnapshot,
   ModelAccessState,
+  ModelCatalogRefreshReport,
 } from "@volli/shared";
 
 import { contextWindowOf } from "./compaction";
+import type { RefreshableCatalogs } from "./model-catalog";
 import type { PiModelAccess } from "./models";
 import { providerSignInMethods } from "./sign-in";
 
@@ -29,6 +31,13 @@ export interface InspectPiModelAccessInput {
 export interface PiModelAccessSource {
   models: Models;
   credentials: PiModelAccess["credentials"] | null;
+  /**
+   * Completion of the profile's local overlay restore. Optional only for
+   * scripted collections, which have no persisted catalog to initialize.
+   */
+  catalogReady?: PiModelAccess["catalogReady"];
+  /** Public catalogs that refresh without provider credentials. */
+  catalogs?: RefreshableCatalogs;
 }
 
 /**
@@ -50,6 +59,8 @@ export async function inspectPiModelAccess(
 ): Promise<ModelAccessSnapshot> {
   const models = source.models;
   input.signal?.throwIfAborted();
+  await (source.catalogReady ?? Promise.resolve());
+  input.signal?.throwIfAborted();
   // One read of the whole file rather than one per provider: every credential
   // lives in the same document, and `list` yields ids and types only — the
   // shape pi-ai defines precisely so a caller can enumerate accounts without
@@ -58,14 +69,80 @@ export async function inspectPiModelAccess(
   const stored = await storedProviderIds(source.credentials, input.signal);
   input.signal?.throwIfAborted();
   let refreshErrors: ReadonlyMap<string, Error> = new Map();
+  let refreshReport: ModelCatalogRefreshReport | undefined;
+  // A refresh preflight resolves every provider's credential to decide which
+  // feeds to reach. The snapshot below needs the same answer, and a catalog
+  // refresh cannot change it, so it is carried across rather than asked twice.
+  const resolvedAuth = new Map<string, AuthProbe>();
   if (input.refresh) {
-    const refreshed = await models.refresh({
+    const before = catalogIdentities(models);
+    const options = {
       force: true,
       ...(input.signal ? { signal: input.signal } : {}),
-    });
-    input.signal?.throwIfAborted();
-    if (refreshed.aborted) throw abortError();
-    refreshErrors = refreshed.errors;
+    };
+    let refreshedProviderIds: readonly string[] = [];
+    let rejected = 0;
+    if (source.catalogs === undefined) {
+      // Scripted/foreign collections retain Pi's ordinary behavior.
+      const refreshed = await models.refresh(options);
+      input.signal?.throwIfAborted();
+      if (refreshed.aborted) throw abortError();
+      refreshErrors = refreshed.errors;
+    } else {
+      const preflight = await Promise.all(
+        models.getProviders().map(async (provider) => ({
+          provider,
+          probe: await probeProviderAuth(models, provider.id, input.signal, PROBE_TIMEOUT_MS),
+        })),
+      );
+      input.signal?.throwIfAborted();
+      for (const { provider, probe } of preflight) resolvedAuth.set(provider.id, probe);
+      const connected = new Set(
+        preflight
+          .filter(({ provider, probe }) => stored.has(provider.id) || probe.auth !== undefined)
+          .map(({ provider }) => provider.id),
+      );
+      const publicIds = source.catalogs.providerIds.filter((providerId) =>
+        connected.has(providerId),
+      );
+      // Public list discovery is deliberately separate from Pi's refresh: Pi
+      // skips the network phase for providers whose credential is unresolved,
+      // while this feed contains no private provider operation at all.
+      const publicRefresh = await source.catalogs.refresh({ ...options, providers: publicIds });
+      input.signal?.throwIfAborted();
+      if (publicRefresh.aborted) throw abortError();
+      rejected = [...publicRefresh.rejectedByProvider.values()].reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+
+      const publicIdSet = new Set(source.catalogs.providerIds);
+      const nativeIds = models
+        .getProviders()
+        .filter(
+          (provider) =>
+            connected.has(provider.id) &&
+            !publicIdSet.has(provider.id) &&
+            provider.refreshModels !== undefined,
+        )
+        .map((provider) => provider.id);
+      const nativeRefresh = await models.refresh({ ...options, providers: nativeIds });
+      input.signal?.throwIfAborted();
+      if (nativeRefresh.aborted) throw abortError();
+      refreshErrors = new Map([...publicRefresh.errors, ...nativeRefresh.errors]);
+      refreshedProviderIds = [
+        ...publicRefresh.refreshedProviderIds,
+        ...nativeIds.filter((providerId) => !nativeRefresh.errors.has(providerId)),
+      ];
+    }
+    const after = catalogIdentities(models);
+    refreshReport = {
+      added: countDifference(after, before),
+      removed: countDifference(before, after),
+      rejected,
+      refreshedProviderIds,
+      failedProviderIds: [...refreshErrors.keys()],
+    };
   }
 
   const providers: ModelAccessProvider[] = [];
@@ -78,7 +155,13 @@ export async function inspectPiModelAccess(
   const probed = await Promise.all(
     models.getProviders().map(async (provider) => ({
       provider,
-      probe: await probeProvider(models, provider.id, input.signal, PROBE_TIMEOUT_MS),
+      probe: await probeProvider(
+        models,
+        provider.id,
+        input.signal,
+        PROBE_TIMEOUT_MS,
+        resolvedAuth.get(provider.id),
+      ),
     })),
   );
   input.signal?.throwIfAborted();
@@ -87,16 +170,19 @@ export async function inspectPiModelAccess(
     const refreshError = refreshErrors.get(provider.id);
     const availableKeys = new Set(available.map(modelKey));
     const known = models.getModels(provider.id);
+    // A catalog refresh failure means the last-known catalog is stale, not
+    // that a provider which just passed auth and availability stopped working.
+    // Keep usable static/restored models available and offer Retry beside them;
+    // otherwise one shared feed outage would turn every configured provider
+    // red despite leaving every request path intact.
     const providerState: ModelAccessState =
-      refreshError !== undefined
-        ? "unavailable"
-        : available.length > 0
-          ? "available"
-          : probeFailed
-            ? "unavailable"
-            : auth === undefined
-              ? "authentication-required"
-              : "unavailable";
+      available.length > 0
+        ? "available"
+        : refreshError !== undefined || probeFailed
+          ? "unavailable"
+          : auth === undefined
+            ? "authentication-required"
+            : "unavailable";
     providers.push({
       id: provider.id,
       label: provider.name,
@@ -126,14 +212,11 @@ export async function inspectPiModelAccess(
         modelId: model.id,
         label: model.name,
         ...(contextWindow === undefined ? {} : { contextWindow }),
-        state:
-          refreshError !== undefined
-            ? "unavailable"
-            : availableKeys.has(modelKey(model))
-              ? "available"
-              : providerState === "authentication-required"
-                ? "authentication-required"
-                : "unavailable",
+        state: availableKeys.has(modelKey(model))
+          ? "available"
+          : providerState === "authentication-required"
+            ? "authentication-required"
+            : "unavailable",
         reasoningLevels: getSupportedThinkingLevels(model),
         // Same defensive stance as contextWindow above — Pi types `input` as
         // required, a gateway entry need not honour that. An unreadable field
@@ -145,45 +228,64 @@ export async function inspectPiModelAccess(
   }
 
   input.signal?.throwIfAborted();
-  return { observedAt: now(), providers, models: catalog };
+  return {
+    observedAt: now(),
+    providers,
+    models: catalog,
+    ...(refreshReport === undefined ? {} : { refresh: refreshReport }),
+  };
 }
 
-/** What one provider's probe yielded, however it ended. */
-interface ProbeResult {
+function catalogIdentities(models: Models): ReadonlySet<string> {
+  return new Set(models.getModels().map(modelKey));
+}
+
+function countDifference(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+  let count = 0;
+  for (const value of left) if (!right.has(value)) count++;
+  return count;
+}
+
+/** What one provider's auth probe yielded, however it ended. */
+interface AuthProbe {
   auth: Awaited<ReturnType<Models["checkAuth"]>>;
-  available: Awaited<ReturnType<Models["getAvailable"]>>;
   /**
-   * True when a call rejected or the probe timed out. Both are the same "cannot
-   * tell" a null store already is, and every one of them reads as `unavailable`.
+   * True when the call rejected or the probe timed out. Both are the same
+   * "cannot tell" a null store already is, and each reads as `unavailable`.
    */
   probeFailed: boolean;
 }
 
+/** What one provider's full probe yielded, however it ended. */
+interface ProbeResult extends AuthProbe {
+  available: Awaited<ReturnType<Models["getAvailable"]>>;
+}
+
 /**
- * One provider's auth and availability, bounded so a hung provider cannot hold
- * the whole snapshot open.
+ * Run one provider's probe under a bound, so a hung provider cannot hold the
+ * whole snapshot open.
  *
  * `checkAuth` and `getAvailable` can each reach the network — an OAuth refresh —
  * and a provider that never answers would otherwise park the inspection on its
- * one slot. The pair is therefore raced against a timeout: if it has not settled
- * within `timeoutMs`, the provider is reported `unavailable`, the same direction
- * a rejected probe takes, and the rest of the snapshot proceeds without it. The
- * bound holds even when a call ignores its signal, because the race resolves on
- * the timer rather than on the call. The timer deliberately does not abort an
- * in-flight credential refresh: OAuth servers can rotate a refresh token before
- * its replacement has been persisted locally. Caller cancellation is still
- * relayed to the pair while this inspection is live.
+ * one slot. Work is therefore raced against a timeout: if it has not settled
+ * within `timeoutMs`, `whenTimedOut` supplies the answer, the rest of the
+ * snapshot proceeds without that provider, and the bound holds even when a call
+ * ignores its signal, because the race resolves on the timer rather than on the
+ * call. The timer deliberately does not abort an in-flight credential refresh:
+ * OAuth servers can rotate a refresh token before its replacement has been
+ * persisted locally. Caller cancellation is still relayed while this inspection
+ * is live.
  *
- * Nothing here surfaces an error: a rejection is collapsed to `probeFailed`, so
- * no provider response text — a token echoed in a message, a refused key — can
- * reach the snapshot or a message built from it.
+ * Nothing here surfaces an error: `run` collapses rejection into `probeFailed`,
+ * so no provider response text — a token echoed in a message, a refused key —
+ * can reach the snapshot or a message built from it.
  */
-async function probeProvider(
-  models: Models,
-  providerId: string,
+async function boundedProbe<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  whenTimedOut: () => T,
   callerSignal: AbortSignal | undefined,
   timeoutMs: number,
-): Promise<ProbeResult> {
+): Promise<T> {
   callerSignal?.throwIfAborted();
   const controller = new AbortController();
   const abortForCaller = (): void => controller.abort(callerSignal?.reason);
@@ -196,26 +298,79 @@ async function probeProvider(
     timedOut.resolve("timeout");
   }, timeoutMs);
   try {
-    const settled = await Promise.race([
-      // `allSettled` never rejects, so the losing branch of this race cannot
-      // become an unhandled rejection when the timer wins and it settles later.
-      Promise.allSettled([
-        models.checkAuth(providerId, { signal: controller.signal }),
-        models.getAvailable(providerId, { signal: controller.signal }),
-      ]),
-      timedOut.promise,
-    ]);
-    if (settled === "timeout") return { auth: undefined, available: [], probeFailed: true };
-    const [authResult, availableResult] = settled;
-    return {
-      auth: authResult.status === "fulfilled" ? authResult.value : undefined,
-      available: availableResult.status === "fulfilled" ? availableResult.value : [],
-      probeFailed: authResult.status === "rejected" || availableResult.status === "rejected",
-    };
+    const settled = await Promise.race([run(controller.signal), timedOut.promise]);
+    return settled === "timeout" ? whenTimedOut() : settled;
   } finally {
     clearTimeout(timer);
     callerSignal?.removeEventListener("abort", abortForCaller);
   }
+}
+
+/**
+ * One provider's auth alone, for the refresh preflight.
+ *
+ * Deciding which providers a refresh should reach only needs to know whether a
+ * credential resolves. Asking `getAvailable` as well would list every provider's
+ * models twice per refresh — once to answer a yes/no question, once for the
+ * snapshot — so the preflight asks the narrow question and {@link probeProvider}
+ * reuses this answer instead of resolving the same credential again.
+ */
+function probeProviderAuth(
+  models: Models,
+  providerId: string,
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<AuthProbe> {
+  return boundedProbe(
+    async (signal) => {
+      // `allSettled` never rejects, so the losing branch of the race cannot
+      // become an unhandled rejection when the timer wins and it settles later.
+      const [settled] = await Promise.allSettled([models.checkAuth(providerId, { signal })]);
+      return {
+        auth: settled.status === "fulfilled" ? settled.value : undefined,
+        probeFailed: settled.status === "rejected",
+      };
+    },
+    () => ({ auth: undefined, probeFailed: true }),
+    callerSignal,
+    timeoutMs,
+  );
+}
+
+/**
+ * One provider's auth and availability.
+ *
+ * `resolved` is the preflight's answer for this provider when a refresh already
+ * asked. Credentials do not change across a catalog refresh, so re-asking would
+ * buy nothing and cost another round-trip.
+ */
+function probeProvider(
+  models: Models,
+  providerId: string,
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+  resolved?: AuthProbe,
+): Promise<ProbeResult> {
+  return boundedProbe(
+    async (signal) => {
+      const [authResult, availableResult] = await Promise.allSettled([
+        resolved === undefined
+          ? models.checkAuth(providerId, { signal })
+          : Promise.resolve(resolved.auth),
+        models.getAvailable(providerId, { signal }),
+      ]);
+      const authFailed =
+        resolved === undefined ? authResult.status === "rejected" : resolved.probeFailed;
+      return {
+        auth: authResult.status === "fulfilled" ? authResult.value : undefined,
+        available: availableResult.status === "fulfilled" ? availableResult.value : [],
+        probeFailed: authFailed || availableResult.status === "rejected",
+      };
+    },
+    () => ({ auth: undefined, available: [], probeFailed: true }),
+    callerSignal,
+    timeoutMs,
+  );
 }
 
 function refreshRecovery(error: Error): ModelAccessRecovery {
