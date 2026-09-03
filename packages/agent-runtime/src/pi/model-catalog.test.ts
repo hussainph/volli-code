@@ -7,6 +7,7 @@ import type {
   CredentialStore,
   Model,
   ModelsPublication,
+  ModelsStore,
   Provider,
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
@@ -19,7 +20,9 @@ import {
   attachRefreshableCatalog,
   modelsDevCatalogSource,
   modelsDevCatalogFacts,
+  CatalogSourceAbsent,
   PiFileModelsStore,
+  supersededModelId,
   withRefreshableCatalog,
 } from "./model-catalog";
 import { providerSignInMethods } from "./sign-in";
@@ -89,7 +92,7 @@ function scriptedSource(
   const calls: { providerId: string; baseline: readonly Model<Api>[] }[] = [];
   return {
     calls,
-    fetchOverlay: async (providerId, baseline) => {
+    fetchCatalog: async (providerId, baseline) => {
       calls.push({ providerId, baseline });
       return result;
     },
@@ -98,7 +101,7 @@ function scriptedSource(
 
 function failingSource(): CatalogSource {
   return {
-    fetchOverlay: async () => {
+    fetchCatalog: async () => {
       throw new Error("no catalog today");
     },
   };
@@ -171,7 +174,7 @@ describe("withRefreshableCatalog", () => {
     expect(providerSignInMethods(wrapped)).toEqual(providerSignInMethods(base));
   });
 
-  it("merges a fetched overlay over the static baseline by id", async () => {
+  it("replaces the static baseline with a fetched complete list", async () => {
     const replaced = model("acme", "acme-2", { name: "Acme 2 (updated)" });
     const added = model("acme", "acme-3");
     const wrapped = withRefreshableCatalog(
@@ -182,8 +185,8 @@ describe("withRefreshableCatalog", () => {
 
     const { context } = refreshContext();
     await wrapped.refreshModels?.(context);
-    expect(wrapped.getModels().map((entry) => entry.id)).toEqual(["acme-1", "acme-2", "acme-3"]);
-    expect(wrapped.getModels()[1]?.name).toBe("Acme 2 (updated)");
+    expect(wrapped.getModels().map((entry) => entry.id)).toEqual(["acme-2", "acme-3"]);
+    expect(wrapped.getModels()[0]?.name).toBe("Acme 2 (updated)");
   });
 
   it("hides an exact stale alias whenever its canonical id is present", async () => {
@@ -216,13 +219,13 @@ describe("withRefreshableCatalog", () => {
     expect(source.calls).toEqual([{ providerId: "acme", baseline }]);
   });
 
-  it("restores persisted facts through current protocol and drops unpinned additions", async () => {
+  it("migrates a legacy overlay without treating it as a complete list", async () => {
     const source = scriptedSource({ models: [] });
     const wrapped = withRefreshableCatalog(baseProvider("acme", baseline), source);
     const stored = {
       models: [
         model("acme", "acme-2", { name: "Acme 2 cached" }),
-        model("acme", "unpinned-addition"),
+        { ...model("acme", "unpinned-addition"), __volliProtocolAdmission: 1 } as Model<Api>,
         model("other", "not-ours"),
       ],
       checkedAt: 1,
@@ -329,6 +332,55 @@ describe("withRefreshableCatalog", () => {
     expect(wrapped.getModels()).toEqual([valid]);
   });
 
+  it("restores refreshed-only protocol only when every cached field remains safe", async () => {
+    const restore = async (overrides: Record<string, unknown>): Promise<readonly Model<Api>[]> => {
+      const wrapped = withRefreshableCatalog(
+        baseProvider("acme", [model("acme", "baseline")]),
+        scriptedSource({ models: [] }),
+      );
+      const cached = {
+        ...model("acme", "pipeline"),
+        __volliProtocolAdmission: 1,
+        ...overrides,
+      } as Model<Api>;
+      await wrapped.refreshModels?.(
+        refreshContext({
+          stored: {
+            models: [cached],
+            __volliCatalogFormat: 2,
+          } as never,
+          allowNetwork: false,
+          force: undefined,
+        }).context,
+      );
+      return wrapped.getModels();
+    };
+
+    const invalid: Record<string, unknown>[] = [
+      { api: "" },
+      { baseUrl: "" },
+      { reasoning: "yes" },
+      { compat: [] },
+      { headers: { bad: 1 } },
+      { samplingParams: [] },
+      { thinkingLevelMap: [] },
+      { thinkingLevelMap: { low: 1 } },
+    ];
+    for (const protocol of invalid) expect(await restore(protocol)).toEqual([]);
+    await expect(restore({ thinkingLevelMap: undefined })).resolves.toEqual([
+      expect.objectContaining({ id: "pipeline" }),
+    ]);
+
+    await expect(
+      restore({
+        compat: {},
+        headers: { "x-string": "yes", "x-null": null },
+        samplingParams: {},
+        thinkingLevelMap: { off: null, low: "low" },
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: "pipeline" })]);
+  });
+
   it("stops after a superseded publish rather than fetching for a dead generation", async () => {
     const source = scriptedSource({ models: [model("acme", "acme-3")] });
     const wrapped = withRefreshableCatalog(baseProvider("acme", baseline), source);
@@ -352,10 +404,11 @@ describe("withRefreshableCatalog", () => {
     await wrapped.refreshModels?.(context);
     expect(publications).toHaveLength(1);
     expect(publications[0]?.persist).toEqual({
-      models: [added],
+      models: [{ ...added, __volliProtocolAdmission: 1 }],
       checkedAt: 9_000,
       etag: '"v1"',
       lastModified: 123,
+      __volliCatalogFormat: 2,
     });
   });
 
@@ -381,7 +434,7 @@ describe("withRefreshableCatalog", () => {
   it("does not publish a fetch superseded while it was in flight", async () => {
     const controller = new AbortController();
     const source: CatalogSource = {
-      fetchOverlay: async () => {
+      fetchCatalog: async () => {
         controller.abort();
         return { models: [model("acme", "acme-3")] };
       },
@@ -404,6 +457,38 @@ describe("withRefreshableCatalog", () => {
   });
 });
 
+describe("supersededModelId", () => {
+  it("tells stored preferences where a renamed model went, and only that", () => {
+    // The same table that hides the stale alias from the picker is what lets a
+    // default naming it survive the rename instead of being cleared.
+    expect(supersededModelId("opencode-go", "ox-alpha-free")).toBe("glm-5.3-flash");
+    expect(supersededModelId("opencode-go", "glm-5.3")).toBeUndefined();
+    expect(supersededModelId("anthropic", "ox-alpha-free")).toBeUndefined();
+  });
+});
+
+describe("a provider the source does not carry", () => {
+  it("keeps pi's catalog and reports neither success nor failure", async () => {
+    // models.dev has no `openai-codex` provider at all. Before this, every
+    // refresh recorded a provider error for it and Model Access offered a
+    // Retry that could never work.
+    const models = createModels();
+    const baseline = [model("openai-codex", "gpt-5.6-sol")];
+    models.setProvider(baseProvider("openai-codex", baseline));
+    const catalogs = attachRefreshableCatalog(models, {
+      fetchCatalog: async (providerId) => {
+        throw new CatalogSourceAbsent(providerId);
+      },
+    });
+
+    const result = await catalogs.refresh();
+
+    expect(result.errors.size).toBe(0);
+    expect(result.refreshedProviderIds).toEqual([]);
+    expect(models.getProvider("openai-codex")?.getModels()).toEqual(baseline);
+  });
+});
+
 describe("attachRefreshableCatalog", () => {
   it("wraps static providers and leaves dynamic ones their own refresh", () => {
     const models = createModels({ credentials: credentialStore("static") });
@@ -416,6 +501,72 @@ describe("attachRefreshableCatalog", () => {
     attachRefreshableCatalog(models, scriptedSource({ models: [] }));
     expect(models.getProvider("static")?.refreshModels).toBeDefined();
     expect(models.getProvider("dynamic")?.refreshModels).toBe(ownRefresh);
+  });
+
+  it("returns immediately when its public refresh is already aborted", async () => {
+    const models = createModels();
+    models.setProvider(baseProvider("acme", [model("acme", "m-1")]));
+    const catalogs = attachRefreshableCatalog(models, scriptedSource({ models: [] }));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(catalogs.refresh({ signal: controller.signal })).resolves.toEqual({
+      aborted: true,
+      errors: new Map(),
+      rejectedByProvider: new Map(),
+      refreshedProviderIds: [],
+    });
+  });
+
+  it("refreshes only selected providers and restores every provider offline", async () => {
+    const models = createModels();
+    models.setProvider(baseProvider("a", [model("a", "a-1")]));
+    models.setProvider(baseProvider("b", [model("b", "b-1")]));
+    const source = scriptedSource({ models: [] });
+    const catalogs = attachRefreshableCatalog(models, source);
+
+    await catalogs.restore();
+    expect(source.calls).toEqual([]);
+    await catalogs.refresh({ providers: ["a"] });
+    expect(source.calls.map((call) => call.providerId)).toEqual(["a"]);
+  });
+
+  it("normalizes a non-Error store failure and suppresses one caused by abort", async () => {
+    const models = createModels();
+    models.setProvider(baseProvider("acme", [model("acme", "m-1")]));
+    const failingStore = {
+      read: async () => Promise.reject("plain store failure"),
+      write: async () => undefined,
+      delete: async () => undefined,
+    } as ModelsStore;
+    const failed = attachRefreshableCatalog(models, scriptedSource({ models: [] }), {
+      store: failingStore,
+    });
+    const result = await failed.refresh();
+    expect(result.errors.get("acme")).toEqual(new Error("plain store failure"));
+
+    const errorModels = createModels();
+    errorModels.setProvider(baseProvider("acme", [model("acme", "m-1")]));
+    const errorResult = await attachRefreshableCatalog(errorModels, failingSource()).refresh();
+    expect(errorResult.errors.get("acme")).toEqual(new Error("no catalog today"));
+
+    const controller = new AbortController();
+    const abortedStore = {
+      ...failingStore,
+      read: async () => {
+        controller.abort();
+        throw new Error("aborted store read");
+      },
+    } as ModelsStore;
+    const nextModels = createModels();
+    nextModels.setProvider(baseProvider("acme", [model("acme", "m-1")]));
+    const aborted = attachRefreshableCatalog(nextModels, scriptedSource({ models: [] }), {
+      store: abortedStore,
+    });
+    await expect(aborted.refresh({ signal: controller.signal })).resolves.toMatchObject({
+      aborted: true,
+      errors: new Map(),
+    });
   });
 });
 
@@ -436,6 +587,7 @@ describe("modelsDevCatalogFacts", () => {
   const feedEntry = {
     name: "GLM-5.3-Flash",
     reasoning: true,
+    tool_call: true,
     modalities: { input: ["text", "image"], output: ["text"] },
     limit: { context: 1_000_000, output: 131_072 },
     cost: { input: 0.15, output: 0.5, cache_read: 0.03 },
@@ -466,6 +618,7 @@ describe("modelsDevCatalogFacts", () => {
           "glm-5.3": {
             name: "GLM-5.3 (renamed)",
             reasoning: false,
+            tool_call: true,
             cost: { input: 0.7, output: 2.2, cache_read: 0.13 },
             limit: { context: 1_000_000, output: 131_072 },
           },
@@ -481,18 +634,32 @@ describe("modelsDevCatalogFacts", () => {
   it("detects a same-length input-modality change", () => {
     const [facts] = modelsDevCatalogFacts("opencode-go", [glm53], {
       "opencode-go": {
-        models: { "glm-5.3": { modalities: { input: ["image"], output: ["text"] } } },
+        models: {
+          "glm-5.3": {
+            tool_call: true,
+            modalities: { input: ["image"], output: ["text"] },
+          },
+        },
       },
     });
     expect(facts?.input).toEqual(["image"]);
   });
 
-  it("falls back to every known fact the feed omits or leaves empty", () => {
+  it("emits every known fact, falling back when the feed omits or leaves it empty", () => {
     expect(
       modelsDevCatalogFacts("opencode-go", [glm53], {
-        "opencode-go": { models: { "glm-5.3": { name: "" } } },
+        "opencode-go": { models: { "glm-5.3": { name: "", tool_call: true } } },
       }),
-    ).toEqual([]);
+    ).toEqual([
+      {
+        id: "glm-5.3",
+        name: "glm-5.3",
+        input: ["text"],
+        cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+      },
+    ]);
   });
 
   it("uses a new model id when the feed leaves its name empty", () => {
@@ -504,14 +671,19 @@ describe("modelsDevCatalogFacts", () => {
 
   it("caps a provider slice before an untrusted feed can grow the overlay", () => {
     const entries = Object.fromEntries(
-      Array.from({ length: 201 }, (_, index) => [`model-${index}`, feedEntry]),
+      Array.from({ length: 1_001 }, (_, index) => [`model-${index}`, feedEntry]),
     );
     expect(
       modelsDevCatalogFacts("opencode-go", [], { "opencode-go": { models: entries } }),
-    ).toHaveLength(200);
+    ).toHaveLength(1_000);
+    // The same bound holds once retained baseline ids are appended, so a huge
+    // feed cannot push the list past it by way of the retention pass either.
+    expect(
+      modelsDevCatalogFacts("opencode-go", [glm53], { "opencode-go": { models: entries } }),
+    ).toHaveLength(1_000);
   });
 
-  it("emits nothing for a known model whose facts agree", () => {
+  it("emits a known model whose facts agree because a refreshed list is complete", () => {
     expect(
       modelsDevCatalogFacts("opencode-go", [glm53], {
         "opencode-go": {
@@ -519,6 +691,7 @@ describe("modelsDevCatalogFacts", () => {
             "glm-5.3": {
               name: "glm-5.3",
               reasoning: false,
+              tool_call: true,
               modalities: { input: ["text"], output: ["text"] },
               limit: { context: 1_000_000, output: 131_072 },
               cost: { input: 1.4, output: 4.4, cache_read: 0.26, cache_write: 0 },
@@ -526,10 +699,10 @@ describe("modelsDevCatalogFacts", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ id: "glm-5.3" })]);
   });
 
-  it("recognizes an unchanged tiered price on a known model", () => {
+  it("preserves an unchanged tiered price on a known model", () => {
     const tier = {
       input: 10,
       output: 45,
@@ -545,6 +718,7 @@ describe("modelsDevCatalogFacts", () => {
         "opencode-go": {
           models: {
             tiered: {
+              tool_call: true,
               cost: {
                 input: 5,
                 output: 30,
@@ -562,7 +736,7 @@ describe("modelsDevCatalogFacts", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ id: "tiered", cost: baseline.cost })]);
   });
 
   it("translates context pricing tiers and distrusts untranslatable ones", () => {
@@ -578,7 +752,7 @@ describe("modelsDevCatalogFacts", () => {
         ],
       },
     };
-    const [added] = modelsDevCatalogFacts("opencode-go", [glm53], {
+    const [added] = modelsDevCatalogFacts("opencode-go", [], {
       "opencode-go": { models: { "glm-5.4": tiered } },
     });
     expect(added?.cost.tiers).toEqual([
@@ -597,13 +771,53 @@ describe("modelsDevCatalogFacts", () => {
     ];
     for (const tiers of invalidTiers) {
       expect(
-        modelsDevCatalogFacts("opencode-go", [glm53], {
+        modelsDevCatalogFacts("opencode-go", [], {
           "opencode-go": {
             models: { "glm-5.4": { ...feedEntry, cost: { input: 5, output: 30, tiers } } },
           },
         }),
       ).toEqual([]);
     }
+  });
+
+  it("keeps a baseline id whose row understates it, because Pi already vouched", () => {
+    // models.dev is community-maintained. A row that says `tool_call: false`, or
+    // omits the field, is a gap in the data — not evidence that a model Pi ships
+    // and a person may have selected stopped being able to call tools.
+    for (const understated of [{ tool_call: false }, { tool_call: undefined }]) {
+      expect(
+        modelsDevCatalogFacts("opencode-go", [glm53], {
+          "opencode-go": { models: { "glm-5.3": { ...feedEntry, ...understated } } },
+        }),
+      ).toEqual([expect.objectContaining({ id: "glm-5.3" })]);
+    }
+  });
+
+  it("keeps a baseline id the source has stopped listing", () => {
+    // The feed may only take away what it gave. Measured against the live
+    // catalogue, retiring pi ids on a feed omission costs three models that
+    // work today, `openai/gpt-5-chat-latest` among them.
+    expect(
+      modelsDevCatalogFacts("opencode-go", [glm53], {
+        "opencode-go": { models: { "something-else": feedEntry } },
+      })
+        .map((facts) => facts.id)
+        .toSorted(),
+    ).toEqual(["glm-5.3", "something-else"]);
+  });
+
+  it("withholds a new id the provider has already marked deprecated", () => {
+    expect(
+      modelsDevCatalogFacts("opencode-go", [glm53], {
+        "opencode-go": {
+          models: {
+            "glm-5.3": feedEntry,
+            "glm-5.4": { ...feedEntry, status: "deprecated" },
+            "glm-5.5": { ...feedEntry, status: "beta" },
+          },
+        },
+      }).map((facts) => facts.id),
+    ).toEqual(["glm-5.3", "glm-5.5"]);
   });
 
   it("skips incomplete, non-text, and malformed new entries", () => {
@@ -616,10 +830,11 @@ describe("modelsDevCatalogFacts", () => {
       "glm-5.9": { ...feedEntry, modalities: { output: ["text"] } },
       "glm-5.10": { ...feedEntry, modalities: { input: ["text"], output: ["video"] } },
       "glm-5.11": "not even an object",
+      "glm-5.12": { ...feedEntry, modalities: "not an object" },
     };
-    expect(
-      modelsDevCatalogFacts("opencode-go", [glm53], { "opencode-go": { models: cases } }),
-    ).toEqual([]);
+    expect(modelsDevCatalogFacts("opencode-go", [], { "opencode-go": { models: cases } })).toEqual(
+      [],
+    );
   });
 
   it("yields no facts for providers or documents it cannot read", () => {
@@ -638,6 +853,9 @@ describe("modelsDevCatalogSource", () => {
       models: {
         "a-2": {
           name: "A2",
+          family: "a",
+          reasoning: false,
+          tool_call: true,
           modalities: { input: ["text"], output: ["text"] },
           limit: { context: 10, output: 5 },
           cost: { input: 1, output: 2 },
@@ -648,6 +866,9 @@ describe("modelsDevCatalogSource", () => {
       models: {
         "b-2": {
           name: "B2",
+          family: "b",
+          reasoning: false,
+          tool_call: true,
           modalities: { input: ["text"], output: ["text"] },
           limit: { context: 10, output: 5 },
           cost: { input: 1, output: 2 },
@@ -665,8 +886,8 @@ describe("modelsDevCatalogSource", () => {
         return gate.promise;
       }) as typeof fetch,
     });
-    const first = source.fetchOverlay("a", [model("a", "a-2")], { signal: signal() });
-    const second = source.fetchOverlay("b", [model("b", "b-2")], { signal: signal() });
+    const first = source.fetchCatalog("a", [model("a", "a-2")], { signal: signal() });
+    const second = source.fetchCatalog("b", [model("b", "b-2")], { signal: signal() });
     gate.resolve(jsonResponse(document));
     const [forA, forB] = await Promise.all([first, second]);
     expect(calls).toBe(1);
@@ -684,34 +905,62 @@ describe("modelsDevCatalogSource", () => {
       }) as typeof fetch,
       now: () => at,
     });
-    await source.fetchOverlay("a", [], { signal: signal() });
-    await source.fetchOverlay("a", [], { signal: signal() });
+    await source.fetchCatalog("a", [], { signal: signal() });
+    await source.fetchCatalog("a", [], { signal: signal() });
     expect(calls).toBe(1);
     at = 10_000;
-    await source.fetchOverlay("a", [], { signal: signal() });
+    await source.fetchCatalog("a", [], { signal: signal() });
     expect(calls).toBe(2);
   });
 
-  it("materializes a reviewed new id through its exact pinned protocol", async () => {
+  it("materializes a new id through an unambiguous provider protocol class", async () => {
+    const classEntry = {
+      family: "glm",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+      tool_call: true,
+      structured_output: true,
+      temperature: true,
+      interleaved: { field: "reasoning_content", enabled: true, marker: null },
+      modalities: { input: ["text", "image"], output: ["text"] },
+      limit: { context: 1_000_000, output: 131_072 },
+      cost: { input: 0.15, output: 0.5, cache_read: 0.03 },
+    };
+    const baseline = model("opencode-go", "glm-5.3", {
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: "max_tokens",
+      },
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: null,
+        high: "high",
+        xhigh: null,
+        max: "max",
+      },
+    });
     const source = modelsDevCatalogSource({
       fetchFn: (async () =>
         jsonResponse({
           "opencode-go": {
             models: {
-              "glm-5.3-flash": {
-                name: "GLM-5.3-Flash",
-                modalities: { input: ["text", "image"], output: ["text"] },
-                limit: { context: 1_000_000, output: 131_072 },
-                cost: { input: 0.15, output: 0.5, cache_read: 0.03 },
-              },
+              "glm-5.3": { ...classEntry, name: "GLM-5.3" },
+              "glm-5.3-flash": { ...classEntry, name: "GLM-5.3-Flash" },
             },
           },
         })) as typeof fetch,
     });
 
-    const result = await source.fetchOverlay("opencode-go", [], { signal: signal() });
+    const result = await source.fetchCatalog("opencode-go", [baseline], { signal: signal() });
 
+    expect(result.rejected).toBe(0);
     expect(result.models).toEqual([
+      expect.objectContaining({ id: "glm-5.3" }),
       expect.objectContaining({
         id: "glm-5.3-flash",
         api: "openai-completions",
@@ -736,6 +985,298 @@ describe("modelsDevCatalogSource", () => {
     ]);
   });
 
+  /** Pi carries the fallback target's own price, which is the giveaway: this is
+   * one model's routing, not a shape the whole provider shares. */
+  const FALLBACK_COST = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+
+  it("never lends a sibling's per-model fallback routing to a new id", async () => {
+    // `compat.allowedFallbackModels` names specific sibling models and carries
+    // their prices. Pi's own type notes Anthropic rejects `fallbacks` for a
+    // model with no permitted targets, so inheriting a neighbour's list would
+    // build a request the upstream refuses. It is also the only thing telling
+    // real `claude-opus-4-8` and `claude-opus-5` apart, so stripping it is what
+    // lets that class stay unanimous and admit anything at all.
+    const classEntry = {
+      family: "claude",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 100_000, output: 8_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          acme: {
+            models: {
+              "opus-4-8": { ...classEntry, name: "Opus 4.8" },
+              "opus-5": { ...classEntry, name: "Opus 5" },
+              "opus-6-pipeline": { ...classEntry, name: "Opus 6" },
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog(
+      "acme",
+      [
+        model("acme", "opus-4-8", {
+          compat: { forceAdaptiveThinking: true, supportsStrictTools: true },
+        }),
+        model("acme", "opus-5", {
+          compat: {
+            forceAdaptiveThinking: true,
+            supportsStrictTools: true,
+            allowedFallbackModels: [{ provider: "acme", model: "opus-4-8", cost: FALLBACK_COST }],
+          },
+        }),
+      ],
+      { signal: signal() },
+    );
+
+    // The two baseline models keep their own protocol untouched, including the
+    // fallback list that belongs to `opus-5`.
+    expect(result.models.find((entry) => entry.id === "opus-5")?.compat).toEqual({
+      forceAdaptiveThinking: true,
+      supportsStrictTools: true,
+      allowedFallbackModels: [{ provider: "acme", model: "opus-4-8", cost: FALLBACK_COST }],
+    });
+    // The new id is admitted — the class was unanimous once the per-model fact
+    // was set aside — and it carries no borrowed fallback routing.
+    expect(result.models.find((entry) => entry.id === "opus-6-pipeline")?.compat).toEqual({
+      forceAdaptiveThinking: true,
+      supportsStrictTools: true,
+    });
+    expect(result.rejected).toBe(0);
+  });
+
+  it("drops compat entirely when stripping leaves a class nothing to say", async () => {
+    const classEntry = {
+      family: "claude",
+      reasoning: true,
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 100_000, output: 8_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          acme: {
+            models: {
+              "with-fallbacks": { ...classEntry, name: "With" },
+              bare: { ...classEntry, name: "Bare" },
+              pipeline: { ...classEntry, name: "Pipeline" },
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog(
+      "acme",
+      [
+        model("acme", "with-fallbacks", {
+          compat: {
+            allowedFallbackModels: [{ provider: "acme", model: "bare", cost: FALLBACK_COST }],
+          },
+        }),
+        // No `compat` at all: equal to its sibling once the per-model key goes.
+        model("acme", "bare"),
+      ],
+      { signal: signal() },
+    );
+
+    const admitted = result.models.find((entry) => entry.id === "pipeline");
+    expect(admitted).toBeDefined();
+    expect(admitted?.compat).toBeUndefined();
+  });
+
+  it("rejects a new id when one provider capability class has conflicting Pi protocols", async () => {
+    const classEntry = {
+      family: "acme",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 100_000, output: 8_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          acme: {
+            models: {
+              first: { ...classEntry, name: "First" },
+              duplicate: { ...classEntry, name: "Duplicate" },
+              second: { ...classEntry, name: "Second" },
+              pipeline: { ...classEntry, name: "Pipeline" },
+            },
+          },
+        })) as typeof fetch,
+    });
+    const result = await source.fetchCatalog(
+      "acme",
+      [
+        model("acme", "first", { api: "openai-completions" }),
+        model("acme", "duplicate", { api: "openai-completions" }),
+        model("acme", "second", { api: "anthropic-messages" }),
+      ],
+      { signal: signal() },
+    );
+
+    expect(result.models.map((entry) => entry.id)).toEqual(["first", "duplicate", "second"]);
+    expect(result.rejected).toBe(1);
+  });
+
+  it("rejects malformed or unmatched protocol capability classes", async () => {
+    const valid = {
+      name: "Stable",
+      family: "acme",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 100_000, output: 8_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const invalidCandidates: Record<string, unknown>[] = [
+      { ...valid, family: undefined },
+      { ...valid, reasoning: "yes" },
+      { ...valid, reasoning_options: 7 },
+      { ...valid, reasoning_options: "BAD_NUMBER" },
+      { ...valid, reasoning_options: ["BAD_NUMBER"] },
+      { ...valid, reasoning_options: { bad: "BAD_NUMBER" } },
+      // A control this module cannot name is a control it cannot reason about.
+      { ...valid, reasoning_options: [{ values: ["high"] }] },
+      { ...valid, interleaved: "BAD_NUMBER" },
+    ];
+    for (const candidate of invalidCandidates) {
+      let text = JSON.stringify({
+        acme: { models: { stable: valid, pipeline: { ...candidate, name: "Pipeline" } } },
+      });
+      text = text.replaceAll('"BAD_NUMBER"', "1e400");
+      const source = modelsDevCatalogSource({
+        fetchFn: (async () => new Response(text, { status: 200 })) as typeof fetch,
+      });
+      const result = await source.fetchCatalog("acme", [model("acme", "stable")], {
+        signal: signal(),
+      });
+      expect(result.models.map((entry) => entry.id)).toEqual(["stable"]);
+      expect(result.rejected).toBe(1);
+    }
+  });
+
+  it("reads every shape the interleaved field is allowed to take", async () => {
+    // `interleaved` is a boolean or an object naming the field, and models.dev
+    // populates it on 13% of rows. Each shape has to land in the same class as
+    // itself and a different one from the others, or the key is not a key.
+    const base = {
+      name: "Model",
+      family: "acme",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["high"] }],
+      tool_call: true,
+      temperature: true,
+      structured_output: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 100_000, output: 8_000 },
+      cost: { input: 1, output: 2 },
+    };
+    const admits = async (baselineShape: unknown, candidateShape: unknown): Promise<boolean> => {
+      const source = modelsDevCatalogSource({
+        fetchFn: (async () =>
+          jsonResponse({
+            acme: {
+              models: {
+                stable: { ...base, interleaved: baselineShape },
+                pipeline: { ...base, name: "Pipeline", interleaved: candidateShape },
+              },
+            },
+          })) as typeof fetch,
+      });
+      const result = await source.fetchCatalog("acme", [model("acme", "stable")], {
+        signal: signal(),
+      });
+      return result.models.some((entry) => entry.id === "pipeline");
+    };
+
+    // Same shape, same class.
+    expect(await admits(true, true)).toBe(true);
+    expect(await admits({ field: "reasoning_content" }, { field: "reasoning_content" })).toBe(true);
+    expect(await admits(undefined, false)).toBe(true);
+    // A bare object names no field, which is the same claim as `true`.
+    expect(await admits(true, {})).toBe(true);
+    // Different shape, different class — nothing to inherit.
+    expect(await admits(true, { field: "reasoning_details" })).toBe(false);
+    expect(await admits(undefined, true)).toBe(false);
+  });
+
+  it("never empties a provider because its rows understate what Pi ships", async () => {
+    // The regression this guards: one community feed edit must not be able to
+    // take every model away from a provider a person is signed in to and using.
+    for (const incompatible of [
+      { tool_call: false },
+      { tool_call: true, modalities: { input: ["text"], output: ["video"] } },
+    ]) {
+      const source = modelsDevCatalogSource({
+        fetchFn: (async () =>
+          jsonResponse({
+            acme: {
+              models: {
+                stable: {
+                  name: "Stable",
+                  family: "acme",
+                  reasoning: false,
+                  limit: { context: 100_000, output: 8_000 },
+                  cost: { input: 1, output: 2 },
+                  ...incompatible,
+                },
+              },
+            },
+          })) as typeof fetch,
+      });
+      const result = await source.fetchCatalog("acme", [model("acme", "stable")], {
+        signal: signal(),
+      });
+      expect(result.models.map((entry) => entry.id)).toEqual(["stable"]);
+      expect(result.rejected).toBe(0);
+    }
+  });
+
+  it("keeps every baseline model when the source describes an unrelated id space", async () => {
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          acme: {
+            models: {
+              // A whole new id space: nothing here is a model pi vouches for.
+              "unrelated-1": document.a.models["a-2"],
+              "unrelated-2": document.a.models["a-2"],
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog("acme", [model("acme", "stable")], {
+      signal: signal(),
+    });
+
+    // Safe by construction rather than by a guard: classes are built only from
+    // exact baseline joins, so an id space sharing nothing with pi produces no
+    // class, admits nothing, and leaves the catalog exactly as it was.
+    expect(result.models.map((entry) => entry.id)).toEqual(["stable"]);
+    expect(result.rejected).toBe(2);
+  });
+
   it("does not turn a prefix-similar unknown id into runnable protocol", async () => {
     const source = modelsDevCatalogSource({
       fetchFn: (async () =>
@@ -753,13 +1294,17 @@ describe("modelsDevCatalogSource", () => {
         })) as typeof fetch,
     });
 
-    const result = await source.fetchOverlay(
+    const result = await source.fetchCatalog(
       "anthropic",
       [model("anthropic", "claude-fable-5", { api: "anthropic-messages" })],
       { signal: signal() },
     );
 
-    expect(result.models).toEqual([]);
+    // A name one character apart is not evidence. `claude-fable-5` is absent
+    // from this feed, so it contributes no class and `claude-fable-5.1` has
+    // nothing to inherit — while the baseline model itself is untouched.
+    expect(result.models.map((entry) => entry.id)).toEqual(["claude-fable-5"]);
+    expect(result.rejected).toBe(1);
   });
 
   it("carries the response validators for the persisted entry", async () => {
@@ -770,16 +1315,44 @@ describe("modelsDevCatalogSource", () => {
           "Last-Modified": "Thu, 01 Jan 2026 00:00:00 GMT",
         })) as typeof fetch,
     });
-    const result = await source.fetchOverlay("a", [], { signal: signal() });
+    const result = await source.fetchCatalog("a", [], { signal: signal() });
     expect(result.etag).toBe('"v7"');
     expect(result.lastModified).toBe(Date.parse("Thu, 01 Jan 2026 00:00:00 GMT"));
+  });
+
+  it("marks a provider the document does not carry as unsourced, not failed", async () => {
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () => jsonResponse({ other: { models: {} } })) as typeof fetch,
+    });
+    await expect(source.fetchCatalog("acme", [], { signal: signal() })).rejects.toThrow(
+      CatalogSourceAbsent,
+    );
+  });
+
+  it("fails one provider instead of publishing a truncated complete list", async () => {
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          acme: {
+            models: {
+              first: document.a.models["a-2"],
+              second: document.a.models["a-2"],
+            },
+          },
+        })) as typeof fetch,
+      maxProviderModels: 1,
+    });
+
+    await expect(source.fetchCatalog("acme", [], { signal: signal() })).rejects.toThrow(
+      /exceeds the model-count bound/,
+    );
   });
 
   it("reports an HTTP failure by status and never by body", async () => {
     const source = modelsDevCatalogSource({
       fetchFn: (async () => new Response("secret-ish body", { status: 503 })) as typeof fetch,
     });
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).rejects.toThrow(/HTTP 503/);
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).rejects.toThrow(/HTTP 503/);
   });
 
   it("rejects a response past the configured readable bound", async () => {
@@ -787,7 +1360,7 @@ describe("modelsDevCatalogSource", () => {
       fetchFn: (async () => new Response("12345", { status: 200 })) as typeof fetch,
       maxBodyBytes: 4,
     });
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).rejects.toThrow(
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).rejects.toThrow(
       /exceeds the readable size bound/,
     );
   });
@@ -796,7 +1369,7 @@ describe("modelsDevCatalogSource", () => {
     const source = modelsDevCatalogSource({
       fetchFn: (async () => jsonResponse([])) as typeof fetch,
     });
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).rejects.toThrow(
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).rejects.toThrow(
       /not a provider map/,
     );
   });
@@ -806,7 +1379,7 @@ describe("modelsDevCatalogSource", () => {
       fetchFn: (async () => new Response("<html>not json</html>", { status: 200 })) as typeof fetch,
     });
     const failure = await source
-      .fetchOverlay("a", [], { signal: signal() })
+      .fetchCatalog("a", [], { signal: signal() })
       .catch((error: Error) => error);
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toMatch(/not readable JSON/);
@@ -822,8 +1395,8 @@ describe("modelsDevCatalogSource", () => {
       }) as typeof fetch,
       memoMs: 0,
     });
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).rejects.toThrow(/HTTP 500/);
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).resolves.toBeDefined();
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).rejects.toThrow(/HTTP 500/);
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).resolves.toBeDefined();
     expect(calls).toBe(2);
   });
 
@@ -831,7 +1404,7 @@ describe("modelsDevCatalogSource", () => {
     const source = modelsDevCatalogSource({
       fetchFn: (() => Promise.reject("plain failure")) as typeof fetch,
     });
-    await expect(source.fetchOverlay("a", [], { signal: signal() })).rejects.toThrow(
+    await expect(source.fetchCatalog("a", [], { signal: signal() })).rejects.toThrow(
       /plain failure/,
     );
   });
@@ -842,7 +1415,7 @@ describe("modelsDevCatalogSource", () => {
     const source = modelsDevCatalogSource({
       fetchFn: (() => new Promise<Response>(() => {})) as typeof fetch,
     });
-    await expect(source.fetchOverlay("a", [], { signal: controller.signal })).rejects.toMatchObject(
+    await expect(source.fetchCatalog("a", [], { signal: controller.signal })).rejects.toMatchObject(
       { name: "AbortError" },
     );
   });
@@ -851,8 +1424,8 @@ describe("modelsDevCatalogSource", () => {
     const gate = Promise.withResolvers<Response>();
     const source = modelsDevCatalogSource({ fetchFn: (() => gate.promise) as typeof fetch });
     const aborter = new AbortController();
-    const abandoned = source.fetchOverlay("a", [], { signal: aborter.signal });
-    const patient = source.fetchOverlay("b", [model("b", "b-2")], { signal: signal() });
+    const abandoned = source.fetchCatalog("a", [], { signal: aborter.signal });
+    const patient = source.fetchCatalog("b", [model("b", "b-2")], { signal: signal() });
     aborter.abort();
     await expect(abandoned).rejects.toThrow(/aborted/i);
     gate.resolve(jsonResponse(document));
@@ -863,6 +1436,349 @@ describe("modelsDevCatalogSource", () => {
 });
 
 // --- the persistent store --------------------------------------------------
+
+// --- real-provider fixtures ------------------------------------------------
+//
+// Everything above scripts its own shapes. This block does not: the baseline
+// models are pi 0.84.3's own `opencode-go` entries, copied verbatim from
+// `dist/models.generated.js`, and the feed rows carry the capability shapes
+// models.dev really publishes for them. That is the join the product performs,
+// and it is the only place these tests can catch a rule that is safe in the
+// abstract but admits nothing — or the wrong thing — in production.
+//
+// Refresh these against `https://models.dev/api.json` and the pinned pi release
+// when either moves; the ids below are the ones the pipeline cares about.
+
+/** pi 0.84.3 `opencode-go` baseline, verbatim. */
+const OPENCODE_GO_BASELINE = {
+  "grok-4.5": {
+    id: "grok-4.5",
+    name: "Grok 4.5",
+    api: "openai-responses",
+    provider: "opencode-go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    compat: { sessionAffinityFormat: "openai-nosession" },
+    contextWindow: 500_000,
+    maxTokens: 500_000,
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: null,
+      max: null,
+    },
+  },
+  hy3: {
+    id: "hy3",
+    name: "Hy3 (8x usage)",
+    api: "openai-completions",
+    provider: "opencode-go",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0.0175, output: 0.0725, cacheRead: 0.004375, cacheWrite: 0 },
+    compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: "max_tokens" },
+    contextWindow: 256_000,
+    maxTokens: 64_000,
+    thinkingLevelMap: {
+      off: "none",
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    },
+  },
+} as unknown as Record<string, Model<Api>>;
+
+/** The models.dev row shape these providers really publish. */
+function feedRow(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    tool_call: true,
+    temperature: true,
+    structured_output: true,
+    modalities: { input: ["text"], output: ["text"] },
+    limit: { context: 500_000, output: 64_000 },
+    cost: { input: 2, output: 6 },
+    ...overrides,
+  };
+}
+
+describe("admission against real opencode-go baseline shapes", () => {
+  it("admits a new model whose only difference is one extra effort rung", async () => {
+    // The measured production bottleneck. `grok-4.6` is protocol-identical to
+    // `grok-4.5` but declares `xhigh` on top of low/medium/high. Keyed on the
+    // exact effort VALUES that put them in different classes, and every class
+    // held one member, so nothing new was ever admitted. Keyed on the reasoning
+    // SHAPE they share, the new id inherits a ladder narrowed to what it
+    // declares — and `xhigh` is still withheld, because no pi evidence covers
+    // that rung.
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          "opencode-go": {
+            models: {
+              "grok-4.5": feedRow({
+                name: "Grok 4.5",
+                family: "grok",
+                reasoning: true,
+                reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+                modalities: { input: ["text", "image"], output: ["text"] },
+              }),
+              "grok-4.6": feedRow({
+                name: "Grok 4.6",
+                family: "grok",
+                reasoning: true,
+                reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh"] }],
+                modalities: { input: ["text", "image"], output: ["text"] },
+              }),
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog("opencode-go", [OPENCODE_GO_BASELINE["grok-4.5"]!], {
+      signal: signal(),
+    });
+
+    const minted = result.models.find((entry) => entry.id === "grok-4.6");
+    expect(minted).toBeDefined();
+    expect(minted).toMatchObject({
+      api: "openai-responses",
+      provider: "opencode-go",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      compat: { sessionAffinityFormat: "openai-nosession" },
+    });
+    expect(minted?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      // Declared by the feed, withheld anyway: pi's `grok-4.5` maps it to null,
+      // so nothing here can vouch for how the provider spells that rung.
+      xhigh: null,
+      max: null,
+    });
+    expect(result.rejected).toBe(0);
+  });
+
+  it("leaves the class ladder alone for a model that declares no effort rungs", async () => {
+    // Absence in the feed is a statement about the catalogue, not the model.
+    // With nothing to narrow against, the new id runs what its siblings run —
+    // and pi reads a missing level as supported, so dropping the map here would
+    // widen the ladder rather than restrict it.
+    const row = (extra: Record<string, unknown>) =>
+      feedRow({
+        family: "grok",
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        ...extra,
+      });
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          "opencode-go": {
+            models: {
+              // A non-effort control declares no rungs to narrow against.
+              "grok-4.5": row({
+                name: "Grok 4.5",
+                reasoning_options: [{ type: "budget_tokens", min: 1024 }],
+              }),
+              "grok-4.6": row({
+                name: "Grok 4.6",
+                reasoning_options: [{ type: "budget_tokens", min: 2048 }],
+              }),
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog("opencode-go", [OPENCODE_GO_BASELINE["grok-4.5"]!], {
+      signal: signal(),
+    });
+
+    expect(result.models.find((entry) => entry.id === "grok-4.6")?.thinkingLevelMap).toEqual(
+      OPENCODE_GO_BASELINE["grok-4.5"]!.thinkingLevelMap,
+    );
+  });
+
+  it("lowers an inherited ladder to the rungs the new model itself declares", async () => {
+    // `hy4-preview` declares none/high where pi's `hy3` also maps `low`. The
+    // ladder is a ceiling, never a floor: `low` is withheld.
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          "opencode-go": {
+            models: {
+              hy3: feedRow({
+                name: "Hy3",
+                family: "hy",
+                reasoning: true,
+                reasoning_options: [{ type: "effort", values: ["none", "low", "high"] }],
+              }),
+              "hy4-preview": feedRow({
+                name: "Hy4 Preview",
+                family: "hy",
+                reasoning: true,
+                // The 42 is deliberate: this document is untrusted, and a rung
+                // that is not a string names nothing the provider accepts.
+                reasoning_options: [{ type: "effort", values: ["none", "high", 42] }],
+              }),
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog("opencode-go", [OPENCODE_GO_BASELINE.hy3!], {
+      signal: signal(),
+    });
+
+    expect(result.models.find((entry) => entry.id === "hy4-preview")?.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: null,
+      low: null,
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    });
+  });
+
+  it("withholds a rung two class members disagree about", async () => {
+    // pi's real `glm-5.2` and `glm-5.3` differ only in their ladders: `glm-5.3`
+    // maps `low`, `glm-5.2` refuses it. Byte-identical unanimity called the
+    // whole class unusable over that; intersecting keeps everything they agree
+    // on and withholds only the rung in dispute.
+    const row = (name: string) =>
+      feedRow({
+        name,
+        family: "glm",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        limit: { context: 1_000_000, output: 131_072 },
+      });
+    const compat = {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    };
+    const ladder = {
+      off: null,
+      minimal: null,
+      medium: null,
+      xhigh: null,
+      high: "high",
+      max: "max",
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          "opencode-go": {
+            models: {
+              "glm-5.2": row("GLM-5.2"),
+              "glm-5.3": row("GLM-5.3"),
+              "glm-5.4": row("GLM-5.4"),
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog(
+      "opencode-go",
+      [
+        model("opencode-go", "glm-5.2", {
+          reasoning: true,
+          compat,
+          thinkingLevelMap: { ...ladder, low: null },
+        }),
+        model("opencode-go", "glm-5.3", {
+          reasoning: true,
+          compat,
+          thinkingLevelMap: { ...ladder, low: "low" },
+        }),
+      ],
+      { signal: signal() },
+    );
+
+    expect(result.models.find((entry) => entry.id === "glm-5.4")?.thinkingLevelMap).toEqual({
+      ...ladder,
+      low: null,
+    });
+  });
+
+  it("does not surface a model the provider has retired", async () => {
+    // Measured: 9 of opencode-go's rows carry `status`, and three of the four
+    // ids the value-keyed rule admitted for it were deprecated. Pressing
+    // Refresh must not spend its one visible effect on retired models.
+    const base = {
+      family: "grok",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+      modalities: { input: ["text", "image"], output: ["text"] },
+    };
+    const source = modelsDevCatalogSource({
+      fetchFn: (async () =>
+        jsonResponse({
+          "opencode-go": {
+            models: {
+              "grok-4.5": feedRow({ ...base, name: "Grok 4.5" }),
+              "grok-4.6": feedRow({ ...base, name: "Grok 4.6" }),
+              "grok-4.4": feedRow({ ...base, name: "Grok 4.4", status: "deprecated" }),
+            },
+          },
+        })) as typeof fetch,
+    });
+
+    const result = await source.fetchCatalog("opencode-go", [OPENCODE_GO_BASELINE["grok-4.5"]!], {
+      signal: signal(),
+    });
+
+    expect(result.models.map((entry) => entry.id)).toEqual(["grok-4.5", "grok-4.6"]);
+    expect(result.rejected).toBe(1);
+  });
+
+  it("keeps an uncorroborated opt-in flag off, and an agreed one on", async () => {
+    // A class of one cannot corroborate an additive capability. Measured
+    // leave-one-out against the real catalogue: inheriting them from a single
+    // sibling mints `gpt-5.2` with tool-search enabled, which pi leaves off.
+    const row = feedRow({
+      family: "gpt",
+      reasoning: true,
+      reasoning_options: [{ type: "effort", values: ["high"] }],
+    });
+    const withFlag = { supportsStrictMode: true, supportsToolSearch: true };
+    const fetchFn = (async () =>
+      jsonResponse({
+        acme: {
+          models: { "gpt-a": row, "gpt-b": row, "gpt-new": row },
+        },
+      })) as typeof fetch;
+
+    const alone = await modelsDevCatalogSource({ fetchFn }).fetchCatalog(
+      "acme",
+      [model("acme", "gpt-a", { compat: withFlag })],
+      { signal: signal() },
+    );
+    expect(alone.models.find((entry) => entry.id === "gpt-new")?.compat).toEqual({
+      supportsStrictMode: true,
+    });
+
+    const corroborated = await modelsDevCatalogSource({ fetchFn }).fetchCatalog(
+      "acme",
+      [model("acme", "gpt-a", { compat: withFlag }), model("acme", "gpt-b", { compat: withFlag })],
+      { signal: signal() },
+    );
+    expect(corroborated.models.find((entry) => entry.id === "gpt-new")?.compat).toEqual(withFlag);
+  });
+});
 
 describe("PiFileModelsStore", () => {
   const path = (): string => join(scratch(), "volli-models.json");

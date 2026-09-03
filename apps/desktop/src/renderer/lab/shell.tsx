@@ -20,8 +20,8 @@
  */
 import * as React from "react";
 
-import { installFakeApi } from "./fake-api";
-import { isScratchModule, slugFromPath, type ScratchModule } from "./scratch";
+import { isScratchModule, slugFromPath } from "./scratch";
+import { activateScratch, type Scratch } from "./scratch-setup";
 import { LabThemeToolbar, useLabThemeController, type LabThemeController } from "./theme-toolbar";
 
 /**
@@ -43,10 +43,6 @@ import { LabThemeToolbar, useLabThemeController, type LabThemeController } from 
 const modules = import.meta.glob(["./scratches/*.tsx", "!./scratches/*.test.tsx"], {
   eager: true,
 });
-
-interface Scratch extends ScratchModule {
-  slug: string;
-}
 
 const scratches: Scratch[] = Object.entries(modules)
   .flatMap(([path, module]) =>
@@ -83,14 +79,11 @@ function useHashSlug(): string {
  * state. The ref guard is what keeps it idempotent, which is also what makes
  * it safe under StrictMode's double render.
  */
-function useScratchSetup(active: Scratch | null): void {
+function useScratchSetup(active: Scratch | null, reapplyTheme: () => void): void {
   const applied = React.useRef<string | null>(null);
   if (active !== null && applied.current !== active.slug) {
     applied.current = active.slug;
-    // Installed wholesale, never merged: the previous scratch's stubs must not
-    // survive into this one.
-    installFakeApi(active.api ?? {});
-    active.seed?.();
+    activateScratch(active, reapplyTheme);
   }
 }
 
@@ -131,9 +124,9 @@ export function LabShell() {
   const [stageWidth, setStageWidth] = React.useState<StageWidth>("app");
   const active = scratches.find((scratch) => scratch.slug === slug) ?? null;
   const stage = STAGE_WIDTHS[stageWidth];
+  const theme = useLabThemeController();
 
-  useScratchSetup(active);
-  const theme = useLabThemeController(active?.slug ?? null);
+  useScratchSetup(active, theme.reapply);
 
   if (active !== null && active.viewport === "window") {
     return <WindowStage scratch={active} theme={theme} />;
