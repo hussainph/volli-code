@@ -590,21 +590,31 @@ describe("BrowserTabHost native surface", () => {
     expect(tools.webContents.capturePage).toHaveBeenCalledOnce();
   });
 
-  it("captures just the page when DevTools is closed", async () => {
+  it("captures just the page when DevTools is closed, still plane-relative", async () => {
     const tab = host.open({
       url: "https://example.com",
       projectId: "project-1",
       ticketId: null,
       createdBy: "user",
     });
+    // Deliberately NOT the default bounds: those start at 0,0, so a frame that
+    // forgot to subtract `entry.bounds` would answer identically and the case
+    // would prove nothing.
+    host.setBounds(tab.tabId, { x: 40, y: 24, width: 640, height: 480 });
 
     await expect(host.capture(tab.tabId)).resolves.toEqual([
       {
         kind: "page",
         dataUrl: "data:image/png;base64,page",
-        bounds: BROWSER_DEFAULT_BOUNDS,
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
       },
     ]);
+  });
+
+  it("refuses to capture a tab it does not have", async () => {
+    // The renderer asks by opaque id and a tab can close mid-overlay; the
+    // guarded IPC envelope turns this throw into `{ ok: false }`.
+    await expect(host.capture("tab-that-never-existed")).rejects.toThrow();
   });
 
   it("sets renderer-measured bounds and attaches only the visible tab", () => {

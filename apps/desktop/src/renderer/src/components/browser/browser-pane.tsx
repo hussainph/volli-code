@@ -2,15 +2,16 @@ import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../../../browser-start-page";
-import type {
-  BrowserTabCaptureFrame,
-  BrowserTabResult,
-  BrowserTabState,
-  Result,
-} from "../../../../ipc/contract";
+import type { BrowserTabResult, BrowserTabState, Result } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
+import {
+  hasNativePlaneOverlay,
+  planeFreezeDecision,
+  PLANE_FREEZE_CAPTURE_TIMEOUT_MS,
+  type PlaneCaptureOutcome,
+} from "@renderer/components/browser/browser-plane-freeze";
 import { toastError } from "@renderer/lib/toast";
 
 /**
@@ -25,46 +26,21 @@ function addressOf(url: string): string {
   return isBrowserStartUrl(url) ? "" : url;
 }
 
-const NATIVE_PLANE_OVERLAY_SELECTOR =
-  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast], [data-native-plane-overlay]';
-
-/** Whether renderer chrome currently needs to paint above every native child view. */
-export function hasNativePlaneOverlay(root: ParentNode): boolean {
-  return root.querySelector(NATIVE_PLANE_OVERLAY_SELECTOR) !== null;
-}
-
-interface RendererOverlayState {
-  active: boolean;
-  /** Distinguishes two openings so pixels from the first can never freeze the second. */
-  epoch: number;
-}
-
 /**
- * Native child views always composite above renderer portals. Each overlay
- * opening gets an epoch so an asynchronous capture from an older opening can
- * never hide the live plane under a newer one.
+ * Native child views always composite above renderer portals, so the pane has
+ * to know when app chrome needs the tier. The rule itself lives in
+ * `browser-plane-freeze.ts`; this hook is only the subscription to it.
  */
-function useRendererOverlay(): RendererOverlayState {
-  const [state, setState] = React.useState<RendererOverlayState>({ active: false, epoch: 0 });
+function useRendererOverlayActive(): boolean {
+  const [active, setActive] = React.useState(false);
   React.useEffect(() => {
-    const read = (): void => {
-      const active = hasNativePlaneOverlay(document);
-      setState((current) => {
-        if (active === current.active) return current;
-        return { active, epoch: active ? current.epoch + 1 : current.epoch };
-      });
-    };
+    const read = (): void => setActive(hasNativePlaneOverlay(document));
     read();
     const observer = new MutationObserver(read);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
-  return state;
-}
-
-interface OverlaySnapshot {
-  epoch: number;
-  frames: BrowserTabCaptureFrame[];
+  return active;
 }
 
 /**
@@ -90,12 +66,16 @@ export function BrowserPane({
   const previousUrlRef = React.useRef(addressOf(tab.url));
   const [address, setAddress] = React.useState(() => addressOf(tab.url));
   const [error, setError] = React.useState<string | null>(null);
-  const [overlaySnapshot, setOverlaySnapshot] = React.useState<OverlaySnapshot | null>(null);
-  const rendererOverlay = useRendererOverlay();
-  const snapshotReady = rendererOverlay.active && overlaySnapshot?.epoch === rendererOverlay.epoch;
-  // Capture first, then detach. The snapshot is already in this render when
-  // the layout effect hides the native child, so no black frame is exposed.
-  const planeVisible = visible && !snapshotReady;
+  const [captureOutcome, setCaptureOutcome] = React.useState<PlaneCaptureOutcome | null>(null);
+  const overlayActive = useRendererOverlayActive();
+  // Capture first, then detach: the frames are already in this render when the
+  // layout effect hides the native child, so no black frame is exposed. The
+  // whole rule — including the bounded wait — is `planeFreezeDecision`.
+  const { planeVisible, frames } = planeFreezeDecision({
+    visible,
+    overlayActive,
+    outcome: captureOutcome,
+  });
 
   // A state push should move an untouched address bar but must not erase an
   // address the person is midway through typing because a title/loading push
@@ -125,38 +105,50 @@ export function BrowserPane({
     return () => window.cancelAnimationFrame(frame);
   }, [blank, tab.tabId]);
 
+  // Freeze the plane for as long as an overlay needs the tier. No `epoch`
+  // rides along: every path that could stale a capture — the overlay closing,
+  // the tab changing, the pane unmounting — already re-runs this effect, and
+  // the cleanup below cancels the in-flight one.
   React.useEffect(() => {
-    if (!rendererOverlay.active) {
-      setOverlaySnapshot(null);
+    if (!overlayActive || !visible) {
+      setCaptureOutcome(null);
       return;
     }
-    if (!visible) return;
 
     let current = true;
-    const epoch = rendererOverlay.epoch;
-    const fail = (detail: string): void => {
+    setCaptureOutcome({ kind: "pending" });
+
+    // The overlay is invisible until the plane yields, so the wait is bounded.
+    // A late capture still upgrades the themed fallback to real pixels.
+    const timer = window.setTimeout(() => {
       if (!current) return;
-      toastError(`Could not freeze Browser Tab for overlay: ${detail}`);
-      // The overlay must remain operable even when capture fails. An empty
-      // frame list falls back to the plane's themed renderer background.
-      setOverlaySnapshot({ epoch, frames: [] });
-    };
+      setCaptureOutcome((outcome) =>
+        outcome === null || outcome.kind === "pending" ? { kind: "unavailable" } : outcome,
+      );
+    }, PLANE_FREEZE_CAPTURE_TIMEOUT_MS);
+
+    // No toast on failure. This capture is work nobody asked for, its fallback
+    // (the themed plane) is already on screen, and no person is waiting on the
+    // result — the documented exception in AGENTS.md. A toast would also be
+    // self-defeating: `[data-sonner-toast]` is itself an overlay, so failing
+    // loudly would hold the plane detached for the life of the toast.
     void api
       .capture({ tabId: tab.tabId })
       .then((result) => {
         if (!current) return;
-        if (!result.ok) {
-          fail(result.error);
-          return;
-        }
-        setOverlaySnapshot({ epoch, frames: result.frames });
+        setCaptureOutcome(
+          result.ok ? { kind: "frames", frames: result.frames } : { kind: "unavailable" },
+        );
       })
-      .catch((reason: unknown) => fail(errorMessage(reason)));
+      .catch(() => {
+        if (current) setCaptureOutcome({ kind: "unavailable" });
+      });
 
     return () => {
       current = false;
+      window.clearTimeout(timer);
     };
-  }, [api, rendererOverlay.active, rendererOverlay.epoch, tab.tabId, visible]);
+  }, [api, overlayActive, tab.tabId, visible]);
 
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -179,6 +171,10 @@ export function BrowserPane({
     };
   }, [api, tab.tabId]);
 
+  // Deliberately re-runs when the controller is replaced as well as when the
+  // decision changes: `api`/`tab.tabId` are the identity of the controller the
+  // effect above installs, and a fresh controller starts at "unknown"
+  // visibility. `setVisible` is idempotent, so the extra passes are free.
   React.useLayoutEffect(() => {
     controllerRef.current?.setVisible(planeVisible);
   }, [api, planeVisible, tab.tabId]);
@@ -244,25 +240,23 @@ export function BrowserPane({
         data-browser-plane={tab.tabId}
         className="relative min-h-0 flex-1 overflow-hidden bg-background"
       >
-        {snapshotReady
-          ? overlaySnapshot.frames.map((frame) => (
-              <img
-                key={frame.kind}
-                aria-hidden
-                alt=""
-                src={frame.dataUrl}
-                draggable={false}
-                data-browser-plane-snapshot={frame.kind}
-                className="pointer-events-none absolute max-w-none select-none"
-                style={{
-                  left: frame.bounds.x,
-                  top: frame.bounds.y,
-                  width: frame.bounds.width,
-                  height: frame.bounds.height,
-                }}
-              />
-            ))
-          : null}
+        {frames.map((frame) => (
+          <img
+            key={frame.kind}
+            aria-hidden
+            alt=""
+            src={frame.dataUrl}
+            draggable={false}
+            data-browser-plane-snapshot={frame.kind}
+            className="pointer-events-none absolute max-w-none select-none"
+            style={{
+              left: frame.bounds.x,
+              top: frame.bounds.y,
+              width: frame.bounds.width,
+              height: frame.bounds.height,
+            }}
+          />
+        ))}
       </div>
     </div>
   );

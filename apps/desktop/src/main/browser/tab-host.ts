@@ -10,6 +10,7 @@ import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type {
+  BrowserTabBounds,
   BrowserTabCaptureFrame,
   BrowserTabCreatedBy,
   BrowserTabState,
@@ -542,34 +543,32 @@ export class BrowserTabHost {
       entry.bounds,
       entry.devToolsOpen && entry.devToolsView !== null,
     );
-    const captures: Promise<BrowserTabCaptureFrame>[] = [
+    // One place that knows the window→plane coordinate change, so the page and
+    // DevTools frames can never drift apart on it.
+    const planeRelative = (surface: Rectangle): BrowserTabBounds => ({
+      x: surface.x - entry.bounds.x,
+      y: surface.y - entry.bounds.y,
+      width: surface.width,
+      height: surface.height,
+    });
+    const pending: Promise<BrowserTabCaptureFrame>[] = [
       entry.view.webContents.capturePage().then((image) => ({
-        kind: "page",
+        kind: "page" as const,
         dataUrl: image.toDataURL(),
-        bounds: {
-          x: split.page.x - entry.bounds.x,
-          y: split.page.y - entry.bounds.y,
-          width: split.page.width,
-          height: split.page.height,
-        },
+        bounds: planeRelative(split.page),
       })),
     ];
     const devToolsBounds = split.devTools;
     if (devToolsBounds !== null && entry.devToolsView !== null) {
-      captures.push(
+      pending.push(
         entry.devToolsView.webContents.capturePage().then((image) => ({
-          kind: "devtools",
+          kind: "devtools" as const,
           dataUrl: image.toDataURL(),
-          bounds: {
-            x: devToolsBounds.x - entry.bounds.x,
-            y: devToolsBounds.y - entry.bounds.y,
-            width: devToolsBounds.width,
-            height: devToolsBounds.height,
-          },
+          bounds: planeRelative(devToolsBounds),
         })),
       );
     }
-    return Promise.all(captures);
+    return Promise.all(pending);
   }
 
   /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
