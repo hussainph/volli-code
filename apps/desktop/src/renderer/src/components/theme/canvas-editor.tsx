@@ -31,13 +31,14 @@
  *
  * ## Preview
  *
- * Every edit paints before it persists, through the theme store's EXISTING
- * preview mechanism (`startPreview` / `commitPreview`) rather than a second one.
- * That mechanism was built for the dead picker's hover and does exactly this
- * job: it repaints the live DOM and writes nothing, so a drag is a continuous
- * repaint and the pointer-up is the single write. It also outranks both scopes,
- * which is what lets a workspace-scoped edit be visible while the global canvas
- * is still what is stored.
+ * Every edit paints through the theme store's EXISTING preview mechanism
+ * rather than a second one. In Settings, the default settlement remains
+ * `commitPreview`: a drag is a continuous memory-only repaint and pointer-up is
+ * the single write. A memory-only host may instead adopt that finished preview
+ * through `onCanvasChange`; Escape and unmount restore its last adopted canvas,
+ * and no persistence action runs. Preview still outranks both scopes, which is
+ * what lets a workspace-scoped edit be visible while the global canvas is still
+ * what is stored.
  *
  * The store paints a preview once per animation frame and tells the terminals
  * only on settle (`stores/theme.ts`, `theme/apply.ts`); the controls here are
@@ -202,7 +203,8 @@ interface GrabOffset {
  * here" looks like.)
  *
  * `onSettle` fires once at the end of any gesture that actually moved, which is
- * the editor's single write per drag — every intermediate frame is a preview.
+ * the editor's single settlement per drag — every intermediate frame is a
+ * preview.
  */
 function useSlopDrag({
   onDrag,
@@ -314,8 +316,8 @@ function PadOrb({
     if (delta === undefined) return;
     event.preventDefault();
     // Relative, so it reads `stop` — which is why the orb has to be rendered
-    // from the previewed canvas. Fed the STORED one, every press in a held
-    // repeat would start from the same anchor and the orb would sit one step
+    // from the previewed canvas. Fed only the accepted one, every press in a
+    // held repeat would start from the same anchor and the orb would sit one step
     // out however long the key was down.
     onMove(index, stop.x + delta.x, stop.y + delta.y);
   };
@@ -494,8 +496,8 @@ function StopCountControls({
  * harmony offsets for the current stop count, so a canvas stays one family
  * instead of three unrelated colours sharing a window.
  *
- * The one control fed the STORED hex rather than the previewed one, and the only
- * place the loop the editor's header describes actually closes. Typing widens
+ * The one control fed the accepted hex rather than the previewed one, and the
+ * only place the loop the editor's header describes actually closes. Typing widens
  * `#e86` into `#ee8866` and previews it; handed that back as its own `hex`, the
  * draft would sync to the widened form and rewrite the field under the cursor
  * after three characters. The swatch ring and the page follow the stored colour
@@ -785,15 +787,17 @@ function WaveSlider({
 /**
  * The editor itself.
  *
- * `canvas` is what the SCOPE has STORED (`appliedCanvas`). What the controls
+ * `canvas` is what the host has accepted: a scope's stored canvas in Settings,
+ * or the Lab controller's chosen canvas in a memory-only host. What the controls
  * render from is `live` — the running preview when there is one — and the
  * difference between those two is the whole of "the colour dragging felt
  * unstable".
  *
- * Rendered from the stored canvas, an orb does not move while you drag it. The
- * window behind Settings repaints, because that goes to the DOM directly, but
- * the pad's own orb is a React `style` fed a value the drag never changes, so it
- * sits still under the pointer for the length of the gesture and then teleports
+ * Rendered from the accepted canvas alone, an orb does not move while you drag
+ * it. The window behind Settings repaints, because that goes to the DOM
+ * directly, but the pad's own orb is a React `style` fed a value the drag never
+ * changes, so it sits still under the pointer for the length of the gesture and
+ * then teleports
  * to the drop point when the release commits. Every relative control had the
  * same fault: a held arrow key re-applied one step to the same stored anchor
  * forever.
@@ -812,9 +816,10 @@ export function CanvasEditor({
   canvas,
   resolved,
   mode,
+  onCanvasChange,
 }: {
   scope: ThemeScope;
-  /** What this scope has STORED — the canvas the controls sit on. */
+  /** The host's accepted canvas — stored in Settings, memory-only in the Lab. */
   canvas: Canvas;
   /** What that canvas renders as right now, `auto` already answered. */
   resolved: ResolvedAppearance;
@@ -826,10 +831,25 @@ export function CanvasEditor({
    * page keeps mode on its own overridable row and passes nothing.
    */
   mode?: React.ReactNode;
+  /**
+   * Memory-only hosts can adopt a finished preview themselves. Omitted in
+   * Settings, where the existing scoped persistence behavior remains the
+   * default.
+   */
+  onCanvasChange?(canvas: Canvas): void;
 }) {
+  // The memory-only host's accepted canvas is separate from the store preview:
+  // the latter may currently be a half-typed colour or an in-flight drag. Refs
+  // let the unmount cleanup restore the latest accepted value without turning
+  // every accepted prop update into an effect cleanup of the previous one.
+  const chosenCanvas = React.useRef(canvas);
+  const memoryHost = React.useRef(onCanvasChange);
+  chosenCanvas.current = canvas;
+  memoryHost.current = onCanvasChange;
+
   /**
    * The canvas an edit builds on: the running preview when there is one, the
-   * stored canvas otherwise.
+   * host's accepted canvas otherwise.
    *
    * A drag fires several pointermoves between renders, and each one has to build
    * on the position the previous one painted rather than on the one this render
@@ -844,12 +864,23 @@ export function CanvasEditor({
     [canvas],
   );
 
-  /** End of a gesture: what is painted becomes what is stored. */
+  /** End of a gesture: what is painted becomes what the host owns. */
   const settle = React.useCallback((): void => {
+    const store = useThemeStore.getState();
+    const adopt = memoryHost.current;
+    if (adopt !== undefined) {
+      if (store.preview !== null) {
+        // Synchronous, so closing in the same turn still restores this choice
+        // even before the host has rendered the new `canvas` prop.
+        chosenCanvas.current = store.preview;
+        adopt(store.preview);
+      }
+      return;
+    }
     // Failure is surfaced and rolled back by the store's own write path; the
     // boolean is only interesting to a caller that wanted to chain, and nothing
     // here does.
-    void useThemeStore.getState().commitPreview(scope);
+    void store.commitPreview(scope);
   }, [scope]);
 
   /**
@@ -869,13 +900,15 @@ export function CanvasEditor({
    * to cancel.
    */
   const abandon = React.useCallback((): void => {
-    useThemeStore.getState().cancelPreview();
+    const store = useThemeStore.getState();
+    if (memoryHost.current === undefined) store.cancelPreview();
+    else store.startPreview(chosenCanvas.current);
   }, []);
 
   /** Leaving mid-gesture is an abandonment like any other. */
   React.useEffect(() => abandon, [abandon]);
 
-  /** A discrete edit — one click, one write. */
+  /** A discrete edit — one click, one settlement. */
   const commit = React.useCallback(
     (update: (current: Canvas) => Canvas): void => {
       edit(update);
@@ -885,9 +918,9 @@ export function CanvasEditor({
   );
 
   /**
-   * What is actually on screen — the preview while a gesture runs, the stored
+   * What is actually on screen — the preview while a gesture runs, the accepted
    * canvas otherwise. Every control that is a picture of the canvas reads this;
-   * the one that is a picture of the STORED canvas is the hex field.
+   * the one that is a picture of the accepted canvas is the hex field.
    */
   const preview = useThemeStore((state) => state.preview);
   const live = preview ?? canvas;

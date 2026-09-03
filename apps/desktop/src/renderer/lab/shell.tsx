@@ -83,14 +83,22 @@ function useHashSlug(): string {
  * state. The ref guard is what keeps it idempotent, which is also what makes
  * it safe under StrictMode's double render.
  */
-function useScratchSetup(active: Scratch | null): void {
+export function activateScratch(active: Scratch | null, reapplyTheme: () => void): void {
+  if (active === null) return;
+  // Installed wholesale, never merged: the previous scratch's stubs must not
+  // survive into this one.
+  installFakeApi(active.api ?? {});
+  active.seed?.();
+  // A scratch may reset the shared theme store while seeding (seedApp does).
+  // The Lab choice wins after that isolated setup and before the scratch paints.
+  reapplyTheme();
+}
+
+function useScratchSetup(active: Scratch | null, reapplyTheme: () => void): void {
   const applied = React.useRef<string | null>(null);
   if (active !== null && applied.current !== active.slug) {
     applied.current = active.slug;
-    // Installed wholesale, never merged: the previous scratch's stubs must not
-    // survive into this one.
-    installFakeApi(active.api ?? {});
-    active.seed?.();
+    activateScratch(active, reapplyTheme);
   }
 }
 
@@ -131,9 +139,9 @@ export function LabShell() {
   const [stageWidth, setStageWidth] = React.useState<StageWidth>("app");
   const active = scratches.find((scratch) => scratch.slug === slug) ?? null;
   const stage = STAGE_WIDTHS[stageWidth];
+  const theme = useLabThemeController();
 
-  useScratchSetup(active);
-  const theme = useLabThemeController(active?.slug ?? null);
+  useScratchSetup(active, theme.reapply);
 
   if (active !== null && active.viewport === "window") {
     return <WindowStage scratch={active} theme={theme} />;
