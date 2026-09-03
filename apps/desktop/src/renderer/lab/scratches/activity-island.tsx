@@ -14,7 +14,7 @@
  *   • event-flash hold time
  *   • hover treatment — none, tooltip, or a rich status popover (dock-feel
  *     candidates; magnification belongs to VC-249 with the tray)
- *   • shimmer on/off, and a force-reduced-motion preview
+ *   • a force-reduced-motion preview
  *
  * Decisions already fixed upstream of the dials (charting round on VC-246):
  * the island is a sibling of the interaction stack sharing its material; it
@@ -103,19 +103,24 @@ interface Dials {
   hover: HoverMode;
   /** Voice of the now channel: all quiet, quiet event + bold payload, all loud. */
   nowText: NowTextMode;
-  /** Pill-level life as material: comets orbit the rim while anything works. */
-  shimmer: boolean;
   forceReduced: boolean;
 }
 
+/**
+ * Round-3 verdicts, decided live on VC-248: Lively spring (0.55/0.25),
+ * clusters+now grammar, payload voice, popover hover. The shimmer — comets
+ * orbiting the pill's rim while anything worked — was decided OUT despite
+ * being liked: every element in the pill already carries its own status
+ * indicator, so a pill-level life-sign said nothing the clusters weren't
+ * already saying. One life-sign per tier, applied to the pill itself.
+ */
 const DEFAULT_DIALS: Dials = {
   grammar: "clusters-now",
-  duration: 0.5,
-  bounce: 0.2,
+  duration: 0.55,
+  bounce: 0.25,
   flashHold: 1.6,
   hover: "popover",
   nowText: "payload",
-  shimmer: true,
   forceReduced: false,
 };
 
@@ -163,58 +168,6 @@ function islandSpring(dials: Dials, reduce: boolean) {
   return reduce
     ? ({ duration: 0.15, ease: EASE_OUT } as const)
     : ({ type: "spring", duration: dials.duration, bounce: dials.bounce } as const);
-}
-
-/**
- * Pill-level life as MATERIAL rather than an element. While anything works,
- * two faint comets orbit the pill's rim; idle, there is nothing — no arc, no
- * dot, no rented 14px slot reading as blank space (the heartbeat this
- * replaces). The ring is a sibling painted BEHIND the opaque pill with inline
- * geometry (the now-drop's lesson), so only its ~2px overhang ever shows, and
- * it tracks the pill's width springs with `layout` on the island's own
- * spring. Motion drives the conic angle as an inline CSS variable per frame;
- * under reduced motion the sweep becomes a still, even glow. `aria-hidden`
- * because the working fact is never said only here — each cluster signs its
- * own life.
- */
-const SHIMMER_GLOW = "color-mix(in oklab, var(--primary) 55%, transparent)";
-
-function ShimmerRing({
-  reduce,
-  spring,
-}: {
-  reduce: boolean;
-  spring: ReturnType<typeof islandSpring>;
-}) {
-  // MotionStyle predates CSS-variable keys in this version's typings — the
-  // animate/transition sides accept "--shimmer-angle", the style side needs
-  // this one assertion. The variable itself is real and Motion writes it per
-  // frame.
-  const ringStyle = {
-    inset: -2,
-    zIndex: -1,
-    borderRadius: 999,
-    "--shimmer-angle": "0deg",
-    background: reduce
-      ? SHIMMER_GLOW
-      : `conic-gradient(from var(--shimmer-angle), transparent 0deg, ${SHIMMER_GLOW} 32deg, transparent 72deg, transparent 180deg, ${SHIMMER_GLOW} 212deg, transparent 252deg)`,
-  } as React.ComponentProps<typeof motion.span>["style"];
-  return (
-    <motion.span
-      aria-hidden
-      layout
-      initial={{ opacity: 0 }}
-      animate={reduce ? { opacity: 1 } : { opacity: 1, "--shimmer-angle": ["0deg", "360deg"] }}
-      exit={{ opacity: 0 }}
-      transition={{
-        opacity: { duration: 0.4, ease: EASE_OUT },
-        layout: spring,
-        "--shimmer-angle": { duration: 3.2, ease: "linear", repeat: Infinity },
-      }}
-      className="pointer-events-none absolute"
-      style={ringStyle}
-    />
-  );
 }
 
 /**
@@ -643,10 +596,6 @@ function ActivityIsland({
   const osReduce = useReducedMotion() ?? false;
   const reduce = osReduce || dials.forceReduced;
   const populated = tabs.length > 0 || agents.length > 0 || shells.length > 0 || plan !== null;
-  const working =
-    tabs.some((tab) => tab.state === "loading") ||
-    agents.some((agent) => agent.state === "working") ||
-    shells.some((shell) => shell.state === "running");
 
   const clustersVisible = dials.grammar !== "now-only";
   /** clusters-now sends the channel to the bubble; now-only keeps it inline. */
@@ -742,11 +691,6 @@ function ActivityIsland({
               aria-label="Agent activity"
               className="relative will-change-transform"
             >
-              <AnimatePresence initial={false}>
-                {dials.shimmer && working ? (
-                  <ShimmerRing key="shimmer" reduce={reduce} spring={spring} />
-                ) : null}
-              </AnimatePresence>
               {/* The now-channel: a drop that buds off the pill upward, hangs
                 while the message reads, and merges back. `mode="wait"` IS the
                 metaphor: a new event waits for the old drop to return first.
@@ -1297,13 +1241,6 @@ export default function ActivityIslandPlayground() {
               onChange={(flashHold) => setDials((current) => ({ ...current, flashHold }))}
             />
             <div className="flex items-center gap-1">
-              <Button
-                size="xs"
-                variant={dials.shimmer ? "secondary" : "ghost"}
-                onClick={() => setDials((current) => ({ ...current, shimmer: !current.shimmer }))}
-              >
-                Shimmer
-              </Button>
               <Button
                 size="xs"
                 variant={dials.forceReduced ? "secondary" : "ghost"}
