@@ -53,12 +53,19 @@ describe("hasNativePlaneOverlay", () => {
     ["alertdialog", { role: "alertdialog" }],
     ["menu", { role: "menu" }],
     ["listbox", { role: "listbox" }],
-    ["tooltip", { role: "tooltip" }],
     ["toast", { "data-sonner-toast": "" }],
   ])("sees a portaled %s outside the app root", (_label, attributes) => {
     mountAppRoot();
     document.body.append(element("div", attributes));
     expect(hasNativePlaneOverlay(document)).toBe(true);
+  });
+
+  it("ignores a tooltip, which follows the pointer and is not worth the plane", () => {
+    // A tooltip costs a capture plus a native detach/reattach, once per button
+    // brushed. It loses to the Browser Tab instead.
+    mountAppRoot();
+    document.body.append(element("div", { role: "tooltip" }));
+    expect(hasNativePlaneOverlay(document)).toBe(false);
   });
 
   it("sees floating chrome inside the app root that opts in by marker", () => {
@@ -93,6 +100,28 @@ describe("planeFreezeDecision", () => {
       planeVisible: true,
       frames: [],
     });
+  });
+
+  it("KEEPS PAINTING the frozen pixels while the plane comes back", () => {
+    // The overlay has gone and the plane is live again, but the native view
+    // reattaches an IPC round trip later. Dropping the pixels now is the flash.
+    expect(
+      planeFreezeDecision({
+        visible: true,
+        overlayActive: false,
+        outcome: { kind: "frames", frames: [frame] },
+      }),
+    ).toEqual({ planeVisible: true, frames: [frame] });
+  });
+
+  it("has nothing to hold over when the capture never produced pixels", () => {
+    expect(
+      planeFreezeDecision({
+        visible: true,
+        overlayActive: false,
+        outcome: { kind: "unavailable" },
+      }),
+    ).toEqual({ planeVisible: true, frames: [] });
   });
 
   it("KEEPS THE PLANE LIVE while pixels are still in flight", () => {

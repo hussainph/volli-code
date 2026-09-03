@@ -21,9 +21,15 @@ export const APP_ROOT_ID = "root";
  * is distinguished by WHERE it renders, not by its role alone — Radix portals
  * to `document.body`, outside the app root — so the role list only decides
  * what counts once the element is already outside the tree.
+ *
+ * `[role="tooltip"]` is deliberately ABSENT. Taking the plane down costs a
+ * capture and a native detach/reattach, and a tooltip follows the pointer:
+ * brushing along a toolbar would tear the plane down and rebuild it once per
+ * button. A tooltip that overlaps a Browser Tab loses to it, and that is the
+ * cheaper trade — the Ticket asked about dialogs and menus, not hints.
  */
 const FLOATING_OVERLAY_SELECTOR =
-  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="tooltip"], [data-sonner-toast]';
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast]';
 
 /**
  * The opt-in for floating chrome the app draws INSIDE its own root, where the
@@ -72,6 +78,10 @@ export interface PlaneFreezeDecision {
 
 const NO_FRAMES: readonly BrowserTabCaptureFrame[] = [];
 
+function framesOf(outcome: PlaneCaptureOutcome | null): readonly BrowserTabCaptureFrame[] {
+  return outcome !== null && outcome.kind === "frames" ? outcome.frames : NO_FRAMES;
+}
+
 /**
  * The whole freeze rule, in one place.
  *
@@ -86,7 +96,15 @@ export function planeFreezeDecision(input: {
   outcome: PlaneCaptureOutcome | null;
 }): PlaneFreezeDecision {
   if (!input.visible) return { planeVisible: false, frames: NO_FRAMES };
-  if (!input.overlayActive) return { planeVisible: true, frames: NO_FRAMES };
+  if (!input.overlayActive) {
+    // The overlay has gone, so the plane may come back — but the frozen pixels
+    // KEEP PAINTING until the caller confirms the native view actually
+    // reattached. Dropping them the moment React changes its mind exposes the
+    // themed background for the length of an IPC round trip, which reads as a
+    // flash on every single overlay. Behind a live native view they cost
+    // nothing; the caller clears them once main has answered.
+    return { planeVisible: true, frames: framesOf(input.outcome) };
+  }
   const outcome = input.outcome;
   if (outcome === null || outcome.kind === "pending") {
     return { planeVisible: true, frames: NO_FRAMES };

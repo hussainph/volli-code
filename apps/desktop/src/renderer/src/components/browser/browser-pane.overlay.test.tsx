@@ -102,6 +102,17 @@ async function settle(): Promise<void> {
   });
 }
 
+/** Lets the plane's restore hand-off finish: main answers, then one frame. */
+async function flushRestore(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+    await Promise.resolve();
+  });
+}
+
 describe("BrowserPane renderer overlays", () => {
   it("captures before hiding the native plane, then restores it when the overlay closes", async () => {
     let finishCapture: ((result: BrowserTabCaptureResult) => void) | null = null;
@@ -157,8 +168,59 @@ describe("BrowserPane renderer overlays", () => {
     closeOverlay(dialog);
     await settle();
 
+    // The plane is live again — but the frozen pixels MUST still be painted
+    // until the native view is actually back, or every overlay ends in a flash
+    // of themed background.
     expect(show).toHaveBeenCalledTimes(2);
+    expect(snapshotCount()).toBe(1);
+
+    await flushRestore();
     expect(container?.querySelector("[data-browser-plane-snapshot]")).toBeNull();
+  });
+
+  it("holds the frozen pixels for as long as main takes to reattach", async () => {
+    const gate: { release: (() => void) | null } = { release: null };
+    const show = vi.fn(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          gate.release = () => resolve({ ok: true });
+        }),
+    );
+    const api = {
+      capture: vi.fn(async () => ({
+        ok: true as const,
+        frames: [
+          {
+            kind: "page" as const,
+            dataUrl: "data:image/png;base64,held",
+            bounds: { x: 0, y: 0, width: 800, height: 600 },
+          },
+        ],
+      })),
+      setBounds: vi.fn(async () => ({ ok: true }) as const),
+      show,
+      hide: vi.fn(async () => ({ ok: true }) as const),
+    } as unknown as BrowserApi;
+
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    // The mount's own show is pending too; let it through before the overlay.
+    gate.release?.();
+
+    const dialog = openDialog();
+    await settle();
+    expect(snapshotCount()).toBe(1);
+
+    closeOverlay(dialog);
+    await settle();
+
+    // Main has NOT answered the reattach yet. The pixels stay.
+    expect(snapshotCount()).toBe(1);
+
+    gate.release?.();
+    await flushRestore();
+    expect(snapshotCount()).toBe(0);
   });
 
   it("yields the plane on a refused capture, so the overlay is still operable", async () => {

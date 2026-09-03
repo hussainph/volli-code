@@ -110,10 +110,14 @@ export function BrowserPane({
   // the tab changing, the pane unmounting — already re-runs this effect, and
   // the cleanup below cancels the in-flight one.
   React.useEffect(() => {
-    if (!overlayActive || !visible) {
+    if (!visible) {
       setCaptureOutcome(null);
       return;
     }
+    // NOT cleared when the overlay merely leaves: the frozen pixels have to
+    // outlive it until the native view is back. The restore effect below owns
+    // that hand-off.
+    if (!overlayActive) return;
 
     let current = true;
     setCaptureOutcome({ kind: "pending" });
@@ -176,8 +180,23 @@ export function BrowserPane({
   // effect above installs, and a fresh controller starts at "unknown"
   // visibility. `setVisible` is idempotent, so the extra passes are free.
   React.useLayoutEffect(() => {
-    controllerRef.current?.setVisible(planeVisible);
-  }, [api, planeVisible, tab.tabId]);
+    const settled = controllerRef.current?.setVisible(planeVisible);
+    if (settled === undefined || !planeVisible || captureOutcome === null) return;
+
+    // Restoring. Keep painting the frozen pixels until main says the native
+    // view is attached, then give it one frame to composite before letting go.
+    // Releasing them any earlier is what made every overlay flicker.
+    let cancelled = false;
+    void settled.then(() => {
+      if (cancelled) return;
+      window.requestAnimationFrame(() => {
+        if (!cancelled) setCaptureOutcome(null);
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, captureOutcome, planeVisible, tab.tabId]);
 
   const runTabCommand = React.useCallback(
     async (operation: Promise<BrowserTabResult>, label: string) => {
