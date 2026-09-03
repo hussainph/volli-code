@@ -1,5 +1,6 @@
 import type {
   BrowserWindow,
+  NativeImage,
   Rectangle,
   Session,
   WebContentsView,
@@ -85,6 +86,17 @@ export const BROWSER_MAX_TABS_PER_PROJECT = 32;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
+
+/**
+ * Stand-in pixels are JPEG, not PNG, and this is a latency decision rather than
+ * a size one. An overlay cannot appear until the capture returns, so the
+ * encode sits on the critical path — and PNG's cost rises with image entropy,
+ * so a dense page pays far more than a plain one and the wait becomes
+ * unpredictable. Measured on the smoke fixture: PNG 20-52ms against JPEG
+ * 11-17ms, and the gap widens with real content. Quality 80 is invisible on a
+ * frame that exists to sit still behind a menu.
+ */
+const BROWSER_CAPTURE_JPEG_QUALITY = 80;
 const BROWSER_DEVTOOLS_RATIO = 0.42;
 const BROWSER_DEVTOOLS_DIVIDER_PX = 1;
 
@@ -539,6 +551,8 @@ export class BrowserTabHost {
    */
   async capture(tabId: string): Promise<BrowserTabCaptureFrame[]> {
     const entry = this.requireTab(tabId);
+    const encode = (image: NativeImage): string =>
+      `data:image/jpeg;base64,${image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY).toString("base64")}`;
     const split = browserSurfaceBounds(
       entry.bounds,
       entry.devToolsOpen && entry.devToolsView !== null,
@@ -554,7 +568,7 @@ export class BrowserTabHost {
     const pending: Promise<BrowserTabCaptureFrame>[] = [
       entry.view.webContents.capturePage().then((image) => ({
         kind: "page" as const,
-        dataUrl: image.toDataURL(),
+        dataUrl: encode(image),
         bounds: planeRelative(split.page),
       })),
     ];
@@ -563,7 +577,7 @@ export class BrowserTabHost {
       pending.push(
         entry.devToolsView.webContents.capturePage().then((image) => ({
           kind: "devtools" as const,
-          dataUrl: image.toDataURL(),
+          dataUrl: encode(image),
           bounds: planeRelative(devToolsBounds),
         })),
       );

@@ -64,9 +64,12 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
-  captureDataUrl = "data:image/png;base64,page";
+  // The host encodes JPEG, so the fake answers the same door: a NativeImage
+  // whose `toJPEG` returns the bytes the frame should carry.
+  captureBytes = "page";
   capturePage = vi.fn(async () => ({
-    toDataURL: () => this.captureDataUrl,
+    toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
+    toJPEG: () => Buffer.from(this.captureBytes),
   }));
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
@@ -572,17 +575,17 @@ describe("BrowserTabHost native surface", () => {
     host.toggleDevTools(tab.tabId);
     const tools = views[1];
     if (tools === undefined) throw new Error("expected DevTools view");
-    tools.webContents.captureDataUrl = "data:image/png;base64,tools";
+    tools.webContents.captureBytes = "tools";
 
     await expect(host.capture(tab.tabId)).resolves.toEqual([
       {
         kind: "page",
-        dataUrl: "data:image/png;base64,page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
         bounds: { x: 0, y: 0, width: 800, height: 347 },
       },
       {
         kind: "devtools",
-        dataUrl: "data:image/png;base64,tools",
+        dataUrl: "data:image/jpeg;base64,dG9vbHM=",
         bounds: { x: 0, y: 348, width: 800, height: 252 },
       },
     ]);
@@ -605,7 +608,7 @@ describe("BrowserTabHost native surface", () => {
     await expect(host.capture(tab.tabId)).resolves.toEqual([
       {
         kind: "page",
-        dataUrl: "data:image/png;base64,page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
         bounds: { x: 0, y: 0, width: 640, height: 480 },
       },
     ]);

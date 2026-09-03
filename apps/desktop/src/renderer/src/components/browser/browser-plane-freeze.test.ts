@@ -5,8 +5,8 @@ import {
   APP_ROOT_ID,
   hasNativePlaneOverlay,
   planeVisibility,
-  shouldRefreshPlanePixels,
-  PLANE_REFRESH_MIN_INTERVAL_MS,
+  shouldPaintPlanePixels,
+  PLANE_CAPTURE_DEADLINE_MS,
 } from "./browser-plane-freeze";
 
 afterEach(() => {
@@ -81,55 +81,63 @@ describe("hasNativePlaneOverlay", () => {
 
 describe("planeVisibility", () => {
   it("holds the window while the pane is visible and nothing floats", () => {
-    expect(planeVisibility({ visible: true, overlayActive: false })).toBe(true);
-  });
-
-  it("yields the moment an overlay wants the tier", () => {
-    // Synchronous by design: an earlier pass waited for a screenshot here, so
-    // every overlay opened behind the page and jumped forward when it landed.
-    expect(planeVisibility({ visible: true, overlayActive: true })).toBe(false);
-  });
-
-  it("stays down when the pane itself is not visible", () => {
-    expect(planeVisibility({ visible: false, overlayActive: false })).toBe(false);
-    expect(planeVisibility({ visible: false, overlayActive: true })).toBe(false);
-  });
-});
-
-describe("shouldRefreshPlanePixels", () => {
-  const live = { visible: true, overlayActive: false, captureInFlight: false };
-
-  it("takes the first photograph it is ever offered", () => {
-    expect(shouldRefreshPlanePixels({ ...live, sinceLastMs: null })).toBe(true);
-  });
-
-  it("refuses while the plane is detached, because it would photograph nothing", () => {
-    expect(shouldRefreshPlanePixels({ ...live, overlayActive: true, sinceLastMs: null })).toBe(
-      false,
-    );
-  });
-
-  it("refuses when the pane is not visible", () => {
-    expect(shouldRefreshPlanePixels({ ...live, visible: false, sinceLastMs: null })).toBe(false);
-  });
-
-  it("refuses while one is already in flight", () => {
-    expect(shouldRefreshPlanePixels({ ...live, captureInFlight: true, sinceLastMs: null })).toBe(
-      false,
-    );
-  });
-
-  it("throttles a drag or a held key down to one photograph per interval", () => {
-    expect(
-      shouldRefreshPlanePixels({ ...live, sinceLastMs: PLANE_REFRESH_MIN_INTERVAL_MS - 1 }),
-    ).toBe(false);
-    expect(shouldRefreshPlanePixels({ ...live, sinceLastMs: PLANE_REFRESH_MIN_INTERVAL_MS })).toBe(
+    expect(planeVisibility({ visible: true, overlayActive: false, captureSettled: false })).toBe(
       true,
     );
   });
 
-  it("keeps the interval short enough that the pixels are never visibly stale", () => {
-    expect(PLANE_REFRESH_MIN_INTERVAL_MS).toBeGreaterThan(0);
-    expect(PLANE_REFRESH_MIN_INTERVAL_MS).toBeLessThanOrEqual(500);
+  it("KEEPS the tier while an overlay waits for its stand-in pixels", () => {
+    // Yielding first is what showed a black rectangle: the page would be gone
+    // with nothing yet painted to replace it.
+    expect(planeVisibility({ visible: true, overlayActive: true, captureSettled: false })).toBe(
+      true,
+    );
+  });
+
+  it("yields once the pixels have settled", () => {
+    expect(planeVisibility({ visible: true, overlayActive: true, captureSettled: true })).toBe(
+      false,
+    );
+  });
+
+  it("takes the tier back the instant the overlay goes, without waiting again", () => {
+    expect(planeVisibility({ visible: true, overlayActive: false, captureSettled: true })).toBe(
+      true,
+    );
+  });
+
+  it("stays down when the pane itself is not visible", () => {
+    expect(planeVisibility({ visible: false, overlayActive: false, captureSettled: false })).toBe(
+      false,
+    );
+    expect(planeVisibility({ visible: false, overlayActive: true, captureSettled: true })).toBe(
+      false,
+    );
+  });
+});
+
+describe("shouldPaintPlanePixels", () => {
+  it("paints nothing before anything has ever been captured", () => {
+    expect(shouldPaintPlanePixels({ visible: true, frameCount: 0 })).toBe(false);
+  });
+
+  it("KEEPS painting once it has frames, even with no overlay open", () => {
+    // They sit under a live native view that covers them completely. Leaving
+    // them there is what removes the flash as the plane comes back: no frame
+    // exists in which neither the page nor its stand-in is on screen.
+    expect(shouldPaintPlanePixels({ visible: true, frameCount: 1 })).toBe(true);
+  });
+
+  it("paints nothing for a pane that is not on screen", () => {
+    expect(shouldPaintPlanePixels({ visible: false, frameCount: 2 })).toBe(false);
+  });
+});
+
+describe("PLANE_CAPTURE_DEADLINE_MS", () => {
+  it("leaves room for a measured capture but cannot hide a menu", () => {
+    // JPEG encoding measured 11-17ms on the smoke fixture, so the deadline is
+    // a backstop rather than the common path.
+    expect(PLANE_CAPTURE_DEADLINE_MS).toBeGreaterThan(20);
+    expect(PLANE_CAPTURE_DEADLINE_MS).toBeLessThanOrEqual(100);
   });
 });

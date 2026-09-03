@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { BrowserTabCaptureResult, BrowserTabState } from "../../../../ipc/contract";
 import type { BrowserApi } from "./browser-api";
 import { BrowserPane } from "./browser-pane";
-import { PLANE_REFRESH_MIN_INTERVAL_MS } from "./browser-plane-freeze";
+import { PLANE_CAPTURE_DEADLINE_MS } from "./browser-plane-freeze";
 
 class TestResizeObserver {
   observe(): void {}
@@ -54,7 +54,7 @@ function captureResult(label: string): BrowserTabCaptureResult {
     frames: [
       {
         kind: "page",
-        dataUrl: `data:image/png;base64,${label}`,
+        dataUrl: `data:image/jpeg;base64,${label}`,
         bounds: { x: 0, y: 0, width: 800, height: 600 },
       },
     ],
@@ -73,8 +73,16 @@ function makeApi(capture: BrowserApi["capture"]) {
   return { api, show, hide };
 }
 
+/**
+ * Flushes a frame as well as the microtask queue: the overlay hook coalesces
+ * its document read with `requestAnimationFrame`, so microtasks alone never
+ * let it notice that an overlay appeared.
+ */
 async function settle(): Promise<void> {
   await act(async () => {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -96,34 +104,42 @@ function shownPixels(): string | null {
 }
 
 describe("BrowserPane renderer overlays", () => {
-  it("photographs the plane up front, so an overlay never waits for pixels", async () => {
-    const capture = vi.fn(async () => captureResult("primed"));
+  it("captures WHEN the overlay opens, and holds the plane until the pixels land", async () => {
+    const gate: { answer: ((r: BrowserTabCaptureResult) => void) | null } = { answer: null };
+    const capture = vi.fn(
+      () =>
+        new Promise<BrowserTabCaptureResult>((resolve) => {
+          gate.answer = resolve;
+        }),
+    );
     const { api, hide } = makeApi(capture as unknown as BrowserApi["capture"]);
 
     await act(async () => {
       root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
     });
     await settle();
+    // Nothing is photographed speculatively: a pre-taken frame would be stale.
+    expect(capture).not.toHaveBeenCalled();
 
-    // Captured on arrival, with no overlay in sight.
-    expect(capture).toHaveBeenCalledWith({ tabId: "tab-1" });
-    expect(shownPixels()).toBe("data:image/png;base64,primed");
-    expect(hide).not.toHaveBeenCalled();
-
-    const capturesBefore = capture.mock.calls.length;
     openDialog();
     await settle();
+    expect(capture).toHaveBeenCalledWith({ tabId: "tab-1" });
+    // The page is STILL on screen. Detaching before the stand-in exists is
+    // exactly what showed a black rectangle.
+    expect(hide).not.toHaveBeenCalled();
 
-    // The plane came down WITHOUT another round trip: the pixels were already
-    // in the tree. This is what stops an overlay opening behind the page.
+    await act(async () => {
+      gate.answer?.(captureResult("fresh"));
+      await Promise.resolve();
+    });
+
     expect(hide).toHaveBeenCalledOnce();
-    expect(capture.mock.calls.length).toBe(capturesBefore);
-    expect(shownPixels()).toBe("data:image/png;base64,primed");
+    expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
   });
 
-  it("restores the plane when the overlay leaves", async () => {
+  it("takes the tier back at once when the overlay goes, pixels still painted", async () => {
     const { api, show } = makeApi(
-      vi.fn(async () => captureResult("primed")) as unknown as BrowserApi["capture"],
+      vi.fn(async () => captureResult("fresh")) as unknown as BrowserApi["capture"],
     );
 
     await act(async () => {
@@ -134,100 +150,76 @@ describe("BrowserPane renderer overlays", () => {
 
     const dialog = openDialog();
     await settle();
+    expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
 
     act(() => dialog.remove());
     await settle();
 
+    // No second wait on the way back, and the stand-in stays painted under the
+    // reattached view so no frame is ever empty.
     expect(show).toHaveBeenCalledTimes(2);
-    // The pixels stay in the tree, covered by the reattached native view, so
-    // there is no moment where neither the page nor its stand-in is painted.
-    expect(shownPixels()).toBe("data:image/png;base64,primed");
+    expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
   });
 
-  it("refuses to photograph a plane that is already detached", async () => {
-    const capture = vi.fn(async () => captureResult("primed"));
-    const { api } = makeApi(capture as unknown as BrowserApi["capture"]);
+  it("gives up on a hung capture rather than hiding the overlay", async () => {
+    // Real timers: the overlay hook coalesces on `requestAnimationFrame`, which
+    // vitest's fake clock does not drive. The deadline is short enough to wait.
+    const capture = vi.fn(() => new Promise<BrowserTabCaptureResult>(() => {}));
+    const { api, hide } = makeApi(capture as unknown as BrowserApi["capture"]);
 
     await act(async () => {
       root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
     });
-    await settle();
     openDialog();
     await settle();
 
-    const capturesBefore = capture.mock.calls.length;
+    // The capture is away and will never answer, so the page still holds the
+    // window rather than the overlay opening onto a hole.
+    expect(capture).toHaveBeenCalledOnce();
+    expect(hide).not.toHaveBeenCalled();
+
     await act(async () => {
-      document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, PLANE_CAPTURE_DEADLINE_MS + 40));
     });
 
-    // A detached view has nothing current to photograph, and the frames it
-    // would answer with are the ones already on screen.
-    expect(capture.mock.calls.length).toBe(capturesBefore);
+    // The deadline is the only reason a menu cannot be hidden by a bad page.
+    expect(hide).toHaveBeenCalledOnce();
   });
 
-  it("throttles a burst of presses down to one photograph", async () => {
-    vi.useFakeTimers();
-    const capture = vi.fn(async () => captureResult("primed"));
-    const { api } = makeApi(capture as unknown as BrowserApi["capture"]);
+  it("falls back to the previous frames when a capture is refused", async () => {
+    let answer: BrowserTabCaptureResult = captureResult("first");
+    const { api, hide } = makeApi(vi.fn(async () => answer) as unknown as BrowserApi["capture"]);
 
     await act(async () => {
       root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
     });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const capturesAfterMount = capture.mock.calls.length;
-
-    await act(async () => {
-      for (let press = 0; press < 5; press += 1) {
-        document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      }
-      await Promise.resolve();
-    });
-    expect(capture.mock.calls.length).toBe(capturesAfterMount);
-
-    vi.advanceTimersByTime(PLANE_REFRESH_MIN_INTERVAL_MS + 1);
-    await act(async () => {
-      document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      await Promise.resolve();
-    });
-    expect(capture.mock.calls.length).toBe(capturesAfterMount + 1);
-  });
-
-  it("keeps the last good pixels when a capture is refused", async () => {
-    let answer: BrowserTabCaptureResult = captureResult("good");
-    const capture = vi.fn(async () => answer);
-    const { api } = makeApi(capture as unknown as BrowserApi["capture"]);
-
-    await act(async () => {
-      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
-    });
+    const first = openDialog();
     await settle();
-    expect(shownPixels()).toBe("data:image/png;base64,good");
+    expect(shownPixels()).toBe("data:image/jpeg;base64,first");
+    act(() => first.remove());
+    await settle();
 
     answer = { ok: false, error: "no such tab" };
-    await act(async () => {
-      document.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      await Promise.resolve();
-    });
+    openDialog();
+    await settle();
 
-    // No toast, no blank plane: the previous photograph is still the truest
-    // thing available, so the overlay still opens onto page pixels.
-    expect(shownPixels()).toBe("data:image/png;base64,good");
+    // No toast, no blank plane: the last good photograph is still the truest
+    // thing available, and the overlay still becomes operable.
+    expect(shownPixels()).toBe("data:image/jpeg;base64,first");
+    expect(hide).toHaveBeenCalledTimes(2);
   });
 
   it("drops the pixels when the pane goes away, so nothing stale returns", async () => {
     const { api } = makeApi(
-      vi.fn(async () => captureResult("primed")) as unknown as BrowserApi["capture"],
+      vi.fn(async () => captureResult("fresh")) as unknown as BrowserApi["capture"],
     );
 
     await act(async () => {
       root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
     });
+    openDialog();
     await settle();
-    expect(shownPixels()).toBe("data:image/png;base64,primed");
+    expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
 
     await act(async () => {
       root?.render(

@@ -14,7 +14,8 @@ import { BrowserPlaneController } from "@renderer/components/browser/browser-pla
 import {
   hasNativePlaneOverlay,
   planeVisibility,
-  shouldRefreshPlanePixels,
+  shouldPaintPlanePixels,
+  PLANE_CAPTURE_DEADLINE_MS,
 } from "@renderer/components/browser/browser-plane-freeze";
 import { toastError } from "@renderer/lib/toast";
 
@@ -34,15 +35,31 @@ function addressOf(url: string): string {
  * Native child views always composite above renderer portals, so the pane has
  * to know when app chrome needs the tier. The rule itself lives in
  * `browser-plane-freeze.ts`; this hook is only the subscription to it.
+ *
+ * Coalesced to one read per frame. The observer watches the whole document for
+ * attribute and child changes, and an overlay's own entry animation produces a
+ * burst of them — answering each one with a document-wide query is work done
+ * exactly when the app is busiest.
  */
 function useRendererOverlayActive(): boolean {
   const [active, setActive] = React.useState(false);
   React.useEffect(() => {
+    let queued = 0;
     const read = (): void => setActive(hasNativePlaneOverlay(document));
+    const schedule = (): void => {
+      if (queued !== 0) return;
+      queued = window.requestAnimationFrame(() => {
+        queued = 0;
+        read();
+      });
+    };
     read();
-    const observer = new MutationObserver(read);
+    const observer = new MutationObserver(schedule);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (queued !== 0) window.cancelAnimationFrame(queued);
+    };
   }, []);
   return active;
 }
@@ -71,10 +88,10 @@ export function BrowserPane({
   const [address, setAddress] = React.useState(() => addressOf(tab.url));
   const [error, setError] = React.useState<string | null>(null);
   const [frames, setFrames] = React.useState<readonly BrowserTabCaptureFrame[]>([]);
+  const [captureSettled, setCaptureSettled] = React.useState(false);
   const overlayActive = useRendererOverlayActive();
-  // Synchronous. The stand-in pixels were captured before this moment, so
-  // yielding the tier costs nothing and the swap has no visible seam.
-  const planeVisible = planeVisibility({ visible, overlayActive });
+  const planeVisible = planeVisibility({ visible, overlayActive, captureSettled });
+  const paintPixels = shouldPaintPlanePixels({ visible, frameCount: frames.length });
 
   // A state push should move an untouched address bar but must not erase an
   // address the person is midway through typing because a title/loading push
@@ -104,65 +121,48 @@ export function BrowserPane({
     return () => window.cancelAnimationFrame(frame);
   }, [blank, tab.tabId]);
 
-  // Keep a recent photograph of the plane in hand, so an overlay never has to
-  // wait for one. It rides on the gestures that PRECEDE an overlay — a press
-  // or a key — which is why the pixels are always already there when a menu
-  // mounts a frame or two later.
+  // Photograph the plane WHEN an overlay opens, so the stand-in is the frame
+  // the person was actually looking at. Capturing ahead of time was cheaper but
+  // dishonest: a pre-taken frame is stale by however long ago it was taken, and
+  // a hover-opened overlay never even had a gesture to ride on.
   //
-  // No toast on failure. Nobody asked for this capture, no person is waiting
-  // on it, and the previous frames stay usable — the exception AGENTS.md
+  // No toast on failure. Nobody asked for this capture, no person is waiting on
+  // it, and the previous frames stay usable — the exception AGENTS.md
   // documents. A toast is also itself an overlay, so failing loudly here would
   // yield the plane for the life of the toast.
-  const capturedAtRef = React.useRef<number | null>(null);
-  const inFlightRef = React.useRef(false);
-  const overlayActiveRef = React.useRef(overlayActive);
-  overlayActiveRef.current = overlayActive;
-
-  const refreshPlanePixels = React.useCallback(() => {
-    const last = capturedAtRef.current;
-    const ready = shouldRefreshPlanePixels({
-      visible,
-      overlayActive: overlayActiveRef.current,
-      captureInFlight: inFlightRef.current,
-      sinceLastMs: last === null ? null : Date.now() - last,
-    });
-    if (!ready) return;
-    inFlightRef.current = true;
-    void api
-      .capture({ tabId: tab.tabId })
-      .then((result) => {
-        inFlightRef.current = false;
-        if (!result.ok) return;
-        capturedAtRef.current = Date.now();
-        setFrames(result.frames);
-      })
-      .catch(() => {
-        inFlightRef.current = false;
-      });
-  }, [api, tab.tabId, visible]);
-
   React.useEffect(() => {
     if (!visible) {
       setFrames([]);
-      capturedAtRef.current = null;
+      setCaptureSettled(false);
       return;
     }
-    refreshPlanePixels();
-    // Capture phase: these must land before the handler that opens the overlay.
-    const prime = (): void => refreshPlanePixels();
-    document.addEventListener("pointerdown", prime, true);
-    document.addEventListener("keydown", prime, true);
-    return () => {
-      document.removeEventListener("pointerdown", prime, true);
-      document.removeEventListener("keydown", prime, true);
-    };
-  }, [refreshPlanePixels, visible]);
+    if (!overlayActive) {
+      // The plane takes the tier back at once. The old frames stay painted
+      // underneath until it has actually reattached.
+      setCaptureSettled(false);
+      return;
+    }
 
-  // A navigation replaces what the plane shows, so the held pixels are wrong.
-  React.useEffect(() => {
-    capturedAtRef.current = null;
-    refreshPlanePixels();
-  }, [refreshPlanePixels, tab.generation]);
+    let live = true;
+    const settle = (): void => {
+      if (live) setCaptureSettled(true);
+    };
+    // Only so a pathological page cannot hide a menu. Normally the pixels win.
+    const deadline = window.setTimeout(settle, PLANE_CAPTURE_DEADLINE_MS);
+    void api
+      .capture({ tabId: tab.tabId })
+      .then((result) => {
+        if (!live) return;
+        if (result.ok) setFrames(result.frames);
+        settle();
+      })
+      .catch(settle);
+
+    return () => {
+      live = false;
+      window.clearTimeout(deadline);
+    };
+  }, [api, overlayActive, tab.tabId, visible]);
 
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -254,7 +254,7 @@ export function BrowserPane({
         data-browser-plane={tab.tabId}
         className="relative min-h-0 flex-1 overflow-hidden bg-background"
       >
-        {frames.map((frame) => (
+        {(paintPixels ? frames : []).map((frame) => (
           <img
             key={frame.kind}
             aria-hidden

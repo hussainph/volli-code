@@ -46,43 +46,46 @@ export function hasNativePlaneOverlay(doc: Document, appRoot?: Element | null): 
 }
 
 /**
- * The shortest interval between two refreshes of the stand-in pixels.
+ * How long an overlay will wait for the true last frame before giving up.
  *
- * The refresh rides on `pointerdown`/`keydown` — the gestures that precede
- * essentially every overlay — so this only has to stop a drag or a held key
- * from asking main for a screenshot per event. A person cannot open two
- * overlays inside this window, so the frames are never meaningfully stale.
+ * The pixels are captured PER OVERLAY, at the moment one opens, because that
+ * is the only way the stand-in matches what the person was looking at. A frame
+ * captured ahead of time is stale by however long ago it was taken, and on an
+ * animating page — or after a scroll the renderer cannot even observe, since
+ * the wheel goes to the native view — it visibly jumps backwards.
+ *
+ * That fidelity is affordable because the capture is cheap: JPEG encoding
+ * measured 11-17ms on the smoke fixture, about one frame. This deadline exists
+ * only so a pathological page cannot hide a menu; in the normal case the
+ * pixels arrive long before it.
  */
-export const PLANE_REFRESH_MIN_INTERVAL_MS = 200;
+export const PLANE_CAPTURE_DEADLINE_MS = 80;
 
 /**
  * Whether the native plane may hold the top of the window right now.
  *
- * There is no asynchronous term in this. An earlier pass asked main for a
- * screenshot AT THE MOMENT an overlay opened and detached only once it
- * answered, which put an IPC round trip on the critical path: the overlay
- * opened behind the web page and jumped in front when the pixels landed. The
- * stand-in pixels are captured ahead of time instead, so yielding the tier is
- * a synchronous decision and the swap is seamless in both directions.
+ * It keeps the tier until the stand-in pixels are settled, so the page is never
+ * replaced by a hole: detaching first is what showed a black rectangle. Once
+ * settled — by pixels arriving or by the deadline passing — it yields.
  */
-export function planeVisibility(input: { visible: boolean; overlayActive: boolean }): boolean {
-  return input.visible && !input.overlayActive;
+export function planeVisibility(input: {
+  visible: boolean;
+  overlayActive: boolean;
+  captureSettled: boolean;
+}): boolean {
+  return input.visible && !(input.overlayActive && input.captureSettled);
 }
 
 /**
- * Whether a fresh capture is worth taking now.
+ * Whether the captured frames should be in the tree.
  *
- * Only while the plane actually holds the window: a detached view has nothing
- * current to photograph, and the frames it would answer with are the ones
- * already on screen. `sinceLastMs` of `null` means nothing has been captured
- * yet, which is always worth one.
+ * Whenever the pane is visible and it has any — not only while an overlay is
+ * open. While the plane holds the tier the native view covers them completely,
+ * so they cost nothing to leave painted, and leaving them painted is what makes
+ * the hand-off seamless in BOTH directions: there is no frame in which neither
+ * the page nor its stand-in is on screen. Clearing them as the plane came back
+ * is what made every overlay end in a flash of themed background.
  */
-export function shouldRefreshPlanePixels(input: {
-  visible: boolean;
-  overlayActive: boolean;
-  captureInFlight: boolean;
-  sinceLastMs: number | null;
-}): boolean {
-  if (!input.visible || input.overlayActive || input.captureInFlight) return false;
-  return input.sinceLastMs === null || input.sinceLastMs >= PLANE_REFRESH_MIN_INTERVAL_MS;
+export function shouldPaintPlanePixels(input: { visible: boolean; frameCount: number }): boolean {
+  return input.visible && input.frameCount > 0;
 }
