@@ -16,6 +16,7 @@ export {
   type PiSignInSteps,
 } from "./pi/sign-in";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
+export { supersededModelId } from "./pi/model-catalog";
 export {
   promptBaseline,
   PROMPT_BASELINE_CHARS_PER_TOKEN,

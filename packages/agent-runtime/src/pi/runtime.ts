@@ -81,6 +81,7 @@ import {
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
+import type { RefreshableCatalogs } from "./model-catalog";
 import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
@@ -151,9 +152,11 @@ export interface PiRuntimeHostOptions {
   /**
    * Completion of local catalog restoration for an injected collection.
    * Main passes this with the `piOwnedModelAccess` pair; scripted collections
-   * omit it because they have no persisted overlay.
+   * omit it because they have no persisted catalog.
    */
   catalogReady?: Promise<void>;
+  /** Credential-independent public catalogs attached to the injected collection. */
+  catalogs?: RefreshableCatalogs;
   /** Host clock for runtime observations; injectable for deterministic tests. */
   now?: () => number;
   /**
@@ -207,6 +210,7 @@ interface PiRuntimeHost {
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
+  catalogs?: RefreshableCatalogs;
   now: () => number;
   executionEnvFactory: (
     workspacePath: string,
@@ -233,6 +237,7 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
     models,
     credentials: options.credentials ?? null,
     catalogReady: options.catalogReady,
+    catalogs: options.catalogs,
   };
 }
 
@@ -250,6 +255,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
+    ...(access.catalogs === undefined ? {} : { catalogs: access.catalogs }),
     now: options.now ?? Date.now,
     // Wrapped rather than passed by reference: `piExecutionEnv`'s second
     // parameter is its options bag, and handing it the identity positionally
@@ -267,6 +273,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           models: host.models,
           credentials: host.credentials,
           catalogReady: host.catalogReady,
+          catalogs: host.catalogs,
         },
         host.now,
         input,

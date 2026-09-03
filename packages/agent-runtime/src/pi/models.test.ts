@@ -315,7 +315,7 @@ describe("piModelsFilePath", () => {
 });
 
 describe("piOwnedModels", () => {
-  it("restores a persisted overlay before catalogReady resolves", async () => {
+  it("drops a cached addition with no current admission proof before catalogReady resolves", async () => {
     const agentDir = agentDirWith("{}");
     const first = piOwnedModelAccess({ agentDir });
     await first.catalogReady;
@@ -331,7 +331,7 @@ describe("piOwnedModels", () => {
     const restarted = piOwnedModelAccess({ agentDir });
     await restarted.catalogReady;
 
-    expect(restarted.models.getModel("opencode-go", added.id)?.name).toBe(added.name);
+    expect(restarted.models.getModel("opencode-go", added.id)).toBeUndefined();
   });
 
   it("surfaces catalog restoration failures without provider error details", async () => {

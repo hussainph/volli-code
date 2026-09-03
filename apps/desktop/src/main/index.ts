@@ -165,6 +165,7 @@ import {
   readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
+  reconcileModelAccessPreferences,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
@@ -1000,6 +1001,7 @@ app.whenReady().then(async () => {
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
+          catalogs: piModelAccess.catalogs,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
@@ -1434,7 +1436,16 @@ app.whenReady().then(async () => {
       ? null
       : registerSessionRpcIpcHandlers({
           runtime: sessionRuntime,
-          inspectModelAccess: piRuntimeHost?.inspectModelAccess,
+          inspectModelAccess:
+            piRuntimeHost === null
+              ? undefined
+              : async (input) => {
+                  const access = await piRuntimeHost.inspectModelAccess(input);
+                  if (input.refresh && sessionDb !== null) {
+                    reconcileModelAccessPreferences(sessionDb, access, Date.now());
+                  }
+                  return access;
+                },
           readModelAccessDefaults:
             sessionDb !== null ? () => readModelAccessDefaults(sessionDb) : undefined,
           writeModelAccessDefault:

@@ -236,6 +236,11 @@ export default defineConfig(({ mode }) => ({
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
+        // What one press of Refresh models is allowed to SAY (VC-244). In the
+        // gate because "nothing appeared" reads the same whether the catalog
+        // was already current, a provider was unreachable, or a model was
+        // withheld as unsafe — and only this classification tells them apart.
+        "src/components/pages/model-access-refresh-model.ts",
         "src/components/pages/agent-observability-model.ts",
         "src/components/pages/web-access-model.ts",
         // The report mirrors the three data sets About already shows. Keeping
