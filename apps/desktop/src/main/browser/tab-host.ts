@@ -646,22 +646,36 @@ export class BrowserTabHost {
    * starves snapshots and screenshots of the frames they wait on until the
    * tab is shown again.
    *
-   * The hold is NOT tab-local, and the cost is accepted on purpose. Electron
-   * documents `backgroundThrottling: false` as disabling frame throttling in
-   * the host BrowserWindow for every WebContents it displays (breaking change,
-   * 28.0.0), and the switch reaches `viz::DisplayScheduler`, which is per
-   * window rather than per view. So one agent hold lifts throttling for the
-   * whole window, Volli's own renderer included, and it lasts for the driving
-   * attachment rather than for one tool call.
+   * Measured, not argued — `e2e/browser-throttle-bench.mjs`, Electron 44 /
+   * Chromium 152 / macOS arm64, against the visible baseline of 100 timer
+   * ticks and 60 frames a second:
    *
-   * That breadth is the deliberate choice (VC-252 review). Releasing per tool
-   * call would re-open the same wedge one level down: `act` returns, the page
-   * is still fetching or laying out what the click started, the hold drops,
-   * and the next `snapshot` reads a page that stopped working in the gap.
-   * People are unaffected either way — a plane a person can touch is attached,
-   * and an attached plane was never throttled — so the hold buys the agent's
-   * background progress and costs idle power. If that cost ever shows up in
-   * measurement, the fix is an idle release on this lease, not a narrower one.
+   *   detached, no hold            1.0 ticks/s,  0 fps   (0.01x — the stall)
+   *   detached + own hold        100.0 ticks/s, 60 fps   (1.00x — the fix)
+   *   another detached tab         1.0 ticks/s,  0 fps   while the first holds
+   *   window's own renderer        1.0 ticks/s           minimised, first holds
+   *
+   * So the lease is PER-TAB in practice. Electron's 28.0.0 note —
+   * `backgroundThrottling: false` reaching every WebContents in the host
+   * BrowserWindow — reads wider than it measures: it says "displayed by", and
+   * neither a detached view nor a minimised window's own page is displayed.
+   * Holding one Browser Tab awake does not stop the rest of the app sleeping,
+   * and total app CPU across six open tabs did not move (3.2% -> 2.6%, inside
+   * noise). An earlier review claimed the opposite from the documentation
+   * alone; the bench is why this comment does not.
+   *
+   * The hold does span the driving attachment rather than one tool call, and
+   * that part is deliberate. Releasing per call would re-open the same wedge
+   * one level down: `act` returns, the page is still fetching or laying out
+   * what the click started, the hold drops, and the next `snapshot` reads a
+   * page that stopped working in the gap. People are unaffected either way —
+   * a plane a person can touch is attached, and an attached plane was never
+   * throttled.
+   *
+   * Both halves of the fix are load-bearing, and the bench shows why: a tab
+   * detached since birth and never held answers `Page.captureScreenshot`
+   * never at all (the bench gives up at the controller's own 15s bound),
+   * while the same tab under a hold answers in ~100ms.
    *
    * Returns the release. Releasing twice releases once, and a hold on a tab
    * that is unknown or has since closed releases into nothing — wakefulness
