@@ -1,13 +1,12 @@
-import type { BrowserTabCaptureFrame } from "../../../../ipc/contract";
-
 /**
- * The decision behind freezing a Browser Tab's native plane, kept as a pure
- * module beside the view for the same reason as `tab-focus.ts` and
- * `slider-squiggle.ts`: what the view RENDERS is glue, but WHEN the native
- * plane may detach is a rule about a surface the renderer does not own, and
- * getting it wrong strands a person under a black rectangle or an invisible
- * menu. It is enrolled in the coverage gate so every transition below has a
- * test rather than a screenshot.
+ * When a Browser Tab's native plane may hold the top of the window, and which
+ * pixels stand in for it when it may not.
+ *
+ * Kept as a pure module beside the view for the same reason as `tab-focus.ts`
+ * and `slider-squiggle.ts`: what the view RENDERS is glue, but this rule
+ * decides whether a person gets an operable overlay or stares at a black
+ * rectangle, and none of its transitions is visible in a screenshot. Enrolled
+ * in the coverage gate so each one has a test.
  */
 
 /** Where the React app mounts. Everything Radix portals lands outside it. */
@@ -22,11 +21,9 @@ export const APP_ROOT_ID = "root";
  * to `document.body`, outside the app root — so the role list only decides
  * what counts once the element is already outside the tree.
  *
- * `[role="tooltip"]` is deliberately ABSENT. Taking the plane down costs a
- * capture and a native detach/reattach, and a tooltip follows the pointer:
- * brushing along a toolbar would tear the plane down and rebuild it once per
- * button. A tooltip that overlaps a Browser Tab loses to it, and that is the
- * cheaper trade — the Ticket asked about dialogs and menus, not hints.
+ * `[role="tooltip"]` is deliberately ABSENT. A tooltip follows the pointer, so
+ * brushing along a toolbar would swap the plane once per button. A tooltip that
+ * overlaps a Browser Tab loses to it: the Ticket asked about dialogs and menus.
  */
 const FLOATING_OVERLAY_SELECTOR =
   '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast]';
@@ -49,66 +46,43 @@ export function hasNativePlaneOverlay(doc: Document, appRoot?: Element | null): 
 }
 
 /**
- * How long an overlay waits for pixels before it gives up and shows itself.
+ * The shortest interval between two refreshes of the stand-in pixels.
  *
- * A WebContentsView composites above the window, so the plane cannot detach
- * until something is ready to stand in its place — which means the overlay is
- * INVISIBLE for exactly this long. Frozen pixels are the nicety; an operable
- * menu is the contract, so the wait is bounded and the themed background is
- * the fallback. Roughly two frames: long enough that a warm capture always
- * wins, short enough that nobody perceives a late menu.
+ * The refresh rides on `pointerdown`/`keydown` — the gestures that precede
+ * essentially every overlay — so this only has to stop a drag or a held key
+ * from asking main for a screenshot per event. A person cannot open two
+ * overlays inside this window, so the frames are never meaningfully stale.
  */
-export const PLANE_FREEZE_CAPTURE_TIMEOUT_MS = 120;
+export const PLANE_REFRESH_MIN_INTERVAL_MS = 200;
 
 /**
- * What a capture attempt has produced so far. `unavailable` is the honest
- * state for both a refusal and a timeout: no pixels are coming, but the
- * overlay must stop waiting either way.
+ * Whether the native plane may hold the top of the window right now.
+ *
+ * There is no asynchronous term in this. An earlier pass asked main for a
+ * screenshot AT THE MOMENT an overlay opened and detached only once it
+ * answered, which put an IPC round trip on the critical path: the overlay
+ * opened behind the web page and jumped in front when the pixels landed. The
+ * stand-in pixels are captured ahead of time instead, so yielding the tier is
+ * a synchronous decision and the swap is seamless in both directions.
  */
-export type PlaneCaptureOutcome =
-  | { kind: "pending" }
-  | { kind: "frames"; frames: readonly BrowserTabCaptureFrame[] }
-  | { kind: "unavailable" };
-
-/** What the pane draws, and whether main's native view may stay attached. */
-export interface PlaneFreezeDecision {
-  planeVisible: boolean;
-  frames: readonly BrowserTabCaptureFrame[];
-}
-
-const NO_FRAMES: readonly BrowserTabCaptureFrame[] = [];
-
-function framesOf(outcome: PlaneCaptureOutcome | null): readonly BrowserTabCaptureFrame[] {
-  return outcome !== null && outcome.kind === "frames" ? outcome.frames : NO_FRAMES;
+export function planeVisibility(input: { visible: boolean; overlayActive: boolean }): boolean {
+  return input.visible && !input.overlayActive;
 }
 
 /**
- * The whole freeze rule, in one place.
+ * Whether a fresh capture is worth taking now.
  *
- * The ordering that matters: while an overlay is open and pixels have not
- * arrived, the plane stays VISIBLE. Detaching first is what exposed the black
- * hole; detaching only once there is a replacement is what fixes it. The
- * timeout is what stops that wait from becoming an invisible menu.
+ * Only while the plane actually holds the window: a detached view has nothing
+ * current to photograph, and the frames it would answer with are the ones
+ * already on screen. `sinceLastMs` of `null` means nothing has been captured
+ * yet, which is always worth one.
  */
-export function planeFreezeDecision(input: {
+export function shouldRefreshPlanePixels(input: {
   visible: boolean;
   overlayActive: boolean;
-  outcome: PlaneCaptureOutcome | null;
-}): PlaneFreezeDecision {
-  if (!input.visible) return { planeVisible: false, frames: NO_FRAMES };
-  if (!input.overlayActive) {
-    // The overlay has gone, so the plane may come back — but the frozen pixels
-    // KEEP PAINTING until the caller confirms the native view actually
-    // reattached. Dropping them the moment React changes its mind exposes the
-    // themed background for the length of an IPC round trip, which reads as a
-    // flash on every single overlay. Behind a live native view they cost
-    // nothing; the caller clears them once main has answered.
-    return { planeVisible: true, frames: framesOf(input.outcome) };
-  }
-  const outcome = input.outcome;
-  if (outcome === null || outcome.kind === "pending") {
-    return { planeVisible: true, frames: NO_FRAMES };
-  }
-  if (outcome.kind === "unavailable") return { planeVisible: false, frames: NO_FRAMES };
-  return { planeVisible: false, frames: outcome.frames };
+  captureInFlight: boolean;
+  sinceLastMs: number | null;
+}): boolean {
+  if (!input.visible || input.overlayActive || input.captureInFlight) return false;
+  return input.sinceLastMs === null || input.sinceLastMs >= PLANE_REFRESH_MIN_INTERVAL_MS;
 }

@@ -396,7 +396,7 @@ async function main() {
 
   await must(
     "2b",
-    "the floating navigation sidebar freezes the Browser plane until it leaves",
+    "overlays swap the Browser plane for pixels captured ahead of time",
     async () => {
       const trigger = page.getByRole("button", {
         name: "Toggle navigation sidebar",
@@ -408,6 +408,15 @@ async function main() {
         "the Browser plane to settle after unpinning the sidebar",
         async () =>
           (await shell.getAttribute("data-volli-shell")) === "ephemeral" &&
+          (await remoteViewAttached(app, startUrl)),
+      );
+      // The stand-in pixels exist BEFORE any overlay does. That is the whole
+      // point: an overlay never waits for a capture, so it can never open
+      // behind the page and jump forward when one lands.
+      await waitUntil(
+        "the plane to be photographed while it is still live",
+        async () =>
+          (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
           (await remoteViewAttached(app, startUrl)),
       );
       await page.mouse.move(700, 70);
@@ -424,7 +433,9 @@ async function main() {
         "the floating sidebar to leave before restoring the Browser plane",
         async () =>
           (await page.locator("[data-native-plane-overlay]").count()) === 0 &&
-          (await page.locator("[data-browser-plane-snapshot]").count()) === 0 &&
+          // The pixels STAY, covered by the reattached native view: there is no
+          // frame in which neither the page nor its stand-in is painted.
+          (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
           (await remoteViewAttached(app, startUrl)),
       );
       await trigger.click();
@@ -450,14 +461,14 @@ async function main() {
         "closing the menu to restore the live Browser plane",
         async () =>
           (await page.getByRole("menu").count()) === 0 &&
-          (await page.locator("[data-browser-plane-snapshot]").count()) === 0 &&
+          (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
           (await remoteViewAttached(app, startUrl)),
       );
 
       return {
         ok: true,
         detail:
-          "floating/menu=renderer snapshot/live plane=hidden withdrawn/closed=live plane restored",
+          "pixels captured while live; floating/menu detach the plane onto them; both restore it",
       };
     },
   );

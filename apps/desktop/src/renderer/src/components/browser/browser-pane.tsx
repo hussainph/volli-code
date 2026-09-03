@@ -2,15 +2,19 @@ import * as React from "react";
 import { errorMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../../../browser-start-page";
-import type { BrowserTabResult, BrowserTabState, Result } from "../../../../ipc/contract";
+import type {
+  BrowserTabCaptureFrame,
+  BrowserTabResult,
+  BrowserTabState,
+  Result,
+} from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
 import {
   hasNativePlaneOverlay,
-  planeFreezeDecision,
-  PLANE_FREEZE_CAPTURE_TIMEOUT_MS,
-  type PlaneCaptureOutcome,
+  planeVisibility,
+  shouldRefreshPlanePixels,
 } from "@renderer/components/browser/browser-plane-freeze";
 import { toastError } from "@renderer/lib/toast";
 
@@ -66,16 +70,11 @@ export function BrowserPane({
   const previousUrlRef = React.useRef(addressOf(tab.url));
   const [address, setAddress] = React.useState(() => addressOf(tab.url));
   const [error, setError] = React.useState<string | null>(null);
-  const [captureOutcome, setCaptureOutcome] = React.useState<PlaneCaptureOutcome | null>(null);
+  const [frames, setFrames] = React.useState<readonly BrowserTabCaptureFrame[]>([]);
   const overlayActive = useRendererOverlayActive();
-  // Capture first, then detach: the frames are already in this render when the
-  // layout effect hides the native child, so no black frame is exposed. The
-  // whole rule — including the bounded wait — is `planeFreezeDecision`.
-  const { planeVisible, frames } = planeFreezeDecision({
-    visible,
-    overlayActive,
-    outcome: captureOutcome,
-  });
+  // Synchronous. The stand-in pixels were captured before this moment, so
+  // yielding the tier costs nothing and the swap has no visible seam.
+  const planeVisible = planeVisibility({ visible, overlayActive });
 
   // A state push should move an untouched address bar but must not erase an
   // address the person is midway through typing because a title/loading push
@@ -105,54 +104,65 @@ export function BrowserPane({
     return () => window.cancelAnimationFrame(frame);
   }, [blank, tab.tabId]);
 
-  // Freeze the plane for as long as an overlay needs the tier. No `epoch`
-  // rides along: every path that could stale a capture — the overlay closing,
-  // the tab changing, the pane unmounting — already re-runs this effect, and
-  // the cleanup below cancels the in-flight one.
-  React.useEffect(() => {
-    if (!visible) {
-      setCaptureOutcome(null);
-      return;
-    }
-    // NOT cleared when the overlay merely leaves: the frozen pixels have to
-    // outlive it until the native view is back. The restore effect below owns
-    // that hand-off.
-    if (!overlayActive) return;
+  // Keep a recent photograph of the plane in hand, so an overlay never has to
+  // wait for one. It rides on the gestures that PRECEDE an overlay — a press
+  // or a key — which is why the pixels are always already there when a menu
+  // mounts a frame or two later.
+  //
+  // No toast on failure. Nobody asked for this capture, no person is waiting
+  // on it, and the previous frames stay usable — the exception AGENTS.md
+  // documents. A toast is also itself an overlay, so failing loudly here would
+  // yield the plane for the life of the toast.
+  const capturedAtRef = React.useRef<number | null>(null);
+  const inFlightRef = React.useRef(false);
+  const overlayActiveRef = React.useRef(overlayActive);
+  overlayActiveRef.current = overlayActive;
 
-    let current = true;
-    setCaptureOutcome({ kind: "pending" });
-
-    // The overlay is invisible until the plane yields, so the wait is bounded.
-    // A late capture still upgrades the themed fallback to real pixels.
-    const timer = window.setTimeout(() => {
-      if (!current) return;
-      setCaptureOutcome((outcome) =>
-        outcome === null || outcome.kind === "pending" ? { kind: "unavailable" } : outcome,
-      );
-    }, PLANE_FREEZE_CAPTURE_TIMEOUT_MS);
-
-    // No toast on failure. This capture is work nobody asked for, its fallback
-    // (the themed plane) is already on screen, and no person is waiting on the
-    // result — the documented exception in AGENTS.md. A toast would also be
-    // self-defeating: `[data-sonner-toast]` is itself an overlay, so failing
-    // loudly would hold the plane detached for the life of the toast.
+  const refreshPlanePixels = React.useCallback(() => {
+    const last = capturedAtRef.current;
+    const ready = shouldRefreshPlanePixels({
+      visible,
+      overlayActive: overlayActiveRef.current,
+      captureInFlight: inFlightRef.current,
+      sinceLastMs: last === null ? null : Date.now() - last,
+    });
+    if (!ready) return;
+    inFlightRef.current = true;
     void api
       .capture({ tabId: tab.tabId })
       .then((result) => {
-        if (!current) return;
-        setCaptureOutcome(
-          result.ok ? { kind: "frames", frames: result.frames } : { kind: "unavailable" },
-        );
+        inFlightRef.current = false;
+        if (!result.ok) return;
+        capturedAtRef.current = Date.now();
+        setFrames(result.frames);
       })
       .catch(() => {
-        if (current) setCaptureOutcome({ kind: "unavailable" });
+        inFlightRef.current = false;
       });
+  }, [api, tab.tabId, visible]);
 
+  React.useEffect(() => {
+    if (!visible) {
+      setFrames([]);
+      capturedAtRef.current = null;
+      return;
+    }
+    refreshPlanePixels();
+    // Capture phase: these must land before the handler that opens the overlay.
+    const prime = (): void => refreshPlanePixels();
+    document.addEventListener("pointerdown", prime, true);
+    document.addEventListener("keydown", prime, true);
     return () => {
-      current = false;
-      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", prime, true);
+      document.removeEventListener("keydown", prime, true);
     };
-  }, [api, overlayActive, tab.tabId, visible]);
+  }, [refreshPlanePixels, visible]);
+
+  // A navigation replaces what the plane shows, so the held pixels are wrong.
+  React.useEffect(() => {
+    capturedAtRef.current = null;
+    refreshPlanePixels();
+  }, [refreshPlanePixels, tab.generation]);
 
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -180,23 +190,8 @@ export function BrowserPane({
   // effect above installs, and a fresh controller starts at "unknown"
   // visibility. `setVisible` is idempotent, so the extra passes are free.
   React.useLayoutEffect(() => {
-    const settled = controllerRef.current?.setVisible(planeVisible);
-    if (settled === undefined || !planeVisible || captureOutcome === null) return;
-
-    // Restoring. Keep painting the frozen pixels until main says the native
-    // view is attached, then give it one frame to composite before letting go.
-    // Releasing them any earlier is what made every overlay flicker.
-    let cancelled = false;
-    void settled.then(() => {
-      if (cancelled) return;
-      window.requestAnimationFrame(() => {
-        if (!cancelled) setCaptureOutcome(null);
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, captureOutcome, planeVisible, tab.tabId]);
+    void controllerRef.current?.setVisible(planeVisible);
+  }, [api, planeVisible, tab.tabId]);
 
   const runTabCommand = React.useCallback(
     async (operation: Promise<BrowserTabResult>, label: string) => {
