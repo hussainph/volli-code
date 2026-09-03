@@ -171,6 +171,13 @@ export default defineConfig(({ mode }) => ({
         // that spread it, for the same reason as tab-focus.ts: four surfaces
         // share it and its capture-phase subtleties are worth the gate.
         "src/components/attachments/file-drop.ts",
+        // WHEN a Browser Tab's native plane may detach (VC-251). Not view glue:
+        // a WebContentsView composites above the window, so this rule decides
+        // whether a person gets an operable overlay or stares at a black
+        // rectangle — and its first version matched any `[role="listbox"]`,
+        // which a permanent Change Set list satisfied forever. Each transition
+        // is gated because none of them is visible in a screenshot.
+        "src/components/browser/browser-plane-freeze.ts",
         "src/components/board/board-dnd.ts",
         // Desktop selection gestures are board policy, not view glue: modifier
         // toggles may span columns while Shift ranges stay in one visual column.

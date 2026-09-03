@@ -64,6 +64,13 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
+  // The host encodes JPEG, so the fake answers the same door: a NativeImage
+  // whose `toJPEG` returns the bytes the frame should carry.
+  captureBytes = "page";
+  capturePage = vi.fn(async () => ({
+    toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
+    toJPEG: () => Buffer.from(this.captureBytes),
+  }));
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -555,6 +562,64 @@ describe("BrowserTabHost navigation controls", () => {
 });
 
 describe("BrowserTabHost native surface", () => {
+  it("captures page and docked DevTools pixels in plane-relative positions", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const bounds = { x: 12, y: 48, width: 800, height: 600 };
+    host.setBounds(tab.tabId, bounds);
+    host.show(tab.tabId);
+    host.toggleDevTools(tab.tabId);
+    const tools = views[1];
+    if (tools === undefined) throw new Error("expected DevTools view");
+    tools.webContents.captureBytes = "tools";
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
+        bounds: { x: 0, y: 0, width: 800, height: 347 },
+      },
+      {
+        kind: "devtools",
+        dataUrl: "data:image/jpeg;base64,dG9vbHM=",
+        bounds: { x: 0, y: 348, width: 800, height: 252 },
+      },
+    ]);
+    expect(views[0]?.webContents.capturePage).toHaveBeenCalledOnce();
+    expect(tools.webContents.capturePage).toHaveBeenCalledOnce();
+  });
+
+  it("captures just the page when DevTools is closed, still plane-relative", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    // Deliberately NOT the default bounds: those start at 0,0, so a frame that
+    // forgot to subtract `entry.bounds` would answer identically and the case
+    // would prove nothing.
+    host.setBounds(tab.tabId, { x: 40, y: 24, width: 640, height: 480 });
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
+      },
+    ]);
+  });
+
+  it("refuses to capture a tab it does not have", async () => {
+    // The renderer asks by opaque id and a tab can close mid-overlay; the
+    // guarded IPC envelope turns this throw into `{ ok: false }`.
+    await expect(host.capture("tab-that-never-existed")).rejects.toThrow();
+  });
+
   it("sets renderer-measured bounds and attaches only the visible tab", () => {
     const first = host.open({
       url: "https://one.example.com",

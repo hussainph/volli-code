@@ -394,50 +394,76 @@ async function main() {
     },
   );
 
-  await must(
-    "2b",
-    "the floating navigation sidebar hides the native Browser plane until it leaves",
-    async () => {
-      const trigger = page.getByRole("button", {
-        name: "Toggle navigation sidebar",
-        exact: true,
-      });
-      const shell = page.locator("[data-volli-shell]");
-      if ((await shell.getAttribute("data-volli-shell")) === "framed") await trigger.click();
-      await waitUntil(
-        "the Browser plane to settle after unpinning the sidebar",
-        async () =>
-          (await shell.getAttribute("data-volli-shell")) === "ephemeral" &&
-          (await remoteViewAttached(app, startUrl)),
-      );
-      await page.mouse.move(700, 70);
-      await trigger.hover();
-      await waitUntil(
-        "the floating sidebar to take the renderer overlay tier",
-        async () =>
-          (await page.locator("[data-native-plane-overlay]").count()) === 1 &&
-          !(await remoteViewAttached(app, startUrl)),
-      );
-      await page.mouse.move(700, 70);
-      await waitUntil(
-        "the floating sidebar to leave before restoring the Browser plane",
-        async () =>
-          (await page.locator("[data-native-plane-overlay]").count()) === 0 &&
-          (await remoteViewAttached(app, startUrl)),
-      );
-      await trigger.click();
-      await waitUntil(
-        "pinning the sidebar to preserve the restored Browser plane",
-        async () =>
-          (await shell.getAttribute("data-volli-shell")) === "framed" &&
-          (await remoteViewAttached(app, startUrl)),
-      );
-      return {
-        ok: true,
-        detail: "floating=renderer plane=hidden withdrawn/pinned=browser plane=restored",
-      };
-    },
-  );
+  await must("2b", "overlays swap the Browser plane for pixels captured as they open", async () => {
+    const trigger = page.getByRole("button", {
+      name: "Toggle navigation sidebar",
+      exact: true,
+    });
+    const shell = page.locator("[data-volli-shell]");
+    if ((await shell.getAttribute("data-volli-shell")) === "framed") await trigger.click();
+    await waitUntil(
+      "the Browser plane to settle after unpinning the sidebar",
+      async () =>
+        (await shell.getAttribute("data-volli-shell")) === "ephemeral" &&
+        (await remoteViewAttached(app, startUrl)),
+    );
+    // Nothing is photographed speculatively: the stand-in is taken WHEN an
+    // overlay opens, so it is the frame the person was actually looking at.
+    if ((await page.locator("[data-browser-plane-snapshot]").count()) !== 0) {
+      throw new Error("expected no stand-in pixels before the first overlay");
+    }
+    await page.mouse.move(700, 70);
+    await trigger.hover();
+    await waitUntil(
+      "the floating sidebar to take the renderer overlay tier",
+      async () =>
+        (await page.locator("[data-native-plane-overlay]").count()) === 1 &&
+        (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
+        !(await remoteViewAttached(app, startUrl)),
+    );
+    await page.mouse.move(700, 70);
+    await waitUntil(
+      "the floating sidebar to leave before restoring the Browser plane",
+      async () =>
+        (await page.locator("[data-native-plane-overlay]").count()) === 0 &&
+        // The pixels STAY, covered by the reattached native view: there is no
+        // frame in which neither the page nor its stand-in is painted.
+        (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
+        (await remoteViewAttached(app, startUrl)),
+    );
+    await trigger.click();
+    await waitUntil(
+      "pinning the sidebar to preserve the restored Browser plane",
+      async () =>
+        (await shell.getAttribute("data-volli-shell")) === "framed" &&
+        (await remoteViewAttached(app, startUrl)),
+    );
+
+    // Exercise a real Radix menu too: this is the everyday overlay path the
+    // ticket reported, whereas the floating sidebar uses the explicit marker.
+    await page.getByRole("button", { name: "Other things to open", exact: true }).click();
+    await waitUntil(
+      "the new-session menu to freeze the Browser plane over its last pixels",
+      async () =>
+        (await page.getByRole("menu").count()) === 1 &&
+        (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
+        !(await remoteViewAttached(app, startUrl)),
+    );
+    await page.keyboard.press("Escape");
+    await waitUntil(
+      "closing the menu to restore the live Browser plane",
+      async () =>
+        (await page.getByRole("menu").count()) === 0 &&
+        (await page.locator('[data-browser-plane-snapshot="page"]').count()) === 1 &&
+        (await remoteViewAttached(app, startUrl)),
+    );
+
+    return {
+      ok: true,
+      detail:
+        "no pixels until an overlay asks; floating/menu each capture then detach; both restore",
+    };
+  });
 
   await must(
     3,

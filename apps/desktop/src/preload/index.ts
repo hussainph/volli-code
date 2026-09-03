@@ -53,6 +53,7 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
   BrowserTabListResult,
@@ -381,8 +382,9 @@ const api = {
    * operation names Volli's opaque tab id — no Chromium index, partition,
    * preload, or WebContents id crosses here — and provenance is main's to
    * stamp: a renderer-opened tab is always a `user` tab. The native surface
-   * itself is painted by main behind the renderer's measured plane; this door
-   * only steers it.
+   * itself is painted by main behind the renderer's measured plane. The one
+   * pixel read is `capture`: an inert fallback frame used only while renderer
+   * overlays must sit above a native child view.
    */
   browser: {
     open: (input: BrowserTabOpenInput): Promise<BrowserTabResult> =>
@@ -400,6 +402,8 @@ const api = {
       invoke("volli:browser-reload", input),
     setBounds: (input: BrowserTabSetBoundsInput): Promise<Result> =>
       invoke("volli:browser-set-bounds", input),
+    capture: (input: BrowserTabIdInput): Promise<BrowserTabCaptureResult> =>
+      invoke("volli:browser-capture", input),
     show: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-show", input),
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
