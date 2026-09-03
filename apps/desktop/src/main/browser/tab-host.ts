@@ -644,9 +644,24 @@ export class BrowserTabHost {
    * nobody is using — and exactly wrong for a tab a Session keeps driving
    * after the person switches to another workspace, where it stalls loads and
    * starves snapshots and screenshots of the frames they wait on until the
-   * tab is shown again. The lease is the narrow door between the two:
-   * throttling stays Chromium's default for every tab, and only while at
-   * least one agent hold is live does this tab run unthrottled.
+   * tab is shown again.
+   *
+   * The hold is NOT tab-local, and the cost is accepted on purpose. Electron
+   * documents `backgroundThrottling: false` as disabling frame throttling in
+   * the host BrowserWindow for every WebContents it displays (breaking change,
+   * 28.0.0), and the switch reaches `viz::DisplayScheduler`, which is per
+   * window rather than per view. So one agent hold lifts throttling for the
+   * whole window, Volli's own renderer included, and it lasts for the driving
+   * attachment rather than for one tool call.
+   *
+   * That breadth is the deliberate choice (VC-252 review). Releasing per tool
+   * call would re-open the same wedge one level down: `act` returns, the page
+   * is still fetching or laying out what the click started, the hold drops,
+   * and the next `snapshot` reads a page that stopped working in the gap.
+   * People are unaffected either way — a plane a person can touch is attached,
+   * and an attached plane was never throttled — so the hold buys the agent's
+   * background progress and costs idle power. If that cost ever shows up in
+   * measurement, the fix is an idle release on this lease, not a narrower one.
    *
    * Returns the release. Releasing twice releases once, and a hold on a tab
    * that is unknown or has since closed releases into nothing — wakefulness
@@ -669,7 +684,7 @@ export class BrowserTabHost {
     };
   }
 
-  /** Foreground pace while agent holds are live; Chromium's own thrift once none are. */
+  /** Foreground pace while agent holds are live; Chromium's own thrift once none are. Window-wide, per the note on {@link BrowserTabHost.holdAwake}. */
   private applyWakePolicy(entry: BrowserTabEntry): void {
     const contents = entry.view.webContents;
     if (!contents.isDestroyed()) contents.setBackgroundThrottling(entry.wakeLeases === 0);

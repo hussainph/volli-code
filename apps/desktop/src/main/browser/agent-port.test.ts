@@ -396,6 +396,20 @@ describe("createAgentBrowserPort", () => {
     ]);
   });
 
+  it("holds a tab awake before screenshotting it, with no snapshot in the call to do it for us", async () => {
+    // The screenshot path is the one that never reaches snapshotOf, so it is
+    // the only caller whose hold is entirely its own. Frames are exactly what
+    // a throttled engine stops producing, so losing this hold is the ticket's
+    // headline symptom coming straight back (VC-252 review).
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+
+    await driven.port.screenshot({ tabId: "user-1", signal });
+
+    expect(driven.wakeEvents).toEqual(["hold user-1"]);
+  });
+
   it("releases its hold on a tab that has left the Session's scope", async () => {
     const driven = portWithHost({
       tabs: [state({ tabId: "user-1", createdBy: "user" })],

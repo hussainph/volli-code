@@ -702,6 +702,24 @@ describe("BrowserTabHost wakefulness", () => {
     expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
   });
 
+  it("wakes the tab again when a fresh hold follows the last release", () => {
+    // A Session that drives a tab, stops, and drives it again must get the
+    // engine back. Restoring throttling has to leave the lease reusable, not
+    // spent (VC-252 review).
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    host.holdAwake(tab.tabId)();
+    host.holdAwake(tab.tabId);
+
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true], [false]]);
+  });
+
   it("treats a hold on an unknown tab and a release after close as nothing to do", () => {
     expect(() => host.holdAwake("missing")()).not.toThrow();
 

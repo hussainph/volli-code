@@ -170,6 +170,10 @@ export class BrowserTabController {
    * nobody reads, never a session.
    */
   async #bounded<T>(answer: Promise<T>, what: string, signal?: AbortSignal): Promise<T> {
+    // An already-aborted signal never dispatches `abort` to a listener added
+    // after the fact, so the race below would wait out the whole clock for a
+    // turn that is already gone. Answer it here instead.
+    if (signal?.aborted === true) throw signal.reason;
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
       const finish = (settle: () => void): void => {
@@ -203,6 +207,29 @@ export class BrowserTabController {
   async #command(method: string, params?: object, signal?: AbortSignal): Promise<unknown> {
     signal?.throwIfAborted();
     return await this.#bounded(this.#send(method, params), method, signal);
+  }
+
+  /**
+   * The second half of a two-part input gesture, sent whatever became of the
+   * first half.
+   *
+   * Press and release are one gesture to the page, but two commands on the
+   * wire. The bound above can reject between them — on a timeout, or when the
+   * turn is withdrawn — and a `mousePressed` with no `mouseReleased` leaves the
+   * page holding a button down for as long as it lives: text selects on every
+   * move, drags start, and the next Session to reach that tab inherits it. So
+   * the release is best-effort and deliberately UNBOUND by the caller's signal.
+   * A cancelled turn still owes the page a mouse-up, and its own failure is
+   * what the caller hears; the release only ever adds to that, never replaces
+   * it.
+   */
+  async #releaseHalf(method: string, params: object): Promise<void> {
+    try {
+      await this.#bounded(this.#send(method, params), method);
+    } catch {
+      // Nothing left to try. The engine is gone, wedged, or tearing down —
+      // all three end the same way, and the caller already has the real fault.
+    }
   }
 
   /**
@@ -392,16 +419,23 @@ export class BrowserTabController {
       await this.#command("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, signal);
       return;
     }
-    await this.#command(
-      "Input.dispatchMouseEvent",
-      { type: "mousePressed", x, y, button: "left", clickCount: 1 },
-      signal,
-    );
-    await this.#command(
-      "Input.dispatchMouseEvent",
-      { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
-      signal,
-    );
+    try {
+      await this.#command(
+        "Input.dispatchMouseEvent",
+        { type: "mousePressed", x, y, button: "left", clickCount: 1 },
+        signal,
+      );
+    } finally {
+      // The press may have reached the page and only failed to answer, so the
+      // page gets its mouse-up either way and no tab is left mid-click.
+      await this.#releaseHalf("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+      });
+    }
   }
 
   async #press(spec: string, signal?: AbortSignal): Promise<void> {
@@ -433,37 +467,39 @@ export class BrowserTabController {
       code: `Key${keyPart.toUpperCase()}`,
       keyCode: keyPart.toUpperCase().charCodeAt(0),
     };
-    await this.#command(
-      "Input.dispatchKeyEvent",
-      {
-        type: "rawKeyDown",
-        modifiers,
-        key: key.key,
-        code: key.code,
-        windowsVirtualKeyCode: key.keyCode,
-      },
-      signal,
-    );
-    // A printable single character also produces its char event, so text
-    // inputs actually receive it the way a keyboard would deliver it.
-    if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
+    const keyUp = {
+      type: "keyUp",
+      modifiers,
+      key: key.key,
+      code: key.code,
+      windowsVirtualKeyCode: key.keyCode,
+    };
+    try {
       await this.#command(
         "Input.dispatchKeyEvent",
-        { type: "char", modifiers, text: keyPart, key: key.key },
+        {
+          type: "rawKeyDown",
+          modifiers,
+          key: key.key,
+          code: key.code,
+          windowsVirtualKeyCode: key.keyCode,
+        },
         signal,
       );
+      // A printable single character also produces its char event, so text
+      // inputs actually receive it the way a keyboard would deliver it.
+      if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
+        await this.#command(
+          "Input.dispatchKeyEvent",
+          { type: "char", modifiers, text: keyPart, key: key.key },
+          signal,
+        );
+      }
+    } finally {
+      // A key down with no key up is a key the page believes is still held —
+      // modifiers latch, and every later keystroke arrives wearing them.
+      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp);
     }
-    await this.#command(
-      "Input.dispatchKeyEvent",
-      {
-        type: "keyUp",
-        modifiers,
-        key: key.key,
-        code: key.code,
-        windowsVirtualKeyCode: key.keyCode,
-      },
-      signal,
-    );
   }
 
   async #viewportCenter(signal?: AbortSignal): Promise<{ x: number; y: number }> {
