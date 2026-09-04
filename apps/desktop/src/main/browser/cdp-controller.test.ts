@@ -317,6 +317,24 @@ describe("BrowserTabController", () => {
     expect(types).toEqual(["rawKeyDown", "keyUp"]);
   });
 
+  it("attaches nothing when the turn was already withdrawn before enable", async () => {
+    // `ensureReady` attaches Chromium's debugger as a side effect. A withdrawn
+    // turn that still ran it would leave the tab owned by a debugger nobody
+    // will detach, and the person could no longer open their own DevTools.
+    let readied = 0;
+    const controller = new BrowserTabController({
+      send: async () => ({}),
+      ensureReady: async () => {
+        readied += 1;
+      },
+    });
+    const abort = new AbortController();
+    abort.abort(new Error("withdrawn"));
+
+    await expect(controller.enable(abort.signal)).rejects.toThrow("withdrawn");
+    expect(readied).toBe(0);
+  });
+
   it("sends no key up when the key spec never named a real key", async () => {
     // The gesture never started, so there is nothing to undo: a refusal must
     // not dispatch input of its own.

@@ -115,12 +115,23 @@ async function screenshotMs(tab) {
   const startedAt = Date.now();
   try {
     if (!wire.isAttached()) wire.attach("1.3");
-    await wire.sendCommand("Page.enable");
+    // `Page.enable` is a CDP command like any other and can hang on a starved
+    // engine too. Bounding only the screenshot would let this line reach the
+    // whole-bench watchdog instead of reporting a bounded result.
+    const enabled = await Promise.race([
+      wire.sendCommand("Page.enable").then(() => "enabled"),
+      sleep(SCREENSHOT_BOUND_MS).then(() => "timeout"),
+    ]);
+    if (enabled === "timeout") {
+      return { ms: Date.now() - startedAt, outcome: "TIMED OUT in Page.enable" };
+    }
     const answered = await Promise.race([
       wire.sendCommand("Page.captureScreenshot", { format: "png" }),
       sleep(SCREENSHOT_BOUND_MS).then(() => "timeout"),
     ]);
-    if (answered === "timeout") return { ms: SCREENSHOT_BOUND_MS, outcome: "TIMED OUT" };
+    if (answered === "timeout") {
+      return { ms: Date.now() - startedAt, outcome: "TIMED OUT in captureScreenshot" };
+    }
     const bytes = Buffer.from(answered.data ?? "", "base64").byteLength;
     return { ms: Date.now() - startedAt, outcome: `${(bytes / 1024).toFixed(0)}KB` };
   } catch (error) {

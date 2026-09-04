@@ -154,6 +154,10 @@ export class BrowserTabController {
 
   /** Domains the controller needs live; the host calls this once after attach. */
   async enable(signal?: AbortSignal): Promise<void> {
+    // Before the transport, not after: `ensureReady` attaches Chromium's
+    // debugger as a side effect, and a turn that is already withdrawn must not
+    // leave one attached behind it.
+    signal?.throwIfAborted();
     if (this.#ensureReady !== undefined) {
       await this.#bounded(this.#ensureReady(), "its CDP attachment", signal);
       return;

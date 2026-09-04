@@ -131,7 +131,11 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
       return wire.sendCommand(method, params);
     },
     dispose: () => {
-      if (!initialized || !wire.isAttached()) return;
+      // Attachment, not initialization, is what has to be given back. An
+      // `ensureReady` that attached and then failed or was withdrawn leaves
+      // `initialized` false over a live attachment, and while Chromium's
+      // debugger owns the tab the person cannot open their own DevTools on it.
+      if (!wire.isAttached()) return;
       initialized = false;
       try {
         wire.detach();
@@ -227,8 +231,18 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
   ): Promise<BrowserTabController> => {
     let controller = controllers.get(tab.tabId);
     if (controller === undefined) {
-      controller = new BrowserTabController(options.transportFor(tab.tabId));
-      await controller.enable(signal);
+      const pending = new BrowserTabController(options.transportFor(tab.tabId));
+      try {
+        await pending.enable(signal);
+      } catch (error) {
+        // Nothing else can reach this controller — it never entered the map, so
+        // the port's own dispose would walk straight past it. An enable that
+        // failed or was withdrawn may still have attached the debugger, so the
+        // only moment it can be handed back is here.
+        pending.dispose();
+        throw error;
+      }
+      controller = pending;
       controllers.set(tab.tabId, controller);
     }
     controller.syncGeneration(tab.generation);

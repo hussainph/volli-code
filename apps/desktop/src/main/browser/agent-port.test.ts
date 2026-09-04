@@ -410,6 +410,34 @@ describe("createAgentBrowserPort", () => {
     expect(driven.wakeEvents).toEqual(["hold user-1"]);
   });
 
+  it("hands back a transport whose enable failed, instead of leaking its attachment", async () => {
+    // A controller whose enable throws never enters the port's map, so the
+    // port's own dispose walks straight past it. If it does not let go here,
+    // Chromium's debugger stays attached to the tab and the person can no
+    // longer open DevTools on it (CodeRabbit, PR #457).
+    let disposed = 0;
+    const failing = createAgentBrowserPort({
+      host: fakeHost([state({ tabId: "user-1", createdBy: "user" })]).host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      transportFor: () => ({
+        send: async () => ({}),
+        ensureReady: async () => {
+          throw new Error("another debugger owns this tab");
+        },
+        dispose: () => {
+          disposed += 1;
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+
+    await expect(failing.snapshot({ tabId: "user-1", signal })).rejects.toThrow(
+      "another debugger owns this tab",
+    );
+    expect(disposed).toBe(1);
+  });
+
   it("releases its hold on a tab that has left the Session's scope", async () => {
     const driven = portWithHost({
       tabs: [state({ tabId: "user-1", createdBy: "user" })],
