@@ -35,9 +35,94 @@ function assistant(overrides: Partial<AssistantMessage> = {}): AssistantMessage 
   };
 }
 
+/**
+ * The sentence Anthropic sends when a replayed `thinking` block is bound to a
+ * prefix that has since changed, verbatim from the preserved-thinking doc,
+ * with the clause it appends without the beta header and the closing one that
+ * names what changed. Every property this file pins about it — that it
+ * survives the sanitizer whole, that it classifies as `reasoning`, that no
+ * retry predicate wants it — is read off these bytes rather than a paraphrase.
+ */
+const SIGNATURE_REFUSED =
+  'messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to "drop_block". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header. The `system` prompt differs from when the block was created.';
+
+/** The same refusal as the Anthropic SDK hands it to pi-ai: status, then the JSON body. */
+const SIGNATURE_REFUSED_ENVELOPE = `400 ${JSON.stringify({
+  type: "error",
+  error: { type: "invalid_request_error", message: SIGNATURE_REFUSED },
+  request_id: "req_011CVK9vX3mF7pQwLtRs2ZbN",
+})}`;
+
+/** The older refusal every thinking model sends when a block came back altered. */
+const BLOCK_MODIFIED =
+  "messages.3.content.0: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.";
+
 describe("sanitizeDiagnostic", () => {
   it("collapses whitespace", () => {
     expect(sanitizeDiagnostic("  request\n  failed  ")).toBe("request failed");
+  });
+
+  it("keeps the provider's own vocabulary out of the redactor (VC-242)", () => {
+    // The two identifiers the preserved-thinking refusal exists to name are 24
+    // and 36 characters of word characters, which is exactly the shape the
+    // opaque-run rule redacts. A person reading `set [redacted] to "drop_block"`
+    // has been told to fix something they cannot see.
+    const sanitized = sanitizeDiagnostic(SIGNATURE_REFUSED);
+    expect(sanitized).toBe(SIGNATURE_REFUSED);
+    expect(sanitized).toContain("prefix_mismatch_behavior");
+    expect(sanitized).toContain("thinking-binding-controls-2026-08-01");
+    // And the sentence that says what changed is the last one; the bound must
+    // reach it.
+    expect(sanitized).toContain("The `system` prompt differs from when the block was created.");
+    expect(sanitized).not.toContain("[redacted]");
+  });
+
+  it("still redacts everything that only looks like words by accident", () => {
+    // What separates vocabulary from a credential, one property at a time: a
+    // key is one long segment, or mixed case, or has no plain word in it.
+    expect(sanitizeDiagnostic("key a3f9c2e17b4d8a6f0e5c3b2a19d7f4e6 refused")).toBe(
+      "key [redacted] refused",
+    );
+    expect(sanitizeDiagnostic("key AIzaSyD-example_key-with_mixed-case1 refused")).toBe(
+      "key [redacted] refused",
+    );
+    expect(sanitizeDiagnostic("id 123e4567-e89b-12d3-a456-426614174000 refused")).toBe(
+      "id [redacted] refused",
+    );
+    expect(sanitizeDiagnostic("token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 refused")).toBe(
+      "token [redacted] refused",
+    );
+  });
+
+  it("unwraps a provider's error envelope down to its sentence", () => {
+    // pi-ai hands on the Anthropic SDK's message as is: the status, then the
+    // whole JSON body. The envelope is a log's business; the request id inside
+    // it is redacted like any other opaque run and the sentence is what is
+    // kept. The status stays in front because the auth classifier reads it.
+    expect(sanitizeDiagnostic(SIGNATURE_REFUSED_ENVELOPE)).toBe(`400 ${SIGNATURE_REFUSED}`);
+    expect(
+      sanitizeDiagnostic(
+        '401 {"error":{"message":"Incorrect API key provided.","type":"invalid_request_error"}}',
+      ),
+    ).toBe("401 Incorrect API key provided.");
+    expect(sanitizeDiagnostic('{"message":"upstream timeout"}')).toBe("upstream timeout");
+  });
+
+  it("leaves text that is not an envelope alone, braces and all", () => {
+    expect(sanitizeDiagnostic("expected { but found }")).toBe("expected { but found }");
+    expect(sanitizeDiagnostic('{"code":400}')).toBe('{"code":400}');
+    expect(sanitizeDiagnostic("not json {")).toBe("not json {");
+    // An `error` that is not an object, or one with nothing to say, yields to
+    // the top-level sentence; an envelope with neither is not an envelope.
+    expect(sanitizeDiagnostic('{"error":null,"message":"top-level sentence"}')).toBe(
+      "top-level sentence",
+    );
+    expect(sanitizeDiagnostic('{"error":{"message":""},"message":"the other one"}')).toBe(
+      "the other one",
+    );
+    expect(sanitizeDiagnostic('{"error":{"message":""},"message":""}')).toBe(
+      '{"error":{"message":""},"message":""}',
+    );
   });
 
   it("redacts prefixed provider keys", () => {
@@ -54,7 +139,7 @@ describe("sanitizeDiagnostic", () => {
 
   it("bounds the length", () => {
     const long = sanitizeDiagnostic("word ".repeat(200));
-    expect(long).toHaveLength(301);
+    expect(long).toHaveLength(401);
     expect(long.endsWith("…")).toBe(true);
   });
 });
@@ -64,6 +149,11 @@ describe("attentionReasonFor", () => {
     expect(attentionReasonFor({ reason: "auth", message: "" })).toBe("auth");
     expect(attentionReasonFor({ reason: "configuration", message: "" })).toBe("configuration");
     expect(attentionReasonFor({ reason: "context", message: "" })).toBe("context");
+    // The generic dead end with a Retry, and deliberately nothing more specific:
+    // by the time this reaches a person the runtime has already dropped the
+    // reasoning and been refused again, so the one repair the doc names is
+    // spent and what is left is a run to try again.
+    expect(attentionReasonFor({ reason: "reasoning", message: "" })).toBe("runtime-failure");
     expect(attentionReasonFor({ reason: "model", message: "" })).toBe("runtime-failure");
     expect(attentionReasonFor({ reason: "aborted", message: "" })).toBe("runtime-failure");
     expect(attentionReasonFor({ reason: "unknown", message: "" })).toBe("runtime-failure");
@@ -82,6 +172,22 @@ describe("classifyDiagnostic", () => {
   it("recognises provider context-window failures", () => {
     expect(classifyDiagnostic("maximum context length exceeded")).toBe("context");
     expect(classifyDiagnostic("too many tokens for this context window")).toBe("context");
+  });
+
+  it("recognises a refused reasoning block by either of its sentences (VC-242)", () => {
+    // The preserved-thinking refusal, and the older one every thinking model
+    // sends for a block that came back altered. Both are answered the same way
+    // — drop the reasoning, send the turn again — and neither is a `model`
+    // failure, which is the arm that would have handed them a Retry that
+    // re-sends the identical array forever.
+    expect(classifyDiagnostic(sanitizeDiagnostic(SIGNATURE_REFUSED))).toBe("reasoning");
+    expect(classifyDiagnostic(sanitizeDiagnostic(SIGNATURE_REFUSED_ENVELOPE))).toBe("reasoning");
+    expect(classifyDiagnostic(sanitizeDiagnostic(BLOCK_MODIFIED))).toBe("reasoning");
+    // Ahead of the broader signals: the sentence names a header and a setting,
+    // and neither the auth nor the context pattern may claim it.
+    expect(classifyDiagnostic("Invalid `signature` in `thinking` block; check your api key")).toBe(
+      "reasoning",
+    );
   });
 
   it("recognises each provider family's own spent-window sentence (VC-155)", () => {
@@ -133,6 +239,9 @@ describe("isTransientTransportFailure", () => {
     "You exceeded your current quota",
     "maximum context length exceeded",
     "No API key found for anthropic",
+    // Re-sending the identical array can never clear it; the doc says so.
+    SIGNATURE_REFUSED,
+    BLOCK_MODIFIED,
   ])("leaves a failure only the user can answer alone: %s", (message) => {
     expect(isTransientTransportFailure(failureFor(message))).toBe(false);
   });

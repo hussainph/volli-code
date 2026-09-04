@@ -89,6 +89,7 @@ import {
   teeObservationsToSink,
 } from "./observability";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
+import { withoutReasoning } from "./reasoning";
 import { createSessionTools } from "./tools";
 import {
   assistantUsage,
@@ -418,6 +419,17 @@ function userMessageText(message: AgentMessage): string {
  * summary, before its retained tail. Keeping the tail last is required by
  * overflow retry, which continues from the user/tool message the failed reply
  * was answering.
+ *
+ * Two callers, and they must agree byte for byte. A live compaction hands
+ * this the tail Pi chose and persists the result INSIDE the compaction entry,
+ * so the restored message is part of what every later attach reads back. A
+ * resume runs it over the whole recovered context, where a tail written that
+ * way already holds every block and nothing is inserted; only an entry
+ * persisted before VC-242 still earns the insert. Recomputing it on every
+ * attach used to be the only path, and it could disagree with the live array
+ * that produced the reasoning after it — a resource activated before the
+ * summary and again after it was restored live and not on resume — which is
+ * a prefix edit under a provider that binds reasoning to its prefix.
  */
 function restoreCompactedResources(
   messages: readonly AgentMessage[],
@@ -458,6 +470,53 @@ function recoverableMessage(entry: MessageEntry): boolean {
 }
 
 const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
+
+/**
+ * The custom entry type for a fact about the context itself, as distinct from
+ * an observation about the Session.
+ *
+ * Its own type rather than a new observation kind, because the observation
+ * marker's reader quarantines and counts every entry of its type it cannot
+ * validate, and a context fact is not a lost transcript fact — it is an
+ * instruction to the replay. One kind so far: `reasoning-dropped`, written at
+ * the moment {@link withoutReasoning} was applied to the live array, so a
+ * later attach applies the same edit to everything before it and reproduces
+ * the array the reasoning after it was bound to. Without it a resume would
+ * put the dropped blocks back and be refused on its first turn, every time.
+ */
+const VOLLI_CONTEXT_MARKER = "volli.context.v1";
+
+interface ReasoningDroppedMarker {
+  kind: "reasoning-dropped";
+}
+
+function isReasoningDroppedMarker(entry: Entry): boolean {
+  return (
+    entry.type === "custom" &&
+    entry.customType === VOLLI_CONTEXT_MARKER &&
+    isRecord(entry.data) &&
+    entry.data["kind"] === "reasoning-dropped"
+  );
+}
+
+/**
+ * The durable branch with every reasoning drop this Session made applied.
+ *
+ * Every message entry ahead of the newest `reasoning-dropped` marker loses its
+ * reasoning, exactly as the live array did when the marker was written;
+ * everything after it is what the model has produced since and is kept whole.
+ * A compaction entry's retained tail is not touched here because
+ * {@link contextMessages} strips it on every read regardless.
+ */
+function withDroppedReasoning(entries: readonly Entry[]): Entry[] {
+  const droppedBefore = entries.findLastIndex(isReasoningDroppedMarker);
+  if (droppedBefore < 0) return [...entries];
+  return entries.map((entry, index) =>
+    index < droppedBefore && entry.type === "message"
+      ? { ...entry, message: withoutReasoning(entry.message) }
+      : entry,
+  );
+}
 
 /**
  * The observations a restart can be told about again.
@@ -1014,11 +1073,18 @@ async function attachSession(
      * own elision rule and is the only way messages are derived here.
      */
     const recoveredContext = contextMessages(
-      conversationPath(recoveredEntries, conversationReader),
+      conversationPath(withDroppedReasoning(recoveredEntries), conversationReader),
     );
+    // A reply withheld from the middle of history invalidates every reasoning
+    // block after it under a provider that chains them, and the attach knows it
+    // did that. Dropping the reasoning from the whole replay is the doc's
+    // "every thinking block before some point" removal, which is always valid,
+    // where leaving the later blocks in would be a first turn refused (VC-242).
+    const replayableContext =
+      disagreedSettledEntryIds.size > 0 ? recoveredContext.map(withoutReasoning) : recoveredContext;
     const recoveredMessages = recoveredEntries.some((entry) => entry.type === "compaction")
-      ? restoreCompactedResources(recoveredContext, [...activeMessageResources.values()])
-      : recoveredContext;
+      ? restoreCompactedResources(replayableContext, [...activeMessageResources.values()])
+      : replayableContext;
     const activeAttentionReasons = new Set<AttentionObservation["reason"]>();
     const openTurnIds = new Set<string>();
     for (const observation of recoveredObservations) {
@@ -1165,6 +1231,16 @@ async function attachSession(
      * one, and a turn resumed in place carries on spending the same one.
      */
     let overflowRecoveryUsed = false;
+    /**
+     * Whether this turn has already dropped the conversation's reasoning.
+     *
+     * The same shape as the overflow budget, for the same reason: a turn the
+     * provider refuses for its earlier reasoning is sent again without any,
+     * once. A second refusal is not about the reasoning — there is none left
+     * to drop — and is the person's to look at. Reset where the other per-turn
+     * budgets are.
+     */
+    let reasoningRecoveryUsed = false;
     /**
      * Whether something already owns the live context, and what to wait for.
      *
@@ -1484,10 +1560,17 @@ async function attachSession(
       enabled: host.compactionPolicy().autoCompaction,
     });
 
-    /** The durable branch, read as a conversation. Costs the whole history. */
+    /**
+     * The durable branch, read as a conversation. Costs the whole history.
+     *
+     * Read under the same reasoning drops as the attach-time replay, so a
+     * context rebuilt from this path — a compaction's — is rebuilt from what
+     * the model was actually sent rather than from what the sidecar remembers
+     * it once holding.
+     */
     const conversationBranch = async (): Promise<Entry[]> =>
       conversationPath(
-        await sidecar.findEntriesOnBranch({ order: "oldestFirst" }),
+        withDroppedReasoning(await sidecar.findEntriesOnBranch({ order: "oldestFirst" })),
         conversationReader,
       );
 
@@ -1555,6 +1638,14 @@ async function attachSession(
           // generated by the model currently selected in the chat pane.
           model: agent.state.model,
           settings: compactionSettings(),
+          // The resources this Session had activated ride INSIDE the durable
+          // entry, ahead of the kept turns, rather than being inserted into
+          // the live array once the entry is written. What the model is sent
+          // after this compaction is then exactly what a later attach reads
+          // back from the entry, which a provider that binds each reasoning
+          // block to everything before it requires (VC-242).
+          retainedTail: (tail) =>
+            restoreCompactedResources(tail, [...activeMessageResources.values()]),
           ...(signal === undefined ? {} : { signal }),
           ...(instructions === undefined ? {} : { customInstructions: instructions }),
         });
@@ -1580,9 +1671,10 @@ async function attachSession(
           // away. Take that away and a turn started mid-summary is one this line
           // overwrites — its message and its reply gone from the model's context
           // while both remain in the ledger and on screen.
-          agent.state.messages = restoreCompactedResources(outcome.messages, [
-            ...activeMessageResources.values(),
-          ]);
+          //
+          // Already whole: the summary, the restored resources and the kept
+          // turns without their reasoning, all read off the entry just written.
+          agent.state.messages = outcome.messages;
         }
         // Recorded before the compaction fact, so a crash between the two
         // loses the summary rather than the bill: the summary is recoverable
@@ -1729,6 +1821,26 @@ async function attachSession(
         await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
         return true;
       }
+      // **Refused reasoning is answered by dropping it.** A provider that binds
+      // each `thinking` block to everything sent before it has found a block
+      // whose prefix this runtime changed — a compaction entry written before
+      // the tail was stripped, a resume that could not reproduce the live
+      // array — and it says so with a 400 that the identical request can
+      // never clear. The doc names exactly one repair without the beta header:
+      // strip every reasoning block, keep each turn's text and tool calls, and
+      // send it once more. That loses nothing a person can see (the model's
+      // hidden scratchpad from earlier turns) and is the same class of act as
+      // the overflow compaction below, which loses far more without asking.
+      // The drop is made durable before the retry so a later attach makes the
+      // same edit and does not put the refused blocks back.
+      if (failed.reason === "reasoning" && !reasoningRecoveryUsed) {
+        reasoningRecoveryUsed = true;
+        agent.state.messages = agent.state.messages.map(withoutReasoning);
+        await sidecar.appendCustomEntry(VOLLI_CONTEXT_MARKER, {
+          kind: "reasoning-dropped",
+        } satisfies ReasoningDroppedMarker);
+        return true;
+      }
       if (failed.reason !== "context" || overflowRecoveryUsed) return false;
       overflowRecoveryUsed = true;
       // The run's own signal, not the attachment's: a person pressing stop
@@ -1755,6 +1867,7 @@ async function attachSession(
           turnId = randomUUID();
           autoRetryAttempts = 0;
           overflowRecoveryUsed = false;
+          reasoningRecoveryUsed = false;
           await commitObservation(
             await persistObservation({ kind: "turn", state: "started", turnId }),
           );
@@ -1901,15 +2014,27 @@ async function attachSession(
           // Including a context refusal that compaction could not answer — an
           // overflow with nothing left to summarize is still a dead end, and
           // still has to say so.
+          //
+          // What the runtime already spent on this turn rides the message, so
+          // a person reading the dead end knows the automatic repairs are behind
+          // it: the transport retries, and the reasoning it dropped and was
+          // refused again without. Appended to the already-sanitized failure
+          // rather than sanitized with it: the note is this runtime's own text,
+          // and re-bounding the whole would cut the note off the end of a
+          // provider sentence that already fills the bound.
+          const spent = [
+            ...(autoRetryAttempts > 0 ? [`after ${autoRetryAttempts} retries`] : []),
+            ...(reasoningRecoveryUsed && failure.reason === "reasoning"
+              ? ["after dropping this conversation's earlier reasoning"]
+              : []),
+          ];
           const reason = attentionReasonFor(failure);
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
             message:
-              autoRetryAttempts === 0
-                ? failure.message
-                : sanitizeDiagnostic(`${failure.message} (after ${autoRetryAttempts} retries)`),
+              spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);

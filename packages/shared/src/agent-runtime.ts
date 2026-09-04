@@ -986,9 +986,18 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
   return sessionToolBindings(spec).map((binding) => binding.tool);
 }
 
-/** Sanitized failure surfaced through observations. Never contains secrets. */
+/**
+ * Sanitized failure surfaced through observations. Never contains secrets.
+ *
+ * `reasoning` is a provider refusing the conversation's own earlier reasoning:
+ * a `thinking` block whose signature no longer matches what was sent before
+ * it (Claude's preserved thinking), or one the provider says was modified. It
+ * is its own reason because it has its own repair — drop the reasoning and
+ * send the turn again — and because re-sending the same request never clears
+ * it, so it must not be mistaken for a transport fault worth retrying as is.
+ */
 export interface RuntimeFailure {
-  reason: "auth" | "configuration" | "context" | "model" | "aborted" | "unknown";
+  reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
 
