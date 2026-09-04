@@ -33,6 +33,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
+  '@earendil-works/pi-ai@0.84.3': 8e4560bc88b9202cf7e2fd69f1311d28a2e6fdd1705aeb45bb138486328d599b
   restty@0.2.0: a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af
 
 importers:
@@ -366,7 +367,7 @@ importers:
         version: 0.84.3(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-ai':
         specifier: 0.84.3
-        version: 0.84.3(ws@8.21.3)(zod@4.4.3)
+        version: 0.84.3(patch_hash=8e4560bc88b9202cf7e2fd69f1311d28a2e6fdd1705aeb45bb138486328d599b)(ws@8.21.3)(zod@4.4.3)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -8500,7 +8501,7 @@ snapshots:
 
   '@earendil-works/pi-agent-core@0.84.3(ws@8.21.3)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/pi-ai': 0.84.3(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.84.3(patch_hash=8e4560bc88b9202cf7e2fd69f1311d28a2e6fdd1705aeb45bb138486328d599b)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-telemetry': 0.84.3
       diff: 8.0.4
       ignore: 7.0.5
@@ -8514,7 +8515,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.84.3(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.84.3(patch_hash=8e4560bc88b9202cf7e2fd69f1311d28a2e6fdd1705aeb45bb138486328d599b)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

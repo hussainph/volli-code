@@ -103,6 +103,7 @@ packageExtensions:
 
 patchedDependencies:
   "@dnd-kit/core@6.3.1": patches/@dnd-kit__core@6.3.1.patch
+  "@earendil-works/pi-ai@0.84.3": patches/@earendil-works__pi-ai@0.84.3.patch
   restty@0.2.0: patches/restty@0.2.0.patch
 
 peerDependencyRules:
