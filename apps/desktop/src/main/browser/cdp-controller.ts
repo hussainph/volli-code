@@ -59,9 +59,19 @@ export interface TabSnapshot {
 export interface ControllerLimits {
   maxSnapshotChars?: number;
   maxWaitMs?: number;
+  maxCommandMs?: number;
 }
 
 const MAX_WAIT_MS = 5_000;
+
+/**
+ * How long one CDP command may go unanswered before its call fails. A crashed
+ * renderer or an engine starved of frames can leave `webContents.debugger`
+ * waiting forever, and an unbounded wait wedges the whole Session behind one
+ * tool call (VC-252); the bound turns that into one readable failure the
+ * caller can act on.
+ */
+export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 
 function narrowedLimit(requested: number | undefined, maximum: number): number {
   return Math.min(Math.max(requested ?? maximum, 0), maximum);
@@ -138,18 +148,92 @@ export class BrowserTabController {
     this.#limits = {
       maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
       maxWaitMs: narrowedLimit(limits.maxWaitMs, MAX_WAIT_MS),
+      maxCommandMs: narrowedLimit(limits.maxCommandMs, CDP_COMMAND_TIMEOUT_MS),
     };
   }
 
   /** Domains the controller needs live; the host calls this once after attach. */
-  async enable(): Promise<void> {
+  async enable(signal?: AbortSignal): Promise<void> {
+    // Before the transport, not after: `ensureReady` attaches Chromium's
+    // debugger as a side effect, and a turn that is already withdrawn must not
+    // leave one attached behind it.
+    signal?.throwIfAborted();
     if (this.#ensureReady !== undefined) {
-      await this.#ensureReady();
+      await this.#bounded(this.#ensureReady(), "its CDP attachment", signal);
       return;
     }
-    await this.#send("Accessibility.enable");
-    await this.#send("DOM.enable");
-    await this.#send("Page.enable");
+    await this.#command("Accessibility.enable", undefined, signal);
+    await this.#command("DOM.enable", undefined, signal);
+    await this.#command("Page.enable", undefined, signal);
+  }
+
+  /**
+   * One engine answer, raced against the caller's signal and the command
+   * clock. Losing either way rejects THIS call while the transport's own
+   * promise stays harmlessly attached — a late answer settles a promise
+   * nobody reads, never a session.
+   */
+  async #bounded<T>(answer: Promise<T>, what: string, signal?: AbortSignal): Promise<T> {
+    // An already-aborted signal never dispatches `abort` to a listener added
+    // after the fact, so the race below would wait out the whole clock for a
+    // turn that is already gone. Answer it here instead.
+    if (signal?.aborted === true) throw signal.reason;
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (settle: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        settle();
+      };
+      const abort = (): void => {
+        finish(() => reject(signal?.reason ?? new Error("Browser action cancelled")));
+      };
+      const timer = setTimeout(() => {
+        finish(() =>
+          reject(
+            new Error(
+              `The Browser Tab's engine did not answer ${what} within ${this.#limits.maxCommandMs}ms.`,
+            ),
+          ),
+        );
+      }, this.#limits.maxCommandMs);
+      signal?.addEventListener("abort", abort, { once: true });
+      answer.then(
+        (value) => finish(() => resolve(value)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+    });
+  }
+
+  /** Every CDP command this controller speaks goes through the bounded wire. */
+  async #command(method: string, params?: object, signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted();
+    return await this.#bounded(this.#send(method, params), method, signal);
+  }
+
+  /**
+   * The second half of a two-part input gesture, sent whatever became of the
+   * first half.
+   *
+   * Press and release are one gesture to the page, but two commands on the
+   * wire. The bound above can reject between them — on a timeout, or when the
+   * turn is withdrawn — and a `mousePressed` with no `mouseReleased` leaves the
+   * page holding a button down for as long as it lives: text selects on every
+   * move, drags start, and the next Session to reach that tab inherits it. So
+   * the release is best-effort and deliberately UNBOUND by the caller's signal.
+   * A cancelled turn still owes the page a mouse-up, and its own failure is
+   * what the caller hears; the release only ever adds to that, never replaces
+   * it.
+   */
+  async #releaseHalf(method: string, params: object): Promise<void> {
+    try {
+      await this.#bounded(this.#send(method, params), method);
+    } catch {
+      // Nothing left to try. The engine is gone, wedged, or tearing down —
+      // all three end the same way, and the caller already has the real fault.
+    }
   }
 
   /**
@@ -177,7 +261,7 @@ export class BrowserTabController {
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
     signal?.throwIfAborted();
-    const answer = (await this.#send("Accessibility.getFullAXTree")) as {
+    const answer = (await this.#command("Accessibility.getFullAXTree", undefined, signal)) as {
       nodes?: AXNodeLike[];
     };
     signal?.throwIfAborted();
@@ -207,9 +291,9 @@ export class BrowserTabController {
     }
     switch (request.kind) {
       case "click":
-        return this.#pointer(this.#resolve(request.ref), "click");
+        return this.#pointer(this.#resolve(request.ref), "click", signal);
       case "hover":
-        return this.#pointer(this.#resolve(request.ref), "hover");
+        return this.#pointer(this.#resolve(request.ref), "hover", signal);
       case "type": {
         const backendNodeId = this.#resolve(request.ref);
         if (request.text === undefined) {
@@ -218,13 +302,12 @@ export class BrowserTabController {
             "type needs text to insert into the element.",
           );
         }
-        await this.#send("DOM.focus", { backendNodeId });
-        signal?.throwIfAborted();
-        await this.#send("Input.insertText", { text: request.text });
+        await this.#command("DOM.focus", { backendNodeId }, signal);
+        await this.#command("Input.insertText", { text: request.text }, signal);
         return;
       }
       case "press":
-        return this.#press(request.key ?? "");
+        return this.#press(request.key ?? "", signal);
       case "select": {
         const backendNodeId = this.#resolve(request.ref);
         if (request.text === undefined) {
@@ -233,7 +316,7 @@ export class BrowserTabController {
             "select needs the option value or label to choose.",
           );
         }
-        const resolved = (await this.#send("DOM.resolveNode", { backendNodeId })) as {
+        const resolved = (await this.#command("DOM.resolveNode", { backendNodeId }, signal)) as {
           object?: { objectId?: string };
         };
         const objectId = resolved.object?.objectId;
@@ -243,13 +326,16 @@ export class BrowserTabController {
             "The element behind that ref is gone from the page: take a fresh snapshot.",
           );
         }
-        signal?.throwIfAborted();
-        const selected = (await this.#send("Runtime.callFunctionOn", {
-          objectId,
-          functionDeclaration: SELECT_OPTION_FUNCTION,
-          arguments: [{ value: request.text }],
-          returnByValue: true,
-        })) as { result?: { value?: unknown } };
+        const selected = (await this.#command(
+          "Runtime.callFunctionOn",
+          {
+            objectId,
+            functionDeclaration: SELECT_OPTION_FUNCTION,
+            arguments: [{ value: request.text }],
+            returnByValue: true,
+          },
+          signal,
+        )) as { result?: { value?: unknown } };
         if (selected.result?.value !== true) {
           throw new BrowserRefusal(
             "browser.unactionable",
@@ -262,15 +348,18 @@ export class BrowserTabController {
         if (request.direction === undefined) {
           throw new BrowserRefusal("browser.unactionable", "scroll needs a direction: up or down.");
         }
-        const { x, y } = await this.#viewportCenter();
-        signal?.throwIfAborted();
-        await this.#send("Input.dispatchMouseEvent", {
-          type: "mouseWheel",
-          x,
-          y,
-          deltaX: 0,
-          deltaY: request.direction === "up" ? -500 : 500,
-        });
+        const { x, y } = await this.#viewportCenter(signal);
+        await this.#command(
+          "Input.dispatchMouseEvent",
+          {
+            type: "mouseWheel",
+            x,
+            y,
+            deltaX: 0,
+            deltaY: request.direction === "up" ? -500 : 500,
+          },
+          signal,
+        );
         return;
       }
       case "wait": {
@@ -285,14 +374,13 @@ export class BrowserTabController {
     signal?: AbortSignal,
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
-    const captured = (await this.#send("Page.captureScreenshot", { format: "png" })) as {
+    const captured = (await this.#command("Page.captureScreenshot", { format: "png" }, signal)) as {
       data?: string;
     };
     if (typeof captured.data !== "string" || captured.data.length === 0) {
       throw new Error("Chromium returned no Browser Tab screenshot data");
     }
-    signal?.throwIfAborted();
-    const metrics = (await this.#send("Page.getLayoutMetrics")) as {
+    const metrics = (await this.#command("Page.getLayoutMetrics", undefined, signal)) as {
       cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
     };
     return {
@@ -313,9 +401,13 @@ export class BrowserTabController {
     return backendNodeId;
   }
 
-  async #pointer(backendNodeId: number, kind: "click" | "hover"): Promise<void> {
-    await this.#send("DOM.scrollIntoViewIfNeeded", { backendNodeId });
-    const box = (await this.#send("DOM.getBoxModel", { backendNodeId })) as {
+  async #pointer(
+    backendNodeId: number,
+    kind: "click" | "hover",
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.#command("DOM.scrollIntoViewIfNeeded", { backendNodeId }, signal);
+    const box = (await this.#command("DOM.getBoxModel", { backendNodeId }, signal)) as {
       model?: { content?: number[] };
     };
     const quad = box.model?.content;
@@ -328,26 +420,29 @@ export class BrowserTabController {
     const x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
     const y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
     if (kind === "hover") {
-      await this.#send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await this.#command("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, signal);
       return;
     }
-    await this.#send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
-    });
-    await this.#send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x,
-      y,
-      button: "left",
-      clickCount: 1,
-    });
+    try {
+      await this.#command(
+        "Input.dispatchMouseEvent",
+        { type: "mousePressed", x, y, button: "left", clickCount: 1 },
+        signal,
+      );
+    } finally {
+      // The press may have reached the page and only failed to answer, so the
+      // page gets its mouse-up either way and no tab is left mid-click.
+      await this.#releaseHalf("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+      });
+    }
   }
 
-  async #press(spec: string): Promise<void> {
+  async #press(spec: string, signal?: AbortSignal): Promise<void> {
     const parts = spec
       .split("+")
       .map((one) => one.trim())
@@ -376,34 +471,43 @@ export class BrowserTabController {
       code: `Key${keyPart.toUpperCase()}`,
       keyCode: keyPart.toUpperCase().charCodeAt(0),
     };
-    await this.#send("Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      modifiers,
-      key: key.key,
-      code: key.code,
-      windowsVirtualKeyCode: key.keyCode,
-    });
-    // A printable single character also produces its char event, so text
-    // inputs actually receive it the way a keyboard would deliver it.
-    if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
-      await this.#send("Input.dispatchKeyEvent", {
-        type: "char",
-        modifiers,
-        text: keyPart,
-        key: key.key,
-      });
-    }
-    await this.#send("Input.dispatchKeyEvent", {
+    const keyUp = {
       type: "keyUp",
       modifiers,
       key: key.key,
       code: key.code,
       windowsVirtualKeyCode: key.keyCode,
-    });
+    };
+    try {
+      await this.#command(
+        "Input.dispatchKeyEvent",
+        {
+          type: "rawKeyDown",
+          modifiers,
+          key: key.key,
+          code: key.code,
+          windowsVirtualKeyCode: key.keyCode,
+        },
+        signal,
+      );
+      // A printable single character also produces its char event, so text
+      // inputs actually receive it the way a keyboard would deliver it.
+      if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
+        await this.#command(
+          "Input.dispatchKeyEvent",
+          { type: "char", modifiers, text: keyPart, key: key.key },
+          signal,
+        );
+      }
+    } finally {
+      // A key down with no key up is a key the page believes is still held —
+      // modifiers latch, and every later keystroke arrives wearing them.
+      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp);
+    }
   }
 
-  async #viewportCenter(): Promise<{ x: number; y: number }> {
-    const metrics = (await this.#send("Page.getLayoutMetrics")) as {
+  async #viewportCenter(signal?: AbortSignal): Promise<{ x: number; y: number }> {
+    const metrics = (await this.#command("Page.getLayoutMetrics", undefined, signal)) as {
       cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
     };
     return {

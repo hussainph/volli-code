@@ -64,6 +64,7 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
+  setBackgroundThrottling = vi.fn();
   // The host encodes JPEG, so the fake answers the same door: a NativeImage
   // whose `toJPEG` returns the bytes the frame should carry.
   captureBytes = "page";
@@ -675,6 +676,67 @@ describe("BrowserTabHost native surface", () => {
     views[0]?.webContents.emit("destroyed");
 
     expect(() => host.hide(tab.tabId)).not.toThrow();
+  });
+});
+
+describe("BrowserTabHost wakefulness", () => {
+  it("runs the engine at foreground pace while any agent hold is live, and restores throttling at the last release", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    const first = host.holdAwake(tab.tabId);
+    const second = host.holdAwake(tab.tabId);
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    // Releasing one hold twice is one release: the other Session's hold stands.
+    first();
+    first();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    second();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("wakes the tab again when a fresh hold follows the last release", () => {
+    // A Session that drives a tab, stops, and drives it again must get the
+    // engine back. Restoring throttling has to leave the lease reusable, not
+    // spent (VC-252 review).
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    host.holdAwake(tab.tabId)();
+    host.holdAwake(tab.tabId);
+
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true], [false]]);
+  });
+
+  it("treats a hold on an unknown tab and a release after close as nothing to do", () => {
+    expect(() => host.holdAwake("missing")()).not.toThrow();
+
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+    const release = host.holdAwake(tab.tabId);
+    host.close(tab.tabId);
+
+    // The tab is already forgotten; a late release owes its torn-down
+    // contents no throttling answer.
+    expect(() => release()).not.toThrow();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
   });
 });
 

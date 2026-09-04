@@ -52,6 +52,8 @@ interface BrowserTabEntry {
   devToolsAttached: boolean;
   console: RuntimeBrowserConsoleMessage[];
   consoleTruncated: boolean;
+  /** Live agent holds against background throttling; see {@link BrowserTabHost.holdAwake}. */
+  wakeLeases: number;
 }
 
 /**
@@ -357,6 +359,7 @@ export class BrowserTabHost {
       devToolsAttached: false,
       console: [],
       consoleTruncated: false,
+      wakeLeases: 0,
     };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
@@ -629,6 +632,76 @@ export class BrowserTabHost {
    */
   webContentsOf(tabId: string): WebContentsView["webContents"] {
     return this.requireTab(tabId).view.webContents;
+  }
+
+  /**
+   * Keeps one tab's engine at foreground pace while an agent drives it
+   * (VC-252).
+   *
+   * A hidden Browser Tab is a detached WebContentsView, and Chromium answers
+   * detachment with background throttling: timers near 1Hz, no animation
+   * frames, no compositor output. That is the right resource policy for a tab
+   * nobody is using — and exactly wrong for a tab a Session keeps driving
+   * after the person switches to another workspace, where it stalls loads and
+   * starves snapshots and screenshots of the frames they wait on until the
+   * tab is shown again.
+   *
+   * Measured, not argued — `e2e/browser-throttle-bench.mjs`, Electron 44 /
+   * Chromium 152 / macOS arm64, against the visible baseline of 100 timer
+   * ticks and 60 frames a second:
+   *
+   *   detached, no hold            1.0 ticks/s,  0 fps   (0.01x — the stall)
+   *   detached + own hold        100.0 ticks/s, 60 fps   (1.00x — the fix)
+   *   another detached tab         1.0 ticks/s,  0 fps   while the first holds
+   *   window's own renderer        1.0 ticks/s           minimised, first holds
+   *
+   * So the lease is PER-TAB in practice. Electron's 28.0.0 note —
+   * `backgroundThrottling: false` reaching every WebContents in the host
+   * BrowserWindow — reads wider than it measures: it says "displayed by", and
+   * neither a detached view nor a minimised window's own page is displayed.
+   * Holding one Browser Tab awake does not stop the rest of the app sleeping,
+   * and total app CPU across six open tabs did not move (3.2% -> 2.6%, inside
+   * noise). An earlier review claimed the opposite from the documentation
+   * alone; the bench is why this comment does not.
+   *
+   * The hold does span the driving attachment rather than one tool call, and
+   * that part is deliberate. Releasing per call would re-open the same wedge
+   * one level down: `act` returns, the page is still fetching or laying out
+   * what the click started, the hold drops, and the next `snapshot` reads a
+   * page that stopped working in the gap. People are unaffected either way —
+   * a plane a person can touch is attached, and an attached plane was never
+   * throttled.
+   *
+   * Both halves of the fix are load-bearing, and the bench shows why: a tab
+   * detached since birth and never held answers `Page.captureScreenshot`
+   * never at all (the bench gives up at the controller's own 15s bound),
+   * while the same tab under a hold answers in ~100ms.
+   *
+   * Returns the release. Releasing twice releases once, and a hold on a tab
+   * that is unknown or has since closed releases into nothing — wakefulness
+   * is resource policy, never a user operation to fail.
+   */
+  holdAwake(tabId: string): () => void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return () => undefined;
+    entry.wakeLeases += 1;
+    if (entry.wakeLeases === 1) this.applyWakePolicy(entry);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // A closed tab was already forgotten; its contents are tearing down and
+      // owe no throttling answer.
+      if (this.tabs.get(tabId) !== entry) return;
+      entry.wakeLeases -= 1;
+      if (entry.wakeLeases === 0) this.applyWakePolicy(entry);
+    };
+  }
+
+  /** Foreground pace while agent holds are live; Chromium's own thrift once none are. Window-wide, per the note on {@link BrowserTabHost.holdAwake}. */
+  private applyWakePolicy(entry: BrowserTabEntry): void {
+    const contents = entry.view.webContents;
+    if (!contents.isDestroyed()) contents.setBackgroundThrottling(entry.wakeLeases === 0);
   }
 
   /** Page console and renderer-failure evidence recorded from the moment the tab exists. */
