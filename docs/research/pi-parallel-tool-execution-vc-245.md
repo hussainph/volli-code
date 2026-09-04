@@ -8,7 +8,15 @@ Volli opts out of Pi's default. This note is the baseline VC-245 asks for
 before any Code Mode work: what does flipping that line actually buy, and what
 does it cost?
 
-**Evidence, two lanes:**
+> **Correction, and it reverses this note's original recommendation.** The
+> first two lanes were synthetic, and they were measuring a workload that does
+> not exist. An audit of 671 real Sessions shows parallel mode would have saved
+> **1.2% of tool time**, not the 23–51% the synthetic tasks suggested — and
+> that the token problem the synthetic lanes said was fully harvested is in
+> fact the largest thing in the system. **Do not flip the flag on the strength
+> of the synthetic numbers.** See [The real workload](#the-real-workload).
+
+**Evidence, three lanes:**
 
 - **Offline** — `packages/agent-runtime/bench/parallel-tools/`, run with
   `pnpm -C packages/agent-runtime run bench`. Pi's real `Agent`, its real
@@ -17,33 +25,67 @@ does it cost?
   latencies are measured rather than guessed (`bench:probe`). Reaches no
   provider, spends nothing.
 - **Live** — `bench:live`, gated behind `PI_LIVE_BENCH=1`. Real models against
-  Volli's real composed system prompt, measuring the one thing the offline
-  lane cannot: how often a model actually batches. ~$0.64 total spend across
-  claude-haiku-4-5 and claude-sonnet-4-5.
+  Volli's real composed system prompt, measuring how often a model batches
+  *when handed a batchable task*. ~$0.64 total spend across claude-haiku-4-5
+  and claude-sonnet-4-5.
+- **Real** — `transcript-audit.ts`, over **671 local Sessions, 1,745 turns,
+  72,459 tool calls, $3,253 of recorded spend**. Read-only and aggregate-only.
+  This is the lane that matters; the other two are hypotheticals it corrects.
 
 ---
 
 ## The short answer
 
-**Volli is currently paying the full token cost of batching while throwing away
-all of its time benefit, and the fix is one line.**
+**Parallel mode is not worth doing. Code Mode probably is.** That is the
+opposite of what the synthetic lanes implied, and the real audit is why.
 
-Models already batch independent tool calls without being asked — measured at
-**100% of independent-task replies on both haiku and sonnet**. So Volli already
-gets the token saving that batching produces. It then executes those batches
-one call at a time, which discards the 23–51% of turn wall-clock that the same
-batch would have saved under Pi's default.
+| Lever | Real measured effect | Verdict |
+|---|---|---|
+| `toolExecution: "parallel"` | saves **1.2%** of tool time (1.57h of 127.6h), 84% of it on `bash` | **not worth the concurrency risk** |
+| Prompting for batching | no change on either model | **no-op, do not ship** |
+| Code Mode | addresses **54%** of all billed context; saves **27–51%** after overheads | **the real opportunity** |
 
-| Lever | Saves time | Saves tokens | Headroom left |
-|---|---|---|---|
-| `toolExecution: "parallel"` | **yes, 23–51% of batched turns** | no, exactly zero | **all of it — unharvested today** |
-| Getting the model to batch | only under parallel mode | yes | **none — already ~100%** |
-| Code Mode (not measured here) | yes | yes | unknown, large build |
+The single most important number in this note: **tool results are 92.6% of
+everything Volli ever sends a model.** Billed context across those Sessions was
+3.40 billion tokens, and roughly 3.15 billion of it was tool results being
+re-sent round after round. Latency was never the expensive axis.
 
-The middle row was my initial reading and the live lane refuted it: there is no
-prompt-level token win available, because the models are already doing it. The
-remaining token question belongs entirely to Code Mode. The remaining *time*
-win is sitting behind a one-line flag.
+---
+
+## The real workload
+
+The synthetic lanes asked "what would parallel mode save on four independent
+browser tabs?". Real Sessions almost never do that. They run `bash`, read a
+file, edit it, run `bash` again — a dependent chain.
+
+| | synthetic lanes | real Sessions |
+|---|---|---|
+| replies carrying 2+ calls | 100% | **16.9%** |
+| tool calls that could overlap | 65% | **23.6%** |
+| dominant tool | browser / web | **`bash` (49,616 calls, 68% of all)** |
+| mean tool duration | 900ms assumed | **`bash` 8,242ms measured** |
+
+Because Volli executes sequentially today, consecutive tool-result timestamps
+*are* the per-call durations. So the wall-clock question needed no model at
+all — for every batch ever issued, sequential cost is the sum of its durations
+and parallel cost is the largest:
+
+| quantity | measured |
+|---|---|
+| time batched replies actually took | 8.53h |
+| time they would take overlapped | 6.95h |
+| **wall-clock saved** | **1.57h** |
+| total tool time across all Sessions | 127.56h |
+| **saved as share of all tool time** | **1.2%** |
+
+1.57 hours spread over 671 Sessions is **~8 seconds per Session**. And 84% of
+it is `bash` — the one tool where concurrency is genuinely dangerous, since
+two commands share a worktree and a git index. The saving is both negligible
+and concentrated in the riskiest possible place.
+
+**The 100% batch rate in the live lane was an artefact of writing batchable
+tasks.** Given real work, models batch 17% of the time — correctly, because
+real work is mostly dependent.
 
 ---
 
@@ -132,7 +174,11 @@ Per-task, arm A, haiku:
 
 ---
 
-## Six findings
+## Seven findings from the synthetic lanes
+
+These hold as statements about Pi's mechanism. Findings 2 and 3 also made
+claims about *how often the mechanism applies*, and the real-Session audit
+corrects both — flagged inline.
 
 ### 1. The mode is token-neutral. Asserted, not assumed.
 
@@ -145,7 +191,7 @@ pressure moves.
 Any claim that parallel execution saves tokens is wrong. That is Code Mode's
 job, and it remains unproven.
 
-### 2. The win is conditional on batching — and models already batch, at ~100%.
+### 2. The win is conditional on batching. ~~Models already batch at ~100%.~~ *(corrected)*
 
 Offline, `browser-tabs-batched` and `browser-tabs-unbatched` do the same four
 tab reads. The first saves 2.7s; the second saves **2ms**. The difference is
@@ -171,7 +217,12 @@ The rate held on naturally-phrased tasks, not just enumerated ones. "Do our
 package.json, tsconfig.json and README.md still agree about the version?"
 never names three reads, and both models batched three reads anyway.
 
-### 3. There is no token headroom in batching. That was my error, and the live lane caught it.
+> **Corrected by the real audit.** 100% was an artefact of writing tasks that
+> *had* independent subtasks. Across 72,459 real tool calls the batch rate is
+> **16.9% of replies and 23.6% of calls**, because real coding work is a
+> dependent chain. The mechanism claim survives; the frequency claim does not.
+
+### 3. There is no token headroom in *batching*. ~~So no token saving is reachable without Code Mode.~~ *(half corrected)*
 
 Offline, the two browser scenarios needed **2 model calls vs 5** for identical
 work, which made batching look like a large, cheap, flag-independent token win
@@ -189,11 +240,13 @@ giving explicit permission to batch independent calls. It changed nothing:
 Within noise on every axis, on both models. **Do not ship the nudge** — it
 buys nothing and costs a sentence in every system prompt forever.
 
-The consequence for VC-245 is the important part: since batching is already
-saturated and the mode is token-neutral, **no token saving is reachable
-without Code Mode**. Code Mode's case rests entirely on keeping intermediate
-results out of context, and it must be judged against a baseline that already
-batches at 100%.
+The nudge finding stands: it is a measured no-op and should not ship.
+
+> **Corrected by the real audit.** The conclusion drawn from it — "no token
+> saving is reachable without Code Mode" — was right in letter and badly wrong
+> in spirit. It read as *there is little token saving available*. There is an
+> enormous one: tool results are **92.6% of all billed context**, and Code Mode
+> addresses roughly half of it. See [The Code Mode case](#the-code-mode-case).
 
 ### 4. The obvious safety lever is a trap.
 
@@ -248,41 +301,118 @@ concurrency, not in the model asking for nonsense.
 
 ## What this does not answer
 
-1. **Whether Volli's tools tolerate concurrency.** This is now the only thing
-   standing between the measurement and the flag. A quick read suggests
-   `ScopedExecutionEnv` is fine (per-call `mkdtemp`, own child process,
-   readonly `cwd`), and that browser tools are the live hazard: refs are valid
-   only for a snapshot `generation`, so two concurrent `browser_act` calls on
-   one tab can race. Reads across *different* tabs look safe. This needs a
-   real audit, not a skim.
-2. **Other providers.** Both live models were Anthropic. OpenAI- and
-   Gemini-backed Sessions may batch at different rates; the lane takes
-   `PI_BENCH_MODEL`, so this is a cheap follow-up rather than new work.
-3. **Code Mode itself.** Untouched by this note. Findings 1–3 sharpen what it
-   would have to justify: it must beat *a 100%-batching model under parallel
-   mode*, not beat today's sequential baseline.
+1. **Whether one developer's Sessions generalise.** All 671 are from a single
+   machine and a single working style. The `bash`/`read` dominance and the 17%
+   batch rate are behavioural, and both headline conclusions depend on them.
+2. **Whether a program can actually reduce those results.** The 58.5% fan-out
+   pool is a ceiling. Nothing here measures how much of it survives contact
+   with a real reduction — that is what the prototype is for.
+3. **Whether `bash` can be safely called from generated code.** The audit says
+   Code Mode is only worth building if it can. This note does not answer
+   whether it may.
+4. **Other providers.** Both live models were Anthropic. The lane takes
+   `PI_BENCH_MODEL`, so this is a cheap follow-up.
+
+## The Code Mode case
+
+The same audit measures what Code Mode would be buying, and here the numbers
+are large.
+
+**Context is almost entirely tool results.** Modelling the re-send rule over
+the real transcripts lands within **11%** of what the provider actually billed
+(3.77B modelled vs 3.40B billed), so the decomposition is trustworthy —
+compaction is rare enough (46 events across 671 Sessions) not to distort it.
+
+| quantity | tokens |
+|---|---|
+| billed context (ground truth) | 3,401,671,705 |
+| tool results produced once | 65,983,265 |
+|  of which intermediate | 65,829,259 (99.8%) |
+|  of which from fan-out replies | 38,620,859 (58.5%) |
+| **tool-result share of all context** | **92.6%** |
+
+A result produced once is re-sent on every later round of its turn. That is
+why 66M tokens of tool output becomes ~3.15B tokens of billed context.
+
+**The counterfactual, with overheads charged.** For the fan-out replies that
+really happened, a program pays two costs the naive figure ignores: the source
+the model must write, and whatever the program returns, which still enters
+context and is still re-sent. Sweeping how much a program condenses:
+
+| program returns | context tokens saved | share of all billed context |
+|---|---|---|
+| 5% of results | 1,731,544,193 | **50.9%** |
+| 10% | 1,640,286,367 | **48.2%** |
+| 25% | 1,366,512,889 | **40.2%** |
+| 50% (pessimistic) | 910,223,760 | **26.8%** |
+
+9,418 fan-out replies × ~250 tokens of program source = 2.35M output tokens of
+overhead, already subtracted.
+
+Even at a deliberately pessimistic 50% condensation, Code Mode addresses **more
+than a quarter of everything Volli sends a model**.
+
+**Two caveats that matter, both against the optimistic reading:**
+
+1. **Cost ≠ tokens.** The cache split is 3.29B read against 72M written, so
+   re-sent context is ~97% cache reads, billed near a tenth of fresh input.
+   The token saving is real for *context-window pressure* — which is what
+   limits session length and drives compaction — but the dollar saving is a
+   fraction of the token saving.
+2. **"Fan-out" is a ceiling, not a capture rate.** It counts results from
+   replies that issued 2+ calls. A program only captures those if it can
+   perform the reduction the model would have done. Semantic comparison
+   ("do these three files agree?") does not reduce in code; extraction and
+   filtering does.
+
+**And the design constraint the audit settles.** 95% of fan-out volume is two
+tools:
+
+| tool | fan-out result tokens | share of fan-out | share of that tool's own output |
+|---|---|---|---|
+| `bash` | 21,949,292 | 56.8% | 51.6% |
+| `read` | 14,796,307 | 38.3% | 70.5% |
+| `web_fetch` | 1,503,729 | 3.9% | 91.4% |
+| `web_search` | 333,318 | 0.9% | 95.5% |
+
+**A Code Mode that excludes `bash` and `read` captures almost none of the
+value.** That is a much harder security conversation than the browser and web
+tools the ticket's framing centres on, and it should be confronted directly
+rather than discovered during a build.
+
+---
 
 ## Recommendation
 
-**Flip `toolExecution` to `"parallel"`, gated on a tool concurrency audit.**
-The measurement is unusually clean: the win is large (23–51% of turn time),
-free in tokens, available on two thirds of tool calls today, requires no
-prompt change, and the models already decline to batch the dependent calls
-that would make concurrency unsafe.
+**Do not flip the flag. Do scope Code Mode — around `bash` and `read`.**
 
-Ordered next steps:
+1. **Drop the parallel-mode work.** 1.2% of tool time, ~8 seconds per Session,
+   84% of it concentrated in the one tool where concurrent execution can
+   corrupt a worktree. The concurrency audit it would require costs more than
+   the saving is worth. Leave `toolExecution: "sequential"` alone.
+2. **Do not ship the batch nudge.** Measured no-op on both models.
+3. **Take Code Mode seriously, and scope it to the reduction shape.** The
+   target is fan-out replies whose results a program can filter or extract
+   without semantic judgement. Design for `bash` and `read` from the start or
+   do not build it — the browser and web tools are 5% of the opportunity.
+4. **Frame the win as context-window pressure first, cost second.** Caching
+   already discounts the re-send by ~10×. The compelling argument is longer
+   Sessions before compaction, not the invoice.
+5. **Re-run the audit on other people's Sessions before committing.** These
+   671 Sessions are one developer's. The batch rate and the `bash`/`read`
+   dominance are behavioural, and could differ across users.
 
-1. **Audit tool concurrency safety**, browser tools first (`generation` races
-   on one tab), then anything holding process-wide or Session-wide state.
-   This is the blocker.
-2. **Flip the flag** behind that audit. Note that per-tool
-   `executionMode: "sequential"` is not the escape hatch it looks like
-   (finding 4) — if some tool must not overlap, the answer is batch
-   eligibility, not a per-tool marking.
-3. **Do not ship the batch nudge.** Measured as a no-op on both models.
-4. **Re-baseline Code Mode against parallel mode**, not against today's
-   sequential behaviour, before spending more on it. Its remaining
-   justification is tokens, and tokens is the axis the flag does not touch.
+## Suggested follow-up tickets
+
+- **Scope a Code Mode prototype around `bash` and `read`** — the loop/filter
+  workflow the ticket asks for, aimed at the 58.5% fan-out pool.
+- **Decide the `bash`-from-code security position.** This is the blocker for
+  anything worth building, and the ticket's current framing does not address
+  it.
+- **Close the parallel-execution question** with this note as the evidence, so
+  it is not re-opened on the strength of the synthetic numbers.
+- **Land `transcript-audit.ts` as a standing measurement**, so context
+  composition can be re-checked after any prompt or tool change.
 
 ## Reproducing
 
@@ -300,6 +430,16 @@ about $0.13 per model at two trials:
 PI_LIVE_BENCH=1 pnpm -C packages/agent-runtime run bench:live
 PI_LIVE_BENCH=1 PI_BENCH_MODEL=anthropic/claude-sonnet-4-5 PI_BENCH_TRIALS=2 \
   pnpm -C packages/agent-runtime run bench:live
+```
+
+Real-Session audit — free, read-only, ~2 minutes. Reads the developer's own
+local Pi session logs and prints aggregates only; it never retains or emits
+message text, tool arguments, command lines, paths or session ids:
+
+```
+node --experimental-strip-types \
+  packages/agent-runtime/bench/parallel-tools/transcript-audit.ts
+VOLLI_PI_SESSIONS="/path/to/pi-sessions" node --experimental-strip-types ...
 ```
 
 Both are out of the default `test` lane: the offline bench because it sleeps
