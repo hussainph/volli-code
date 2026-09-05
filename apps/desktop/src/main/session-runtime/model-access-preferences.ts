@@ -10,6 +10,7 @@ import {
   type ModelAccessSnapshot,
   type ModelPurpose,
   type ModelSelection,
+  visualModelProblem,
 } from "@volli/shared";
 
 import { supersededModelId } from "@volli/agent-runtime";
@@ -254,10 +255,16 @@ export function writeCompactionPolicy(
  * that merely *exists* in the catalog is a first message that dies at the
  * provider, once per Session, with a raw API error and no obvious cause.
  * Signed-out is a state to recover from before saving, not a choice to honour.
+ *
+ * `tier` adds the one per-tier rule: the Visual slot exists to read images,
+ * so a model that cannot is refused here, at the save, with the shared
+ * one-line reason — never discovered later by a Session that was handed a
+ * screenshot it cannot open. Omitted, no tier rule applies.
  */
 export function assertDefaultModelAvailable(
   access: ModelAccessSnapshot,
   selection: ModelSelection,
+  tier?: ModelPurpose,
 ): void {
   const model = access.models.find(
     (candidate) =>
@@ -272,5 +279,9 @@ export function assertDefaultModelAvailable(
   }
   if (!model.reasoningLevels.includes(selection.reasoningLevel)) {
     throw new Error("This reasoning level is not supported by the selected model.");
+  }
+  if (tier === "visual") {
+    const problem = visualModelProblem(access.models, selection);
+    if (problem !== null) throw new Error(problem);
   }
 }

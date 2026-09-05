@@ -387,6 +387,30 @@ describe("Model Access default selection", () => {
       ),
     ).toThrow("not currently available");
   });
+
+  it("refuses a Visual default that cannot read images, with the one-line reason", () => {
+    const blind = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-text",
+      label: "GPT-5.6 Text",
+      state: "available" as const,
+      reasoningLevels: ["off", "high"] as const,
+      acceptsImageInput: false,
+    };
+    const access = { observedAt: 1, providers: [], models: [blind] };
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-text",
+      reasoningLevel: "high" as const,
+    };
+
+    expect(() => assertDefaultModelAvailable(access, selection, "visual")).toThrow(
+      "This model can't read images, so it can't be the Visual default.",
+    );
+    // The same model is fine for every other tier: the rule is Visual's alone.
+    expect(() => assertDefaultModelAvailable(access, selection, "fast")).not.toThrow();
+    expect(() => assertDefaultModelAvailable(access, selection, "ticket")).not.toThrow();
+  });
 });
 
 describe("the stored compaction policy", () => {

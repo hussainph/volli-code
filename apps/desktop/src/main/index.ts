@@ -1459,7 +1459,7 @@ app.whenReady().then(async () => {
                   // it resolves to the global default, which had one when saved.
                   if (selection !== null) {
                     const access = await piRuntimeHost.inspectModelAccess({});
-                    assertDefaultModelAvailable(access, selection);
+                    assertDefaultModelAvailable(access, selection, purpose);
                   }
                   return writeModelAccessDefault(sessionDb, purpose, selection, Date.now());
                 }
