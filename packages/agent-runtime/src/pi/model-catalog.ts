@@ -17,33 +17,79 @@
  *    connected provider always reaches a public feed even though Pi's own
  *    dynamic-provider network phase is credential-gated.
  *
- * 2. {@link modelsDevCatalogSource} reads models.dev's `api.json`, the same
- *    catalogue Pi's generator uses. It is authoritative only for provider
- *    membership and declared facts/capabilities: id, name, cost, limits, input
- *    modalities, tool support, family, reasoning controls, interleaving,
- *    temperature and structured output. Pi remains authoritative for every
- *    executable field (`api`, `baseUrl`, `compat`, `reasoning`, headers,
- *    sampling parameters and `thinkingLevelMap`). Exact baseline joins build
- *    provider-level protocol classes from that capability tuple. A new id is
- *    admitted only when its exact class has one unanimous Pi protocol; missing
- *    or conflicting evidence is counted as unsafe and withheld. No id pin and
- *    no fuzzy sibling search participates, and per-model routing facts are
- *    stripped before a class can carry them onto another id. One whole-document
- *    GET is shared by a burst, while validation and failures stay
- *    provider-scoped.
+ * 2. {@link piDevCatalogSource} reads Pi's own provider feed — one GET per
+ *    provider at `https://pi.dev/api/models/providers/<id>` — and takes its
+ *    entries as **executable protocol**, not merely facts.
  *
- *    Authority runs one way only. The feed may *remove* a model by no longer
- *    listing it, but it may not *disqualify* one Pi already ships: this is a
- *    community catalogue, and a row that omits `tool_call` is a gap in the data
- *    rather than proof that a working model stopped working. A provider whose
- *    admitted list would retain none of its baseline is failed instead of
- *    published, so no feed edit can empty a catalog a person is using.
+ *    That is a deliberate change of authority from VC-135, which read
+ *    models.dev and refused to let a feed set `api`, `baseUrl` or `compat`. The
+ *    reasoning behind that refusal was sound and is unchanged: models.dev is a
+ *    community catalogue that cannot know how a request is shaped —
+ *    `thinkingLevelMap` values in the wild are provider-private strings
+ *    (`"HIGH"`, `"default"`, `"none"`), so a generic feed can supply facts and
+ *    only pi can supply protocol. What changed is the feed, not the standard.
+ *    pi.dev is published by the same maintainers whose code this process
+ *    already executes from npm; it is the feed Pi's own `pi update --models`
+ *    applies verbatim through `withRemoteCatalog`; and its entries are
+ *    literally pi-ai's `Model<Api>`, field for field. This is the executable
+ *    protocol VC-135 concluded "only pi can supply", with pi supplying it, and
+ *    believing it is strictly less trusting than running the package that
+ *    serves it.
+ *
+ *    Trusting the publisher is not trusting the transport, so one thing the
+ *    feed may not do is move traffic. A {@link redirectionGuard} admits an
+ *    entry only when its `api` is one the provider's baseline already speaks
+ *    and its `baseUrl` origin is one the baseline already reaches. (Sets, not
+ *    single values: `opencode-go` alone serves three APIs across two origins,
+ *    so "the provider's api" is not a well-defined thing to compare against.)
+ *    A rejected entry is withheld and counted in `rejected`; the baseline model
+ *    it would have replaced stays. The feed can therefore add models, correct
+ *    prices, widen a thinking ladder and turn on `compat` flags, and cannot
+ *    point any of it at another host — which is the one failure a compromised
+ *    or mistaken feed could otherwise cause that a person could not see.
+ *
+ *    The `api` half of that guard has a measured price, recorded here so a
+ *    future loosening starts from evidence. Across all 39 providers on
+ *    2026-09-05 it withheld exactly 15 entries, all on `openrouter`, where
+ *    pi.dev now serves the Anthropic models as `anthropic-messages` and the
+ *    pinned baseline still speaks only `openai-completions`. Fourteen are
+ *    baseline ids that keep working on their baseline shape; one
+ *    (`anthropic/claude-fable-5.1`) is a genuinely new model that waits for a
+ *    bump. A protocol switch changes the entire request encoding, so making it
+ *    deliberate is the intent rather than a side effect — but it is the one
+ *    place this guard costs a model rather than only forbidding a redirect.
+ *
+ *    Authority still runs one way only, on the same reasoning as VC-135 and one
+ *    new one. A baseline id the feed omits is kept, because the staleness rule
+ *    below establishes that the built-in catalog may legitimately be *newer*
+ *    than the feed — so feed silence about an id is not evidence the model went
+ *    away, and Pi's own overlay merges rather than replaces for the same
+ *    reason. A refreshed-only id has no such backing: it exists because the
+ *    feed listed it, so the feed dropping it is exactly the removal signal, and
+ *    it is gone by not being rebuilt. Renames stay explicit, through
+ *    {@link supersededModelId}. Because the merge base is always the baseline,
+ *    "never empty a provider a person is using" is structural here rather than
+ *    a special case, and an empty published list is failed outright.
+ *
+ *    Mirroring Pi, a feed whose `Last-Modified` is not newer than
+ *    `getBuiltinModelDataGeneratedAt()` is ignored entirely, so a stale feed
+ *    cannot roll a fresher pi-ai bump backwards. A feed that states no
+ *    `Last-Modified` says nothing about its own age and is read normally.
+ *
+ *    models.dev is retired rather than kept alongside. Measured 2026-09-05,
+ *    `https://pi.dev/api/models/providers` returns exactly the 39 provider ids
+ *    this module wraps — the same set, in the same order — including
+ *    `openai-codex`, which models.dev has never carried at all. There is no
+ *    uncovered remainder to keep a second source of truth alive for.
  *
  * 3. {@link PiFileModelsStore} makes complete refreshed lists durable beside
  *    Pi's own `auth.json`. Every execution/inspection path awaits restore before
  *    its first model lookup. Exact baseline ids are rebased onto current Pi
  *    protocol; refreshed-only ids restore only with this policy version's
- *    admission proof. The complete-list format marker also distinguishes new
+ *    admission proof *and* a fresh pass through the same redirection guard,
+ *    because a cache outlives the fetch that filled it and a bump can retire
+ *    the origin an entry was admitted against. The complete-list format marker
+ *    also distinguishes new
  *    caches from VC-135's legacy append-only overlays, which are migrated as
  *    overlays so an upgrade cannot accidentally erase the rest of a provider.
  *    The cache takes no credential lock and treats unreadable data as empty:
@@ -56,9 +102,15 @@
  * a compile error in this file on `pnpm install`, not an empty model list at
  * runtime — the same rule `sign-in.ts` states for itself.
  *
- * **The feed is untrusted data.** Every field read out of `api.json` is
- * type-checked before use, malformed entries are skipped rather than fatal,
- * each provider list is bounded, and no error message ever quotes response bytes.
+ * **The feed is untrusted data, and trusting its publisher does not change
+ * that.** Believing pi.dev's protocol is a judgement about who authors the
+ * catalogue; it says nothing about what arrives over a socket. So every field
+ * is type-checked before use and the resulting `Model` is built field by field
+ * from an allowlist rather than spread from response bytes; entries that fail
+ * are skipped rather than fatal; `compat`, `headers` and `samplingParams` are
+ * accepted only as bounded inert JSON with no prototype-shaped keys; the body
+ * and the entry count are bounded; and no error message ever quotes a
+ * response byte.
  */
 
 import { randomUUID } from "node:crypto";
@@ -79,36 +131,58 @@ import {
   type Provider,
   type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
+import { getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
 
-/** The whole-catalogue document models.dev publishes, and pi's generator reads. */
-export const MODELS_DEV_URL = "https://models.dev/api.json";
-
-/** A wedged catalog fetch may not hold the Refresh button's snapshot open. */
-const FETCH_TIMEOUT_MS = 15_000;
+/** Pi's per-provider catalog feed; one document per provider id. */
+export const PI_DEV_PROVIDERS_URL = "https://pi.dev/api/models/providers";
 
 /**
- * How long one fetched document answers for the whole burst. `Models.refresh`
- * starts every provider's refresh concurrently, so ~40 wrapped providers would
- * otherwise cost ~40 GETs of the same file; long enough to cover a burst's
- * stragglers, short enough that a second press of the button is a real fetch.
+ * A wedged catalog fetch may not hold the Refresh button's snapshot open.
+ *
+ * Pi's own `withRemoteCatalog` allows 4s per attempt. This is deliberately
+ * more generous: pi retries on its own schedule across later runs, where this
+ * is one press of a button whose only failure display is a Retry beside the
+ * provider, so a timeout that fires on a slow link costs more here than the
+ * extra seconds do.
  */
-const MEMO_MS = 5_000;
+const FETCH_TIMEOUT_MS = 10_000;
 
 /** A non-forced refresh within this window trusts the persisted list. */
 const CATALOG_FRESH_MS = 60 * 60 * 1000;
 
-/** Upper bound on a response this module is willing to parse. */
-const MAX_BODY_BYTES = 32 * 1024 * 1024;
+/** Upper bound on one provider's response. A provider slice is tens of KB. */
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /** Upper bound on complete entries per provider; a feed gone wrong stays bounded. */
 const MAX_PROVIDER_MODELS = 1_000;
 
 /**
+ * Bounds on the opaque JSON this module will carry into a runtime model.
+ *
+ * `compat` and `samplingParams` are read without knowing their vocabulary (see
+ * {@link feedInertRecord}), so what stands in for a schema is a ceiling: deep
+ * enough for pi's most nested real shape — `compat.openRouterRouting.order[]`
+ * is three — with room to spare, and wide enough that no honest entry comes
+ * near it.
+ */
+const MAX_INERT_DEPTH = 6;
+const MAX_INERT_NODES = 512;
+
+/** Keys that read as a prototype rather than as data, wherever they appear. */
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
  * Bump whenever provider-level admission semantics change incompatibly.
  * Refreshed-only models carry this proof into the cache; restore accepts no
  * executable protocol minted by another version of the policy.
+ *
+ * 1 — VC-135: models.dev facts materialized through a Pi protocol class.
+ * 2 — VC-255: pi.dev protocol behind the redirection guard. A model admitted
+ *     under 1 was minted by inference from a community catalogue, which is not
+ *     what this version means by admitted, so those cache entries do not
+ *     restore and are simply re-fetched.
  */
-const PROTOCOL_ADMISSION_VERSION = 1;
+const PROTOCOL_ADMISSION_VERSION = 2;
 const PROTOCOL_ADMISSION_FIELD = "__volliProtocolAdmission";
 const CATALOG_FORMAT_VERSION = 2;
 const CATALOG_FORMAT_FIELD = "__volliCatalogFormat";
@@ -132,83 +206,7 @@ export type CatalogModelFacts = Pick<
 
 type CatalogModelProtocol = Omit<Model<Api>, keyof CatalogModelFacts>;
 
-/**
- * A provider-level executable protocol class.
- *
- * models.dev is authoritative for the capability tuple in
- * {@link protocolClassKey}; Pi is authoritative for how that tuple is sent.
- * Every exact baseline id present in the feed contributes its Pi protocol to
- * its class, and a new id sharing that class is minted from the evidence the
- * class agrees on. This is structural, never a fuzzy id/family-neighbour
- * search: an id that lands in no class is rejected rather than guessed at.
- *
- * The three parts are held to different standards, because they fail
- * differently:
- *
- * - {@link core} is how the request is addressed and encoded — `api`,
- *   `baseUrl`, `provider`, `reasoning`, headers, sampling, and every `compat`
- *   key that changes the wire shape or defaults to `true`. Getting one wrong
- *   produces a request the provider refuses, so the class is usable only if
- *   every member states it identically. Disagreement makes the class unusable
- *   rather than picking a winner.
- * - {@link ladder} is the thinking-level map, intersected: a level survives
- *   only where every member maps it the same way, and anything else becomes an
- *   explicit `null`. Pi reads an *absent* level as supported, so withholding
- *   has to be written down rather than omitted.
- * - {@link additive} are opt-in capability flags that pi documents
- *   `Default: false` and enables per model. A single model cannot corroborate
- *   one, so a class of one publishes none of them: the failure mode is a
- *   feature that stays off, not a request the model rejects.
- */
-interface ProviderProtocolClass {
-  core: CatalogModelProtocol;
-  ladder: ThinkingLevelMap | undefined;
-  additive: Record<string, unknown>;
-  /** Core evidence disagreed; nothing may be minted from this class. */
-  unusable: boolean;
-}
-
 type ThinkingLevelMap = NonNullable<Model<Api>["thinkingLevelMap"]>;
-type ThinkingLevel = keyof ThinkingLevelMap;
-
-/** Pi's thinking ladder, widest last. */
-const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const satisfies readonly ThinkingLevel[];
-
-/**
- * `compat` flags a class of one may not lend out.
- *
- * Every key here is documented `Default: false` in pi's own types and is turned
- * on per model by the generated catalogue — grammar tools, tool search, extra
- * tool channels. Withholding one costs a feature; inventing one costs a request
- * the provider rejects, so an uncorroborated flag stays off.
- *
- * Deliberately absent: `forceAdaptiveThinking`, which is `Default: false` but
- * whose documentation says models that *require* the adaptive format set it —
- * omitting it malforms their requests, so it belongs to the core. Every
- * `Default: true` flag (`supportsTemperature`, `supportsToolReferences`, …) is
- * absent for the mirror-image reason: dropping one turns the behaviour *on*,
- * and `supportsTemperature: false` exists precisely because Claude Opus 4.7+
- * rejects a temperature.
- */
-const ADDITIVE_COMPAT_KEYS: readonly string[] = [
-  "allowEmptySignature",
-  "sendSessionAffinityHeaders",
-  "supportsAdditionalTools",
-  "supportsExplicitPromptCacheMode",
-  "supportsOpenAIGrammarTools",
-  "supportsStrictTools",
-  "supportsThinkingTokenBudget",
-  "supportsToolSearch",
-  "zaiToolStream",
-];
 
 /** Exact catalogue identity policy; applied only when the canonical id exists. */
 const SUPERSEDED_MODEL_IDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -229,37 +227,22 @@ export function supersededModelId(providerId: string, modelId: string): string |
 }
 
 /**
- * Per-model facts that must never ride a protocol class onto another id.
+ * There is nothing for this provider to apply, and that is not a failure.
  *
- * `allowedFallbackModels` names specific sibling models and carries their
- * prices: it is routing for one model, not the provider's wire protocol. Pi's
- * own type says Anthropic rejects `fallbacks` for a model with no permitted
- * targets, so lending a sibling's list to a new id would build a request the
- * upstream refuses. Stripping it also stops a purely per-model fact from
- * splitting an otherwise unanimous class — `claude-opus-4-8` and
- * `claude-opus-5` differ by nothing else.
- */
-const MODEL_SCOPED_COMPAT_KEYS: readonly string[] = ["allowedFallbackModels"];
-
-/**
- * The source publishes no list for this provider at all.
+ * The difference is the whole point. Under models.dev this covered a provider
+ * the document did not carry — `openai-codex` had no entry at all, so every
+ * refresh raised a provider error and Model Access offered a Retry that could
+ * never succeed. pi.dev covers every wrapped provider, so the surviving cases
+ * are a feed that answers 404/501 for an id and a feed older than the built-in
+ * catalog. Both mean the same thing operationally: keep what is already there,
+ * report neither success nor failure, and ask nobody to fix anything.
  *
- * Not a failure, and the difference is the whole point: models.dev has no
- * `openai-codex` provider — those models are served by the ChatGPT backend, not
- * the public API platform — so every refresh raised a provider error for it and
- * Model Access offered a Retry that could never succeed. A provider with no
- * public list simply keeps the catalog pi ships, which for it is the complete
- * and correct one. Nothing is applied, nothing failed, and nobody is asked to
- * fix it.
- *
- * Aliasing such a provider onto a neighbouring feed id was considered and
- * rejected: pi's baseline would supply the right protocol, but the neighbour's
- * membership list is wrong, and inventing models a backend does not serve is
- * the failure this ticket exists to prevent.
+ * The reason is carried so a log line says which of the two happened; the
+ * behaviour is identical either way.
  */
 export class CatalogSourceAbsent extends Error {
-  constructor(providerId: string) {
-    super(`Model catalog has no list for provider ${providerId}.`);
+  constructor(providerId: string, reason = "publishes no list") {
+    super(`Model catalog ${reason} for provider ${providerId}.`);
     this.name = "CatalogSourceAbsent";
   }
 }
@@ -542,236 +525,387 @@ function isFresh(stored: Readonly<ModelsStoreEntry> | undefined, at: number): bo
   return stored?.checkedAt !== undefined && at - stored.checkedAt < CATALOG_FRESH_MS;
 }
 
-export interface ModelsDevSourceOptions {
-  /** The catalogue document to read. Defaults to {@link MODELS_DEV_URL}. */
-  url?: string;
+export interface PiDevSourceOptions {
+  /** The provider-feed base URL. Defaults to {@link PI_DEV_PROVIDERS_URL}. */
+  baseUrl?: string;
   /** Injectable transport for tests; the product uses the global `fetch`. */
   fetchFn?: typeof fetch;
   timeoutMs?: number;
-  memoMs?: number;
   /** Injectable response bound for deterministic tests. */
   maxBodyBytes?: number;
-  /** Per-provider complete-list bound; exceeding it fails instead of truncating. */
+  /** Per-provider list bound; exceeding it fails instead of truncating. */
   maxProviderModels?: number;
-  now?: () => number;
+  /**
+   * When the running pi-ai's built-in catalogs were generated. A feed no newer
+   * than this is ignored, exactly as pi's own overlay ignores it.
+   */
+  builtinGeneratedAt?: () => number | undefined;
 }
 
-interface FetchedDocument {
-  document: Record<string, unknown>;
+/** The last body this process accepted for one provider, and its validators. */
+interface CachedProviderFeed {
+  entries: Record<string, unknown>;
   etag?: string;
   lastModified?: number;
-  at: number;
 }
 
 /**
- * The models.dev catalogue as a {@link CatalogSource}.
+ * Pi's provider feed as a {@link CatalogSource}.
  *
- * One GET per burst: the first caller starts the request, everyone else in the
- * memo window shares its result, and each caller slices its own provider out
- * of the shared document. The request runs on its own timeout signal rather
- * than any caller's — pi supersedes per-provider refreshes with per-provider
- * aborts, and one provider's superseded refresh must not kill the document
- * thirty-eight others are waiting on. Each caller still honours its own
- * signal by racing it against the shared fetch.
+ * One GET per provider, on the caller's own signal joined to a timeout. The
+ * documents are per-provider and small, so there is nothing for a refresh burst
+ * to share and no reason for one provider's superseded refresh to disturb
+ * another's request — which is what the shared-document memo and its
+ * signal-racing existed to arrange, and why neither is here any more.
+ *
+ * The last accepted body is kept per provider so `If-None-Match` has something
+ * to revalidate and a 304 can be answered without a second copy of the bytes.
+ * That cache holds only bodies that already passed the staleness rule, so a
+ * revalidation can never bring an ignored feed back.
  */
-export function modelsDevCatalogSource(options: ModelsDevSourceOptions = {}): CatalogSource {
-  const url = options.url ?? MODELS_DEV_URL;
+export function piDevCatalogSource(options: PiDevSourceOptions = {}): CatalogSource {
+  const base = (options.baseUrl ?? PI_DEV_PROVIDERS_URL).replace(/\/+$/, "");
   const fetchFn = options.fetchFn ?? fetch;
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
-  const memoMs = options.memoMs ?? MEMO_MS;
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const maxProviderModels = options.maxProviderModels ?? MAX_PROVIDER_MODELS;
-  const now = options.now ?? Date.now;
-  let memo: FetchedDocument | undefined;
-  let inFlight: Promise<FetchedDocument> | undefined;
-
-  const load = (): Promise<FetchedDocument> => {
-    if (memo !== undefined && now() - memo.at < memoMs) return Promise.resolve(memo);
-    if (inFlight !== undefined) return inFlight;
-    const request = (async (): Promise<FetchedDocument> => {
-      const response = await fetchFn(url, {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw new Error(`Model catalog fetch failed: HTTP ${response.status} from ${url}.`);
-      }
-      const text = await response.text();
-      if (text.length > maxBodyBytes) {
-        throw new Error(`Model catalog at ${url} exceeds the readable size bound.`);
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        // Never quote the body: it is third-party bytes and V8's own parse
-        // error would echo the offending source text into a message.
-        throw new Error(`Model catalog at ${url} is not readable JSON.`);
-      }
-      if (!isRecord(parsed)) throw new Error(`Model catalog at ${url} is not a provider map.`);
-      const lastModifiedHeader = response.headers.get("last-modified");
-      const lastModified =
-        lastModifiedHeader === null ? Number.NaN : Date.parse(lastModifiedHeader);
-      return {
-        document: parsed,
-        etag: response.headers.get("etag") ?? undefined,
-        ...(Number.isNaN(lastModified) ? {} : { lastModified }),
-        at: now(),
-      };
-    })();
-    const shared = request.then((result) => {
-      memo = result;
-      return result;
-    });
-    inFlight = shared;
-    void shared
-      .catch(() => undefined)
-      .then(() => {
-        inFlight = undefined;
-      });
-    return shared;
-  };
+  const builtinGeneratedAt = options.builtinGeneratedAt ?? getBuiltinModelDataGeneratedAt;
+  const cached = new Map<string, CachedProviderFeed>();
 
   return {
     fetchCatalog: async (providerId, baseline, context) => {
-      const loaded = await raceSignal(load(), context.signal);
-      const listed = modelsDevProviderModels(providerId, loaded.document);
-      if (listed === undefined) throw new CatalogSourceAbsent(providerId);
-      if (Object.keys(listed).length > maxProviderModels) {
+      const previous = cached.get(providerId);
+      const response = await fetchFn(`${base}/${encodeURIComponent(providerId)}`, {
+        headers: {
+          accept: "application/json",
+          ...(previous?.etag === undefined ? {} : { "if-none-match": previous.etag }),
+        },
+        signal: AbortSignal.any([context.signal, AbortSignal.timeout(timeoutMs)]),
+      });
+      // Pi's own overlay reads these two as "no feed here" rather than as a
+      // failure, and so does this: the provider keeps the catalog pi ships.
+      if (response.status === 404 || response.status === 501) {
+        throw new CatalogSourceAbsent(providerId);
+      }
+      let feed: CachedProviderFeed;
+      if (response.status === 304) {
+        // A validator is only ever sent while the body behind it is still held,
+        // so a 304 with nothing cached is a broken intermediary rather than an
+        // unchanged catalog, and guessing which would be worse than failing.
+        if (previous === undefined) {
+          throw new Error(`Model catalog for ${providerId} answered 304 with nothing cached.`);
+        }
+        feed = previous;
+      } else {
+        if (!response.ok) {
+          throw new Error(
+            `Model catalog fetch failed: HTTP ${response.status} for provider ${providerId}.`,
+          );
+        }
+        feed = await readProviderFeed(providerId, response, maxBodyBytes);
+      }
+      // Pi's staleness rule: a feed no newer than the catalog compiled into the
+      // running package cannot be evidence of anything the package lacks, so a
+      // lagging feed may not undo a bump. A feed that states no `Last-Modified`
+      // has made no claim about its age and is read normally.
+      const generatedAt = builtinGeneratedAt();
+      if (
+        feed.lastModified !== undefined &&
+        generatedAt !== undefined &&
+        feed.lastModified <= generatedAt
+      ) {
+        throw new CatalogSourceAbsent(providerId, "is older than the built-in catalog");
+      }
+      if (Object.keys(feed.entries).length > maxProviderModels) {
         throw new Error(`Model catalog for ${providerId} exceeds the model-count bound.`);
       }
-      const facts = modelsDevCatalogFacts(providerId, baseline, loaded.document);
-      const admitted = materializeCatalog(
-        baseline,
-        facts,
-        providerProtocolClasses(baseline, listed),
-        listed,
-      );
-      const admittedIds = new Set(admitted.map((model) => model.id));
-      const rejected = Object.keys(listed).filter((id) => !admittedIds.has(id)).length;
+      const { models, rejected } = admitPiDevCatalog(providerId, baseline, feed.entries);
+      // The floor from VC-135, kept as an assertion rather than a mechanism:
+      // the merge below always retains the baseline, so the only way here is a
+      // provider pi itself ships empty, and publishing that would replace a
+      // usable cached list with nothing.
+      if (models.length === 0) {
+        throw new Error(`Model catalog for ${providerId} would publish an empty list.`);
+      }
+      cached.set(providerId, feed);
       return {
-        models: admitted,
+        models,
         rejected,
-        ...(loaded.etag === undefined ? {} : { etag: loaded.etag }),
-        ...(loaded.lastModified === undefined ? {} : { lastModified: loaded.lastModified }),
+        ...(feed.etag === undefined ? {} : { etag: feed.etag }),
+        ...(feed.lastModified === undefined ? {} : { lastModified: feed.lastModified }),
       };
     },
   };
 }
 
+/** Read one provider's response into bounded, parsed, unvalidated entries. */
+async function readProviderFeed(
+  providerId: string,
+  response: Response,
+  maxBodyBytes: number,
+): Promise<CachedProviderFeed> {
+  // Refuse an oversized body before buffering it when the response says how
+  // large it is, and again afterwards for the case where it lied or was silent.
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBodyBytes) {
+    throw new Error(`Model catalog for ${providerId} exceeds the readable size bound.`);
+  }
+  const text = await response.text();
+  if (text.length > maxBodyBytes) {
+    throw new Error(`Model catalog for ${providerId} exceeds the readable size bound.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Never quote the body: it is third-party bytes and V8's own parse error
+    // would echo the offending source text into a message.
+    throw new Error(`Model catalog for ${providerId} is not readable JSON.`);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(`Model catalog for ${providerId} is not a model map.`);
+  }
+  const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
+  return {
+    entries: parsed,
+    ...(response.headers.get("etag") === null ? {} : { etag: response.headers.get("etag")! }),
+    ...(Number.isNaN(lastModified) ? {} : { lastModified }),
+  };
+}
+
 /**
- * One provider's factual updates, derived from the models.dev document.
+ * Merge one provider's feed over the baseline pi ships.
  *
- * Exported for tests: this is the whole feed-to-facts policy in one pure
- * function, and the tests hold the ticket's factual cases directly. Executable
- * materialization is tested through {@link modelsDevCatalogSource} instead.
+ * A feed entry replaces the baseline model of the same id and appends when the
+ * id is new; a baseline id the feed omits is kept. An entry that fails the
+ * redirection guard or any field check is withheld and counted, and the
+ * baseline model it would have replaced simply stays — the feed may correct a
+ * model or add one, and may never cost anyone a model that already works.
+ *
+ * Baseline order is preserved and new ids follow in feed order, so the picker
+ * does not reshuffle itself on every refresh.
  */
-export function modelsDevCatalogFacts(
+function admitPiDevCatalog(
   providerId: string,
   baseline: readonly Model<Api>[],
-  document: unknown,
-): CatalogModelFacts[] {
-  if (!isRecord(document)) return [];
-  const provider = document[providerId];
-  const listed = isRecord(provider) && isRecord(provider.models) ? provider.models : undefined;
-  if (listed === undefined) return [];
-  const byId = new Map(baseline.map((model) => [model.id, model]));
-  const facts: CatalogModelFacts[] = [];
-  for (const [id, raw] of Object.entries(listed)) {
-    if (facts.length >= MAX_PROVIDER_MODELS) break;
-    if (!isRecord(raw)) continue;
-    const existing = byId.get(id);
-    if (!admitsCatalogEntry(raw, existing !== undefined)) continue;
-    const modelFacts = existing === undefined ? addedFacts(id, raw) : refreshedFacts(existing, raw);
-    if (modelFacts !== undefined) facts.push(modelFacts);
+  entries: Readonly<Record<string, unknown>>,
+): { models: Model<Api>[]; rejected: number } {
+  const guard = redirectionGuard(baseline);
+  const baselineIds = new Set(baseline.map((model) => model.id));
+  const admitted = new Map<string, Model<Api>>();
+  let rejected = 0;
+  for (const [id, raw] of Object.entries(entries)) {
+    const model = piDevModel(providerId, id, raw, guard);
+    if (model === undefined) {
+      rejected += 1;
+      continue;
+    }
+    admitted.set(id, model);
   }
-  // The removal policy, in one line: the feed may only take away what it gave.
-  //
-  // An id pi ships and the feed omits is kept. Measured against the live
-  // catalogue, dropping those retires three models that work right now —
-  // `openai/gpt-5-chat-latest`, `zai/glm-5.2-highspeed` and
-  // `google/gemini-robotics-er-1.6-preview` — on no better evidence than a
-  // community catalogue not having got to them. A refreshed-only id has no such
-  // backing: it exists because the feed listed it, so the feed dropping it is
-  // exactly the removal signal, and it is gone by not being rebuilt here.
-  // Renames stay explicit, through {@link supersededModelId}.
+  const models = baseline.map((model) => admitted.get(model.id) ?? model);
+  for (const [id, model] of admitted) {
+    if (!baselineIds.has(id)) models.push(model);
+  }
+  return { models, rejected };
+}
+
+/** Where this provider's baseline already sends requests, and how. */
+interface RedirectionGuard {
+  apis: ReadonlySet<string>;
+  origins: ReadonlySet<string>;
+}
+
+/**
+ * The redirection guard, built from the baseline pi ships.
+ *
+ * Sets rather than single values, because a provider is not required to speak
+ * one protocol to one host: `opencode-go` alone serves three APIs across two
+ * origins, so "the provider's api" would not name anything real to compare an
+ * entry against. What the sets do express is the invariant worth having — the
+ * feed may describe models on infrastructure this provider already talks to,
+ * and may not introduce a protocol or a host of its own.
+ */
+function redirectionGuard(baseline: readonly Model<Api>[]): RedirectionGuard {
+  const apis = new Set<string>();
+  const origins = new Set<string>();
   for (const model of baseline) {
-    if (facts.length >= MAX_PROVIDER_MODELS) break;
-    if (!(model.id in listed)) facts.push(catalogFactsOf(model));
+    const api = nonEmptyString(model.api);
+    if (api !== undefined) apis.add(api);
+    const origin = requestDestination(model.baseUrl);
+    if (origin !== undefined) origins.add(origin);
   }
-  return facts;
+  return { apis, origins };
 }
 
-/** A known model with only feed-owned catalogue facts refreshed. */
-function refreshedFacts(
-  model: Model<Api>,
-  entry: Record<string, unknown>,
-): CatalogModelFacts | undefined {
-  const limit = isRecord(entry.limit) ? entry.limit : undefined;
-  const current = catalogFactsOf(model);
-  const updated: CatalogModelFacts = {
-    ...current,
-    name: nonEmptyString(entry.name) ?? current.name,
-    cost: costOf(entry) ?? current.cost,
-    contextWindow: positiveInteger(limit?.context) ?? current.contextWindow,
-    maxTokens: positiveInteger(limit?.output) ?? current.maxTokens,
-    input: inputsOf(entry) ?? current.input,
-  };
-  return updated;
-}
-
-/** A new catalogue candidate; executable protocol is admitted separately. */
-function addedFacts(id: string, entry: Record<string, unknown>): CatalogModelFacts | undefined {
-  const cost = costOf(entry);
-  const limit = isRecord(entry.limit) ? entry.limit : undefined;
-  const contextWindow = positiveInteger(limit?.context);
-  const maxTokens = positiveInteger(limit?.output);
-  const input = inputsOf(entry);
-  if (
-    cost === undefined ||
-    contextWindow === undefined ||
-    maxTokens === undefined ||
-    input === undefined
-  ) {
+/**
+ * Where a `baseUrl` would actually send, as a comparable destination.
+ *
+ * `undefined` for anything this module will not reason about, which is the
+ * conservative answer everywhere it is used: an unreadable baseline `baseUrl`
+ * contributes no destination, and an unreadable feed `baseUrl` matches none.
+ *
+ * The empty string is its own destination rather than an unreadable one, and it
+ * has to be, because pi ships it: every `azure-openai-responses` model has
+ * `baseUrl: ""`, since an Azure endpoint is a per-deployment resource the person
+ * configures at runtime and the catalog cannot know. An empty `baseUrl` is not a
+ * host — it is a deferral to that configuration — so a feed stating one
+ * introduces no destination the baseline did not already defer on. Treating it
+ * as unreadable instead rejected all 39 of Azure's entries and made the provider
+ * permanently unrefreshable, which was measured before it was fixed.
+ *
+ * Embedded credentials are refused rather than normalized away, because
+ * `https://user:pass@api.openai.com` has origin `https://api.openai.com` and
+ * would pass an origin comparison while putting an `Authorization` header on
+ * the wire that the baseline never had.
+ */
+function requestDestination(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value === "") return "";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
     return undefined;
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+  if (url.username !== "" || url.password !== "") return undefined;
+  return url.origin;
+}
+
+/**
+ * One feed entry as an executable {@link Model}, or `undefined` to withhold it.
+ *
+ * The result is assembled field by field out of validated locals. Nothing is
+ * spread from the parsed entry, so a key this module does not know about cannot
+ * ride into a runtime model, and a key it does know about cannot arrive with a
+ * type pi will not survive reading.
+ */
+function piDevModel(
+  providerId: string,
+  id: string,
+  raw: unknown,
+  guard: RedirectionGuard,
+): Model<Api> | undefined {
+  if (!isRecord(raw) || !safeKey(id)) return undefined;
+  // An entry may restate its own identity; it may not contradict the map that
+  // carries it, and it may not claim to belong to a different provider.
+  if (raw.id !== undefined && raw.id !== id) return undefined;
+  if (raw.provider !== undefined && raw.provider !== providerId) return undefined;
+
+  // The guard. Every other field here is a claim about a model; these two are a
+  // claim about where its requests go, and that one is not the feed's to make.
+  const api = nonEmptyString(raw.api);
+  const destination = requestDestination(raw.baseUrl);
+  if (api === undefined || !guard.apis.has(api)) return undefined;
+  if (destination === undefined || !guard.origins.has(destination)) return undefined;
+  const baseUrl = raw.baseUrl as string;
+
+  if (typeof raw.reasoning !== "boolean") return undefined;
+  const input = inputModalities(raw.input);
+  const cost = storedCost(raw.cost);
+  const contextWindow = positiveInteger(raw.contextWindow);
+  const maxTokens = positiveInteger(raw.maxTokens);
+  if (input === undefined || cost === undefined) return undefined;
+  if (contextWindow === undefined || maxTokens === undefined) return undefined;
+
+  const thinkingLevelMap = feedThinkingLevelMap(raw.thinkingLevelMap);
+  const headers = feedHeaders(raw.headers);
+  const compat = feedInertRecord(raw.compat);
+  const samplingParams = feedInertRecord(raw.samplingParams);
+  if (thinkingLevelMap === null || headers === null) return undefined;
+  if (compat === null || samplingParams === null) return undefined;
+
   return {
     id,
-    name: nonEmptyString(entry.name) ?? id,
+    name: nonEmptyString(raw.name) ?? id,
+    api,
+    provider: providerId,
+    baseUrl,
+    reasoning: raw.reasoning,
     input,
     cost,
     contextWindow,
     maxTokens,
-  };
+    ...(thinkingLevelMap === undefined ? {} : { thinkingLevelMap }),
+    ...(headers === undefined ? {} : { headers }),
+    ...(compat === undefined ? {} : { compat }),
+    ...(samplingParams === undefined ? {} : { samplingParams }),
+  } as Model<Api>;
 }
 
-/** Materialize feed/store facts only through today's exact executable protocol. */
-function materializeCatalog(
-  baseline: readonly Model<Api>[],
-  facts: readonly CatalogModelFacts[],
-  classes: ReadonlyMap<string, ProviderProtocolClass>,
-  listed: Readonly<Record<string, unknown>>,
-): Model<Api>[] {
-  const baselineById = new Map(baseline.map((model) => [model.id, model]));
-  const materialized: Model<Api>[] = [];
-  for (const entry of facts) {
-    const existing = baselineById.get(entry.id);
-    let protocol: CatalogModelProtocol | Model<Api> | undefined = existing;
-    if (protocol === undefined) {
-      // Facts are produced only from record-valued rows in this same list.
-      const raw = listed[entry.id] as Record<string, unknown>;
-      const classKey = protocolClassKey(raw);
-      const candidate = classKey === undefined ? undefined : classes.get(classKey);
-      if (candidate !== undefined && !candidate.unusable) protocol = mintProtocol(candidate, raw);
-    }
-    if (protocol === undefined) continue;
-    materialized.push({
-      ...protocol,
-      ...entry,
-      ...(existing === undefined ? { [PROTOCOL_ADMISSION_FIELD]: PROTOCOL_ADMISSION_VERSION } : {}),
-    } as PersistedCatalogModel);
+/**
+ * A feed thinking ladder: every value a level string or an explicit `null`.
+ *
+ * Keys are not restricted to pi's `ModelThinkingLevel`. Pi looks its ladder up
+ * by known level name, so a level this build has never heard of is inert here
+ * and is exactly what a bump-free catalog should be able to carry forward; an
+ * allowlist would drop the next rung on the day it shipped. A value of the
+ * wrong *type* is different — pi would send it — so it fails the entry.
+ */
+function feedThinkingLevelMap(value: unknown): ThinkingLevelMap | undefined | null {
+  const ladder = feedRecordOf(value, (entry) => entry === null || typeof entry === "string");
+  return ladder === undefined || ladder === null ? ladder : (ladder as ThinkingLevelMap);
+}
+
+/** Feed headers: pi's `Model.headers` is `Record<string, string>`, exactly. */
+function feedHeaders(value: unknown): Record<string, string> | undefined | null {
+  const headers = feedRecordOf(value, (entry) => typeof entry === "string");
+  return headers === undefined || headers === null ? headers : (headers as Record<string, string>);
+}
+
+/**
+ * A bounded record whose every value passes `admits`, keyed safely.
+ *
+ * `undefined` for absent, `null` for present and not carryable.
+ */
+function feedRecordOf(
+  value: unknown,
+  admits: (entry: unknown) => boolean,
+): Record<string, unknown> | undefined | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_INERT_NODES) return null;
+  for (const [key, entry] of entries) {
+    if (!safeKey(key) || !admits(entry)) return null;
   }
-  return materialized;
+  return value;
+}
+
+/**
+ * `compat` and `samplingParams`, as bounded inert JSON.
+ *
+ * Neither can be checked key by key from out here, and neither should be. Pi's
+ * `compat` is a union of four API-specific shapes that gains keys on ordinary
+ * bumps, and an allowlist would silently drop the new capability flag on the
+ * day it shipped — which is the failure this whole module exists to prevent.
+ * What *is* checkable without knowing the vocabulary is that the value is inert
+ * data: plain JSON, finite numbers, bounded depth and node count, and no key
+ * that reads as a prototype. That is enough to guarantee it can do nothing
+ * except be read by the code that understands it.
+ */
+function feedInertRecord(value: unknown): Record<string, unknown> | undefined | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  return isInertJson(value, 0, { nodes: 0 }) ? value : null;
+}
+
+function isInertJson(value: unknown, depth: number, budget: { nodes: number }): boolean {
+  if (depth > MAX_INERT_DEPTH) return false;
+  budget.nodes += 1;
+  if (budget.nodes > MAX_INERT_NODES) return false;
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((entry) => isInertJson(entry, depth + 1, budget));
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([key, entry]) => safeKey(key) && isInertJson(entry, depth + 1, budget),
+  );
+}
+
+/** A key that names data rather than a prototype, wherever it appears. */
+function safeKey(key: string): boolean {
+  return key.length > 0 && !UNSAFE_KEYS.has(key);
 }
 
 /**
@@ -782,12 +916,19 @@ function materializeCatalog(
  * this exact provider-level policy version and its protocol fields still pass
  * local structural validation. The cache is therefore persistence, never a
  * way for old or foreign request shape to outrank current code.
+ *
+ * The redirection guard is re-applied here rather than trusted from admission
+ * time, and the two checks are deliberately the same code. A cache is a file on
+ * disk that outlives the fetch that filled it: a pi-ai bump can retire the
+ * origin an entry was admitted against, and nothing but this stops an edited
+ * `models.json` from pointing a restored model at a host of its own.
  */
 function restoreStoredCatalog(
   baseline: readonly Model<Api>[],
   stored: readonly Model<Api>[],
 ): Model<Api>[] {
   const baselineById = new Map(baseline.map((model) => [model.id, model]));
+  const guard = redirectionGuard(baseline);
   const restored: Model<Api>[] = [];
   for (const model of stored) {
     const facts = storedModelFacts(model);
@@ -800,7 +941,7 @@ function restoreStoredCatalog(
     const persisted = model as PersistedCatalogModel;
     if (
       persisted[PROTOCOL_ADMISSION_FIELD] !== PROTOCOL_ADMISSION_VERSION ||
-      !safeStoredProtocol(persisted)
+      !safeStoredProtocol(persisted, guard)
     ) {
       continue;
     }
@@ -809,14 +950,15 @@ function restoreStoredCatalog(
   return restored;
 }
 
-function safeStoredProtocol(model: PersistedCatalogModel): boolean {
-  if (
-    nonEmptyString(model.api) === undefined ||
-    nonEmptyString(model.baseUrl) === undefined ||
-    typeof model.reasoning !== "boolean"
-  ) {
-    return false;
-  }
+function safeStoredProtocol(model: PersistedCatalogModel, guard: RedirectionGuard): boolean {
+  const api = nonEmptyString(model.api);
+  const destination = requestDestination(model.baseUrl);
+  if (api === undefined || !guard.apis.has(api)) return false;
+  // `""` is a destination, not a missing one — see {@link requestDestination}.
+  // Reading it as missing dropped every Azure model the feed added, one restart
+  // after adding them, which is the worst shape a bug like this can take.
+  if (destination === undefined || !guard.origins.has(destination)) return false;
+  if (typeof model.reasoning !== "boolean") return false;
   if (model.compat !== undefined && !isRecord(model.compat)) return false;
   if (model.headers !== undefined && !headerRecord(model.headers)) return false;
   if (model.samplingParams !== undefined && !isRecord(model.samplingParams)) return false;
@@ -834,149 +976,8 @@ function headerRecord(value: Record<string, unknown>): boolean {
 }
 
 /** Build one provider's protocol classes from exact baseline joins. */
-function providerProtocolClasses(
-  baseline: readonly Model<Api>[],
-  listed: Readonly<Record<string, unknown>>,
-): ReadonlyMap<string, ProviderProtocolClass> {
-  const members = new Map<string, Model<Api>[]>();
-  for (const model of baseline) {
-    const raw = listed[model.id];
-    if (!isRecord(raw)) continue;
-    const classKey = protocolClassKey(raw);
-    if (classKey === undefined) continue;
-    const group = members.get(classKey);
-    if (group === undefined) members.set(classKey, [model]);
-    else group.push(model);
-  }
-  return new Map([...members].map(([classKey, group]) => [classKey, protocolClassOf(group)]));
-}
-
 /** Reduce one class's members to the evidence they actually agree on. */
-function protocolClassOf(group: readonly Model<Api>[]): ProviderProtocolClass {
-  const cores = group.map(coreProtocolOf);
-  const coreKey = JSON.stringify(cores[0]);
-  return {
-    // Every member states the same core, or nothing may be minted at all.
-    core: cores[0]!,
-    unusable: cores.some((core) => JSON.stringify(core) !== coreKey),
-    ladder: intersectLadders(group),
-    additive: corroboratedAdditive(group),
-  };
-}
-
-/**
- * The part of a protocol every member of a class must state identically.
- *
- * Facts, the thinking ladder, per-model routing and the additive opt-ins are
- * all handled separately; what is left is how the request is addressed and
- * encoded, and it is not negotiable.
- */
-function coreProtocolOf(model: Model<Api>): CatalogModelProtocol {
-  const { thinkingLevelMap: _ladder, ...protocol } = protocolOf(model);
-  if (!isRecord(protocol.compat)) return protocol;
-  const compat: Record<string, unknown> = { ...protocol.compat };
-  for (const key of [...MODEL_SCOPED_COMPAT_KEYS, ...ADDITIVE_COMPAT_KEYS]) delete compat[key];
-  const { compat: _compat, ...rest } = protocol;
-  return (Object.keys(compat).length === 0 ? rest : { ...rest, compat }) as CatalogModelProtocol;
-}
-
-/**
- * The thinking levels a whole class agrees on.
- *
- * A level survives only where every member maps it identically. Anything else
- * becomes an explicit `null`, never an omission: pi reads a *missing* entry for
- * `off`…`high` as supported, so "we could not agree" has to be written down or
- * it silently reads as "yes".
- */
-function intersectLadders(group: readonly Model<Api>[]): ThinkingLevelMap | undefined {
-  const ladders = group.map((model) => model.thinkingLevelMap);
-  const intersected: Record<string, string | null> = {};
-  let stated = false;
-  for (const level of THINKING_LEVELS) {
-    const values = ladders.map((ladder) => ladder?.[level]);
-    const [first] = values;
-    if (values.every((value) => value === first)) {
-      if (first === undefined) continue;
-      intersected[level] = first;
-    } else {
-      intersected[level] = null;
-    }
-    stated = true;
-  }
-  return stated ? (intersected as ThinkingLevelMap) : undefined;
-}
-
 /** Additive opt-ins at least two members corroborate; see {@link ADDITIVE_COMPAT_KEYS}. */
-function corroboratedAdditive(group: readonly Model<Api>[]): Record<string, unknown> {
-  const corroborated: Record<string, unknown> = {};
-  if (group.length < 2) return corroborated;
-  for (const key of ADDITIVE_COMPAT_KEYS) {
-    const values = group.map((model) => (isRecord(model.compat) ? model.compat[key] : undefined));
-    const [first] = values;
-    if (first !== undefined && values.every((value) => value === first)) corroborated[key] = first;
-  }
-  return corroborated;
-}
-
-/**
- * Mint one new id's protocol from its class.
- *
- * The class supplies the ceiling; the candidate's own declared effort values
- * can only lower it. A level whose provider string the candidate does not
- * declare becomes `null` — that is how `grok-4.6` inherits `grok-4.5`'s shape
- * without claiming a rung no Pi evidence covers. A candidate that declares no
- * ladder is left with the class's, which is what its siblings run.
- */
-function mintProtocol(
-  candidate: ProviderProtocolClass,
-  entry: Record<string, unknown>,
-): CatalogModelProtocol {
-  const compat = { ...(isRecord(candidate.core.compat) ? candidate.core.compat : {}) };
-  for (const [key, value] of Object.entries(candidate.additive)) compat[key] = value;
-  const declared = declaredEffortValues(entry);
-  const ladder =
-    candidate.ladder === undefined || declared === undefined
-      ? candidate.ladder
-      : narrowLadder(candidate.ladder, declared);
-  return {
-    ...candidate.core,
-    ...(Object.keys(compat).length === 0 ? {} : { compat }),
-    ...(ladder === undefined ? {} : { thinkingLevelMap: ladder }),
-  } as CatalogModelProtocol;
-}
-
-function narrowLadder(ladder: ThinkingLevelMap, declared: ReadonlySet<string>): ThinkingLevelMap {
-  const narrowed: Record<string, string | null> = {};
-  for (const level of THINKING_LEVELS) {
-    const mapped = ladder[level];
-    if (mapped === undefined) continue;
-    narrowed[level] = mapped !== null && declared.has(mapped) ? mapped : null;
-  }
-  return narrowed as ThinkingLevelMap;
-}
-
-/**
- * The effort strings this row says the model accepts.
- *
- * `undefined` when the row declares no effort ladder — which is a statement
- * about the feed, not about the model, so it narrows nothing.
- */
-function declaredEffortValues(entry: Record<string, unknown>): ReadonlySet<string> | undefined {
-  const declared = new Set<string>();
-  for (const option of reasoningOptionList(entry.reasoning_options) ?? []) {
-    if (!isRecord(option) || option.type !== "effort" || !Array.isArray(option.values)) continue;
-    // The document is untrusted: a rung that is not a string names nothing the
-    // provider could accept, so it cannot widen what this model may be sent.
-    const rungs = option.values.filter((value) => typeof value === "string");
-    for (const rung of rungs) declared.add(rung);
-  }
-  return declared.size > 0 ? declared : undefined;
-}
-
-function reasoningOptionList(value: unknown): readonly unknown[] | undefined {
-  return Array.isArray(value) ? value : undefined;
-}
-
 function withoutAdmissionMarker(model: Model<Api>): Model<Api> {
   const persisted = model as PersistedCatalogModel;
   const { [PROTOCOL_ADMISSION_FIELD]: _admission, ...runtimeModel } = persisted;
@@ -998,95 +999,12 @@ function protocolOf(model: Model<Api>): CatalogModelProtocol {
   return protocol;
 }
 
-function modelsDevProviderModels(
-  providerId: string,
-  document: Readonly<Record<string, unknown>>,
-): Record<string, unknown> | undefined {
-  const provider = document[providerId];
-  return isRecord(provider) && isRecord(provider.models) ? provider.models : undefined;
-}
-
-/**
- * The models.dev fields that may distinguish request behavior.
- *
- * All are capability declarations, not names guessed from an id. A model must
- * support text output and tools before it can join a coding-agent catalog.
- *
- * The key deliberately reads reasoning *shape* — which kinds of control the
- * model exposes — rather than the exact effort strings. Keying on the values
- * made the key a per-model identifier: `grok-4.6` offers
- * `low|medium|high|xhigh` where `grok-4.5` offers `low|medium|high`, and that
- * one extra string put two protocol-identical models in different classes, so
- * essentially every class held exactly one member and every genuinely new id
- * fell outside all of them. The values are not lost — {@link mintProtocol} uses
- * the candidate's own to narrow the ladder it inherits, which is the job they
- * can actually do soundly.
- *
- * `family` stays in the key. Dropping it was measured against the real feed and
- * mints wrong `api`/`baseUrl` inside `opencode-go`, which serves three
- * different APIs across two base URLs.
- */
-function protocolClassKey(entry: Record<string, unknown>): string | undefined {
-  if (entry.tool_call !== true || !declaresTextOutput(entry)) return undefined;
-  const family = nonEmptyString(entry.family);
-  if (family === undefined || typeof entry.reasoning !== "boolean") return undefined;
-  const reasoningShape = reasoningControlShape(entry.reasoning_options);
-  const interleaved = interleavedShape(entry.interleaved);
-  if (reasoningShape === undefined || interleaved === undefined) return undefined;
-  return JSON.stringify({
-    family,
-    reasoning: entry.reasoning,
-    reasoningShape,
-    interleaved,
-    temperature: typeof entry.temperature === "boolean" ? entry.temperature : null,
-    structuredOutput: typeof entry.structured_output === "boolean" ? entry.structured_output : null,
-  });
-}
-
-/**
- * Which kinds of reasoning control a row declares, sorted and de-duplicated.
- *
- * `null` for a row that declares none. `undefined` — rejecting the row — only
- * for a shape this module cannot read at all.
- */
-function reasoningControlShape(value: unknown): readonly string[] | null | undefined {
-  if (value === undefined || value === null) return null;
-  if (!Array.isArray(value)) return undefined;
-  const types = new Set<string>();
-  for (const option of value) {
-    if (!isRecord(option)) return undefined;
-    const type = nonEmptyString(option.type);
-    if (type === undefined) return undefined;
-    types.add(type);
-  }
-  return [...types].toSorted();
-}
-
 /** Whether interleaved reasoning is declared, and under which field name. */
-function interleavedShape(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === false) return "none";
-  if (value === true) return "any";
-  if (!isRecord(value)) return undefined;
-  const field = nonEmptyString(value.field);
-  return field === undefined ? "any" : `field:${field}`;
-}
-
-function catalogFactsOf(model: Model<Api>): CatalogModelFacts {
-  return {
-    id: model.id,
-    name: model.name,
-    input: model.input,
-    cost: model.cost,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-  };
-}
-
 /** Invalid legacy/cache entries fail closed rather than becoming runnable protocol. */
 function storedModelFacts(model: Model<Api>): CatalogModelFacts | undefined {
   const id = nonEmptyString(model.id);
   const name = nonEmptyString(model.name);
-  const input = inputsOf({ modalities: { input: model.input } });
+  const input = inputModalities(model.input);
   const cost = storedCost(model.cost);
   const contextWindow = positiveInteger(model.contextWindow);
   const maxTokens = positiveInteger(model.maxTokens);
@@ -1149,83 +1067,12 @@ function storedTiers(value: unknown): ModelCostTier[] | undefined | null {
 }
 
 /** Price mapping is all-or-nothing: a cost with unmappable tiers is no cost. */
-function costOf(entry: Record<string, unknown>): ModelCost | undefined {
-  const cost = isRecord(entry.cost) ? entry.cost : undefined;
-  if (cost === undefined) return undefined;
-  const input = rate(cost.input);
-  const output = rate(cost.output);
-  if (input === undefined || output === undefined) return undefined;
-  const tiers = tiersOf(cost.tiers);
-  if (tiers === null) return undefined;
-  return {
-    input,
-    output,
-    cacheRead: rate(cost.cache_read) ?? 0,
-    cacheWrite: rate(cost.cache_write) ?? 0,
-    ...(tiers === undefined ? {} : { tiers }),
-  };
-}
-
-/**
- * models.dev spells a pricing tier `{ ..., tier: { type: "context", size } }`;
- * pi spells it `{ ..., inputTokensAbove }`. Null means "present but not
- * translatable", which {@link costOf} treats as distrust of the whole price.
- */
-function tiersOf(value: unknown): ModelCostTier[] | undefined | null {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return null;
-  const tiers: ModelCostTier[] = [];
-  for (const raw of value) {
-    if (!isRecord(raw)) return null;
-    const input = rate(raw.input);
-    const output = rate(raw.output);
-    const tier = isRecord(raw.tier) ? raw.tier : undefined;
-    const size = positiveInteger(tier?.size);
-    if (input === undefined || output === undefined) return null;
-    if (tier?.type !== "context" || size === undefined) return null;
-    tiers.push({
-      input,
-      output,
-      cacheRead: rate(raw.cache_read) ?? 0,
-      cacheWrite: rate(raw.cache_write) ?? 0,
-      inputTokensAbove: size,
-    });
-  }
-  return tiers;
-}
-
-/**
- * Whether one feed row may hold a place in this provider's list.
- *
- * The two directions are deliberately asymmetric, because the evidence behind
- * them is. Pi already vouches that a baseline id is an executable agent model,
- * and this is a community-maintained catalogue: a row that omits `tool_call`,
- * or sets it false by mistake, is a gap in the data, not grounds to retire a
- * model that works and that somebody may have selected. Membership is the part
- * the feed genuinely owns — an id it stops listing never reaches this function
- * at all, and *that* is what removes a model.
- *
- * A new id has no Pi backing whatsoever, so it carries the whole burden: it
- * must declare tool calling and text output itself, and must not be one the
- * provider has already marked retired.
- */
-function admitsCatalogEntry(entry: Record<string, unknown>, knownToPi: boolean): boolean {
-  if (knownToPi) return true;
-  return entry.tool_call === true && declaresTextOutput(entry) && entry.status !== "deprecated";
-}
-
-function declaresTextOutput(entry: Record<string, unknown>): boolean {
-  const modalities = isRecord(entry.modalities) ? entry.modalities : undefined;
-  return Array.isArray(modalities?.output) && modalities.output.includes("text");
-}
-
-function inputsOf(entry: Record<string, unknown>): ("text" | "image")[] | undefined {
-  const modalities = isRecord(entry.modalities) ? entry.modalities : undefined;
-  const input = modalities?.input;
-  if (!Array.isArray(input)) return undefined;
+/** The input modalities pi models, de-duplicated; anything else is not one. */
+function inputModalities(value: unknown): ("text" | "image")[] | undefined {
+  if (!Array.isArray(value)) return undefined;
   const kept = [
     ...new Set(
-      input.filter((value): value is "text" | "image" => value === "text" || value === "image"),
+      value.filter((entry): entry is "text" | "image" => entry === "text" || entry === "image"),
     ),
   ];
   return kept.length > 0 ? kept : undefined;
@@ -1235,8 +1082,23 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * A price rate: any finite number, including a negative one.
+ *
+ * Negative is not nonsense here, it is pi's own sentinel. `openrouter/auto` and
+ * `openrouter/auto-beta` ship `input: -1000000` in the built-in catalog, because
+ * an auto-router's price is whatever the model it routes to charges and the
+ * catalog cannot say in advance. Requiring `>= 0` therefore rejected two models
+ * pi itself ships — which cost nothing visible on a refresh, since the baseline
+ * kept them, and then dropped them outright on the next restart, because the
+ * same validator gates {@link storedModelFacts}. Measured, then fixed.
+ *
+ * Being wrong about a rate misprices a usage report; it cannot malform a
+ * request. That is the whole reason this field does not get the treatment the
+ * protocol fields get.
+ */
 function rate(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -1364,42 +1226,6 @@ function asStoreEntry(value: unknown): ModelsStoreEntry | undefined {
       ? { [CATALOG_FORMAT_FIELD]: CATALOG_FORMAT_VERSION }
       : {}),
   } as PersistedCatalogEntry;
-}
-
-/**
- * Resolve with the shared promise, or reject when this caller's own refresh is
- * superseded — without cancelling the fetch other callers still await. The
- * shared promise always has handlers attached here, so an abandoned fetch's
- * rejection is never unhandled.
- */
-function raceSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => {
-      reject(abortError(signal));
-    };
-    if (signal.aborted) {
-      onAbort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
-function abortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) return signal.reason;
-  const error = new Error("Model catalog fetch was aborted");
-  error.name = "AbortError";
-  return error;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
