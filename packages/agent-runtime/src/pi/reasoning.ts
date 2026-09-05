@@ -19,10 +19,12 @@
  *   it. `contextMessages` strips it from every compaction entry it expands.
  * - **A resume that could not reproduce the live array.** A settled reply the
  *   sidecar disagrees about is withheld from the middle of history, which
- *   invalidates every block after it; the attach strips the lot.
+ *   invalidates every block after it; the first attach to withhold it strips
+ *   the lot and records that it did, so later attaches strip only up to the
+ *   record and keep the reasoning bound to the stripped replay.
  *
  * And one place applies it as a recovery: a turn the provider refused for its
- * reasoning is retried once without any.
+ * reasoning is retried once without any, under the same record.
  *
  * Pi's own message shape is what is edited, not the provider's. A Pi
  * `thinking` block carries `thinkingSignature` (or, when `redacted`, the opaque

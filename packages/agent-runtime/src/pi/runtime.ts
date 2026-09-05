@@ -479,10 +479,14 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  * marker's reader quarantines and counts every entry of its type it cannot
  * validate, and a context fact is not a lost transcript fact — it is an
  * instruction to the replay. One kind so far: `reasoning-dropped`, written at
- * the moment {@link withoutReasoning} was applied to the live array, so a
- * later attach applies the same edit to everything before it and reproduces
- * the array the reasoning after it was bound to. Without it a resume would
- * put the dropped blocks back and be refused on its first turn, every time.
+ * the moment {@link withoutReasoning} was applied to the whole live array —
+ * by a refused turn's recovery, or by an attach that withheld a reply from
+ * the middle of history — so a later attach applies the same edit to
+ * everything before it and reproduces the array the reasoning after it was
+ * bound to. Without it a resume would put the dropped blocks back and be
+ * refused on its first turn, every time; or, for the withheld reply, strip
+ * everything again on every attach and throw away reasoning that was validly
+ * bound to the stripped replay.
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
 
@@ -516,6 +520,22 @@ function withDroppedReasoning(entries: readonly Entry[]): Entry[] {
       ? { ...entry, message: withoutReasoning(entry.message) }
       : entry,
   );
+}
+
+/**
+ * Whether a recorded reasoning drop already sits after every one of `entryIds`.
+ *
+ * The question an attach that withholds a reply asks before stripping the
+ * replay: if a `reasoning-dropped` marker is newer than everything withheld,
+ * {@link withDroppedReasoning} has already made the edit the withholding
+ * required, and whatever reasoning was produced after that marker was bound to
+ * the stripped replay and may be kept. An id no entry on the branch carries
+ * counts as withheld from before the beginning, which any marker covers.
+ */
+function reasoningDroppedAfter(entries: readonly Entry[], entryIds: ReadonlySet<string>): boolean {
+  const newestDrop = entries.findLastIndex(isReasoningDroppedMarker);
+  const newestWithheld = entries.findLastIndex((entry) => entryIds.has(entry.id));
+  return newestDrop > newestWithheld;
 }
 
 /**
@@ -1044,6 +1064,25 @@ async function attachSession(
       ),
     ]);
     /**
+     * Whether this attach withholds a reply no recorded reasoning drop has
+     * answered yet.
+     *
+     * The disagreement is a fact of the sidecar and recurs on every attach;
+     * the drop it earns must not. The first attach to withhold strips the
+     * whole replay and records that it did; every later one finds the record
+     * newer than the withheld reply and lets {@link withDroppedReasoning} make
+     * the same edit, keeping the reasoning produced since.
+     */
+    const withholdingUnrecorded =
+      disagreedSettledEntryIds.size > 0 &&
+      !reasoningDroppedAfter(recoveredEntries, disagreedSettledEntryIds);
+    /** The durable record that every reasoning block before this point was dropped. */
+    const recordReasoningDropped = async (): Promise<void> => {
+      await sidecar.appendCustomEntry(VOLLI_CONTEXT_MARKER, {
+        kind: "reasoning-dropped",
+      } satisfies ReasoningDroppedMarker);
+    };
+    /**
      * How this sidecar's entries are read back as a conversation.
      *
      * Both halves matter and neither is Pi's business: a user message accepted
@@ -1080,8 +1119,11 @@ async function attachSession(
     // did that. Dropping the reasoning from the whole replay is the doc's
     // "every thinking block before some point" removal, which is always valid,
     // where leaving the later blocks in would be a first turn refused (VC-242).
-    const replayableContext =
-      disagreedSettledEntryIds.size > 0 ? recoveredContext.map(withoutReasoning) : recoveredContext;
+    // Once only: an attach that finds the drop already on record has had it
+    // applied by `withDroppedReasoning` above, and keeps what came after.
+    const replayableContext = withholdingUnrecorded
+      ? recoveredContext.map(withoutReasoning)
+      : recoveredContext;
     const recoveredMessages = recoveredEntries.some((entry) => entry.type === "compaction")
       ? restoreCompactedResources(replayableContext, [...activeMessageResources.values()])
       : replayableContext;
@@ -1126,6 +1168,11 @@ async function attachSession(
       };
     };
     if (disagreedSettledEntryIds.size > 0) {
+      // The fact about the replay, then the notice about it. Either order is
+      // safe across a crash between them: an attach that finds no record
+      // strips the replay again, and one that finds a record without a notice
+      // raises the notice again.
+      if (withholdingUnrecorded) await recordReasoningDropped();
       await persistObservation({
         kind: "attention",
         state: "raised",
@@ -1836,9 +1883,7 @@ async function attachSession(
       if (failed.reason === "reasoning" && !reasoningRecoveryUsed) {
         reasoningRecoveryUsed = true;
         agent.state.messages = agent.state.messages.map(withoutReasoning);
-        await sidecar.appendCustomEntry(VOLLI_CONTEXT_MARKER, {
-          kind: "reasoning-dropped",
-        } satisfies ReasoningDroppedMarker);
+        await recordReasoningDropped();
         return true;
       }
       if (failed.reason !== "context" || overflowRecoveryUsed) return false;

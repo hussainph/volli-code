@@ -7307,13 +7307,20 @@ describe("recovering a turn whose reasoning the provider refused", () => {
     await handle.close();
   });
 
-  it("replays no reasoning at all when it had to withhold a reply from the middle of history", async () => {
+  it("replays no reasoning at all when it had to withhold a reply from the middle of history, and only the once", async () => {
     // The doc's table: removing a thinking block from the middle invalidates
     // every one after it. A settled reply the sidecar disagrees about is
     // withheld from exactly there, and the attach knows it did that; the
     // replay drops every block rather than sending the later ones to be
     // refused. This is the edit the resume filter genuinely makes — a stopped
     // or errored reply is not one, because pi-ai never sends those.
+    //
+    // The disagreement is a fact of the sidecar and recurs on every attach
+    // after this one. The drop must not: the reasoning produced on the
+    // stripped replay was bound to that replay, and a later attach that read
+    // it back whole would be right to keep it. So the attach records the drop
+    // with the same marker the refused-turn recovery writes, and the next
+    // attach applies that marker rather than stripping everything again.
     const attachment = fixture();
     const firstRuntime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -7343,7 +7350,7 @@ describe("recovering a turn whose reasoning the provider refused", () => {
     const calls: ProviderCall[] = [];
     const secondRuntime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(scriptedStream([recording(calls, settles("safe retry"))])),
+      models: modelsWithStream(scriptedStream([recording(calls, reasons("sig-3", "safe retry"))])),
     });
     const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     expect((await secondHandle.reconcile(null)).observations).toEqual(
@@ -7352,12 +7359,40 @@ describe("recovering a turn whose reasoning the provider refused", () => {
       ]),
     );
     await secondHandle.submitUserMessage("carry on");
+    const secondRecovery = secondHandle.recovery!;
+    await secondHandle.close();
 
     const replayed = wireOf(calls[0]!);
     expect(replayed.join("\n")).not.toContain("first answer");
     expect(replayed.join("\n")).toContain("second answer");
     expect(signaturesOn(replayed)).toEqual([]);
-    await secondHandle.close();
+    // The drop is on record, once.
+    expect(contextMarkers(secondRecovery.sessionFilePath)).toEqual([
+      expect.objectContaining({ data: { kind: "reasoning-dropped" } }),
+    ]);
+
+    // The same sidecar, the same disagreement, one more attach: the withheld
+    // reply stays withheld, the reasoning from before the drop stays gone, and
+    // the reply produced on the stripped replay keeps its own — the array is
+    // byte for byte what the previous attach last sent, plus the turn since.
+    const thirdRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("still going"))])),
+    });
+    const thirdHandle = await thirdRuntime.startSession({
+      ...attachment.spec,
+      recovery: secondRecovery,
+    });
+    await thirdHandle.submitUserMessage("once more");
+    await thirdHandle.close();
+
+    expect(calls).toHaveLength(2);
+    expectAppendOnly(calls[0]!, calls[1]!);
+    const replayedAgain = wireOf(calls[1]!);
+    expect(replayedAgain.join("\n")).not.toContain("first answer");
+    expect(signaturesOn(replayedAgain)).toEqual(["sig-3"]);
+    // Covered by the marker already there; the third attach wrote no second one.
+    expect(contextMarkers(secondRecovery.sessionFilePath)).toHaveLength(1);
   });
 });
 
