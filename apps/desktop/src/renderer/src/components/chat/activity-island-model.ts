@@ -67,6 +67,7 @@ export interface IslandAgent {
 /** The Session's plan: an ordered list of steps and how many are done. */
 export interface IslandPlan {
   id: string;
+  /** Distinct titles — a step is keyed by its title in the card, so a rename is a new row. */
   steps: readonly string[];
   /** Steps completed, from the top; `steps[done]` is the current one. */
   done: number;
