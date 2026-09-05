@@ -14,10 +14,18 @@
  * Writes `profile.measured.json` beside this file. The bench falls back to
  * `FALLBACK_PROFILE` when that file is absent, and always prints which one it
  * used.
+ *
+ * That file is a generated artefact committed in-tree, which is a rule this
+ * repo otherwise holds to. It is kept deliberately: the benchmark tables in
+ * `docs/research/pi-parallel-tool-execution-vc-245.md` are only reproducible
+ * against the latencies they were produced with, and network latency in
+ * particular moves enough between runs to shift every absolute millisecond in
+ * them. **Re-running this probe invalidates those tables** — regenerate them
+ * with `run bench` in the same sitting, or restore the committed profile.
  */
 
 import { execFile } from "node:child_process";
-import { open, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +68,13 @@ async function main(): Promise<void> {
 
   const subprocess = await timed(11, () => run("/bin/echo", ["bench"]));
 
-  const scratch = join(tmpdir(), `volli-bench-${process.pid}.tmp`);
+  // `mkdtemp` rather than a name built from the pid: a predictable path in the
+  // shared temp dir is one another user can pre-create as a symlink, and the
+  // `open(…, "w")` below would then follow it and write through. `mkdtemp`
+  // makes a fresh 0700 directory with a random suffix, so the file underneath
+  // it cannot be anticipated.
+  const scratchDir = await mkdtemp(join(tmpdir(), "volli-bench-"));
+  const scratch = join(scratchDir, "durable-write.tmp");
   const sessionStart = await timed(11, async () => {
     // A durable write is a write plus the fsync that makes it durable; timing
     // only the write would flatter every side-effecting tool in the bench.
@@ -69,7 +83,7 @@ async function main(): Promise<void> {
     await handle.sync();
     await handle.close();
   });
-  await rm(scratch, { force: true });
+  await rm(scratchDir, { recursive: true, force: true });
 
   let network = 0;
   let networkNote = "measured";
