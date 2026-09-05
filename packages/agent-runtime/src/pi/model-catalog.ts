@@ -48,16 +48,32 @@
  *    point any of it at another host — which is the one failure a compromised
  *    or mistaken feed could otherwise cause that a person could not see.
  *
- *    The `api` half of that guard has a measured price, recorded here so a
- *    future loosening starts from evidence. Across all 39 providers on
- *    2026-09-05 it withheld exactly 15 entries, all on `openrouter`, where
- *    pi.dev now serves the Anthropic models as `anthropic-messages` and the
- *    pinned baseline still speaks only `openai-completions`. Fourteen are
- *    baseline ids that keep working on their baseline shape; one
- *    (`anthropic/claude-fable-5.1`) is a genuinely new model that waits for a
- *    bump. A protocol switch changes the entire request encoding, so making it
- *    deliberate is the intent rather than a side effect — but it is the one
- *    place this guard costs a model rather than only forbidding a redirect.
+ *    The `api` half of that guard is the only part that can cost a model rather
+ *    than merely forbid a redirect, and its price is **transient**: it is the
+ *    size of the gap between the pinned catalog and the feed, so a bump pays it
+ *    off. Measured across all 39 providers on 2026-09-05, against two pins:
+ *
+ *    - pi-ai 0.84.3 (catalog generated 2026-08-24): 100 models added, **15
+ *      withheld** — every one on `openrouter`, where pi.dev had begun serving
+ *      the Anthropic models as `anthropic-messages` while that baseline still
+ *      spoke only `openai-completions`.
+ *    - pi-ai 0.85.0 (catalog generated 2026-09-04): 6 models added, **0
+ *      withheld**. 0.85.0 ships those same `openrouter` entries under
+ *      `anthropic-messages`, so the guard's api set widens and all 15 admit.
+ *
+ *    So the guard does not permanently withhold a class of model; it withholds
+ *    a protocol migration until the pinned package has seen it, which is the
+ *    intent — a protocol switch changes the whole request encoding. Read the
+ *    two numbers together before loosening it: the 15 was a symptom of an
+ *    11-day-old pin, not a standing cost.
+ *
+ *    Watch the margin on the staleness rule while doing so. 0.85.0's catalog is
+ *    stamped 2026-09-04T10:06Z and pi.dev's `Last-Modified` was
+ *    2026-09-04T20:10Z — ten hours, and the whole feed is ignored if that ever
+ *    goes the other way. That is Pi's own rule and the safe direction (the
+ *    fresher catalog wins), but it means a pi-ai release published from a
+ *    snapshot newer than pi.dev's last push turns every provider into
+ *    {@link CatalogSourceAbsent} until pi.dev republishes.
  *
  *    Authority still runs one way only, on the same reasoning as VC-135 and one
  *    new one. A baseline id the feed omits is kept, because the staleness rule
