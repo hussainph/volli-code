@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
+import { roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
@@ -46,6 +47,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-a",
       projectId,
       ticketId: null,
+      role: "project",
       title: "One",
       provenance,
     });
@@ -53,6 +55,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-a",
       projectId,
       ticketId: null,
+      role: "project",
       title: "One",
       provenance,
     });
@@ -60,6 +63,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-b",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Two",
       provenance,
     });
@@ -90,6 +94,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-a",
       projectId,
       ticketId: null,
+      role: "project",
       title: "One",
       provenance,
     });
@@ -97,6 +102,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-b",
       projectId: other.id,
       ticketId: null,
+      role: "project",
       title: "Two",
       provenance,
     });
@@ -117,6 +123,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create",
       projectId,
       ticketId: null,
+      role: "project",
       title: "One",
       provenance,
     });
@@ -157,6 +164,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-brief",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Brief",
       provenance,
     });
@@ -189,6 +197,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-resources",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Skills",
       provenance,
     });
@@ -214,6 +223,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-tool-surface",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Tools",
       provenance,
     });
@@ -239,6 +249,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-model-selection",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Model selection",
       provenance,
     });
@@ -274,6 +285,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-invalid-model-selection",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Invalid model selection",
       provenance,
     });
@@ -311,6 +323,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-retry",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Retry",
       provenance,
     });
@@ -385,6 +398,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-null-envelope",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Null envelope",
       provenance,
     });
@@ -421,6 +435,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-interrupted-turn",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Interrupted turn",
       provenance,
     });
@@ -454,6 +469,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-authority-denied",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Authority denied",
       provenance,
     });
@@ -494,6 +510,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-authority-malformed",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Authority malformed",
       provenance,
     });
@@ -531,6 +548,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-corrupt-prior",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Prior",
       provenance,
     });
@@ -543,6 +561,7 @@ describe("SqliteSessionLedger", () => {
         commandId: "create-unrelated",
         projectId,
         ticketId: null,
+        role: "project",
         title: "Unrelated",
         provenance,
       }),
@@ -556,6 +575,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-signal-first",
       projectId,
       ticketId: "ticket-a",
+      role: "ticket",
       title: "First",
       provenance,
     });
@@ -569,6 +589,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-signal-second",
       projectId,
       ticketId: "ticket-a",
+      role: "ticket",
       title: "Second",
       provenance,
     });
@@ -600,6 +621,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-invalid-signal",
       projectId,
       ticketId: "ticket-invalid-signal",
+      role: "ticket",
       title: "Invalid signal",
       provenance,
     });
@@ -624,6 +646,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create",
       projectId,
       ticketId: null,
+      role: "project",
       title: "One",
       provenance,
     });
@@ -668,6 +691,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-structured",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Structured",
       provenance,
     });
@@ -801,6 +825,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-prompts",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Prompts",
       provenance,
     });
@@ -927,6 +952,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-invalid",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Invalid",
       provenance,
     });
@@ -1073,6 +1099,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-cancelled",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Cancelled",
       provenance,
     });
@@ -1166,6 +1193,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-retired-kind",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Retired kind",
       provenance,
     });
@@ -1212,6 +1240,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-retired-page",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Retired page",
       provenance,
     });
@@ -1262,6 +1291,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-retired-kind-get-event",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Retired kind get event",
       provenance,
     });
@@ -1289,6 +1319,7 @@ describe("SqliteSessionLedger", () => {
       commandId: "create-strict-write",
       projectId,
       ticketId: null,
+      role: "project",
       title: "Strict write",
       provenance,
     });
@@ -1333,6 +1364,7 @@ describe("the Session usage projection", () => {
       commandId: options.commandId,
       projectId: options.projectId,
       ticketId: options.ticketId,
+      role: roleImpliedByTicket(options.ticketId),
       title: options.commandId,
       provenance,
     });

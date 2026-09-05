@@ -22,7 +22,14 @@ import {
 } from "./session-slice";
 import { EMPTY_TRANSCRIPT, type ChatSessionFrame } from "./transcript";
 
-const SESSION = { id: "durable-1", projectId: "p1", ticketId: null, title: "Plan", createdAt: 0 };
+const SESSION = {
+  id: "durable-1",
+  projectId: "p1",
+  ticketId: null,
+  role: "project" as const,
+  title: "Plan",
+  createdAt: 0,
+};
 
 function projectionFor(attachmentId: string | null): SessionPresentationProjection {
   return {

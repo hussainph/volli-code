@@ -76,6 +76,7 @@ describe("Ticket Session delegation grants", () => {
         maxChildren: DEFAULT_TICKET_SESSION_DELEGATION.maxChildren,
         claimToolCallId: null,
       },
+      parentSessionId: null,
     });
     expect(h.store.readStartGrant(h.root.id)).toEqual({
       scope: "own-ticket",
@@ -147,7 +148,7 @@ describe("Ticket Session delegation grants", () => {
     const birth = h.store.resolveBirth({ role: "project", ticketId: null });
     h.store.recordBirth(h.root.id, birth);
 
-    expect(birth).toEqual({ grants: [], delegation: null });
+    expect(birth).toEqual({ grants: [], delegation: null, parentSessionId: null });
     expect(h.db.prepare("SELECT COUNT(*) AS count FROM session_delegations").get()).toEqual({
       count: 0,
     });
@@ -183,6 +184,7 @@ describe("Ticket Session delegation grants", () => {
           maxChildren: 2,
           claimToolCallId: null,
         },
+        parentSessionId: null,
       }),
     ).toThrow("already has a different start grant");
   });
@@ -191,7 +193,11 @@ describe("Ticket Session delegation grants", () => {
     const h = harness();
 
     expect(() =>
-      h.store.recordBirth(h.root.id, { grants: ["session.start"], delegation: null }),
+      h.store.recordBirth(h.root.id, {
+        grants: ["session.start"],
+        delegation: null,
+        parentSessionId: null,
+      }),
     ).toThrow("cannot receive a verb grant");
     expect(() =>
       h.store.recordBirth(

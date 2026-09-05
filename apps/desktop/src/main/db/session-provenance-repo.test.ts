@@ -190,6 +190,7 @@ describe("readSessionProvenance", () => {
           kind: "session.create",
           projectId: f.projectId,
           ticketId: null,
+          role: "project",
           title: "Project chat",
         }),
       );
@@ -279,6 +280,7 @@ describe("readSessionProvenance", () => {
           kind: "session.create",
           projectId: f.projectId,
           ticketId: null,
+          role: "project",
           title: "Nightly sweep",
         }),
       );

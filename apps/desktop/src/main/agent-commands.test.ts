@@ -4,7 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY, makeAgentError, MUTATION_PLAN_CONTRACT } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  makeAgentError,
+  MUTATION_PLAN_CONTRACT,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -2012,6 +2017,7 @@ describe("agent command service", () => {
       commandId: "structured-create",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
       title: "Structured OpenCode Session",
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -2090,6 +2096,7 @@ describe("agent command service", () => {
       commandId: "create-working",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
       title: "Working",
       provenance,
     });
@@ -2122,6 +2129,7 @@ describe("agent command service", () => {
       commandId: "create-waiting",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
       title: "Waiting",
       provenance,
     });
@@ -2169,6 +2177,7 @@ describe("agent command service", () => {
       commandId: "create-idle",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
       title: "Idle",
       provenance,
     });
@@ -2178,6 +2187,7 @@ describe("agent command service", () => {
       commandId: "create-stopped",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
       title: "Stopped",
       provenance,
     });
@@ -2378,6 +2388,7 @@ describe("agent command service", () => {
         commandId: "chat-create",
         projectId: "project-one",
         ticketId: null,
+        role: "project",
         title: "Review VC-53",
         provenance: PROVENANCE,
       });
@@ -2813,6 +2824,7 @@ describe("agent command service", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -2857,6 +2869,7 @@ describe("agent command service", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -5855,6 +5868,7 @@ describe("reads over a session the socket did not start", () => {
       commandId: "structured-create",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -5973,6 +5987,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6013,6 +6028,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6045,6 +6061,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6119,6 +6136,7 @@ describe("volli cost", () => {
       commandId: options.commandId,
       projectId: "p1",
       ticketId: options.ticketId,
+      role: roleImpliedByTicket(options.ticketId),
       title: options.commandId,
       provenance,
     });

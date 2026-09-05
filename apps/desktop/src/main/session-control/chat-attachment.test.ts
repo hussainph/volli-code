@@ -23,6 +23,7 @@ function projectionWith(
       id: "session",
       projectId: "project",
       ticketId: null,
+      role: "project",
       title: "Plan the migration",
       createdAt: 1,
     },

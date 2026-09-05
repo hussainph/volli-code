@@ -12,7 +12,7 @@
  * keeps provider tool projection, Registry validation, and durable grant data
  * in their separate jobs.
  */
-import type { RuntimeSessionRole, VerbToolKey } from "@volli/shared";
+import type { SessionRole, VerbToolKey } from "@volli/shared";
 
 /**
  * The largest delegation chain this build will record.
@@ -67,6 +67,16 @@ export interface SessionGrantBirth {
   grants: readonly VerbToolKey[];
   /** Null for a Project Session; retained even when a child reaches the depth cap. */
   delegation: TicketSessionDelegation | null;
+  /**
+   * The Session that delegated this one, for a Subagent Session (VC-9).
+   *
+   * Beside `delegation` rather than inside it, because the two are different
+   * kinds of child. A `session.start` child is a peer executor born under a
+   * scoped grant with a fan-out allowance; a subagent is a bounded helper with
+   * no grant at all, whose only ancestry fact is who asked. Recording it in
+   * `session_delegations` reuses the parent link and nothing else.
+   */
+  parentSessionId: string | null;
 }
 
 /**
@@ -76,9 +86,11 @@ export interface SessionGrantBirth {
  */
 export interface SessionGrantPorts {
   resolveBirth(input: {
-    role: RuntimeSessionRole;
+    role: SessionRole;
     ticketId: string | null;
     delegation?: TicketSessionDelegation;
+    /** The delegating Session; present exactly for a `subagent`. */
+    parentSessionId?: string;
   }): SessionGrantBirth;
   recordBirth(sessionId: string, birth: SessionGrantBirth): void;
 }

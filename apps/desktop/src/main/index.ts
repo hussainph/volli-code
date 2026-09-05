@@ -34,6 +34,7 @@ import {
   resolveAgentToolSurface,
   resolveDefaultModel,
   resolveShell,
+  roleImpliedByTicket,
   skillPromptResource,
   skillResourcePart,
   skillsIndexResource,
@@ -907,13 +908,14 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants) => {
+          resolve: (role, grants, within) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
             const web = webPortsFor(webAccess.resolve());
             return resolveAgentToolSurface({
               role,
+              ...(within === undefined ? {} : { within }),
               capabilities: {
                 coding: PI_TOOLS.tools,
                 // The desktop always owns the ask surface, so `ask_user` is a
@@ -942,6 +944,9 @@ app.whenReady().then(async () => {
               grants,
             });
           },
+          // A parent's own frozen record, read to bound its child (VC-9).
+          recorded: async (sessionId) =>
+            recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           record: async (sessionId, tools) => {
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
@@ -1477,7 +1482,13 @@ app.whenReady().then(async () => {
             sessionDb !== null
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
-          createSession: sessions?.create,
+          // A person's create door chooses a Ticket or none; the Role is what
+          // that choice implies (VC-9). No renderer input can name a
+          // `subagent` — only the bound delegate tool door mints one.
+          createSession:
+            sessions === null
+              ? undefined
+              : (input) => sessions.create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
           // Every renderer Retry rides this wrapper. A ready attachment is the
           // recovery point for an Automation's durable first-message intent;
           // the runner's fixed Session command id reconciles rather than

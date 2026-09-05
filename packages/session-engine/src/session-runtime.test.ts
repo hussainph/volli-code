@@ -225,6 +225,7 @@ async function createAndAttach(runtime: SessionRuntime) {
       kind: "session.create",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
       title: "Native Session",
     },
   });
@@ -245,6 +246,7 @@ describe("SessionRuntime native adapter contract", () => {
         kind: "session.create",
         projectId: "project-1",
         ticketId: "ticket-1",
+        role: "ticket",
         title: "Model selection",
       },
     });
@@ -538,6 +540,7 @@ describe("SessionRuntime native adapter contract", () => {
       id: "session-unrouted-model",
       projectId: "project-1",
       ticketId: null,
+      role: "project" as const,
       title: null,
       createdAt: 0,
     };
@@ -1218,7 +1221,13 @@ describe("SessionRuntime native adapter contract", () => {
     const misconfigured = composition();
     const misconfiguredSession = await misconfigured.runtime.command({
       commandId: "misconfigured-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     misconfigured.adapter.attachFailure = new NativeAttachmentError(
       "No Pi model is configured",
@@ -1274,7 +1283,13 @@ describe("SessionRuntime native adapter contract", () => {
     const failed = composition();
     const failedSession = await failed.runtime.command({
       commandId: "failed-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     failed.adapter.attachFailure = new Error("native server refused the binding");
     await expect(
@@ -1288,7 +1303,13 @@ describe("SessionRuntime native adapter contract", () => {
     const plainFailure = composition();
     const plainSession = await plainFailure.runtime.command({
       commandId: "plain-failure-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     plainFailure.adapter.attachFailure = "socket disappeared";
     await expect(
@@ -1336,7 +1357,13 @@ describe("SessionRuntime native adapter contract", () => {
     const { runtime } = composition();
     const created = await runtime.command({
       commandId: "detached-failure-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
 
     await runtime.reportMessageDeliveryFailure({
@@ -1367,7 +1394,13 @@ describe("SessionRuntime native adapter contract", () => {
     const unrecoverable = composition();
     const session = await unrecoverable.runtime.command({
       commandId: "unrecoverable-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     unrecoverable.adapter.attachFailure = new NativeAttachmentError(
       "Pi recovery sidecar identity does not match this attachment",
@@ -1420,6 +1453,7 @@ describe("SessionRuntime native adapter contract", () => {
         kind: "session.create",
         projectId: "project-1",
         ticketId: "ticket-1",
+        role: "ticket",
         title: null,
       },
     });
@@ -1475,7 +1509,13 @@ describe("SessionRuntime native adapter contract", () => {
     const { runtime, adapter } = composition();
     const session = await runtime.command({
       commandId: "plain-throw-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     adapter.attachFailure = new Error("native server refused the binding");
 
@@ -1697,6 +1737,7 @@ describe("SessionRuntime native adapter contract", () => {
         kind: "session.create",
         projectId: "project-1",
         ticketId: null,
+        role: "project",
         title: "Never attached",
       },
     });
@@ -1750,7 +1791,13 @@ describe("SessionRuntime native adapter contract", () => {
     const { runtime } = composition();
     const created = await runtime.command({
       commandId: "retry-detached-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
 
     await expect(
@@ -2664,7 +2711,13 @@ describe("SessionRuntime native adapter contract", () => {
     const malformed = composition();
     const createdMalformed = await malformed.runtime.command({
       commandId: "malformed-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     await malformed.engine.observe({
       id: "malformed-attachment",
@@ -2802,7 +2855,13 @@ describe("SessionRuntime native adapter contract", () => {
     const { runtime } = composition({ engine, adapter });
     const created = await runtime.command({
       commandId: "rollback-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
 
     await expect(
@@ -2867,7 +2926,13 @@ describe("SessionRuntime native adapter contract", () => {
 
     const detached = await runtime.command({
       commandId: "detached-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     await expect(
       runtime.command({
@@ -2902,7 +2967,13 @@ describe("SessionRuntime native adapter contract", () => {
     const corrupt = composition();
     const created = await corrupt.runtime.command({
       commandId: "corrupt-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     await corrupt.engine.observe({
       id: "corrupt-attachment",
@@ -3121,7 +3192,13 @@ describe("SessionRuntime native adapter contract", () => {
     const { runtime, engine } = composition({ artifacts });
     const created = await runtime.command({
       commandId: "no-route-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     const reference = await artifacts.write({
       version: 1,
@@ -3171,7 +3248,13 @@ describe("SessionRuntime native adapter contract", () => {
     const failure = composition({ engine: failingEngine });
     const failureSession = await failure.runtime.command({
       commandId: "late-failure-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     await expect(
       failure.runtime.command({
@@ -3214,7 +3297,13 @@ describe("SessionRuntime native adapter contract", () => {
     const restored = composition();
     const created = await restored.runtime.command({
       commandId: "locator-create",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
     await restored.engine.observe({
       id: "locator-attachment",
@@ -3276,7 +3365,13 @@ describe("SessionRuntime native adapter contract", () => {
       const persisted = composition();
       const created = await persisted.runtime.command({
         commandId: `envelope-create-${label}`,
-        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          title: null,
+        },
       });
       await persisted.engine.observe({
         id: `envelope-attachment-${label}`,
@@ -3416,7 +3511,13 @@ describe("SessionRuntime native adapter contract", () => {
     for (let index = 0; index <= 8; index += 1) {
       const created = await runtime.command({
         commandId: `bounded-create-${index}`,
-        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          title: null,
+        },
       });
       if (index === 0) oldest = created.sessionId;
       newest = created.sessionId;
@@ -3938,7 +4039,13 @@ describe("SessionRuntime transient transcript overlay", () => {
     for (let index = 0; index <= 8; index += 1) {
       const created = await runtime.command({
         commandId: `overlay-create-${index}`,
-        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          title: null,
+        },
       });
       await runtime.command({
         commandId: `overlay-attach-${index}`,

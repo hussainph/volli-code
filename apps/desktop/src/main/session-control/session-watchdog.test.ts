@@ -14,6 +14,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
       id: SESSION,
       projectId: "project-1",
       ticketId: null,
+      role: "project",
       title: "Implementer",
       createdAt: 0,
     },

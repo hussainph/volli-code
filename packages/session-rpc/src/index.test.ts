@@ -48,6 +48,7 @@ function frame(sequence: number): SessionStreamFrame {
           id: "session-1",
           projectId: "project-1",
           ticketId: null,
+          role: "project",
           title: null,
           createdAt: 10,
         },
@@ -214,6 +215,7 @@ function snapshot(): SessionRuntimeSnapshot {
         id: "session-1",
         projectId: "project-1",
         ticketId: null,
+        role: "project",
         title: null,
         createdAt: 10,
       },
@@ -299,7 +301,13 @@ function runtimeFixture(): {
           id: request.commandId,
           sessionId,
           createdAt: 10,
-          intent: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+          intent: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            title: null,
+          },
           route: null,
         },
         receipt: null,
@@ -1175,7 +1183,13 @@ describe("Session tRPC router", () => {
     await expect(
       caller.session.command({
         commandId: "forged-create",
-        command: { kind: "session.create", projectId: "p1", ticketId: null, title: null },
+        command: {
+          kind: "session.create",
+          projectId: "p1",
+          ticketId: null,
+          role: "project",
+          title: null,
+        },
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
@@ -1293,7 +1307,13 @@ describe("Session tRPC router", () => {
 
     await caller.session.command({
       commandId: "create-command",
-      command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
     });
 
     expect(fixture.calls.command).toEqual([
@@ -1769,7 +1789,13 @@ describe("Session tRPC router", () => {
       caller.session.command({
         commandId: "create-with-session",
         sessionId: "session-1",
-        command: { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          title: null,
+        },
       }),
     ).rejects.toThrow("session.create must not include sessionId");
     await expect(

@@ -31,7 +31,14 @@ import { rejectedReceipt } from "./wire";
 
 /* ------------------------------------------------------------------ scripts */
 
-const SESSION = { id: "durable", projectId: "p1", ticketId: null, title: null, createdAt: 0 };
+const SESSION = {
+  id: "durable",
+  projectId: "p1",
+  ticketId: null,
+  role: "project" as const,
+  title: null,
+  createdAt: 0,
+};
 const ACCEPTED_RECEIPT: CommandReceipt = {
   id: "receipt-accepted",
   commandId: "command-accepted",

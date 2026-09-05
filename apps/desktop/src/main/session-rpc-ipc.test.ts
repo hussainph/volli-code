@@ -133,6 +133,7 @@ function frame(sequence: number): SessionStreamFrame {
           id: "session-1",
           projectId: "project-1",
           ticketId: null,
+          role: "project",
           title: null,
           createdAt: 10,
         },

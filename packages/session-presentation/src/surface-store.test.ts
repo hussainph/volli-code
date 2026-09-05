@@ -10,7 +10,14 @@ import { describe, expect, it } from "vite-plus/test";
 import { createSurfaceStore } from "./surface-store";
 
 const projection: SessionPresentationProjection = {
-  session: { id: "s1", projectId: "p1", ticketId: null, title: "Plan", createdAt: 0 },
+  session: {
+    id: "s1",
+    projectId: "p1",
+    ticketId: null,
+    role: "project",
+    title: "Plan",
+    createdAt: 0,
+  },
   status: "open",
   liveExecutor: null,
   attention: { active: [], primary: null },

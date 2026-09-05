@@ -331,6 +331,7 @@ describe("buildExportDocument — populated db", () => {
         id: earlierSession.id,
         projectId: project.id,
         ticketId: liveTicket.id,
+        role: "ticket",
         title: earlierSession.title,
         createdAt: 29,
       },
@@ -338,6 +339,7 @@ describe("buildExportDocument — populated db", () => {
         id: session.id,
         projectId: project.id,
         ticketId: liveTicket.id,
+        role: "ticket",
         title: session.title,
         createdAt: 30,
       },
@@ -554,6 +556,7 @@ describe("buildExportDocument — populated db", () => {
       commandId: "failure-create-command",
       projectId: project.id,
       ticketId: null,
+      role: "project",
       title: "Failed attachment",
       provenance: {
         source: { kind: "system", id: "test", detail: null },
@@ -725,6 +728,7 @@ describe("buildExportDocument — populated db", () => {
       commandId: "usage-session",
       projectId: project.id,
       ticketId: "ticket-1",
+      role: "ticket",
       title: "Metered",
       provenance: {
         source: { kind: "system", id: "test", detail: null },

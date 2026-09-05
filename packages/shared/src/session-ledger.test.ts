@@ -38,6 +38,7 @@ const session: Session = {
   id: "session-1",
   projectId: "project-1",
   ticketId: "ticket-1",
+  role: "ticket",
   title: "A durable Session",
   createdAt: 100,
 };
@@ -1364,6 +1365,7 @@ describe("sameSessionCommand", () => {
         kind: "session.create" as const,
         projectId: session.projectId,
         ticketId: session.ticketId,
+        role: session.role,
         title: session.title,
       },
     };

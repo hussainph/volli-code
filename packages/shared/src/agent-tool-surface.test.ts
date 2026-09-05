@@ -113,6 +113,56 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     ]);
   });
 
+  it("puts a Subagent Session in a room with every coding tool, no verb, and no way to ask a person (VC-9)", () => {
+    expect(roleVerbBundle("subagent")).toEqual([]);
+    const surface = resolveAgentToolSurface(capabilities({ role: "subagent" }));
+    // Powerful where the work is: a subagent edits the tree it was handed.
+    expect(surface).toEqual(
+      expect.arrayContaining(["read", "edit", "write", "execute", "web_fetch", "web_search"]),
+    );
+    // No agent control, no waiting on a Ticket, no delegating further — depth
+    // is a bundle fact, not a counter — and no `ask_user`: the person driving
+    // never started this Session, and a question from it would arrive inside
+    // work they delegated to someone else. Absence here is what keeps the
+    // `askUser` port from being wired at all.
+    expect(verbToolsOf(surface)).toEqual([]);
+    expect(surface).not.toContain("ask_user");
+    expect(surface).toEqual([
+      "read",
+      "edit",
+      "write",
+      "execute",
+      "web_fetch",
+      "web_search",
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+    ]);
+  });
+
+  it("bounds a Subagent Session by its parent's frozen surface: no port the parent lacked", () => {
+    // The parent was frozen before this profile configured search or the
+    // Browser; the child cannot inherit what the parent never held, whatever
+    // Settings say now.
+    expect(
+      resolveAgentToolSurface(
+        capabilities({
+          role: "subagent",
+          within: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "ticket.await"],
+        }),
+      ),
+    ).toEqual(["read", "edit", "write", "execute", "web_fetch"]);
+  });
+
+  it("refuses to grant a Subagent Session any verb — its bundle is the whole of its authority", () => {
+    expect(() =>
+      resolveAgentToolSurface(capabilities({ role: "subagent", grants: ["session.start"] })),
+    ).toThrow(AgentToolSurfaceError);
+  });
+
   it("offers no web tool to a profile that configured no provider", () => {
     // A port IS the capability: absent means the tool is not in the array at
     // all, rather than one that refuses when called.

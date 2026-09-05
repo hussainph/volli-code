@@ -21,7 +21,14 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const noop = (): void => undefined;
 
-const SESSION = { id: "durable-1", projectId: "p1", ticketId: "t1", title: "VC-1", createdAt: 0 };
+const SESSION = {
+  id: "durable-1",
+  projectId: "p1",
+  ticketId: "t1",
+  role: "ticket" as const,
+  title: "VC-1",
+  createdAt: 0,
+};
 const ACCEPTED_RECEIPT: CommandReceipt = {
   id: "receipt-accepted",
   commandId: "command-accepted",

@@ -146,6 +146,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
                 kind: "session.create",
                 projectId: input.projectId,
                 ticketId: input.ticketId,
+                role: input.role,
                 title: input.title,
               }),
             );

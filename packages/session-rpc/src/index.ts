@@ -16,6 +16,7 @@ import {
 import {
   MODEL_PURPOSES,
   REASONING_LEVELS,
+  SESSION_ROLES,
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
@@ -472,6 +473,10 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
     ticketId: nullableString,
+    // Stated, never derived from `ticketId` (VC-9). This raw command is the
+    // lab transport's door only; the product `sessions.create` route below
+    // states the two Roles a person can choose through `roleImpliedByTicket`.
+    role: z.enum(SESSION_ROLES),
     title: nullableString,
   }),
   z.object({

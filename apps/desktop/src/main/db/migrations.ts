@@ -1705,6 +1705,53 @@ CREATE TABLE IF NOT EXISTS session_delegation_extensions (
 );
 `;
 
+/**
+ * Migration 040: the Session's Role becomes a column (VC-9).
+ *
+ * Until this migration `ticket_id IS NULL` WAS the Role — a Session on a Ticket
+ * was a Ticket Session and any other was a project one. A Subagent Session
+ * breaks that reading: it inherits its parent's Ticket and is not a Ticket
+ * Session, so the Role has to be stated rather than inferred.
+ *
+ * The backfill reads each Session's Role off its own `session.created` event
+ * rather than off the live column, because the live column is not the birth
+ * fact: `sessions.ticket_id` is `ON DELETE SET NULL`, so a Ticket Session whose
+ * Ticket was since deleted reads null today and would be backfilled as a
+ * project Session — the exact orphan `SessionProjection.bornTicketless` exists
+ * to tell apart. The column default is the second rung, for a row with no
+ * birth event, which no post-018 lineage has.
+ *
+ * The CHECK pins the vocabulary to what this build knows. A Role added later is
+ * a migration, which is the point: what a stored Session may claim to be is a
+ * schema fact, not a string a caller happens to write.
+ */
+const MIGRATION_040_SESSION_ROLE_COLUMN = `
+ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'project'
+  CHECK (role IN ('project', 'ticket', 'subagent'));
+`;
+
+const MIGRATION_040_SESSION_ROLE_BACKFILL = `
+UPDATE sessions
+   SET role = 'ticket'
+ WHERE id IN (
+   SELECT session_id
+     FROM session_events
+    WHERE json_extract(payload, '$.kind') = 'session.created'
+      AND json_extract(payload, '$.session.ticketId') IS NOT NULL
+ );
+UPDATE sessions
+   SET role = 'ticket'
+ WHERE ticket_id IS NOT NULL
+   AND role = 'project'
+   AND id NOT IN (
+     SELECT session_id
+       FROM session_events
+      WHERE json_extract(payload, '$.kind') = 'session.created'
+   );
+`;
+
+const MIGRATION_040_SESSION_ROLE = `${MIGRATION_040_SESSION_ROLE_COLUMN}${MIGRATION_040_SESSION_ROLE_BACKFILL}`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1904,7 +1951,28 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_039_SESSION_DELEGATION_EXTENSIONS,
     apply: applyMigration039SessionDelegationExtensions,
   },
+  {
+    version: 40,
+    name: "sessions.role — the Role as data, backfilled from each Session's birth event",
+    sql: MIGRATION_040_SESSION_ROLE,
+    apply: applyMigration040SessionRole,
+  },
 ];
+
+/**
+ * Migration 040's reconciler, probe-gated like 031's for the same reason: an
+ * `ALTER TABLE … ADD COLUMN` cannot be written idempotently in SQL, and a
+ * lineage re-offered this version (a rewound `user_version`, a sibling branch
+ * that took the number first) must converge rather than fail on a duplicate
+ * column. The backfill runs only with the column, so a database that already
+ * holds Roles keeps them.
+ */
+function applyMigration040SessionRole(db: Database.Database): void {
+  const columns = db.pragma("table_info(sessions)") as { name: string }[];
+  if (columns.some((column) => column.name === "role")) return;
+  db.exec(MIGRATION_040_SESSION_ROLE_COLUMN);
+  db.exec(MIGRATION_040_SESSION_ROLE_BACKFILL);
+}
 
 /**
  * Migration 039's reconciler — the VC-204 branch shipped this table as its own

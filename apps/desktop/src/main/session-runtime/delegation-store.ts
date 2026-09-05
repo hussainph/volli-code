@@ -12,7 +12,7 @@
  */
 import type Database from "better-sqlite3";
 import { isVerbToolKey } from "@volli/shared";
-import type { RuntimeSessionRole } from "@volli/shared";
+import type { SessionRole } from "@volli/shared";
 
 import {
   assertDelegation,
@@ -61,19 +61,33 @@ export class TicketSessionDelegationStore
   constructor(private readonly db: Database.Database) {}
 
   resolveBirth(input: {
-    role: RuntimeSessionRole;
+    role: SessionRole;
     ticketId: string | null;
     delegation?: TicketSessionDelegation;
+    parentSessionId?: string;
   }): SessionGrantBirth {
+    if (input.role === "subagent") {
+      // A subagent holds no grant and no fan-out allowance — its bundle is the
+      // whole of its authority — so the only birth fact is its parent (VC-9).
+      if (input.parentSessionId === undefined) {
+        throw new Error("A Subagent Session needs the Session that delegated it");
+      }
+      if (input.delegation !== undefined) {
+        throw new Error("A Subagent Session cannot inherit Ticket delegation ancestry");
+      }
+      return { grants: [], delegation: null, parentSessionId: input.parentSessionId };
+    }
+    if (input.parentSessionId !== undefined) {
+      throw new Error("Only a Subagent Session names a parent Session at birth");
+    }
     if (input.role === "project") {
       if (input.delegation !== undefined) {
         throw new Error("A Project Session cannot inherit Ticket delegation ancestry");
       }
-      return { grants: [], delegation: null };
+      return { grants: [], delegation: null, parentSessionId: null };
     }
-    // The Role and the Ticket are one fact on start (`ticketId !== null` IS the
-    // Role), so a `ticket` Role with no Ticket is a caller that has already
-    // lost track of which Session it is minting.
+    // A `ticket` Role with no Ticket is a caller that has already lost track
+    // of which Session it is minting.
     if (input.ticketId === null) {
       throw new Error("A Ticket Session needs a Ticket before grants can resolve");
     }
@@ -85,11 +99,19 @@ export class TicketSessionDelegationStore
     return {
       grants: delegation.depth < delegation.maxDepth ? ["session.start"] : [],
       delegation: cloneDelegation(delegation),
+      parentSessionId: null,
     };
   }
 
   recordBirth(sessionId: string, birth: SessionGrantBirth): void {
     this.db.transaction(() => {
+      if (birth.parentSessionId !== null) {
+        if (birth.delegation !== null || birth.grants.length !== 0) {
+          throw new Error("A Subagent Session carries neither a grant nor delegation ancestry");
+        }
+        this.recordSubagentParent(sessionId, birth.parentSessionId);
+        return;
+      }
       if (birth.delegation === null) {
         if (birth.grants.length !== 0) {
           throw new Error("A Session without delegation ancestry cannot receive a verb grant");
@@ -302,6 +324,49 @@ export class TicketSessionDelegationStore
           WHERE parent_session_id = ? AND tool_call_id = ? AND child_session_id IS NULL`,
       )
       .run(ref.parentSessionId, ref.toolCallId);
+  }
+
+  /**
+   * The parent link a Subagent Session is born with (VC-9), in the same
+   * `session_delegations` row a `session.start` child records its ancestry in.
+   * Depth is the parent's plus one, so a subagent of a delegated Ticket Session
+   * reads as the grandchild it is; the Ticket is the child's own inherited one
+   * and detaches with it, exactly as it does for any other child.
+   */
+  private recordSubagentParent(sessionId: string, parentSessionId: string): void {
+    const session = this.db
+      .prepare("SELECT ticket_id FROM sessions WHERE id = ?")
+      .get(sessionId) as { ticket_id: string | null } | undefined;
+    if (session === undefined) {
+      throw new Error("A parent link can only be recorded for an existing Session");
+    }
+    const parent = this.db
+      .prepare("SELECT depth FROM session_delegations WHERE session_id = ?")
+      .get(parentSessionId) as { depth: number } | undefined;
+    const depth = (parent?.depth ?? 0) + 1;
+    const existing = this.db
+      .prepare("SELECT parent_session_id, depth FROM session_delegations WHERE session_id = ?")
+      .get(sessionId) as { parent_session_id: string | null; depth: number } | undefined;
+    if (existing !== undefined) {
+      if (existing.parent_session_id !== parentSessionId || existing.depth !== depth) {
+        throw new Error(`Session ${sessionId} already has different delegation ancestry`);
+      }
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(sessionId, session.ticket_id, parentSessionId, depth);
+  }
+
+  /** The Session that delegated this one, or `null` for a root Session. */
+  parentSessionId(sessionId: string): string | null {
+    const row = this.db
+      .prepare("SELECT parent_session_id FROM session_delegations WHERE session_id = ?")
+      .get(sessionId) as { parent_session_id: string | null } | undefined;
+    return row?.parent_session_id ?? null;
   }
 
   private recordDelegation(

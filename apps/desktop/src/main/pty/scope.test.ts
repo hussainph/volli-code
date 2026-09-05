@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import { getHarnessAdapter } from "@volli/shared";
+import { getHarnessAdapter, roleImpliedByTicket } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
@@ -47,6 +47,7 @@ async function seedTerminal(
     commandId: `create-${input.title}`,
     projectId: input.projectId,
     ticketId: input.ticketId,
+    role: roleImpliedByTicket(input.ticketId),
     title: input.title,
     provenance,
   });
@@ -103,6 +104,7 @@ describe("resolveScope", () => {
       commandId: "create",
       projectId: project.id,
       ticketId: ticket.id,
+      role: roleImpliedByTicket(ticket.id),
       title: "Session 1",
       provenance,
     });

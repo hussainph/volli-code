@@ -18,6 +18,7 @@ import type {
 } from "@volli/shared";
 import {
   COST_BASES,
+  SESSION_ROLES,
   SESSION_USAGE_CAUSES,
   assertSession,
   assertSessionEvent,
@@ -90,7 +91,9 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   getSession(sessionId: string): Session | null {
     this.assertOpen();
     const row = this.db
-      .prepare("SELECT id, project_id, ticket_id, title, created_at FROM sessions WHERE id = ?")
+      .prepare(
+        "SELECT id, project_id, ticket_id, role, title, created_at FROM sessions WHERE id = ?",
+      )
       .get(sessionId) as unknown;
     return row === undefined ? null : decodeSession(row, "sessions row");
   }
@@ -105,7 +108,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = this.db
       .prepare(
-        `SELECT id, project_id, ticket_id, title, created_at
+        `SELECT id, project_id, ticket_id, role, title, created_at
            FROM sessions
           WHERE project_id = @projectId${scope}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
@@ -337,8 +340,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertGloballyUnusedId(session.id);
     this.db
       .prepare(
-        `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
-         VALUES (@id, @projectId, @ticketId, @title, @createdAt)`,
+        `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
+         VALUES (@id, @projectId, @ticketId, @role, @title, @createdAt)`,
       )
       .run(session);
   }
@@ -739,6 +742,9 @@ function decodeSession(row: unknown, context: string): Session {
     id: readString(value.id, `${context}.id`),
     projectId: readString(value.project_id, `${context}.project_id`),
     ticketId: readNullableString(value.ticket_id, `${context}.ticket_id`),
+    // Stored since migration 040 and pinned there by a CHECK; a value outside
+    // the vocabulary is corruption and fails loudly like any other column.
+    role: enumValue(value.role, SESSION_ROLES, `${context}.role`),
     title: readNullableString(value.title, `${context}.title`),
     createdAt: readInteger(value.created_at, `${context}.created_at`),
   };

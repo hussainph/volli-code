@@ -3,7 +3,12 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
-import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
+import type {
+  CompactionReason,
+  ModelSelection,
+  PromptResource,
+  SessionRole,
+} from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
@@ -13,6 +18,14 @@ export interface Session {
   id: string;
   projectId: string;
   ticketId: string | null;
+  /**
+   * The Role this Session was created under (VC-9). Data, never derived:
+   * before this field `ticketId !== null` WAS the Role, which stopped being
+   * true the moment a Subagent Session could inherit its parent's Ticket
+   * without being a Ticket Session. {@link roleImpliedByTicket} is the one
+   * read-side fallback, for rows and events written before the field existed.
+   */
+  role: SessionRole;
   title: string | null;
   /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
   createdAt: number;
@@ -863,8 +876,33 @@ export function observationPayload(
   }
 }
 
+/**
+ * The Role a "Ticket or not" choice implies: the two Roles a person's door can
+ * state, and the read-side fallback for records written before `Session.role`
+ * existed (VC-9).
+ *
+ * Two callers, one rule. A person starting a chat chooses a Ticket or none and
+ * nothing else, so the renderer's create route and the CLI's start door state
+ * their Role through this. And every pre-VC-9 Session was one of these two, so
+ * the codec reads a record lacking the field through the same function. It is
+ * never consulted for a Session that states its Role: a Subagent Session may
+ * carry its parent's Ticket and is not a Ticket Session, which is the case this
+ * function exists to be kept away from.
+ */
+export function roleImpliedByTicket(
+  ticketId: string | null,
+): Extract<SessionRole, "ticket" | "project"> {
+  return ticketId === null ? "project" : "ticket";
+}
+
 export type SessionCommandIntent =
-  | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
+  | {
+      kind: "session.create";
+      projectId: string;
+      ticketId: string | null;
+      role: SessionRole;
+      title: string | null;
+    }
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }

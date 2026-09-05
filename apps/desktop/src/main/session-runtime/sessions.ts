@@ -1,8 +1,10 @@
 /**
  * The one Session-start module: how a structured Session begins, whatever its
- * Role. `ticketId: string | null` IS the Role on start — the same nullable
- * field `session.create` records durably — so the Role is stated once, by the
- * caller, instead of being re-derived by parallel Ticket/project facades.
+ * Role. The Role is stated once, by the caller, as {@link SessionStartInput.role}
+ * — the same field `session.create` records durably — instead of being
+ * re-derived by parallel Ticket/project facades. Until VC-9 `ticketId !== null`
+ * stood in for it; a Subagent Session inherits its parent's Ticket without
+ * being a Ticket Session, which is what retired that reading.
  *
  * There is one executor, so there is one adapter id; keeping it here rather
  * than at each caller is what stops a second copy from quietly naming a
@@ -25,7 +27,7 @@ import type {
   ModelSelection,
   PromptResource,
   ReasoningLevel,
-  RuntimeSessionRole,
+  SessionRole,
   SessionStartResult,
   SessionToolId,
   TicketEventActor,
@@ -75,7 +77,10 @@ export type StructuredSessionsErrorCode =
   // the chosen model cannot run. Refused before any Session exists.
   | "MODEL_UNAVAILABLE"
   | "SKILL_NOT_FOUND"
-  | "TICKET_NOT_IN_PROJECT";
+  | "TICKET_NOT_IN_PROJECT"
+  // A Subagent Session with no parent, or a parent named for a Role that has
+  // none (VC-9). A caller bug, refused before anything durable exists.
+  | "PARENT_REQUIRED";
 
 /** A refusal a caller can act on, never a bare string a surface has to parse. */
 export class StructuredSessionsError extends Error {
@@ -140,15 +145,22 @@ export interface SessionToolSurfacePorts {
    * this argument existed every Session resolved the same list, and "Role
    * determines the tool bundle" was true only in `CONTEXT.md`.
    *
-   * {@link RuntimeSessionRole} and NOT {@link SessionDefaultModelRole}, though
-   * the two spell the same pair today. They answer different questions: one is
-   * which rung of the default-model ladder to read, the other is which Role's
-   * bundle to resolve, and borrowing the model policy's vocabulary for a tool
-   * decision is how the next Role gets added to one and not the other. This is
-   * the runtime's Role vocabulary — the same one `RuntimeToolBundle` and the
-   * first-message block are written in. VC-9 widens it here, in the open.
+   * `within` is a Subagent Session's bound (VC-9): its parent's own frozen
+   * surface. A child cannot get a port its parent lacked, and the parent's
+   * record — not today's Settings — is what says what it had. Absent for the
+   * two root Roles, which are bounded by nothing but the profile.
    */
-  resolve(role: RuntimeSessionRole, grants: readonly string[]): readonly SessionToolId[];
+  resolve(
+    role: SessionRole,
+    grants: readonly string[],
+    within?: readonly SessionToolId[],
+  ): readonly SessionToolId[];
+  /**
+   * The surface one existing Session was frozen with, or `null` when it has
+   * none recorded (a legacy Session that has not attached since VC-164). Read
+   * for a parent, to bound its child.
+   */
+  recorded(sessionId: string): Promise<readonly SessionToolId[] | null>;
   record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
 }
 
@@ -171,8 +183,23 @@ function modelBackfillCommandId(sessionId: string): string {
 export interface SessionStartInput {
   operationId: string;
   projectId: string;
-  /** The Role: a Ticket Session when set, a project Session when null. */
+  /**
+   * The Ticket this Session works, or none. A Ticket Session's own; a Subagent
+   * Session's inherited from its parent; a project Session's null.
+   */
   ticketId: string | null;
+  /**
+   * The Role, stated by the door (VC-9). A person's doors have two to choose
+   * from and say which through `roleImpliedByTicket`; only the delegate tool
+   * door mints a `subagent`, and it says so.
+   */
+  role: SessionRole;
+  /**
+   * The Session that delegated this one — required for a `subagent`, refused
+   * for every other Role. Trusted in-process ancestry from the bound tool
+   * door; no renderer or socket schema can name it.
+   */
+  parentSessionId?: string;
   title: string | null;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */
   skills?: readonly string[];
@@ -267,14 +294,16 @@ export interface SessionAttachInput {
 }
 
 /**
- * Which Role's default a resolution wants — `ticketId !== null`, and nothing
- * else, decides it.
+ * Which Role's default a resolution wants.
  *
  * The Role is this module's own vocabulary, so it is what the port asks in;
  * mapping a Role onto a Model Access *purpose* (VC-53's global / ticket /
  * utility policy) is the composition root's job, and stays in one place there.
+ * Since VC-9 this is the whole {@link SessionRole}: a Subagent Session reads
+ * the `utility` rung, because a bounded delegation is the cost-efficient
+ * background work that purpose was named for.
  */
-export type SessionDefaultModelRole = "ticket" | "project";
+export type SessionDefaultModelRole = SessionRole;
 
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
@@ -296,7 +325,7 @@ export interface SessionsOptions {
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
   skills: SessionSkillPorts;
   toolSurface: SessionToolSurfacePorts;
-  /** Durable per-Session grants, resolved and recorded at birth (VC-183). */
+  /** Durable per-Session grants and ancestry, resolved and recorded at birth (VC-183, VC-9). */
   grants: SessionGrantPorts;
   /**
    * What Model Access can actually run, consulted only when an override
@@ -405,16 +434,22 @@ export function createSessions(options: SessionsOptions): Sessions {
         "The requested Ticket was not found in this project.",
       );
     }
-    // One derivation of the Role for this mint, read by both the model policy
-    // and the tool surface. `ticketId !== null` IS the Role on start, and
-    // asking twice is how two answers start disagreeing.
-    //
-    // The two ports name their argument in different vocabularies on purpose
-    // (`SessionDefaultModelRole` is a ladder rung, `RuntimeSessionRole` is a
-    // Role), and this one literal satisfies both while they spell the same
-    // pair. The day they diverge, this is the line that has to split — which
-    // is the point of not having collapsed them.
-    const role: SessionDefaultModelRole = input.ticketId === null ? "project" : "ticket";
+    // The Role is the caller's statement, read once here by the model policy,
+    // the grants and the tool surface alike. What is checked is only that the
+    // statement is coherent: a subagent has a parent and nothing else does.
+    const role = input.role;
+    if (role === "subagent" && input.parentSessionId === undefined) {
+      throw new StructuredSessionsError(
+        "PARENT_REQUIRED",
+        "A Subagent Session needs the Session that delegated it.",
+      );
+    }
+    if (role !== "subagent" && input.parentSessionId !== undefined) {
+      throw new StructuredSessionsError(
+        "PARENT_REQUIRED",
+        "Only a Subagent Session has a parent Session.",
+      );
+    }
     const model = await resolveModelSelection(options, input.modelOverride, role, input.projectId);
     // Resolved before anything durable exists: a missing skill refuses the
     // start outright instead of stranding a Session that never attaches.
@@ -437,17 +472,32 @@ export function createSessions(options: SessionsOptions): Sessions {
       role,
       ticketId: input.ticketId,
       ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
+      ...(input.parentSessionId === undefined ? {} : { parentSessionId: input.parentSessionId }),
     });
+    // A child is bounded by what its parent was frozen with (VC-9): the
+    // parent's own durable record, read now, because a child cannot get a port
+    // its parent lacked and Settings may have changed since the parent began.
+    // A parent with no record — a legacy Session that never attached under
+    // VC-164 — bounds its child by nothing, which is what it holds itself.
+    const within =
+      input.parentSessionId === undefined
+        ? null
+        : await options.toolSurface.recorded(input.parentSessionId);
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
-    const toolSurface = options.toolSurface.resolve(role, grants.grants);
+    const toolSurface = options.toolSurface.resolve(
+      role,
+      grants.grants,
+      ...(within === null ? [] : [within]),
+    );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),
       command: {
         kind: "session.create",
         projectId: input.projectId,
         ticketId: input.ticketId,
+        role,
         title: input.title,
       },
     });

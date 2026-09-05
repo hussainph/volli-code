@@ -41,7 +41,13 @@ import {
 } from "./session-ledger";
 import type { SessionUsage } from "./session-usage";
 
-export type SessionRole = "project" | "ticket" | "subagent";
+/** The Roles a Session may be created under, as a runtime list a stored string is checked against. */
+export const SESSION_ROLES = ["project", "ticket", "subagent"] as const;
+export type SessionRole = (typeof SESSION_ROLES)[number];
+
+export function isSessionRole(value: unknown): value is SessionRole {
+  return typeof value === "string" && (SESSION_ROLES as readonly string[]).includes(value);
+}
 
 /** Volli's reasoning policy, independent of any provider's type names. */
 export const REASONING_LEVELS = [

@@ -17,6 +17,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionRole,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -108,6 +109,8 @@ export type SessionClientCommand =
       kind: "session.create";
       projectId: string;
       ticketId: string | null;
+      /** The Role the Session is created under (VC-9); the caller states it. */
+      role: SessionRole;
       title: string | null;
     }
   | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
@@ -753,6 +756,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         commandId: request.commandId,
         projectId: request.command.projectId,
         ticketId: request.command.ticketId,
+        role: request.command.role,
         title: request.command.title,
         provenance: userProvenance(null),
       });

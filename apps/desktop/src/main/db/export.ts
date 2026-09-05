@@ -172,8 +172,10 @@ export interface ExportTicketEvent {
 export interface ExportSession {
   id: string;
   projectId: string;
-  /** `null` for a Project Session. */
+  /** `null` for a Project Session; a Subagent Session's is inherited from its parent. */
   ticketId: string | null;
+  /** The Role the Session was created under (migration 040). */
+  role: string;
   title: string | null;
   createdAt: number;
 }
@@ -651,6 +653,7 @@ interface SessionRow {
   id: string;
   project_id: string;
   ticket_id: string | null;
+  role: string;
   title: string | null;
   created_at: number;
 }
@@ -658,13 +661,14 @@ interface SessionRow {
 function exportSessions(db: Database.Database): ExportSession[] {
   const rows = prepared<[], SessionRow>(
     db,
-    `SELECT id, project_id, ticket_id, title, created_at
+    `SELECT id, project_id, ticket_id, role, title, created_at
        FROM sessions ORDER BY id COLLATE BINARY`,
   ).all();
   return rows.map((session) => ({
     id: session.id,
     projectId: session.project_id,
     ticketId: session.ticket_id,
+    role: session.role,
     title: session.title,
     createdAt: session.created_at,
   }));

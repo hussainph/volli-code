@@ -10,6 +10,7 @@ import {
   getHarnessAdapter,
   harnessAdapters,
   resolveShell,
+  roleImpliedByTicket,
   scrubInheritedSessionEnv,
 } from "@volli/shared";
 import type {
@@ -357,6 +358,9 @@ export class PtyManager {
           commandId: randomUUID(),
           projectId: scope.projectId,
           ticketId: scope.ticketId,
+          // A terminal is a person's companion on a Ticket or on the project:
+          // those are the only two Roles it can be, and the Ticket says which.
+          role: roleImpliedByTicket(scope.ticketId),
           title: scope.title,
           provenance: terminalSystemProvenance(),
         });

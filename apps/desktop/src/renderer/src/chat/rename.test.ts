@@ -16,7 +16,14 @@ import { applyRemoteChatTitle, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
-const SESSION = { id: "chat-1", projectId: "p1", ticketId: "t1", title: "Plan", createdAt: 0 };
+const SESSION = {
+  id: "chat-1",
+  projectId: "p1",
+  ticketId: "t1",
+  role: "ticket" as const,
+  title: "Plan",
+  createdAt: 0,
+};
 
 const projection: SessionPresentationProjection = {
   session: SESSION,

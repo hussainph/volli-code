@@ -39,6 +39,7 @@ const session: Session = {
   id: "session-1",
   projectId: "project-1",
   ticketId: null,
+  role: "project",
   title: "One",
   createdAt: 100,
 };
@@ -397,8 +398,29 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
 
   it("round-trips every command intent kind through command.recorded", () => {
     const intents: SessionCommand["intent"][] = [
-      { kind: "session.create", projectId: "project-1", ticketId: "ticket-1", title: "One" },
-      { kind: "session.create", projectId: "project-1", ticketId: null, title: null },
+      {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        title: "One",
+      },
+      {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        title: null,
+      },
+      // A subagent that inherited its parent's Ticket: the Role is what says
+      // it is not a Ticket Session (VC-9).
+      {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        title: null,
+      },
       { kind: "session.archive" },
       { kind: "session.retitle", title: null },
       { kind: "session.signal", signal: "done", reason: null },
@@ -507,6 +529,53 @@ const resolved = (resolution: unknown) =>
   );
 
 describe("decodeSessionEventPayload tolerance and corruption", () => {
+  it("reads a Session written before `role` existed as the Role its birth Ticket implied (VC-9)", () => {
+    const legacyTicket = decodeSessionEventPayload(
+      {
+        kind: "session.created",
+        session: { id: "s-1", projectId: "p-1", ticketId: "t-1", title: null, createdAt: 1 },
+      },
+      "payload",
+    );
+    const legacyProject = decodeSessionEventPayload(
+      {
+        kind: "session.created",
+        session: { id: "s-2", projectId: "p-1", ticketId: null, title: null, createdAt: 1 },
+      },
+      "payload",
+    );
+    expect(legacyTicket.kind === "session.created" && legacyTicket.session.role).toBe("ticket");
+    expect(legacyProject.kind === "session.created" && legacyProject.session.role).toBe("project");
+    // Absent is legacy; present-and-wrong is corruption inside a known kind.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.created",
+          session: { id: "s-3", projectId: "p-1", ticketId: null, role: "agent", createdAt: 1 },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.session.role has an unsupported value");
+    const legacyCreate = decodeSessionEventPayload(
+      {
+        kind: "command.recorded",
+        command: {
+          id: "c-1",
+          sessionId: "s-1",
+          createdAt: 1,
+          route: null,
+          intent: { kind: "session.create", projectId: "p-1", ticketId: "t-1", title: null },
+        },
+      },
+      "payload",
+    );
+    expect(
+      legacyCreate.kind === "command.recorded" &&
+        legacyCreate.command.intent.kind === "session.create" &&
+        legacyCreate.command.intent.role,
+    ).toBe("ticket");
+  });
+
   it("raises the distinct unknown-kind signal for a retired kind", () => {
     let caught: unknown;
     try {

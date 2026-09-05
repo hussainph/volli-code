@@ -22,6 +22,7 @@ import type {
   SessionAttachment,
   SessionCommand,
   SessionCommandIntent,
+  SessionRole,
   SessionCommandRequest,
   SessionCommandRoute,
   SessionEvent,
@@ -44,6 +45,8 @@ export interface CreateSessionRequest {
   commandId: string;
   projectId: string;
   ticketId: string | null;
+  /** The Role the Session is created under; stated by the caller, never derived from `ticketId` (VC-9). */
+  role: SessionRole;
   title: string | null;
   /** Trusted host-supplied audit provenance; renderers never call this module directly. */
   provenance: SessionEventProvenance;
@@ -167,6 +170,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           id: ports.ids.next("session"),
           projectId: request.projectId,
           ticketId: request.ticketId,
+          role: request.role,
           title: request.title,
           createdAt,
         };
@@ -178,6 +182,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             kind: "session.create",
             projectId: request.projectId,
             ticketId: request.ticketId,
+            role: request.role,
             title: request.title,
           },
           route: null,
@@ -678,6 +683,7 @@ function sameCreateSessionRequest(command: SessionCommand, request: CreateSessio
     command.intent.kind === "session.create" &&
     command.intent.projectId === request.projectId &&
     command.intent.ticketId === request.ticketId &&
+    command.intent.role === request.role &&
     command.intent.title === request.title
   );
 }
@@ -687,6 +693,7 @@ function sameSession(left: Session, right: Session): boolean {
     left.id === right.id &&
     left.projectId === right.projectId &&
     left.ticketId === right.ticketId &&
+    left.role === right.role &&
     left.title === right.title &&
     left.createdAt === right.createdAt
   );
