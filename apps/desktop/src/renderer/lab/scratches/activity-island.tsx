@@ -45,6 +45,18 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import {
+  ACTIVITY_METADATA_KEY,
+  type ActivityDescriptor,
+  type ActivityKind,
+  type ActivityOutcome,
+} from "@volli/shared";
+import type { DynamicToolUIPart } from "ai";
+
+import type { BundleRow } from "@volli/session-presentation";
+import { ActivityBundle } from "@renderer/components/chat/activity-ui";
+import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 
 import { SessionComposer, type ComposerModel } from "@renderer/components/chat/composer-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -90,6 +102,7 @@ interface AgentSim {
 }
 
 interface PlanSim {
+  id: number;
   done: number;
   total: number;
   current: string;
@@ -321,6 +334,7 @@ function ClusterShell({
           side="top"
           align="center"
           sideOffset={10}
+          collisionPadding={8}
           className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? "w-72")}
           onOpenAutoFocus={(event) => event.preventDefault()}
           // Radix counts the anchor as OUTSIDE (it is not a Trigger), so a
@@ -420,9 +434,9 @@ function Card({
   );
 }
 
-function CardRows({ children }: { children: React.ReactNode }) {
+function CardRows({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className="flex flex-col">
+    <div className={cn("flex flex-col", className)}>
       <AnimatePresence mode="popLayout" initial={false}>
         {children}
       </AnimatePresence>
@@ -574,6 +588,10 @@ function TabsCard({ tabs, reduce }: { tabs: TabSim[]; reduce: boolean }) {
   );
 }
 
+function agentsDone(agents: readonly AgentSim[]): number {
+  return agents.filter((agent) => agent.state === "done").length;
+}
+
 function agentStateWord(agent: AgentSim): string {
   const base = agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state;
   return agent.promoted ? `${base} · tab` : base;
@@ -581,12 +599,8 @@ function agentStateWord(agent: AgentSim): string {
 
 function AgentsCard({ agents, reduce }: { agents: AgentSim[]; reduce: boolean }) {
   const dispatch = React.useContext(DispatchContext);
-  const working = agents.filter((agent) => agent.state === "working").length;
   return (
-    <Card
-      glyph={UsersIcon}
-      heading={working > 0 ? `Subagents · ${working} working` : `Subagents · settled`}
-    >
+    <Card glyph={UsersIcon} heading={`Subagents · ${agentsDone(agents)}/${agents.length} done`}>
       <CardRows>
         {agents.map((agent) => (
           <CardRow
@@ -644,13 +658,18 @@ function PlanCard({ plan, reduce }: { plan: PlanSim; reduce: boolean }) {
           transition={reduce ? { duration: 0.1 } : { type: "spring", duration: 0.55, bounce: 0 }}
         />
       </div>
-      <CardRows>
+      {/* Compact rows and a scroll cap: a plan is the one list that can run
+          to twenty entries, and a card taller than the room above the pill
+          makes Radix flip it BELOW the island, over the composer. Seven steps
+          fit without scrolling; twenty scroll inside the same card. */}
+      <CardRows className="max-h-72 overflow-y-auto">
         {PLAN_STEPS.slice(0, plan.total).map((step, index) => {
           const state = index < plan.done ? "done" : index === plan.done ? "current" : "pending";
           return (
             <CardRow
               key={step}
               reduce={reduce}
+              className="py-1"
               leading={
                 state === "done" ? (
                   <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
@@ -846,11 +865,9 @@ function AgentsCluster({
   dials: Dials;
   reduce: boolean;
 }) {
-  const working = agents.filter((agent) => agent.state === "working").length;
-  const line =
-    working > 0
-      ? `${agents.length} subagent${agents.length === 1 ? "" : "s"} · ${working} working`
-      : `${agents.length} subagent${agents.length === 1 ? "" : "s"} · settled`;
+  // A counter, not a mood: "settled" was the pill editorialising about a
+  // group whose members each already say what they are.
+  const line = `${agentsDone(agents)}/${agents.length} subagents done`;
   return (
     <ClusterShell
       dials={dials}
@@ -944,7 +961,7 @@ function summaryLine(tabs: TabSim[], agents: AgentSim[], plan: PlanSim | null): 
   if (working.length > 0) {
     const mean = working.reduce((sum, agent) => sum + agent.progress, 0) / working.length;
     parts.push(`agents ${Math.round(mean * 100)}%`);
-  } else if (agents.length > 0) parts.push("agents settled");
+  } else if (agents.length > 0) parts.push(`agents ${agentsDone(agents)}/${agents.length}`);
   if (plan) parts.push(`plan ${plan.done}/${plan.total}`);
   return parts.join(" · ");
 }
@@ -1227,17 +1244,167 @@ const MODELS: ComposerModel[] = [
 ];
 
 /** A quiet stand-in transcript so the island reads against content, not void. */
-function FakeFeed() {
+/* -------------------------------------------------------------------- feed */
+
+/**
+ * The transcript above the island is the SAME model seen from the other side.
+ * Each tab is a `fetch-url` row, each subagent a `delegate` row, each shell a
+ * `run-command` row, the plan a `plan` row — drawn with the real
+ * `ActivityBundle`, in the order the sim created them. The island summarises
+ * what the transcript narrates; judging the pill against skeleton bars was
+ * judging it out of context.
+ *
+ * The builders below are the chat-activity scratch's, trimmed to the three
+ * tool states this feed reaches.
+ */
+function activityOutcome(patch: Partial<ActivityOutcome>): ActivityOutcome {
+  return {
+    exitCode: null,
+    matchCount: null,
+    fileCount: null,
+    lineCount: null,
+    bytes: null,
+    addedLines: null,
+    removedLines: null,
+    diff: null,
+    summary: null,
+    ...patch,
+  };
+}
+
+function activityTool(
+  id: number,
+  kind: ActivityKind,
+  label: string,
+  state: "live" | "done" | "failed",
+  options: { outcome?: Partial<ActivityOutcome>; errorText?: string; nativeToolName?: string } = {},
+): DynamicToolUIPart {
+  const descriptor: ActivityDescriptor = {
+    kind,
+    nativeToolName: options.nativeToolName ?? kind,
+    subject: { label, path: null, lineRange: null },
+    outcome: options.outcome ? activityOutcome(options.outcome) : null,
+    startedAt: 0,
+    endedAt: state === "live" ? null : 2400,
+  };
+  const base = {
+    type: "dynamic-tool" as const,
+    toolName: descriptor.nativeToolName,
+    toolCallId: `island-${id}`,
+    // The SDK types `toolMetadata` as `JSONObject`; a descriptor is one structurally.
+    toolMetadata: { [ACTIVITY_METADATA_KEY]: descriptor } as DynamicToolUIPart["toolMetadata"],
+    input: null,
+  };
+  switch (state) {
+    case "live":
+      return { ...base, state: "input-available" };
+    case "failed":
+      return { ...base, state: "output-error", errorText: options.errorText ?? "Failed" };
+    default:
+      return { ...base, state: "output-available", output: null };
+  }
+}
+
+function feedRows(sim: Sim): BundleRow[] {
+  const entries: { id: number; part: DynamicToolUIPart }[] = [];
+  if (sim.plan) {
+    entries.push({
+      id: sim.plan.id,
+      part: activityTool(
+        sim.plan.id,
+        "plan",
+        `${sim.plan.done}/${sim.plan.total} steps`,
+        sim.plan.done >= sim.plan.total ? "done" : "live",
+      ),
+    });
+  }
+  for (const tab of sim.tabs) {
+    entries.push({
+      id: tab.id,
+      part: activityTool(
+        tab.id,
+        "fetch-url",
+        tab.host,
+        tab.state === "loading" ? "live" : "done",
+        tab.state === "ready" ? { outcome: { bytes: 12_800 } } : {},
+      ),
+    });
+  }
+  for (const agent of sim.agents) {
+    const state = agent.state === "working" ? "live" : agent.state === "done" ? "done" : "failed";
+    entries.push({
+      id: agent.id,
+      part: activityTool(agent.id, "delegate", agent.label, state, {
+        nativeToolName: "delegate",
+        outcome: agent.state === "done" ? { summary: "3 tools" } : undefined,
+        errorText: agent.state === "stopped" ? "Stopped" : "Subagent failed",
+      }),
+    });
+  }
+  for (const shell of sim.shells) {
+    entries.push({
+      id: shell.id,
+      part: activityTool(
+        shell.id,
+        "run-command",
+        shell.command,
+        shell.state === "running" ? "live" : "done",
+        shell.state === "exited" ? { outcome: { exitCode: shell.code ?? 0 } } : {},
+      ),
+    });
+  }
+  entries.sort((a, b) => a.id - b.id);
+  if (entries.length === 0) return [];
+  return [
+    {
+      kind: "reasoning",
+      key: "thought",
+      streaming: false,
+      part: {
+        type: "reasoning",
+        state: "done",
+        text: "**Splitting the audit**\n\nA tab for the lab, one subagent per grep, a shell for the checks.",
+      },
+    },
+    ...entries.map(({ id, part }) => ({ kind: "tool" as const, key: `tool-${id}`, part })),
+  ];
+}
+
+const USER_PROMPT =
+  "Audit the icon weights across the composer and open the lab on :5177 so I can see it. Split the grep work into subagents.";
+
+function Feed({ sim }: { sim: Sim }) {
+  const rows = React.useMemo(() => feedRows(sim), [sim]);
+  const working =
+    sim.tabs.some((tab) => tab.state === "loading") ||
+    sim.agents.some((agent) => agent.state === "working") ||
+    sim.shells.some((shell) => shell.state === "running");
   return (
-    <div className="flex min-h-0 flex-1 flex-col justify-end gap-4 overflow-hidden pb-4">
-      <div className="ml-auto max-w-96 rounded-container bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
-        Try the browser tab on :5177 and split the audit into subagents.
-      </div>
-      <div className="flex flex-col gap-2">
-        <div className="h-3 w-4/5 rounded-full bg-muted/40" />
-        <div className="h-3 w-3/5 rounded-full bg-muted/40" />
-        <div className="h-3 w-2/3 rounded-full bg-muted/30" />
-      </div>
+    // Bottom-anchored and top-clipped, the way a followed transcript sits.
+    <div className="flex min-h-0 flex-1 flex-col justify-end gap-6 overflow-hidden pb-4">
+      <Message from="user" className="relative max-w-full">
+        <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
+          <GuardedResponse>{USER_PROMPT}</GuardedResponse>
+        </MessageContent>
+      </Message>
+      <Message from="assistant" className="relative max-w-full">
+        <MessageContent className="gap-0">
+          <div className="space-y-4">
+            <GuardedResponse>
+              I'll open the lab in a tab, split the grep work across subagents, and run the checks
+              in the background while they work.
+            </GuardedResponse>
+            {rows.length > 0 ? <ActivityBundle rows={rows} /> : null}
+            {rows.length > 0 ? (
+              <GuardedResponse isAnimating={working}>
+                {working
+                  ? "Folding their findings in as they land."
+                  : "Everything has landed — here is what the audit found."}
+              </GuardedResponse>
+            ) : null}
+          </div>
+        </MessageContent>
+      </Message>
     </div>
   );
 }
@@ -1367,11 +1534,19 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     }
     case "clear-agents":
       return { ...sim, agents: [] };
-    case "start-plan":
+    case "start-plan": {
+      const next = flashed(sim, `Plan drafted · ${PLAN_STEPS.length} steps`);
       return {
-        ...flashed(sim, `Plan drafted · ${PLAN_STEPS.length} steps`),
-        plan: { done: 0, total: PLAN_STEPS.length, current: PLAN_STEPS[0] ?? "Start" },
+        ...next,
+        plan: {
+          id: next.seq,
+          done: 0,
+          total: PLAN_STEPS.length,
+          current: PLAN_STEPS[0] ?? "Start",
+        },
+        seq: next.seq + 1,
       };
+    }
     case "advance-plan": {
       if (!sim.plan) return sim;
       const done = Math.min(sim.plan.total, sim.plan.done + 1);
@@ -1552,9 +1727,15 @@ export default function ActivityIslandPlayground() {
     <TooltipProvider>
       <div className="flex flex-col gap-6">
         {/* ------------------------------------------------ the stage */}
-        <div className="flex h-120 flex-col rounded-xl border border-border bg-background px-4 pt-4">
+        {/* Height is inline: it is the room the cards have above the pill, and
+            a dropped utility here would silently flip every tall card below
+            the island. 640 leaves ~400px, a short real chat pane. */}
+        <div
+          className="flex flex-col rounded-xl border border-border bg-background px-4 pt-4"
+          style={{ height: 640 }}
+        >
           <ContentColumn className="flex min-h-0 flex-1 flex-col">
-            <FakeFeed />
+            <Feed sim={sim} />
             <DispatchContext.Provider value={dispatch}>
               <ActivityIsland
                 tabs={sim.tabs}
