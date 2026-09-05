@@ -15,6 +15,8 @@
  *   • hover treatment — none, tooltip, or a rich status popover (dock-feel
  *     candidates; magnification belongs to VC-249 with the tray)
  *   • a force-reduced-motion preview
+ *   • VC-249 — the cards as control surfaces: row-action reveal (hover /
+ *     pinned / always) and destructive arming on/off
  *
  * Decisions already fixed upstream of the dials (charting round on VC-246):
  * the island is a sibling of the interaction stack sharing its material; it
@@ -28,18 +30,29 @@
  */
 import * as React from "react";
 import {
+  ArrowSquareOutIcon,
+  CheckCircleIcon,
+  CircleIcon,
+  EyeIcon,
   GlobeSimpleIcon,
+  type Icon as PhosphorIcon,
   ListChecksIcon,
   PlayIcon,
+  PushPinSimpleIcon,
+  StopIcon,
   TerminalWindowIcon,
+  UsersIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { SessionComposer, type ComposerModel } from "@renderer/components/chat/composer-ui";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Button } from "@renderer/components/ui/button";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import {
   Tooltip,
   TooltipContent,
@@ -50,7 +63,7 @@ import { cn } from "@renderer/lib/utils";
 
 export const title = "Activity Island · feel playground";
 export const note =
-  "VC-248 — closed-state grammar, spring feel, flash hold and hover treatment as live dials";
+  "VC-248 closed state (settled) · VC-249 — the cards as control surfaces: row verbs, action reveal, arming, pin";
 export const viewport = "stage" as const;
 
 /* ------------------------------------------------------------- simulation */
@@ -60,6 +73,8 @@ interface TabSim {
   host: string;
   tone: string;
   state: "loading" | "ready";
+  /** Promoted to a Browser pane from its card row — the card and the pane are one model. */
+  promoted: boolean;
 }
 
 interface AgentSim {
@@ -68,7 +83,10 @@ interface AgentSim {
   tone: string;
   /** 0..1 */
   progress: number;
-  state: "working" | "done" | "failed";
+  /** `stopped` is ended-by-decision from the card: dim like failed, no badge. */
+  state: "working" | "done" | "failed" | "stopped";
+  /** Promoted to a full tab from its card row. */
+  promoted: boolean;
 }
 
 interface PlanSim {
@@ -81,6 +99,8 @@ interface ShellSim {
   id: number;
   command: string;
   state: "running" | "exited";
+  /** Exit code once exited; 137 when killed from the card. */
+  code?: number;
 }
 
 interface Flash {
@@ -91,6 +111,8 @@ interface Flash {
 type Grammar = "clusters-now" | "now-only" | "clusters-only";
 type HoverMode = "none" | "tooltip" | "popover";
 type NowTextMode = "quiet" | "payload" | "loud";
+/** When a card row's action buttons show: on row hover, only while pinned, or always. */
+type RevealMode = "hover" | "pinned" | "always";
 
 interface Dials {
   grammar: Grammar;
@@ -103,6 +125,9 @@ interface Dials {
   hover: HoverMode;
   /** Voice of the now channel: all quiet, quiet event + bold payload, all loud. */
   nowText: NowTextMode;
+  reveal: RevealMode;
+  /** Destructive row actions (close / stop / kill) arm on first press, fire on second. */
+  arm: boolean;
   forceReduced: boolean;
 }
 
@@ -121,6 +146,8 @@ const DEFAULT_DIALS: Dials = {
   flashHold: 1.6,
   hover: "popover",
   nowText: "payload",
+  reveal: "hover",
+  arm: true,
   forceReduced: false,
 };
 
@@ -193,17 +220,52 @@ interface HoverCoordination {
 
 const HoverContext = React.createContext<HoverCoordination | null>(null);
 
-/** One cluster's hover shell: nothing, a one-line tooltip, or a rich status popover. */
+/** One cluster's hover shell: nothing, a one-line tooltip, or a rich card. */
 function ClusterShell({
-  mode,
+  dials,
   line,
   detail,
+  cardClassName,
   children,
-}: React.PropsWithChildren<{ mode: HoverMode; line: string; detail: React.ReactNode }>) {
+}: React.PropsWithChildren<{
+  dials: Dials;
+  line: string;
+  detail: React.ReactNode;
+  /** Card width — the agents card earns more room for three row actions. */
+  cardClassName?: string;
+}>) {
   const id = React.useId();
   const coordination = React.useContext(HoverContext);
+  const anchorRef = React.useRef<HTMLSpanElement>(null);
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const focusOnPin = React.useRef(false);
+  const latest = React.useRef(coordination);
+  latest.current = coordination;
+  const pinned = coordination?.pinned === id;
 
-  if (mode === "tooltip") {
+  // A cluster that leaves the pill takes its pin with it — otherwise a card
+  // could outlive its own subject (close the last tab from the tabs card).
+  React.useEffect(() => () => latest.current?.dismiss(id), [id]);
+
+  // A KEYBOARD pin moves focus into the card's first row; a pointer pin never
+  // does — the person is typing in the composer and the card is a glance.
+  React.useEffect(() => {
+    if (!pinned || !focusOnPin.current) return;
+    focusOnPin.current = false;
+    contentRef.current?.querySelector<HTMLElement>("[data-card-row], button")?.focus();
+  }, [pinned]);
+
+  const frame = React.useMemo<CardFrame>(
+    () => ({
+      pinned,
+      reveal: dials.reveal,
+      arm: dials.arm,
+      togglePin: () => coordination?.togglePin(id),
+    }),
+    [pinned, dials.reveal, dials.arm, coordination, id],
+  );
+
+  if (dials.hover === "tooltip") {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -213,8 +275,7 @@ function ClusterShell({
       </Tooltip>
     );
   }
-  if (mode === "popover" && coordination) {
-    const pinned = coordination.pinned === id;
+  if (dials.hover === "popover" && coordination) {
     const open = pinned || coordination.hovered === id;
     return (
       <Popover
@@ -233,6 +294,7 @@ function ClusterShell({
             so hover and pin stay the only two doors. */}
         <PopoverAnchor asChild>
           <span
+            ref={anchorRef}
             role="button"
             tabIndex={0}
             aria-expanded={open}
@@ -246,6 +308,7 @@ function ClusterShell({
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
+                focusOnPin.current = !pinned;
                 coordination.togglePin(id);
               }
             }}
@@ -254,15 +317,22 @@ function ClusterShell({
           </span>
         </PopoverAnchor>
         <PopoverContent
+          ref={contentRef}
           side="top"
           align="center"
           sideOffset={10}
-          className="w-64 p-2 data-[state=closed]:duration-75"
+          className={cn("p-1 data-[state=closed]:duration-75", cardClassName ?? "w-72")}
           onOpenAutoFocus={(event) => event.preventDefault()}
+          // Radix counts the anchor as OUTSIDE (it is not a Trigger), so a
+          // re-click on a pinned cluster dismissed on pointerdown and re-pinned
+          // on click — a flicker that could never unpin. The anchor is ours.
+          onInteractOutside={(event) => {
+            if (anchorRef.current?.contains(event.target as Node)) event.preventDefault();
+          }}
           onMouseEnter={() => coordination.enter(id)}
           onMouseLeave={() => coordination.leave(id)}
         >
-          {detail}
+          <CardContext.Provider value={frame}>{detail}</CardContext.Provider>
         </PopoverContent>
       </Popover>
     );
@@ -279,26 +349,401 @@ function clusterPresence(reduce: boolean) {
   } as const;
 }
 
+/* ------------------------------------------------------------------ cards */
+
+/**
+ * The card is where the island stops being a status display and becomes a
+ * control surface (VC-249). Three decisions, each a dial or a rule:
+ *
+ *  • ROW = VERB. Activating a row does the obvious promotion — tab → Browser
+ *    pane, subagent → overlay, shell → output, plan step → jump — on
+ *    `ListRow`'s own activatable branch, so hover fill and focus ring come
+ *    for free and an inert row cannot lie.
+ *  • ACTIONS ARE SIBLINGS of the row target (a button inside a button is not
+ *    markup), revealed by a dial: on row hover (dock-like), only while
+ *    pinned (the glance card stays pure), or always (heaviest, most
+ *    discoverable). Hidden actions keep their width so hover never shifts
+ *    the name. The verb also appears as the first action so it is
+ *    discoverable — the row is just its bigger target.
+ *  • DESTRUCTIVE ARMS FIRST. Close / stop / kill on a surface the pointer
+ *    reached by glancing is one click from harm, so the first press arms
+ *    (tint + relabel, 1.8s), the second fires. Dial off to feel the loss.
+ *
+ * The now channel is the confirmation — every action flashes through the
+ * same `event · payload` grammar, and the pill redraws because the card and
+ * the pill are one model. No toast system.
+ */
+interface CardFrame {
+  pinned: boolean;
+  reveal: RevealMode;
+  arm: boolean;
+  togglePin(): void;
+}
+
+const CARD_UNFRAMED: CardFrame = { pinned: false, reveal: "always", arm: false, togglePin() {} };
+const CardContext = React.createContext<CardFrame>(CARD_UNFRAMED);
+/** Cards act on the sim directly — the island's clusters never learn the verbs. */
+const DispatchContext = React.createContext<React.Dispatch<SimAction>>(() => {});
+
+/** Header + body. The pin lives in the header so the glance card carries its own invitation to become a work card. */
+function Card({
+  glyph: Glyph,
+  heading,
+  children,
+}: React.PropsWithChildren<{ glyph: PhosphorIcon; heading: string }>) {
+  const frame = React.useContext(CardContext);
+  return (
+    <div className="flex flex-col">
+      <div className="flex h-6 items-center gap-1.5 px-2">
+        <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-label font-medium text-muted-foreground uppercase">
+          {heading}
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-pressed={frame.pinned}
+              aria-label={frame.pinned ? "Unpin card" : "Pin card open"}
+              className={cn(frame.pinned && "text-primary hover:text-primary")}
+              onClick={frame.togglePin}
+            >
+              <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">{frame.pinned ? "Unpin · Esc" : "Pin open"}</TooltipContent>
+        </Tooltip>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function CardRows({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <AnimatePresence mode="popLayout" initial={false}>
+        {children}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** A `ListRow` that enters, leaves and reflows as its subject does. */
+function CardRow({ reduce, ...row }: { reduce: boolean } & React.ComponentProps<typeof ListRow>) {
+  return (
+    <motion.div
+      layout
+      initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
+      transition={{ duration: 0.16, ease: EASE_OUT }}
+    >
+      <ListRow data-card-row="" {...row} />
+    </motion.div>
+  );
+}
+
+/** The state word riding the name's line — `· loading`, `· 72%`, `· exit 137`. Nothing when there is nothing to say. */
+function RowState({ children }: { children: React.ReactNode }) {
+  if (children === null || children === undefined || children === false) return null;
+  return <span className="shrink-0 text-label text-muted-foreground">· {children}</span>;
+}
+
+function RowActions({ children }: React.PropsWithChildren) {
+  const { reveal, pinned } = React.useContext(CardContext);
+  if (reveal === "pinned" && !pinned) return null;
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center",
+        reveal === "hover" &&
+          "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** An icon action; destructive ones arm on the first press when the dial says so. */
+function ActionButton({
+  label,
+  armedLabel = "Click again",
+  destructive = false,
+  onPress,
+  children,
+}: React.PropsWithChildren<{
+  label: string;
+  armedLabel?: string;
+  destructive?: boolean;
+  onPress(): void;
+}>) {
+  const { arm } = React.useContext(CardContext);
+  const [armed, setArmed] = React.useState(false);
+  React.useEffect(() => {
+    if (!armed) return;
+    const timer = window.setTimeout(() => setArmed(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [armed]);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={armed ? armedLabel : label}
+          className={cn(
+            "text-muted-foreground",
+            destructive && "hover:text-destructive",
+            armed &&
+              "bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive",
+          )}
+          onClick={() => {
+            if (destructive && arm && !armed) {
+              setArmed(true);
+              return;
+            }
+            setArmed(false);
+            onPress();
+          }}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{armed ? armedLabel : label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Per-tab identity — the favicon idiom (rounded square + letter) that left the pill for the card. */
+function TabChip({ tab }: { tab: TabSim }) {
+  return (
+    <span
+      className="flex size-4 shrink-0 items-center justify-center rounded-sm text-label leading-none font-semibold text-white"
+      style={{ backgroundColor: tab.tone }}
+    >
+      {tab.host.charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
+function TabsCard({ tabs, reduce }: { tabs: TabSim[]; reduce: boolean }) {
+  const dispatch = React.useContext(DispatchContext);
+  return (
+    <Card
+      glyph={GlobeSimpleIcon}
+      heading={`Browser · ${tabs.length} tab${tabs.length === 1 ? "" : "s"}`}
+    >
+      <CardRows>
+        {tabs.map((tab) => (
+          <CardRow
+            key={tab.id}
+            reduce={reduce}
+            leading={<TabChip tab={tab} />}
+            primary={tab.host}
+            primaryTrailing={
+              <RowState>
+                {tab.state === "loading" ? "loading" : tab.promoted ? "in pane" : null}
+              </RowState>
+            }
+            onActivate={() => dispatch({ type: "promote-tab", id: tab.id })}
+            actions={
+              <RowActions>
+                <ActionButton
+                  label={tab.promoted ? "Focus Browser pane" : "Open in Browser pane"}
+                  onPress={() => dispatch({ type: "promote-tab", id: tab.id })}
+                >
+                  <ArrowSquareOutIcon />
+                </ActionButton>
+                <ActionButton
+                  label="Close tab"
+                  armedLabel="Click again to close"
+                  destructive
+                  onPress={() => dispatch({ type: "close-tab", id: tab.id })}
+                >
+                  <XIcon />
+                </ActionButton>
+              </RowActions>
+            }
+          />
+        ))}
+      </CardRows>
+    </Card>
+  );
+}
+
+function agentStateWord(agent: AgentSim): string {
+  const base = agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state;
+  return agent.promoted ? `${base} · tab` : base;
+}
+
+function AgentsCard({ agents, reduce }: { agents: AgentSim[]; reduce: boolean }) {
+  const dispatch = React.useContext(DispatchContext);
+  const working = agents.filter((agent) => agent.state === "working").length;
+  return (
+    <Card
+      glyph={UsersIcon}
+      heading={working > 0 ? `Subagents · ${working} working` : `Subagents · settled`}
+    >
+      <CardRows>
+        {agents.map((agent) => (
+          <CardRow
+            key={agent.id}
+            reduce={reduce}
+            leading={<AgentDot agent={agent} reduce={reduce} />}
+            primary={agent.label}
+            primaryTrailing={<RowState>{agentStateWord(agent)}</RowState>}
+            onActivate={() => dispatch({ type: "peek-agent", id: agent.id })}
+            actions={
+              <RowActions>
+                <ActionButton
+                  label="Peek in overlay"
+                  onPress={() => dispatch({ type: "peek-agent", id: agent.id })}
+                >
+                  <EyeIcon />
+                </ActionButton>
+                <ActionButton
+                  label={agent.promoted ? "Focus tab" : "Open as tab"}
+                  onPress={() => dispatch({ type: "promote-agent", id: agent.id })}
+                >
+                  <ArrowSquareOutIcon />
+                </ActionButton>
+                {agent.state === "working" ? (
+                  <ActionButton
+                    label="Stop subagent"
+                    armedLabel="Click again to stop"
+                    destructive
+                    onPress={() => dispatch({ type: "stop-agent", id: agent.id })}
+                  >
+                    <StopIcon weight="fill" />
+                  </ActionButton>
+                ) : null}
+              </RowActions>
+            }
+          />
+        ))}
+      </CardRows>
+    </Card>
+  );
+}
+
+function PlanCard({ plan, reduce }: { plan: PlanSim; reduce: boolean }) {
+  const dispatch = React.useContext(DispatchContext);
+  const pct = (plan.done / plan.total) * 100;
+  return (
+    <Card glyph={ListChecksIcon} heading={`Plan · ${plan.done}/${plan.total}`}>
+      {/* Progress as a hairline under the header — the header's number says
+          it, the bar lets a glance read it without parsing. */}
+      <div className="mx-2 mb-1 h-0.5 overflow-hidden rounded-full bg-border">
+        <motion.div
+          className="h-full rounded-full bg-primary"
+          initial={false}
+          animate={{ width: `${pct}%` }}
+          transition={reduce ? { duration: 0.1 } : { type: "spring", duration: 0.55, bounce: 0 }}
+        />
+      </div>
+      <CardRows>
+        {PLAN_STEPS.slice(0, plan.total).map((step, index) => {
+          const state = index < plan.done ? "done" : index === plan.done ? "current" : "pending";
+          return (
+            <CardRow
+              key={step}
+              reduce={reduce}
+              leading={
+                state === "done" ? (
+                  <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
+                ) : (
+                  <CircleIcon
+                    weight={state === "current" ? "bold" : "regular"}
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      state === "current" ? "text-primary" : "text-muted-foreground/50",
+                    )}
+                  />
+                )
+              }
+              primary={
+                <span
+                  className={cn(
+                    "min-w-0 truncate text-ui",
+                    state === "done" && "text-muted-foreground line-through",
+                    state === "current" && "font-medium",
+                  )}
+                >
+                  {step}
+                </span>
+              }
+              primaryTrailing={<RowState>{state === "current" ? "now" : null}</RowState>}
+              onActivate={() => dispatch({ type: "jump-step", index })}
+            />
+          );
+        })}
+      </CardRows>
+    </Card>
+  );
+}
+
+function ShellsCard({ shells, reduce }: { shells: ShellSim[]; reduce: boolean }) {
+  const dispatch = React.useContext(DispatchContext);
+  const running = shells.filter((shell) => shell.state === "running").length;
+  return (
+    <Card
+      glyph={TerminalWindowIcon}
+      heading={running > 0 ? `Shells · ${running} running` : `Shells · ${shells.length} exited`}
+    >
+      <CardRows>
+        {shells.map((shell) => (
+          <CardRow
+            key={shell.id}
+            reduce={reduce}
+            leading={
+              <span className="flex size-4 shrink-0 items-center justify-center">
+                <StatusDot state={shell.state === "running" ? "working" : "exited"} />
+              </span>
+            }
+            primary={
+              <span className="min-w-0 truncate font-mono text-ui text-foreground">
+                {shell.command}
+              </span>
+            }
+            primaryTrailing={
+              <RowState>{shell.state === "exited" ? `exit ${shell.code ?? 0}` : null}</RowState>
+            }
+            onActivate={() => dispatch({ type: "open-shell", id: shell.id })}
+            actions={
+              <RowActions>
+                <ActionButton
+                  label="Open output"
+                  onPress={() => dispatch({ type: "open-shell", id: shell.id })}
+                >
+                  <ArrowSquareOutIcon />
+                </ActionButton>
+                {shell.state === "running" ? (
+                  <ActionButton
+                    label="Kill shell"
+                    armedLabel="Click again to kill"
+                    destructive
+                    onPress={() => dispatch({ type: "kill-shell", id: shell.id })}
+                  >
+                    <StopIcon weight="fill" />
+                  </ActionButton>
+                ) : null}
+              </RowActions>
+            }
+          />
+        ))}
+      </CardRows>
+    </Card>
+  );
+}
+
 function TabsCluster({ tabs, dials, reduce }: { tabs: TabSim[]; dials: Dials; reduce: boolean }) {
   const line =
     tabs.length === 1 ? `1 browser tab · ${tabs[0]?.host ?? ""}` : `${tabs.length} browser tabs`;
   return (
-    <ClusterShell
-      mode={dials.hover}
-      line={line}
-      detail={
-        <div className="flex flex-col gap-1">
-          {tabs.map((tab) => (
-            <div key={tab.id} className="flex items-center gap-2 px-2 py-1 text-ui">
-              <span className="min-w-0 flex-1 truncate text-foreground">{tab.host}</span>
-              <span className="text-label uppercase text-muted-foreground">
-                {tab.state === "loading" ? "loading" : "ready"}
-              </span>
-            </div>
-          ))}
-        </div>
-      }
-    >
+    <ClusterShell dials={dials} line={line} detail={<TabsCard tabs={tabs} reduce={reduce} />}>
       {/* Tabs compress to namespace glyph + count — the colored chips belong
           to the SUBAGENTS now (they are the workers; circles + letters is the
           people idiom, and this pill has exactly one people-cluster). Identity
@@ -357,7 +802,7 @@ function AgentDot({
       {...clusterPresence(reduce)}
       className={cn(
         "relative flex size-4 shrink-0 items-center justify-center rounded-full",
-        agent.state === "failed" && "opacity-60",
+        (agent.state === "failed" || agent.state === "stopped") && "opacity-60",
         className,
       )}
       style={{ backgroundColor: agent.tone, borderRadius: 999 }}
@@ -408,21 +853,10 @@ function AgentsCluster({
       : `${agents.length} subagent${agents.length === 1 ? "" : "s"} · settled`;
   return (
     <ClusterShell
-      mode={dials.hover}
+      dials={dials}
       line={line}
-      detail={
-        <div className="flex flex-col gap-1">
-          {agents.map((agent) => (
-            <div key={agent.id} className="flex items-center gap-2 px-2 py-1 text-ui">
-              <AgentDot agent={agent} reduce={reduce} />
-              <span className="min-w-0 flex-1 truncate text-foreground">{agent.label}</span>
-              <span className="text-label uppercase text-muted-foreground">
-                {agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state}
-              </span>
-            </div>
-          ))}
-        </div>
-      }
+      cardClassName="w-80"
+      detail={<AgentsCard agents={agents} reduce={reduce} />}
     >
       {/* Chips only. Identity IS this cluster — the people idiom needs no
           namespace glyph — and each chip's arc is its own working state. The
@@ -448,30 +882,9 @@ function AgentsCluster({
 function PlanCluster({ plan, dials, reduce }: { plan: PlanSim; dials: Dials; reduce: boolean }) {
   return (
     <ClusterShell
-      mode={dials.hover}
+      dials={dials}
       line={`Plan ${plan.done}/${plan.total} · ${plan.current}`}
-      detail={
-        <div className="flex flex-col gap-1 px-2 py-1">
-          {PLAN_STEPS.slice(0, plan.total).map((step, index) => (
-            <div key={step} className="flex items-center gap-2 text-ui">
-              <span
-                className={cn(
-                  "size-1.5 rounded-full",
-                  index < plan.done ? "bg-primary" : "bg-border",
-                )}
-              />
-              <span
-                className={cn(
-                  index < plan.done ? "text-muted-foreground line-through" : "text-foreground",
-                  index === plan.done && "font-medium",
-                )}
-              >
-                {step}
-              </span>
-            </div>
-          ))}
-        </div>
-      }
+      detail={<PlanCard plan={plan} reduce={reduce} />}
     >
       <motion.span layout {...clusterPresence(reduce)} className="flex items-center gap-1">
         <ListChecksIcon className="size-3.5 text-muted-foreground" />
@@ -495,25 +908,13 @@ function ShellsCluster({
   const running = shells.filter((shell) => shell.state === "running").length;
   return (
     <ClusterShell
-      mode={dials.hover}
+      dials={dials}
       line={
         running > 0
           ? `${running} shell${running === 1 ? "" : "s"} running`
           : `${shells.length} shell${shells.length === 1 ? "" : "s"} · exited`
       }
-      detail={
-        <div className="flex flex-col gap-1">
-          {shells.map((shell) => (
-            <div key={shell.id} className="flex items-center gap-2 px-2 py-1 text-ui">
-              <TerminalWindowIcon className="size-3.5 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-                {shell.command}
-              </span>
-              <span className="text-label uppercase text-muted-foreground">{shell.state}</span>
-            </div>
-          ))}
-        </div>
-      }
+      detail={<ShellsCard shells={shells} reduce={reduce} />}
     >
       {/* State lives IN the glyph — fill + primary while running, outline +
           muted at rest. The corner badge died of geometry: a dot needs a
@@ -878,7 +1279,18 @@ type SimAction =
   | { type: "exit-shells" }
   | { type: "drop-shells" }
   | { type: "clear-flash"; id: number }
-  | { type: "reset" };
+  | { type: "reset" }
+  // The cards' verbs (VC-249). Each is the sim's answer to a row action; the
+  // real ones will be bridge calls, but the shape — one verb, one subject id,
+  // one flash — is what the cards are designed against.
+  | { type: "close-tab"; id: number }
+  | { type: "promote-tab"; id: number }
+  | { type: "peek-agent"; id: number }
+  | { type: "promote-agent"; id: number }
+  | { type: "stop-agent"; id: number }
+  | { type: "open-shell"; id: number }
+  | { type: "kill-shell"; id: number }
+  | { type: "jump-step"; index: number };
 
 /** The transition plus its announcement, atomically. */
 function flashed(sim: Sim, text: string): Sim {
@@ -890,10 +1302,10 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     case "add-tab": {
       const host = TAB_HOSTS[sim.tabs.length % TAB_HOSTS.length] ?? "localhost";
       const tone = SIM_TONES[sim.tabs.length % SIM_TONES.length] ?? "#3577f2";
-      const next = flashed(sim, `Opened ${host}`);
+      const next = flashed(sim, `Opened · ${host}`);
       return {
         ...next,
-        tabs: [...sim.tabs, { id: next.seq, host, tone, state: "loading" }],
+        tabs: [...sim.tabs, { id: next.seq, host, tone, state: "loading", promoted: false }],
         seq: next.seq + 1,
       };
     }
@@ -907,7 +1319,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     case "drop-tab": {
       const last = sim.tabs[sim.tabs.length - 1];
       if (!last) return sim;
-      return { ...flashed(sim, `Closed ${last.host}`), tabs: sim.tabs.slice(0, -1) };
+      return { ...flashed(sim, `Closed · ${last.host}`), tabs: sim.tabs.slice(0, -1) };
     }
     case "spawn-agent": {
       const label = AGENT_LABELS[sim.agents.length % AGENT_LABELS.length] ?? "Subagent";
@@ -915,7 +1327,10 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const next = flashed(sim, `Subagent started · ${label}`);
       return {
         ...next,
-        agents: [...sim.agents, { id: next.seq, label, tone, progress: 0.08, state: "working" }],
+        agents: [
+          ...sim.agents,
+          { id: next.seq, label, tone, progress: 0.08, state: "working", promoted: false },
+        ],
         seq: next.seq + 1,
       };
     }
@@ -981,7 +1396,9 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       return sim.shells.some((shell) => shell.state === "running")
         ? {
             ...flashed(sim, "Shell exited · 0"),
-            shells: sim.shells.map((shell) => ({ ...shell, state: "exited" as const })),
+            shells: sim.shells.map((shell) =>
+              shell.state === "running" ? { ...shell, state: "exited" as const, code: 0 } : shell,
+            ),
           }
         : sim;
     case "drop-shells":
@@ -991,6 +1408,68 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       return sim.flash?.id === action.id ? { ...sim, flash: null } : sim;
     case "reset":
       return INITIAL_SIM;
+    case "close-tab": {
+      const tab = sim.tabs.find((candidate) => candidate.id === action.id);
+      if (!tab) return sim;
+      return {
+        ...flashed(sim, `Closed · ${tab.host}`),
+        tabs: sim.tabs.filter((candidate) => candidate.id !== action.id),
+      };
+    }
+    case "promote-tab": {
+      const tab = sim.tabs.find((candidate) => candidate.id === action.id);
+      if (!tab) return sim;
+      return {
+        ...flashed(sim, `${tab.promoted ? "Focused pane" : "Opened in pane"} · ${tab.host}`),
+        tabs: sim.tabs.map((candidate) =>
+          candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
+        ),
+      };
+    }
+    case "peek-agent": {
+      const agent = sim.agents.find((candidate) => candidate.id === action.id);
+      return agent ? flashed(sim, `Overlay · ${agent.label}`) : sim;
+    }
+    case "promote-agent": {
+      const agent = sim.agents.find((candidate) => candidate.id === action.id);
+      if (!agent) return sim;
+      return {
+        ...flashed(sim, `${agent.promoted ? "Focused tab" : "Opened as tab"} · ${agent.label}`),
+        agents: sim.agents.map((candidate) =>
+          candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
+        ),
+      };
+    }
+    case "stop-agent": {
+      const agent = sim.agents.find((candidate) => candidate.id === action.id);
+      if (!agent || agent.state !== "working") return sim;
+      return {
+        ...flashed(sim, `Stopped · ${agent.label}`),
+        agents: sim.agents.map((candidate) =>
+          candidate.id === action.id ? { ...candidate, state: "stopped" as const } : candidate,
+        ),
+      };
+    }
+    case "open-shell": {
+      const shell = sim.shells.find((candidate) => candidate.id === action.id);
+      return shell ? flashed(sim, `Output · ${shell.command}`) : sim;
+    }
+    case "kill-shell": {
+      const shell = sim.shells.find((candidate) => candidate.id === action.id);
+      if (!shell || shell.state !== "running") return sim;
+      return {
+        ...flashed(sim, `Killed · ${shell.command}`),
+        shells: sim.shells.map((candidate) =>
+          candidate.id === action.id
+            ? { ...candidate, state: "exited" as const, code: 137 }
+            : candidate,
+        ),
+      };
+    }
+    case "jump-step": {
+      const step = PLAN_STEPS[action.index];
+      return step ? flashed(sim, `Jump · ${step}`) : sim;
+    }
   }
 }
 
@@ -1076,14 +1555,16 @@ export default function ActivityIslandPlayground() {
         <div className="flex h-120 flex-col rounded-xl border border-border bg-background px-4 pt-4">
           <ContentColumn className="flex min-h-0 flex-1 flex-col">
             <FakeFeed />
-            <ActivityIsland
-              tabs={sim.tabs}
-              agents={sim.agents}
-              plan={sim.plan}
-              shells={sim.shells}
-              flash={sim.flash}
-              dials={dials}
-            />
+            <DispatchContext.Provider value={dispatch}>
+              <ActivityIsland
+                tabs={sim.tabs}
+                agents={sim.agents}
+                plan={sim.plan}
+                shells={sim.shells}
+                flash={sim.flash}
+                dials={dials}
+              />
+            </DispatchContext.Provider>
             <div className="pb-4">
               <SessionComposer
                 value={composerValue}
@@ -1213,6 +1694,19 @@ export default function ActivityIslandPlayground() {
                 onChange={(nowText) => setDials((current) => ({ ...current, nowText }))}
               />
             </Dial>
+            <Dial label="Row actions">
+              <Segmented
+                ariaLabel="Card row action reveal"
+                value={dials.reveal}
+                size="sm"
+                options={[
+                  { key: "hover", label: "Hover" },
+                  { key: "pinned", label: "Pinned" },
+                  { key: "always", label: "Always" },
+                ]}
+                onChange={(reveal) => setDials((current) => ({ ...current, reveal }))}
+              />
+            </Dial>
             <Slider
               label="Spring duration"
               value={dials.duration}
@@ -1249,6 +1743,13 @@ export default function ActivityIslandPlayground() {
                 }
               >
                 Reduced motion
+              </Button>
+              <Button
+                size="xs"
+                variant={dials.arm ? "secondary" : "ghost"}
+                onClick={() => setDials((current) => ({ ...current, arm: !current.arm }))}
+              >
+                Arm destructive
               </Button>
               <span className="ml-2 text-label text-muted-foreground">Presets</span>
               <Button
