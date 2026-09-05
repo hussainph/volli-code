@@ -41,7 +41,7 @@
  * in the app.
  */
 import * as React from "react";
-import { DEFAULT_COMPACTION_POLICY } from "@volli/shared";
+import { DEFAULT_COMPACTION_POLICY, EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 import type {
   HiddenModelRef,
   ModelAccessDefaults,
@@ -159,9 +159,9 @@ const PROVIDERS: ModelAccessSnapshot["providers"] = [
  * one model would look correct whichever it read.
  */
 const SEEDED_DEFAULTS: ModelAccessDefaults = {
+  ...EMPTY_MODEL_ACCESS_DEFAULTS,
   global: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "medium" },
   ticket: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
-  utility: null,
 };
 
 /** A Model Access client with no main process behind it — reads only. */

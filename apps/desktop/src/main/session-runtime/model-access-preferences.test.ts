@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 
 import { setAppState } from "../db/app-state-repo";
 import { openTestDb, type TestDb } from "../db/test-helpers";
@@ -37,14 +38,14 @@ describe("Model Access default selection", () => {
     writeModelAccessDefault(ctx.db, "global", selection, 123);
     const ticket = { ...selection, modelId: "gpt-5.6-luna" };
     expect(writeModelAccessDefault(ctx.db, "ticket", ticket, 124)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
       ticket,
-      utility: null,
     });
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
       ticket,
-      utility: null,
     });
 
     // Clearing an explicit choice is a write, not an absence.
@@ -63,9 +64,8 @@ describe("Model Access default selection", () => {
     setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, JSON.stringify(selection), 1);
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
-      ticket: null,
-      utility: null,
     });
 
     // The first purpose-aware write persists the new shape; the legacy key
@@ -73,8 +73,8 @@ describe("Model Access default selection", () => {
     writeModelAccessDefault(ctx.db, "utility", { ...selection, modelId: "claude-haiku" }, 2);
     setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, "not-json", 3);
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
-      ticket: null,
       utility: { ...selection, modelId: "claude-haiku" },
     });
   });
@@ -93,13 +93,12 @@ describe("Model Access default selection", () => {
     );
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
-      ticket: null,
-      utility: null,
     });
 
     setAppState(ctx.db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, "not-json", 2);
-    expect(readModelAccessDefaults(ctx.db)).toEqual({ global: null, ticket: null, utility: null });
+    expect(readModelAccessDefaults(ctx.db)).toEqual(EMPTY_MODEL_ACCESS_DEFAULTS);
   });
 
   it("treats missing or malformed stored state as unconfigured", () => {
@@ -231,9 +230,8 @@ describe("Model Access default selection", () => {
     );
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
-      global: null,
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       ticket: stable,
-      utility: null,
     });
     expect(readHiddenModels(ctx.db)).toEqual([{ providerId: "acme", modelId: "stable" }]);
   });

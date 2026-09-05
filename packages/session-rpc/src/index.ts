@@ -354,11 +354,13 @@ const modelOverrideSchema = z
   })
   .optional();
 const modelPurposeSchema = z.enum(MODEL_PURPOSES);
-const modelAccessDefaultsSchema = z.object({
-  global: modelSelectionSchema.nullable(),
-  ticket: modelSelectionSchema.nullable(),
-  utility: modelSelectionSchema.nullable(),
-});
+// One nullable selection per tier, keyed off the shared list so a tier added
+// there cannot be silently stripped at this edge (z.object drops unknown keys).
+const modelAccessDefaultsSchema = z.object(
+  Object.fromEntries(
+    MODEL_PURPOSES.map((tier) => [tier, modelSelectionSchema.nullable()]),
+  ) as Record<ModelPurpose, z.ZodNullable<typeof modelSelectionSchema>>,
+);
 /**
  * A hidden-model entry is an identity pair, never a whole model row: the list
  * is user curation persisted app-wide, and anything beyond the two ids would

@@ -37,6 +37,7 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
 });
 
 import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
@@ -537,10 +538,10 @@ describe("registerSessionRpcIpcHandlers", () => {
     };
     const registration = registerSessionRpcIpcHandlers({
       runtime: fixture.runtime,
-      readModelAccessDefaults: () => ({ global, ticket: null, utility: null }),
+      readModelAccessDefaults: () => ({ ...EMPTY_MODEL_ACCESS_DEFAULTS, global }),
       writeModelAccessDefault: (purpose, selection) => {
         writes.push({ purpose, selection });
-        return { global, ticket: selection, utility: null };
+        return { ...EMPTY_MODEL_ACCESS_DEFAULTS, global, ticket: selection };
       },
     });
 
@@ -548,7 +549,7 @@ describe("registerSessionRpcIpcHandlers", () => {
       invoke(sender(), { procedure: "modelAccess.defaults", input: undefined }),
     ).resolves.toEqual({
       ok: true,
-      data: { global, ticket: null, utility: null },
+      data: { ...EMPTY_MODEL_ACCESS_DEFAULTS, global },
     });
     await expect(
       invoke(sender(), {
@@ -557,7 +558,7 @@ describe("registerSessionRpcIpcHandlers", () => {
       }),
     ).resolves.toEqual({
       ok: true,
-      data: { global, ticket, utility: null },
+      data: { ...EMPTY_MODEL_ACCESS_DEFAULTS, global, ticket },
     });
     expect(writes).toEqual([{ purpose: "ticket", selection: ticket }]);
     await registration.close();

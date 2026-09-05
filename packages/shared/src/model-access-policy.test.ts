@@ -6,8 +6,16 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isDefaultModelRequired,
   isModelHidden,
+  AGENT_MODEL_TIERS,
+  MODEL_TIER_ROWS,
+  MODEL_TIERS,
+  acceptsImageInputIn,
+  defaultModelRequiredForTier,
+  isAgentModelTier,
   resolveDefaultModel,
+  resolveModelTier,
   visibleModels,
+  visualModelProblem,
   withModelVisibility,
 } from "./model-access-policy";
 
@@ -24,14 +32,19 @@ const TICKET: ModelSelection = {
 
 describe("resolveDefaultModel", () => {
   it("resolves each purpose to its own explicit choice", () => {
-    const defaults = { global: GLOBAL, ticket: TICKET, utility: GLOBAL };
+    const defaults = {
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: GLOBAL,
+      ticket: TICKET,
+      utility: GLOBAL,
+    };
     expect(resolveDefaultModel(defaults, "global")).toBe(GLOBAL);
     expect(resolveDefaultModel(defaults, "ticket")).toBe(TICKET);
     expect(resolveDefaultModel(defaults, "utility")).toBe(GLOBAL);
   });
 
   it("resolves an unset ticket or utility purpose to the global default", () => {
-    const defaults = { global: GLOBAL, ticket: null, utility: null };
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL };
     expect(resolveDefaultModel(defaults, "ticket")).toBe(GLOBAL);
     expect(resolveDefaultModel(defaults, "utility")).toBe(GLOBAL);
   });
@@ -39,6 +52,124 @@ describe("resolveDefaultModel", () => {
   it("resolves null — never a substitute — when nothing is configured", () => {
     expect(resolveDefaultModel(EMPTY_MODEL_ACCESS_DEFAULTS, "global")).toBeNull();
     expect(resolveDefaultModel(EMPTY_MODEL_ACCESS_DEFAULTS, "ticket")).toBeNull();
+  });
+});
+
+describe("model tiers", () => {
+  const FAST: ModelSelection = { providerId: "openai", modelId: "gpt-mini", reasoningLevel: "low" };
+
+  it("is the fixed set, in Settings order: the three purposes, then the advanced tiers", () => {
+    expect(MODEL_TIERS).toEqual(["global", "ticket", "utility", "fast", "deep", "visual"]);
+  });
+
+  it("resolves a set tier to its own choice and says so", () => {
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL, ticket: TICKET, fast: FAST };
+    expect(resolveModelTier(defaults, "fast")).toEqual({
+      tier: "fast",
+      resolvedFrom: "fast",
+      selection: FAST,
+    });
+  });
+
+  it("resolves an unset advanced tier through Ticket, then Board — and names the rung", () => {
+    const viaTicket = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL, ticket: TICKET };
+    expect(resolveModelTier(viaTicket, "fast")).toEqual({
+      tier: "fast",
+      resolvedFrom: "ticket",
+      selection: TICKET,
+    });
+    const viaGlobal = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL };
+    expect(resolveModelTier(viaGlobal, "deep")).toEqual({
+      tier: "deep",
+      resolvedFrom: "global",
+      selection: GLOBAL,
+    });
+  });
+
+  it("resolves null for an advanced tier when nothing above it is configured", () => {
+    expect(resolveModelTier(EMPTY_MODEL_ACCESS_DEFAULTS, "fast")).toBeNull();
+    expect(resolveDefaultModel(EMPTY_MODEL_ACCESS_DEFAULTS, "deep")).toBeNull();
+  });
+});
+
+describe("tiers as agents name them", () => {
+  it("lets a delegating Session name every tier but Utility", () => {
+    expect(AGENT_MODEL_TIERS).toEqual(["fast", "deep", "visual", "ticket", "global"]);
+    expect(isAgentModelTier("fast")).toBe(true);
+    expect(isAgentModelTier("utility")).toBe(false);
+    expect(isAgentModelTier("smol")).toBe(false);
+  });
+
+  it("carries one label and one-line job per tier, in Settings order", () => {
+    expect(MODEL_TIER_ROWS.map((row) => row.tier)).toEqual(MODEL_TIERS);
+    expect(MODEL_TIER_ROWS.find((row) => row.tier === "fast")).toEqual({
+      tier: "fast",
+      label: "Fast",
+      hint: "Quick, cheap, bounded side work.",
+      advanced: true,
+    });
+    expect(MODEL_TIER_ROWS.find((row) => row.tier === "ticket")?.advanced).toBe(false);
+  });
+
+  it("refuses an unresolved tier with the one missing-default sentence, naming the tier", () => {
+    const message = defaultModelRequiredForTier("deep");
+    expect(message).toBe(
+      "Choose a default model in Settings before starting a Session. The deep tier resolved to nothing.",
+    );
+    expect(isDefaultModelRequired(message)).toBe(true);
+  });
+});
+
+describe("the visual tier", () => {
+  const VISUAL: ModelSelection = {
+    providerId: "openai",
+    modelId: "gpt-vision",
+    reasoningLevel: "medium",
+  };
+  const catalog = [
+    { providerId: "anthropic", modelId: "claude-sonnet", acceptsImageInput: true },
+    { providerId: "anthropic", modelId: "claude-opus", acceptsImageInput: false },
+    { providerId: "openai", modelId: "gpt-vision", acceptsImageInput: true },
+  ];
+  const sees = acceptsImageInputIn(catalog);
+
+  it("resolves an explicit Visual choice as-is — it was checked when it was saved", () => {
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS, visual: VISUAL };
+    expect(resolveModelTier(defaults, "visual")).toEqual({
+      tier: "visual",
+      resolvedFrom: "visual",
+      selection: VISUAL,
+    });
+  });
+
+  it("falls back to the Ticket default only when that model accepts images", () => {
+    const sonnetTicket = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: TICKET, ticket: GLOBAL };
+    expect(resolveModelTier(sonnetTicket, "visual", sees)).toEqual({
+      tier: "visual",
+      resolvedFrom: "ticket",
+      selection: GLOBAL,
+    });
+  });
+
+  it("refuses — never skips a rung — when the Ticket default cannot read images", () => {
+    // Ticket is Opus (no images); Board is Sonnet (images). The walk lands on
+    // Ticket and stops: reaching past the user's Ticket choice to find a model
+    // that happens to see would be a substitution nobody chose.
+    const opusTicket = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL, ticket: TICKET };
+    expect(resolveModelTier(opusTicket, "visual", sees)).toBeNull();
+  });
+
+  it("refuses the fallback when no catalog is there to check it against", () => {
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: GLOBAL };
+    expect(resolveModelTier(defaults, "visual")).toBeNull();
+  });
+
+  it("names the one reason a model cannot be the Visual default", () => {
+    expect(visualModelProblem(catalog, GLOBAL)).toBeNull();
+    expect(visualModelProblem(catalog, TICKET)).toBe(
+      "This model can't read images, so it can't be the Visual default.",
+    );
+    expect(visualModelProblem(catalog, VISUAL)).toBeNull();
   });
 });
 

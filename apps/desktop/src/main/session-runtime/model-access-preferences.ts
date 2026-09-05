@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 import {
   DEFAULT_COMPACTION_POLICY,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  MODEL_TIERS,
   REASONING_LEVELS,
   type CompactionPolicy,
   type HiddenModelRef,
@@ -78,24 +80,23 @@ export function readDefaultModelSelection(db: Database.Database): ModelSelection
 }
 
 /**
- * The per-purpose defaults this profile has configured.
+ * The per-tier defaults this profile has configured.
  *
- * The purpose-aware key wins once it exists; before it does, a legacy single
- * default reads as the global purpose so nobody's configured model vanishes on
- * update. Each stored purpose is sanitized independently — one malformed entry
- * costs that entry, never the others.
+ * The tier-aware key wins once it exists; before it does, a legacy single
+ * default reads as the global tier so nobody's configured model vanishes on
+ * update. Each stored tier is sanitized independently — one malformed entry
+ * costs that entry, never the others — and a tier the blob predates (the
+ * advanced three arrived in VC-259) simply reads as unset.
  */
 export function readModelAccessDefaults(db: Database.Database): ModelAccessDefaults {
   const stored = readAppState(db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY);
   if (typeof stored === "object" && stored !== null) {
     const candidate = stored as Record<string, unknown>;
-    return {
-      global: sanitizeSelection(candidate["global"]),
-      ticket: sanitizeSelection(candidate["ticket"]),
-      utility: sanitizeSelection(candidate["utility"]),
-    };
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS };
+    for (const tier of MODEL_TIERS) defaults[tier] = sanitizeSelection(candidate[tier]);
+    return defaults;
   }
-  return { global: readDefaultModelSelection(db), ticket: null, utility: null };
+  return { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: readDefaultModelSelection(db) };
 }
 
 /** Stores one purpose's secret-free model policy; null clears an explicit choice. */
@@ -187,11 +188,11 @@ export function reconcileModelAccessPreferences(
   };
 
   const defaults = readModelAccessDefaults(db);
-  const repaired: ModelAccessDefaults = {
-    global: defaults.global === null ? null : settle(defaults.global),
-    ticket: defaults.ticket === null ? null : settle(defaults.ticket),
-    utility: defaults.utility === null ? null : settle(defaults.utility),
-  };
+  const repaired = { ...EMPTY_MODEL_ACCESS_DEFAULTS };
+  for (const tier of MODEL_TIERS) {
+    const selection = defaults[tier];
+    repaired[tier] = selection === null ? null : settle(selection);
+  }
   if (JSON.stringify(repaired) !== JSON.stringify(defaults)) {
     setAppState(db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, JSON.stringify(repaired), now);
   }

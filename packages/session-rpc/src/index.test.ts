@@ -9,7 +9,7 @@ import type {
   SessionStreamFrame,
   SessionStreamOverlay,
 } from "@volli/session-engine";
-import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
+import { EMPTY_MODEL_ACCESS_DEFAULTS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -907,14 +907,13 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const stored = {
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: {
         providerId: "openai-codex",
         modelId: "gpt-5.6-sol",
         reasoningLevel: "high" as const,
         credential: "must-not-cross",
       },
-      ticket: null,
-      utility: null,
     };
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
@@ -934,9 +933,8 @@ describe("Session tRPC router", () => {
 
     // The stray credential on the stored value never crosses the edge.
     expect(current).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
-      ticket: null,
-      utility: null,
     });
     expect(writes).toEqual([
       {

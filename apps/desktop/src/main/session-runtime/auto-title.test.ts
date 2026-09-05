@@ -131,9 +131,9 @@ function harness(
 
 /** Defaults with no explicit utility choice, so the ladder falls past rung one. */
 const NO_UTILITY: ModelAccessDefaults = {
+  ...EMPTY_MODEL_ACCESS_DEFAULTS,
   global: GLOBAL_DEFAULT,
   ticket: TICKET_DEFAULT,
-  utility: null,
 };
 
 describe("createAutoTitler().refine", () => {
