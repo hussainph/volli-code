@@ -48,11 +48,7 @@ import {
   type SessionRuntimeSpec,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-  attachRefreshableCatalog,
-  modelsDevCatalogSource,
-  PiFileModelsStore,
-} from "./model-catalog";
+import { attachRefreshableCatalog, piDevCatalogSource, PiFileModelsStore } from "./model-catalog";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createSessionTools } from "./tools";
 import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
@@ -944,33 +940,31 @@ describe("model access", () => {
     const models = createModels();
     models.setProvider(configuredProvider);
     const entry = {
-      family: "acme-reasoner",
+      api: "openai-completions",
+      provider: "acme",
+      baseUrl: "https://acme.test/v1",
       reasoning: true,
-      reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
-      tool_call: true,
-      temperature: true,
-      structured_output: true,
-      modalities: { input: ["text"], output: ["text"] },
-      limit: { context: 128_000, output: 16_000 },
-      cost: { input: 1, output: 2 },
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_000,
+      compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: "max_tokens" },
+      thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" },
     };
-    const source = modelsDevCatalogSource({
+    const source = piDevCatalogSource({
+      builtinGeneratedAt: () => undefined,
       fetchFn: (async () =>
         new Response(
           JSON.stringify({
-            acme: {
-              npm: "@ai-sdk/openai-compatible",
-              api: "https://acme.test/v1",
-              models: {
-                "acme-stable": { ...entry, id: "acme-stable", name: "Acme Stable" },
-                "acme-pipeline": { ...entry, id: "acme-pipeline", name: "Acme Pipeline" },
-                "acme-unsafe": {
-                  ...entry,
-                  id: "acme-unsafe",
-                  name: "Acme Unsafe",
-                  tool_call: false,
-                },
-              },
+            "acme-stable": { ...entry, id: "acme-stable", name: "Acme Stable" },
+            "acme-pipeline": { ...entry, id: "acme-pipeline", name: "Acme Pipeline" },
+            // Withheld by the redirection guard: the provider's baseline never
+            // reaches this origin, so the feed may not point a model at it.
+            "acme-unsafe": {
+              ...entry,
+              id: "acme-unsafe",
+              name: "Acme Unsafe",
+              baseUrl: "https://elsewhere.test/v1",
             },
           }),
           { status: 200 },
@@ -1052,9 +1046,9 @@ describe("model access", () => {
         supportsDeveloperRole: false,
         maxTokensField: "max_tokens",
       },
-      // Narrowed to what the new model's own row declares. The sibling maps
-      // `off` to the provider string "none", but this row's effort ladder is
-      // low/medium/high, so that rung is withheld rather than assumed.
+      // Verbatim from the feed, not inferred from a sibling. The baseline maps
+      // `off` to the provider string "none"; this model's own entry says the
+      // rung does not exist, and that is what reaches the wire.
       thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" },
     });
   });
@@ -1088,28 +1082,25 @@ describe("model access", () => {
       getModels: () => baseline,
     });
     const entry = {
-      family: "acme",
+      api: "openai-completions",
+      provider: "acme",
+      baseUrl: "https://acme.test/v1",
       reasoning: true,
-      reasoning_options: [{ type: "effort", values: ["low", "high"] }],
-      tool_call: true,
-      temperature: true,
-      structured_output: true,
-      modalities: { input: ["text"], output: ["text"] },
-      limit: { context: 128_000, output: 16_000 },
-      cost: { input: 1, output: 2 },
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_000,
     };
     let listPipeline = true;
-    const source = modelsDevCatalogSource({
-      memoMs: 0,
+    const source = piDevCatalogSource({
+      builtinGeneratedAt: () => undefined,
       fetchFn: (async () =>
         new Response(
           JSON.stringify({
-            acme: {
-              models: {
-                "acme-stable": { ...entry, name: "Acme Stable" },
-                ...(listPipeline ? { "acme-pipeline": { ...entry, name: "Acme Pipeline" } } : {}),
-              },
-            },
+            "acme-stable": { ...entry, id: "acme-stable", name: "Acme Stable" },
+            ...(listPipeline
+              ? { "acme-pipeline": { ...entry, id: "acme-pipeline", name: "Acme Pipeline" } }
+              : {}),
           }),
           { status: 200 },
         )) as typeof fetch,
