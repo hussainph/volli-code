@@ -399,7 +399,33 @@ const CardContext = React.createContext<CardFrame>(CARD_UNFRAMED);
 /** Cards act on the sim directly — the island's clusters never learn the verbs. */
 const DispatchContext = React.createContext<React.Dispatch<SimAction>>(() => {});
 
-/** Header + body. The pin lives in the header so the glance card carries its own invitation to become a work card. */
+/**
+ * A tooltip that is a LABEL and nothing else. Radix keeps tooltip content
+ * hoverable by default (for rich tooltips), so a label opening 6px above a
+ * 20px row action lands on the row above's icons — move up the column and the
+ * pointer hits live tooltip text: I-beam, close, next label opens over the
+ * next row, arrow, I-beam… the cursor flicker the live round caught. Here
+ * the content ignores the pointer and the tooltip closes the instant its
+ * trigger is left. Candidate for `ui/tooltip.tsx` itself at migration — its
+ * own header already says a tooltip "is a label, not a surface".
+ */
+function LabelTip({ label, children }: React.PropsWithChildren<{ label: string }>) {
+  return (
+    <Tooltip disableHoverableContent>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" className="pointer-events-none select-none">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * Header + body. The pin lives in the header so the glance card carries its
+ * own invitation to become a work card. `cursor-default select-none` is the
+ * menu-item idiom (`ui/menu-classes.ts`): this is a control surface, and a
+ * label that shows an I-beam is a surface lying about being prose.
+ */
 function Card({
   glyph: Glyph,
   heading,
@@ -407,27 +433,24 @@ function Card({
 }: React.PropsWithChildren<{ glyph: PhosphorIcon; heading: string }>) {
   const frame = React.useContext(CardContext);
   return (
-    <div className="flex flex-col">
+    <div className="flex cursor-default flex-col select-none">
       <div className="flex h-6 items-center gap-1.5 px-2">
         <Glyph className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-label font-medium text-muted-foreground uppercase">
           {heading}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-pressed={frame.pinned}
-              aria-label={frame.pinned ? "Unpin card" : "Pin card open"}
-              className={cn(frame.pinned && "text-primary hover:text-primary")}
-              onClick={frame.togglePin}
-            >
-              <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">{frame.pinned ? "Unpin · Esc" : "Pin open"}</TooltipContent>
-        </Tooltip>
+        <LabelTip label={frame.pinned ? "Unpin · Esc" : "Pin open"}>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-pressed={frame.pinned}
+            aria-label={frame.pinned ? "Unpin card" : "Pin card open"}
+            className={cn(frame.pinned && "text-primary hover:text-primary")}
+            onClick={frame.togglePin}
+          >
+            <PushPinSimpleIcon weight={frame.pinned ? "fill" : "regular"} />
+          </Button>
+        </LabelTip>
       </div>
       {children}
     </div>
@@ -502,32 +525,29 @@ function ActionButton({
     return () => window.clearTimeout(timer);
   }, [armed]);
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          aria-label={armed ? armedLabel : label}
-          className={cn(
-            "text-muted-foreground",
-            destructive && "hover:text-destructive",
-            armed &&
-              "bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive",
-          )}
-          onClick={() => {
-            if (destructive && arm && !armed) {
-              setArmed(true);
-              return;
-            }
-            setArmed(false);
-            onPress();
-          }}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{armed ? armedLabel : label}</TooltipContent>
-    </Tooltip>
+    <LabelTip label={armed ? armedLabel : label}>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={armed ? armedLabel : label}
+        className={cn(
+          "text-muted-foreground",
+          destructive && "hover:text-destructive",
+          armed &&
+            "bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive",
+        )}
+        onClick={() => {
+          if (destructive && arm && !armed) {
+            setArmed(true);
+            return;
+          }
+          setArmed(false);
+          onPress();
+        }}
+      >
+        {children}
+      </Button>
+    </LabelTip>
   );
 }
 
