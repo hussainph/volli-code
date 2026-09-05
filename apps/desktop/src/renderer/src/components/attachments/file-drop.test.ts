@@ -85,14 +85,17 @@ describe("fileAttachHandlers", () => {
   });
 
   describe("dragover", () => {
-    it("prevents the default, which is what makes this a drop target", () => {
+    it("accepts the drop without letting a nested editor stage its own drop target", () => {
       const event = dragEvent([]);
 
       fileAttachHandlers(vi.fn()).onDragOverCapture(event);
 
       // Note there are no files on a dragover — only `types` is readable — so
-      // this must key off the type list, not off `files`.
+      // this must key off the type list, not off `files`. `preventDefault`
+      // makes the outer surface a drop target; stopping the native event keeps
+      // Monaco from staging a dotted caret that its captured drop cannot clear.
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(event.nativeEvent.stopPropagation).toHaveBeenCalledTimes(1);
     });
 
     it("ignores a drag carrying something other than files", () => {
@@ -101,6 +104,7 @@ describe("fileAttachHandlers", () => {
       fileAttachHandlers(vi.fn()).onDragOverCapture(event);
 
       expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(event.nativeEvent.stopPropagation).not.toHaveBeenCalled();
     });
 
     it("declines when the surface cannot attach", () => {
@@ -109,6 +113,7 @@ describe("fileAttachHandlers", () => {
       fileAttachHandlers(undefined).onDragOverCapture(event);
 
       expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(event.nativeEvent.stopPropagation).not.toHaveBeenCalled();
     });
 
     it("survives a dragover with no dataTransfer at all", () => {
