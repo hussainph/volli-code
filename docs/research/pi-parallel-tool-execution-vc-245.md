@@ -43,7 +43,7 @@ opposite of what the synthetic lanes implied, and the real audit is why.
 |---|---|---|
 | `toolExecution: "parallel"` | saves **1.2%** of tool time (1.57h of 127.6h), 84% of it on `bash` | **not worth the concurrency risk** |
 | Prompting for batching | no change on either model | **no-op, do not ship** |
-| Code Mode | addresses **54%** of all billed context; saves **27–51%** after overheads | **the real opportunity** |
+| Code Mode | addresses **24–27%** of all billed context after narrowing (54% ceiling) | **the real opportunity** |
 
 The single most important number in this note: **tool results are 92.6% of
 everything Volli ever sends a model.** Billed context across those Sessions was
@@ -304,9 +304,10 @@ concurrency, not in the model asking for nonsense.
 1. **Whether one developer's Sessions generalise.** All 671 are from a single
    machine and a single working style. The `bash`/`read` dominance and the 17%
    batch rate are behavioural, and both headline conclusions depend on them.
-2. **Whether a program can actually reduce those results.** The 58.5% fan-out
-   pool is a ceiling. Nothing here measures how much of it survives contact
-   with a real reduction — that is what the prototype is for.
+2. **Whether a program can actually reduce those results.** Structural signals
+   narrow the 58.5% ceiling to a ~24–27%-of-context capture band, but
+   "homogeneous and barely discussed" is a proxy for programmable, not a
+   measurement of it. Only a prototype turns the band into a number.
 3. **Whether `bash` can be safely called from generated code.** The audit says
    Code Mode is only worth building if it can. This note does not answer
    whether it may.
@@ -352,6 +353,37 @@ overhead, already subtracted.
 Even at a deliberately pessimistic 50% condensation, Code Mode addresses **more
 than a quarter of everything Volli sends a model**.
 
+### Narrowing the ceiling
+
+58.5% is what a program *could* absorb, not what it *would*. Two structural
+signals bracket the real capture rate — neither is proof, and reporting the
+band beats quoting a point estimate that would be repeated as fact:
+
+| signal | share of fan-out volume | reading |
+|---|---|---|
+| **homogeneous** — every call in the reply hit one tool | **59.9%** | 7,234 of 9,577 fan-out replies; the loop shape Code Mode exists for |
+| **transient** — consuming reply wrote <600 chars of prose | **87.8%** | results the model barely spoke about before moving on |
+| mean prose written about a fan-out's results | — | **544 characters** |
+
+That 544-character mean is the striking one. The model reads a fan-out's
+results, says about two sentences, and proceeds — those tokens then sit in
+context for the rest of the turn. That is precisely the volume a program would
+have consumed in-process and never sent.
+
+Taking the product of both signals as the conservative reading and the smaller
+of them as the generous one:
+
+| | capture rate | context tokens | share of all billed context |
+|---|---|---|---|
+| conservative | 52.6% of fan-out | 868M | **23.7%** |
+| generous | 59.9% of fan-out | 988M | **27.0%** |
+
+**So the honest headline is ~24–27% of all billed context, not 48%.** The case
+survives the narrowing, at roughly half its ceiling.
+
+Homogeneous loops are **69.3% `bash` and 26.3% `read`** — 95.6% between them,
+confirming the constraint below on the loop shape specifically.
+
 **Two caveats that matter, both against the optimistic reading:**
 
 1. **Cost ≠ tokens.** The cache split is 3.29B read against 72M written, so
@@ -359,11 +391,10 @@ than a quarter of everything Volli sends a model**.
    The token saving is real for *context-window pressure* — which is what
    limits session length and drives compaction — but the dollar saving is a
    fraction of the token saving.
-2. **"Fan-out" is a ceiling, not a capture rate.** It counts results from
-   replies that issued 2+ calls. A program only captures those if it can
-   perform the reduction the model would have done. Semantic comparison
-   ("do these three files agree?") does not reduce in code; extraction and
-   filtering does.
+2. **The capture band rests on two heuristics.** "Homogeneous" and "transient"
+   are structural proxies for programmability, not measurements of it. The
+   600-character prose threshold is a judgement call. A prototype is what
+   turns the band into a number.
 
 **And the design constraint the audit settles.** 95% of fan-out volume is two
 tools:

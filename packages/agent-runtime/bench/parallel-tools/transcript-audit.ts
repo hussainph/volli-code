@@ -47,6 +47,16 @@ const estimateTokens = (chars: number): number => Math.ceil(chars / CHARS_PER_TO
  */
 const DURATION_CAP_MS = 600_000;
 
+/**
+ * Prose below this, in the reply that consumed a fan-out, reads as "the model
+ * looked and moved on" rather than "the model synthesised".
+ *
+ * 600 characters is roughly a short paragraph — about 150 tokens. It is a
+ * judgement call and the number it produces is a bound, not a measurement,
+ * which is why the report prints it alongside the result.
+ */
+const TRANSIENT_PROSE_CHARS = 600;
+
 const DEFAULT_ROOT = join(homedir(), "Library", "Application Support", "Volli Code", "pi-sessions");
 
 /** One assistant reply and the tool calls it issued. */
@@ -101,6 +111,38 @@ interface Totals {
   fanoutRounds: number;
 
   /**
+   * Narrowing the fan-out ceiling by structure rather than by guessing at
+   * meaning.
+   *
+   * A fan-out is only capturable if a program can do the reduction the model
+   * would have done, and nothing in a transcript states that outright. Rather
+   * than one classifier pretending to know, two independent structural signals
+   * are recorded and reported as bounds:
+   *
+   *  - **homogeneous** — every call in the reply hit the same tool. That is
+   *    the loop shape Code Mode exists for: read twelve files, search six
+   *    terms, stat every package. A heterogeneous batch is more likely to be
+   *    the model pursuing several unrelated threads at once, which a single
+   *    program has no natural shape for.
+   *  - **transient** — how much prose the model wrote about the results before
+   *    its next tool call. A fan-out that returned 20k tokens and produced two
+   *    sentences spent that context on nothing a program could not have
+   *    discarded in-process. Heavy prose means the model was synthesising, and
+   *    synthesis is the part code cannot do.
+   *
+   * Neither is proof. Together they bracket the honest capture rate, which is
+   * what the ceiling on its own does not.
+   */
+  fanoutHomogeneousChars: number;
+  fanoutHomogeneousRounds: number;
+  /** Homogeneous fan-out volume by the tool it looped over. */
+  perToolHomogeneousChars: Map<string, number>;
+  /** Prose the model wrote in the reply that consumed a fan-out's results. */
+  fanoutFollowOnProseChars: number;
+  /** Fan-out volume whose consuming reply wrote very little prose. */
+  fanoutTransientChars: number;
+
+  /**
    * Real context actually billed, from Volli's own usage observations.
    *
    * `inputTokens` alone is near-zero on a caching provider; the prompt lives
@@ -150,6 +192,11 @@ function emptyTotals(): Totals {
     fanoutResultChars: 0,
     fanoutShippedChars: 0,
     fanoutRounds: 0,
+    fanoutHomogeneousChars: 0,
+    fanoutHomogeneousRounds: 0,
+    perToolHomogeneousChars: new Map(),
+    fanoutFollowOnProseChars: 0,
+    fanoutTransientChars: 0,
     realContextTokens: 0,
     realCacheReadTokens: 0,
     realCacheWriteTokens: 0,
@@ -246,6 +293,31 @@ async function foldSession(path: string, totals: Totals): Promise<void> {
         totals.fanoutRounds += 1;
         for (const [name, chars] of round.resultCharsByTool) {
           totals.perToolFanoutChars.set(name, (totals.perToolFanoutChars.get(name) ?? 0) + chars);
+        }
+
+        // Signal one: did this reply loop over a single tool?
+        const names = round.toolNames;
+        const looped = names.length >= 2 && names.every((name) => name === names[0]);
+        if (looped) {
+          const tool = names[0] ?? "unknown";
+          totals.fanoutHomogeneousChars += round.resultChars;
+          totals.fanoutHomogeneousRounds += 1;
+          totals.perToolHomogeneousChars.set(
+            tool,
+            (totals.perToolHomogeneousChars.get(tool) ?? 0) + round.resultChars,
+          );
+        }
+
+        // Signal two: how much did the model say about what came back? The
+        // reply that consumed these results is the next round in the turn; a
+        // fan-out at the very end of a turn has no consumer and is skipped
+        // rather than counted as either kind.
+        const consumer = rounds[index + 1];
+        if (consumer !== undefined) {
+          totals.fanoutFollowOnProseChars += consumer.assistantChars;
+          if (consumer.assistantChars <= TRANSIENT_PROSE_CHARS) {
+            totals.fanoutTransientChars += round.resultChars;
+          }
         }
       }
 
@@ -588,6 +660,63 @@ async function main(): Promise<void> {
   console.log(
     `\nfan-out replies: ${totals.fanoutRounds.toLocaleString()} × ~${PROGRAM_TOKENS} tokens of program source ` +
       `= ${programCost.toLocaleString()} output tokens of overhead, already subtracted.`,
+  );
+
+  // --- narrowing the ceiling ----------------------------------------------
+  console.log("\n### How much of the fan-out pool is actually programmable\n");
+  const homogeneousShare = totals.fanoutHomogeneousChars / Math.max(totals.fanoutResultChars, 1);
+  const transientShare = totals.fanoutTransientChars / Math.max(totals.fanoutResultChars, 1);
+  console.log(
+    table(
+      ["signal", "share of fan-out volume", "reading"],
+      [
+        [
+          "homogeneous (one tool looped)",
+          pct(totals.fanoutHomogeneousChars, totals.fanoutResultChars),
+          `${totals.fanoutHomogeneousRounds.toLocaleString()} of ${totals.fanoutRounds.toLocaleString()} fan-out replies`,
+        ],
+        [
+          `transient (consumer wrote <${TRANSIENT_PROSE_CHARS} chars)`,
+          pct(totals.fanoutTransientChars, totals.fanoutResultChars),
+          "results the model barely spoke about",
+        ],
+        [
+          "mean prose per fan-out",
+          "—",
+          `${Math.round(totals.fanoutFollowOnProseChars / Math.max(totals.fanoutRounds, 1)).toLocaleString()} chars written about each fan-out's results`,
+        ],
+      ],
+    ),
+  );
+
+  console.log("\nHomogeneous fan-out volume by the tool it looped over:\n");
+  const loopRows = [...totals.perToolHomogeneousChars.entries()]
+    .toSorted((left, right) => right[1] - left[1])
+    .slice(0, 6)
+    .map(([name, chars]) => [
+      name,
+      estimateTokens(chars).toLocaleString(),
+      pct(chars, totals.fanoutHomogeneousChars),
+    ]);
+  console.log(table(["tool", "tokens", "share of homogeneous"], loopRows));
+
+  // Both signals are necessary-ish conditions, not sufficient ones, so their
+  // product is the conservative reading and the smaller of them is the
+  // generous one. Reporting the band beats reporting a point estimate that
+  // would be quoted as fact.
+  const generous = Math.min(homogeneousShare, transientShare);
+  const conservative = homogeneousShare * transientShare;
+  const ceilingSaved = fanoutShippedTokens - fanoutShippedTokens * 0.1 - programCost;
+  console.log(
+    `\nCapture band: ${pct(conservative, 1)} – ${pct(generous, 1)} of fan-out volume ` +
+      `(product of both signals … smaller of the two).`,
+  );
+  console.log(
+    `Applied to the 10%-condensation row, that is ` +
+      `${Math.round(ceilingSaved * conservative).toLocaleString()} – ` +
+      `${Math.round(ceilingSaved * generous).toLocaleString()} context tokens, or ` +
+      `${pct(ceilingSaved * conservative, totals.realContextTokens)} – ` +
+      `${pct(ceilingSaved * generous, totals.realContextTokens)} of all billed context.`,
   );
 
   console.log("\n## 4. Rounds per turn\n");
