@@ -35,6 +35,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ReasoningDropCause, ReasoningDroppedObservation } from "@volli/shared";
 
 /**
  * The same message with no reasoning in it.
@@ -50,5 +51,76 @@ export function withoutReasoning(message: AgentMessage): AgentMessage {
   return {
     ...assistant,
     content: assistant.content.filter((block) => block.type !== "thinking"),
+  };
+}
+
+/**
+ * The diagnostic pi-ai records when Anthropic drops blocks from a request.
+ *
+ * Named here rather than imported because pi-ai types `AssistantMessageDiagnostic.type`
+ * as a bare `string` — the value is a convention, not a union, so this is the
+ * one place that convention is written down.
+ */
+const INPUT_TRANSFORMATIONS_DIAGNOSTIC = "anthropic_input_transformations";
+
+/**
+ * Volli's word for one of Anthropic's transformation types.
+ *
+ * The provider's vocabulary stops here. A type this build has not been taught
+ * is `unknown` rather than a new string on a durable observation — the same
+ * containment `ATTEMPT_STOP_REASONS` applies to stop reasons.
+ */
+function dropCause(type: string | undefined): ReasoningDropCause {
+  if (type === undefined) return "unknown";
+  if (type.includes("prefix")) return "prefix-mismatch";
+  if (type.includes("model")) return "model-mismatch";
+  return "unknown";
+}
+
+/**
+ * What the provider silently dropped from this reply's request, if anything.
+ *
+ * Under the `thinking-binding-controls` beta a block bound to a prefix that has
+ * since changed is no longer a 400 — pi-ai sends
+ * `block_binding.prefix_mismatch_behavior: "drop_block"` for every
+ * managed-effort model, so the block is dropped, the turn succeeds, and the
+ * only record is a top-level `input_transformations` array that pi-ai appends
+ * to the assistant message as a diagnostic (`anthropic-messages.js` ~606).
+ *
+ * Volli read `AssistantMessage.diagnostics` nowhere before this. That made the
+ * drop completely invisible: no error, no failed turn, nothing on screen, and a
+ * model answering with less reasoning than it had built up. This function is
+ * the whole of the reading (VC-254).
+ *
+ * Returns nothing when there is nothing to say, which is the overwhelmingly
+ * common case — every turn on every model without the flag, and every clean
+ * turn on the models with it.
+ */
+export function reasoningDropped(
+  message: AssistantMessage,
+  turnId: string,
+): ReasoningDroppedObservation | undefined {
+  const transformations = message.diagnostics?.flatMap((diagnostic) =>
+    diagnostic.type === INPUT_TRANSFORMATIONS_DIAGNOSTIC
+      ? ((diagnostic.details?.["transformations"] as unknown[] | undefined) ?? [])
+      : [],
+  );
+  if (transformations === undefined || transformations.length === 0) return undefined;
+
+  const causes = new Set<ReasoningDropCause>();
+  const paths: string[] = [];
+  for (const entry of transformations) {
+    const transformation = entry as { type?: unknown; path?: unknown };
+    causes.add(
+      dropCause(typeof transformation.type === "string" ? transformation.type : undefined),
+    );
+    if (typeof transformation.path === "string") paths.push(transformation.path);
+  }
+  return {
+    kind: "reasoning-dropped",
+    turnId,
+    count: transformations.length,
+    causes: [...causes],
+    paths,
   };
 }

@@ -159,6 +159,7 @@ export type TranslatedObservation =
       reason: CompactionReason;
       detail: string;
     })
+
   /**
    * What one model operation consumed. Named after the executor's own entry id
    * rather than counted, so the same operation seen live and replayed after a
@@ -351,6 +352,12 @@ export class RuntimeObservationTranslator {
       // the overlay a live turn is filling belongs to the turn it is still in.
       case "compaction":
         return emit(this.#compactionObservation(observation));
+      // Reported through the observability side channel by the runtime and
+      // nowhere else, so there is no durable fact to translate. Giving a
+      // person a transcript notice for it needs a ledger event kind, a codec
+      // arm and a row to render — its own ticket, filed alongside VC-254.
+      case "reasoning-dropped":
+        return Promise.resolve();
       case "delta":
         return this.#translateDelta(observation, emit);
       case "message-settled":
@@ -399,6 +406,8 @@ export class RuntimeObservationTranslator {
         return [];
       case "compaction":
         return [this.#compactionObservation(observation)];
+      case "reasoning-dropped":
+        return [];
       case "message-settled": {
         const settled = this.#settledObservation(observation);
         return settled === null ? [] : [settled];

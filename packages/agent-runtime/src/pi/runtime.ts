@@ -6,13 +6,17 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
+  value as sessionValue,
   type AgentMessage,
   type AgentOptions,
-  type CompactionReason as PiCompactionReason,
+  type Branch,
   type CompactionSettings,
+  type HarnessEvent,
   type CustomEntry,
   type Entry,
+  type JsonValue,
   type MessageEntry,
+  type Session,
 } from "@earendil-works/pi-agent-core";
 import {
   Agent,
@@ -74,6 +78,7 @@ import {
   contextWindowOf,
   conversationPath,
   estimatedContextTokens,
+  MAIN_BRANCH,
   occupiedContextTokens,
   type CompactionOutcome,
   type ConversationReader,
@@ -89,7 +94,9 @@ import {
   teeObservationsToSink,
 } from "./observability";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
-import { withoutReasoning } from "./reasoning";
+import { piContext, type Context } from "./pi-context";
+import { reasoningDropped, withoutReasoning } from "./reasoning";
+import { migrateLegacySidecar } from "./sidecar-migration";
 import { createSessionTools } from "./tools";
 import {
   assistantUsage,
@@ -122,12 +129,20 @@ export function autoRetryDelayMs(attempt: number): number {
 /**
  * Volli's compaction vocabulary, checked against the executor's own.
  *
- * `@volli/shared` depends on nothing and so spells Pi's `CompactionReason` out
- * rather than importing it; this is the one file that can see both, and the
+ * `@volli/shared` depends on nothing and so spells Pi's compaction reasons out
+ * rather than importing them; this is the one file that can see both, and the
  * `satisfies` is what makes a word Volli uses that Pi does not a compile error
  * rather than a divergence nobody notices. The list is also what validates a
  * persisted marker on recovery.
+ *
+ * Pi 0.85.0 deleted the named `CompactionReason` type. The three words did not
+ * change — they are still `manual`, `threshold` and `overflow` — but they now
+ * exist only as an inline union inside the harness event payloads, so the type
+ * has to be recovered from one of those rather than imported by name. Doing it
+ * this way rather than restating the union keeps the check honest: it still
+ * fails to compile if Pi ever drops or renames one of the three.
  */
+type PiCompactionReason = Extract<HarnessEvent, { type: "compaction_start" }>["reason"];
 const COMPACTION_REASON_VALUES = COMPACTION_REASONS satisfies readonly PiCompactionReason[];
 
 export interface PiRuntimeHostOptions {
@@ -873,6 +888,97 @@ async function assertOwnedRecoveryPath(root: string, candidate: string): Promise
   }
 }
 
+/** Who a sidecar belongs to: the three ids an attach must find unchanged. */
+interface SidecarIdentity {
+  volliSessionId: string;
+  volliThreadId: string;
+  volliAttachmentId: string;
+}
+
+/**
+ * Where a sidecar records the attachment it belongs to.
+ *
+ * Until Pi 0.85.0 this was the JSONL session's `metadata` field — an opaque
+ * application-owned bag, written at `create` and readable off `list` without
+ * opening anything. 0.85.0 deleted it: `JsonlSessionMetadata` is now Pi's own
+ * six fields and nothing else, and `JsonlSessionCreateOptions` no longer takes
+ * a bag to put there.
+ *
+ * A session value is the replacement Pi offers, and it is a good one — durable,
+ * inside the session, committed through the same mutation line as every entry.
+ * The one thing it is not is readable without opening the session, which is why
+ * the identity check moved after `open`. That reordering is worth naming: the
+ * check exists so that an attachment cannot be handed another attachment's
+ * conversation, and opening a file to find out whose it is does not weaken
+ * that — the answer is the same and the refusal is the same. What it does mean
+ * is that a refused sidecar was briefly open, so the caller closes it.
+ */
+const SIDECAR_IDENTITY = sessionValue<SidecarIdentity>("volli.identity.v1");
+
+/** Bind a freshly created sidecar to this attachment, once. */
+async function writeSidecarIdentity(
+  sidecar: Session,
+  identity: SidecarIdentity,
+  context: Context,
+): Promise<void> {
+  await sidecar.setValue(SIDECAR_IDENTITY, identity, context);
+}
+
+/**
+ * Refuse a sidecar this attachment does not own.
+ *
+ * A sidecar written before this runtime moved the identity off Pi's metadata
+ * bag carries no value at all. That reads as a mismatch and is refused, which
+ * is the fail-closed direction: the alternative is admitting any sidecar whose
+ * binding cannot be read, and "cannot tell whose this is" must never resolve to
+ * "then it is yours".
+ */
+async function assertSidecarIdentity(
+  sidecar: Session,
+  expected: SidecarIdentity,
+  context: Context,
+): Promise<void> {
+  const stored = await sidecar.getValue(SIDECAR_IDENTITY, context);
+  if (
+    stored?.value.volliSessionId !== expected.volliSessionId ||
+    stored.value.volliThreadId !== expected.volliThreadId ||
+    stored.value.volliAttachmentId !== expected.volliAttachmentId
+  ) {
+    throw new Error("Pi recovery sidecar identity does not match this attachment.");
+  }
+}
+
+/**
+ * The one branch this runtime reads and writes, created if this sidecar has
+ * none yet.
+ *
+ * `Session.findEntriesOnBranch` and `Session.appendMessage` were conveniences
+ * over the current branch until 0.85.0 moved both onto an explicit `Branch`
+ * handle. Naming the branch here rather than at each call site keeps the
+ * choice in one place — and the choice is still the one VC-242 made: the
+ * BRANCH, never the flat file, because the elision rule takes the last
+ * compaction on the path rather than the last one written.
+ *
+ * Creating it is this runtime's job now, and that is new. 0.85.0 makes no
+ * branch at `create`: branches are made by the lane machinery inside
+ * `AgentHarness`, which Volli does not use — it drives the lower-level `Agent`
+ * (see this module's header). So a freshly created sidecar has no branch at
+ * all until something makes one, and this is that something.
+ *
+ * The anchor is what makes it safe on a sidecar that already holds history:
+ * a branch created at `null` on a file with entries would be an empty path
+ * beside a full file, and the replay would read a Session that had never said
+ * anything. Anchoring at the newest entry adopts what is there instead. On a
+ * new sidecar there is no newest entry and the anchor is `null`, which is the
+ * same thing said about nothing.
+ */
+async function sidecarBranch(sidecar: Session, context: Context): Promise<Branch> {
+  const existing = await sidecar.branch(MAIN_BRANCH, context);
+  if (existing !== undefined) return existing;
+  const [newest] = await sidecar.findEntries({ order: "desc", limit: 1 }, context);
+  return sidecar.createBranch(MAIN_BRANCH, newest?.id ?? null, context);
+}
+
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
@@ -939,8 +1045,32 @@ async function attachSession(
   let createdSidecar = false;
 
   try {
-    const sidecars = new JsonlSessionRepo({ fs: sidecarEnv, sessionsRoot: host.sessionDataDir });
-    const expectedMetadata = {
+    /**
+     * Opening the sidecar is not cancellable, on purpose.
+     *
+     * Pi 0.85.0 threads a context through every repository call, so this is
+     * the first version where the attachment's signal COULD reach them, and it
+     * deliberately does not. Two reasons, and the second is the one that
+     * decides it:
+     *
+     * - Nothing here waits on anything slow. Creating or opening a sidecar is
+     *   a handful of local file operations; there is no long poll for a
+     *   cancellation to shorten.
+     * - A cancelled `create` throws a transport-shaped file error from inside
+     *   Pi, which this runtime would surface as a failed attachment. But a
+     *   Session whose caller cancelled did not FAIL, and the difference is
+     *   what a person sees. The attach already checks the signal at its own
+     *   checkpoints and answers a cancellation with a closed attachment, and
+     *   the failure path below deletes a sidecar it created before rethrowing.
+     *   Letting the signal in would replace that clean answer with a file
+     *   error, and would do it only in the window between two checks.
+     */
+    const attachContext = piContext();
+    const sidecars = new JsonlSessionRepo({
+      fileSystem: sidecarEnv,
+      sessionsRoot: host.sessionDataDir,
+    });
+    const expectedIdentity = {
       volliSessionId: spec.identity.sessionId,
       volliThreadId: spec.identity.rootThreadId,
       volliAttachmentId: spec.identity.attachmentId,
@@ -948,11 +1078,35 @@ async function attachSession(
     const inputRecovery = spec.recovery;
     const sidecar =
       inputRecovery === undefined
-        ? await sidecars.create({ cwd: spec.workspacePath, metadata: expectedMetadata })
+        ? await (async () => {
+            const created = await sidecars.create({ cwd: spec.workspacePath }, attachContext);
+            await writeSidecarIdentity(created, expectedIdentity, attachContext);
+            return created;
+          })()
         : await (async () => {
-            const candidates = (await sidecars.list({ cwd: spec.workspacePath })).filter(
-              (candidate) => candidate.id === inputRecovery.sessionId,
-            );
+            const listed = async () =>
+              (await sidecars.list({ cwd: spec.workspacePath }, attachContext)).filter(
+                (candidate) => candidate.id === inputRecovery.sessionId,
+              );
+            let candidates = await listed();
+            if (candidates.length === 0) {
+              // A sidecar written before the Pi 0.85.0 bump is not reported as
+              // broken — it is not reported at all, because 0.85.0's header
+              // parser does not recognise 0.84.3's header and an unparseable
+              // file is silently skipped by `list`. So "no candidate" is the
+              // only symptom an upgraded Session has, and this is where it is
+              // answered: migrate the file the recovery ref names, then ask
+              // again. See `sidecar-migration.ts` for what changed and why the
+              // conversation itself is carried across untouched.
+              //
+              // The ownership check runs FIRST and unconditionally. A recovery
+              // ref names a path, and this is a write — so a path outside the
+              // runtime's own session directory must be refused before it is
+              // opened, not after.
+              await assertOwnedRecoveryPath(host.sessionDataDir, inputRecovery.sessionFilePath);
+              await migrateLegacySidecar(inputRecovery.sessionFilePath);
+              candidates = await listed();
+            }
             if (candidates.length !== 1) {
               throw new Error("Pi recovery sidecar was not found uniquely for this workspace.");
             }
@@ -961,18 +1115,30 @@ async function attachSession(
               throw new Error("Pi recovery sidecar path does not match the owned session.");
             }
             await assertOwnedRecoveryPath(host.sessionDataDir, candidate.path);
-            if (
-              candidate.metadata?.["volliSessionId"] !== expectedMetadata.volliSessionId ||
-              candidate.metadata?.["volliThreadId"] !== expectedMetadata.volliThreadId ||
-              candidate.metadata?.["volliAttachmentId"] !== expectedMetadata.volliAttachmentId
-            ) {
-              throw new Error("Pi recovery sidecar identity does not match this attachment.");
+            // The identity check now happens on the far side of `open`, because
+            // Pi 0.85.0 deleted the opaque `metadata` bag it used to live in
+            // (see {@link writeSidecarIdentity}) and a session value can only be
+            // read from an open session. The two checks ahead of it are
+            // unchanged and still run first, so a sidecar outside this host's
+            // data directory is still refused without being opened at all.
+            const opened = await sidecars.open(candidate, attachContext);
+            try {
+              await assertSidecarIdentity(opened, expectedIdentity, attachContext);
+            } catch (error) {
+              await opened.close(piContext()).catch(
+                /* v8 ignore next -- closing a sidecar we are already refusing is best effort. */
+                () => undefined,
+              );
+              throw error;
             }
-            return sidecars.open(candidate);
+            return opened;
           })();
     createdSidecar = inputRecovery === undefined;
-    const sidecarMetadata = await sidecar.getMetadata();
+    const sidecarMetadata = sidecar.metadata;
     sidecarPath = sidecarMetadata.path;
+    // Resolved once and shared: the handle is the branch's identity, not a
+    // read, and every append and scan below goes through this one.
+    const mainBranch = await sidecarBranch(sidecar, attachContext);
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
     // The BRANCH, not the file. Today these are the same entries — this runtime
     // writes one lane and never forks — but they stop being the same the moment
@@ -983,7 +1149,7 @@ async function attachSession(
     // future sibling branch from quietly resurrecting elided history — the one
     // failure this ticket exists to prevent.
     const recoveredEntries = inputRecovery
-      ? await sidecar.findEntriesOnBranch({ order: "oldestFirst" })
+      ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
       : [];
     const customEntries = recoveredEntries.filter(
       (entry): entry is CustomEntry => entry.type === "custom",
@@ -1078,9 +1244,11 @@ async function attachSession(
       !reasoningDroppedAfter(recoveredEntries, disagreedSettledEntryIds);
     /** The durable record that every reasoning block before this point was dropped. */
     const recordReasoningDropped = async (): Promise<void> => {
-      await sidecar.appendCustomEntry(VOLLI_CONTEXT_MARKER, {
-        kind: "reasoning-dropped",
-      } satisfies ReasoningDroppedMarker);
+      await mainBranch.appendCustomEntry(
+        VOLLI_CONTEXT_MARKER,
+        { kind: "reasoning-dropped" } satisfies ReasoningDroppedMarker,
+        piContext(),
+      );
     };
     /**
      * How this sidecar's entries are read back as a conversation.
@@ -1157,8 +1325,16 @@ async function attachSession(
       if (!isRecoverableObservation(durable)) {
         throw new Error("Pi observation marker would not survive recovery; refusing to write it.");
       }
-      const markerId = await sidecar.appendCustomEntry(VOLLI_OBSERVATION_MARKER, durable);
-      const marker = await sidecar.getEntry(markerId);
+      // `durable` is the JSON round trip two lines up, so it holds nothing but
+      // JSON — which is the whole of what Pi 0.85.0 tightened `CustomEntry.data`
+      // from `unknown` to `JsonValue` to require. The cast states that, and the
+      // round trip is what makes it true rather than hopeful.
+      const markerId = await mainBranch.appendCustomEntry(
+        VOLLI_OBSERVATION_MARKER,
+        durable as unknown as JsonValue,
+        piContext(),
+      );
+      const marker = await sidecar.getEntry(markerId, piContext());
       /* v8 ignore next -- appendCustomEntry promises the entry it just returned. */
       if (marker?.type !== "custom") throw new Error("Pi recovery marker was not persisted.");
       return {
@@ -1288,6 +1464,15 @@ async function attachSession(
      * budgets are.
      */
     let reasoningRecoveryUsed = false;
+    /**
+     * Whether this turn has already said that the provider dropped reasoning.
+     *
+     * A turn can spend several provider calls — a tool round, a resumed
+     * refusal, a retry — and a mismatched prefix is dropped on every one of
+     * them. What a person needs to hear is that it happened this turn, once,
+     * not once per request the turn happened to make.
+     */
+    let reasoningDropReported = false;
     /**
      * Whether something already owns the live context, and what to wait for.
      *
@@ -1615,9 +1800,11 @@ async function attachSession(
      * the model was actually sent rather than from what the sidecar remembers
      * it once holding.
      */
-    const conversationBranch = async (): Promise<Entry[]> =>
+    const conversationBranch = async (signal?: AbortSignal): Promise<Entry[]> =>
       conversationPath(
-        withDroppedReasoning(await sidecar.findEntriesOnBranch({ order: "oldestFirst" })),
+        withDroppedReasoning(
+          await mainBranch.findEntries({ order: "oldestFirst" }, piContext(signal)),
+        ),
         conversationReader,
       );
 
@@ -1988,7 +2175,7 @@ async function attachSession(
           event.message.role === "user" && acceptedUserMessages.has(event.message);
         const entryId = acceptedUserMessage
           ? null
-          : await sidecar.appendMessage(durableMessage(event.message));
+          : await mainBranch.appendMessage(durableMessage(event.message), piContext());
         if (event.message.role !== "assistant") {
           return;
         }
@@ -2005,6 +2192,28 @@ async function attachSession(
             await persistObservation({ kind: "usage", entryId, turnId, usage: metered }),
           );
         }
+        // Reported before the reply is classified, and for the same reason
+        // metering is: this is a fact about the request that produced the
+        // message, true whether or not the message itself said anything.
+        //
+        // Once per turn, however many blocks went, because that is what a
+        // person needs to know — a per-block report on a long conversation is
+        // noise about one event. `reasoningDropped` returns nothing when the
+        // provider dropped nothing, which is every turn on every model that
+        // does not carry the flag.
+        const dropped = reasoningDropped(event.message as AssistantMessage, turnId);
+        if (dropped !== undefined && !reasoningDropReported) {
+          reasoningDropReported = true;
+          // The side channel only, for now. Making this durable Session
+          // history means a new ledger event kind, its codec arm and a
+          // transcript row to render it — a product surface of its own, and
+          // deliberately not smuggled into a dependency bump. What lands here
+          // is the half that has no surface to design: the fact is measured,
+          // counted and exported, so the rate is visible to whoever is
+          // watching a Session run. The visible notice is filed as its own
+          // ticket (VC-254).
+          recordObservability(dropped);
+        }
         const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
         if (outcome.kind === "settled") {
           await commitObservation(
@@ -2020,6 +2229,7 @@ async function attachSession(
         return;
       }
       activityByToolCallId.clear();
+      reasoningDropReported = false;
       if (failure === undefined) {
         for (const reason of activeAttentionReasons) {
           const cleared = await persistObservation({
@@ -2340,14 +2550,21 @@ async function attachSession(
         await agent.waitForIdle();
         unsubscribe?.();
         unsubscribe = undefined;
-        await ownedToolEnv.cleanup();
+        // Cleanup runs on an uncancellable context on purpose: this is the
+        // path taken precisely when the attachment's own signal has aborted,
+        // and cancellation must not be able to stop the release of what it
+        // just abandoned.
+        await ownedToolEnv.cleanup(piContext());
         toolEnv = undefined;
-        await sidecarEnv.cleanup();
+        await sidecarEnv.cleanup(piContext());
         await observe({ kind: "attachment", state: "closed" });
       },
 
       async reconcile(cursor) {
-        const entries = await sidecar.findEntries({ order: "oldestFirst" });
+        // `asc`, which is what 0.85.0 renamed the session-wide scan's
+        // `oldestFirst` to. The branch scan below still spells it the old way;
+        // the two orderings are the same order under two vocabularies.
+        const entries = await sidecar.findEntries({ order: "asc" }, piContext());
         const cursorIndex =
           cursor === null ? -1 : entries.findIndex((entry) => entry.id === cursor);
         if (cursor !== null && cursorIndex < 0) {
@@ -2420,17 +2637,17 @@ async function attachSession(
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
-    await toolEnv?.cleanup().catch(
+    await toolEnv?.cleanup(piContext()).catch(
       /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
       () => undefined,
     );
     if (createdSidecar && sidecarPath !== undefined) {
-      await sidecarEnv.remove(sidecarPath, { force: true }).catch(
+      await sidecarEnv.remove(sidecarPath, { force: true }, piContext()).catch(
         /* v8 ignore next -- sidecar deletion is best effort after a failed attach. */
         () => undefined,
       );
     }
-    await sidecarEnv.cleanup().catch(
+    await sidecarEnv.cleanup(piContext()).catch(
       /* v8 ignore next -- sidecar cleanup is best effort after a failed attach. */
       () => undefined,
     );
