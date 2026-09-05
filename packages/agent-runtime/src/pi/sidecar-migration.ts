@@ -111,14 +111,28 @@ function identityFrom(metadata: unknown): SidecarIdentityRecord | null {
 }
 
 /**
- * The id of the last entry in the file, and the highest `seq` any record used.
+ * The id of the last entry ON THE MAIN LANE, and the highest `seq` any record
+ * used.
  *
- * The tip is read off the file rather than off a lane record because that is
- * the question 0.85.0 actually asks — "which entry is the head of this branch"
- * — and the file answers it directly: entries are appended in order, so the
- * last one is the head of the only branch 0.84.3 sidecars written by this
- * runtime ever had. (This runtime writes one lane and never forks; the module
- * header in `runtime.ts` says so, and `compaction.ts` depends on it.)
+ * The tip is read off the file because that is the question 0.85.0 asks —
+ * "which entry is the head of this branch" — and entries are appended in
+ * order, so the last one on a lane is that lane's head.
+ *
+ * **The lane filter is the load-bearing part.** 0.84.3 tagged every entry with
+ * its lane and could hold more than one: `appendEntry(entry, lane)` and
+ * `createLane` were public, and a sibling lane's entries sit in the same file,
+ * interleaved by write order. Taking the last entry regardless of lane would
+ * therefore point `main` at an entry that was never on it, and the branch walk
+ * would follow that entry's parents into history this Session had elided —
+ * the exact resurrection the branch-not-file read in `runtime.ts` exists to
+ * prevent, arrived at from the other direction.
+ *
+ * This runtime writes one lane and never forks, so in practice every entry
+ * says `main`. That is a reason to expect the filter to be a no-op, not a
+ * reason to leave it out: this rewrites a person's durable history, and "the
+ * file should only contain one lane" is an assumption about files this code
+ * did not write. An entry with no lane at all is treated as `main`, which is
+ * what a reader with no lane concept would have assumed anyway.
  */
 function scanRecords(lines: readonly string[]): { tip: string | null; maxSeq: number } {
   let tip: string | null = null;
@@ -134,7 +148,10 @@ function scanRecords(lines: readonly string[]): { tip: string | null; maxSeq: nu
       if (!isRecord(record)) continue;
       const seq = record["seq"];
       if (typeof seq === "number" && Number.isSafeInteger(seq)) maxSeq = Math.max(maxSeq, seq);
-      if (record["kind"] === "entry" && typeof record["id"] === "string") tip = record["id"];
+      if (record["kind"] !== "entry" || typeof record["id"] !== "string") continue;
+      const lane = record["lane"];
+      if (lane !== undefined && lane !== MAIN_BRANCH) continue;
+      tip = record["id"];
     }
   }
   return { tip, maxSeq };

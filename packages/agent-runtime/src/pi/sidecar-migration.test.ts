@@ -198,6 +198,40 @@ describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
     expect(readFileSync(owned.path, "utf8")).toBe(afterFirst);
   });
 
+  it("anchors main at main's own last entry, never a sibling lane's", async () => {
+    // 0.84.3 could hold more than one lane in a file, and their entries are
+    // interleaved by write order. A migration that took the last entry
+    // regardless of lane would point `main` at an entry that was never on it,
+    // and the branch walk would follow that entry's parents into history this
+    // Session had elided — the resurrection the branch-not-file read exists to
+    // prevent, arrived at from the other direction.
+    const owned = fixture();
+    const lines = readFileSync(owned.path, "utf8").trimEnd().split("\n");
+    const sibling = JSON.stringify({
+      kind: "entry",
+      lane: "sibling",
+      type: "custom",
+      id: "sibling-entry",
+      customType: "volli.observation.v1",
+      data: { kind: "message-settled" },
+      parentId: null,
+      seq: 4,
+      timestamp: 1_788_646_281_500,
+    });
+    // Written last, so file order and lane order disagree.
+    writeFileSync(owned.path, `${[...lines, sibling].join("\n")}\n`);
+
+    await migrateLegacySidecar(owned.path);
+    const repo = repoFor(owned);
+    const [candidate] = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
+    const session = await repo.open(candidate!, BACKGROUND_CONTEXT);
+    const branch = await session.branch("main", BACKGROUND_CONTEXT);
+
+    const entries = await branch!.findEntries({ order: "oldestFirst" }, BACKGROUND_CONTEXT);
+    expect(entries.map((entry) => entry.id)).toEqual(["entry-1", "entry-2", "entry-3"]);
+    expect(entries.map((entry) => entry.id)).not.toContain("sibling-entry");
+  });
+
   it("does not touch a file it does not recognise", async () => {
     const owned = fixture();
     const foreign = join(owned.root, "not-a-session.jsonl");
