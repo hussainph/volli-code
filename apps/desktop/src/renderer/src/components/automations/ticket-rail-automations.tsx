@@ -8,8 +8,12 @@
  * Automation, and that is a ruling rather than an omission (VC-112): an
  * authoring form in a 300px rail would be a worse copy of the Automations page,
  * and the page is the one surface that owns the record's lifecycle. What the
- * rail offers instead is a door to that page — from the menu always, and from
- * the empty state's own sentence.
+ * rail offers instead is ONE door to that page, in the header row beside the
+ * eyebrow — where the Sessions block below keeps its own control — and it is
+ * there whether the project lists nothing or ten. It used to be a text link
+ * under the empty state's sentence, which put the word "Automations" two lines
+ * under the heading AUTOMATIONS (VC-257): the same noun twice in one glance,
+ * and a door that vanished the moment the project had something to run.
  *
  * Four rules the drawing carries:
  *
@@ -34,6 +38,7 @@
  *    page's own words beside it rather than dimmed or withheld.
  */
 import * as React from "react";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
@@ -73,7 +78,10 @@ import {
   ModelPill,
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  RAIL_PANEL_INSET,
+  RailSectionHeadingRow,
+} from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -99,8 +107,8 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -179,9 +187,9 @@ export function TicketAutomationsPanel({
 
   return (
     <section className={SECTION} aria-label="Automations" data-testid="ticket-rail-automations">
-      <div className="mb-1 flex items-center px-2">
-        <SectionHeading>Automations</SectionHeading>
-      </div>
+      <RailSectionHeadingRow label="Automations">
+        <AutomationsPageDoor projectId={projectId} />
+      </RailSectionHeadingRow>
       <AutomationRunControl
         rail={rail}
         models={models}
@@ -190,26 +198,14 @@ export function TicketAutomationsPanel({
         onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
       {!rail.ready || rail.listsAny ? null : (
-        // Visible, plain, and a door. The button above still presses — Run once
-        // names no record, so an empty project is not an empty control. The
-        // sentence waits for the read, though: "no automations here" is a claim
-        // about the project, and an unread cache cannot make it.
-        <>
-          <p className="px-2 text-label text-muted-foreground">
-            No automations in this project yet.
-          </p>
-          {/* The door OUT of the empty state is the page, because the rail
-              never authors (VC-112) — and a link is the primitive for a
-              control that is read rather than aimed at. */}
-          <Button
-            variant="link"
-            size="sm"
-            className="self-start"
-            onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
-          >
-            Automations
-          </Button>
-        </>
+        // Visible and plain: one line, a report and never an action — the
+        // header's own door is 20px above it, and a second copy of the same
+        // door inside the empty state would be the same offer twice in one
+        // glance. The button above still presses — Run once names no record,
+        // so an empty project is not an empty control. The sentence waits for
+        // the read, though: "no automations here" is a claim about the
+        // project, and an unread cache cannot make it.
+        <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
       )}
       <TicketRuns projectId={projectId} runs={runs} />
       <RunOnceDialog
@@ -222,6 +218,39 @@ export function TicketAutomationsPanel({
         onStarted={() => void refreshTicketRuns(ticket.id)}
       />
     </section>
+  );
+}
+
+/**
+ * The one door from the rail to the Automations page, in the header row.
+ *
+ * An icon at `icon-xs` ghost — the rung the Sessions header's own control sits
+ * at, level with a text-label eyebrow — and not a word, because the word is
+ * already on the line: the eyebrow says AUTOMATIONS, and a control beside it
+ * saying it again is the redundancy this replaces. The tooltip carries the
+ * verb for anyone who hovers, and the label carries it for anyone who cannot.
+ *
+ * The glyph is the rail's own "leaves this surface" mark (`RailRowActions`'
+ * Open in tab, the repository card's View PR): pressing it navigates the
+ * workspace away from this Ticket, which is exactly what a Run from the button
+ * under it never does (VC-234).
+ */
+function AutomationsPageDoor({ projectId }: { projectId: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Open Automations"
+          data-testid="ticket-rail-automations-page"
+          onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
+        >
+          <ArrowSquareOutIcon />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Open Automations</TooltipContent>
+    </Tooltip>
   );
 }
 

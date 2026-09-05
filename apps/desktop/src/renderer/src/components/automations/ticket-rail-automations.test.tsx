@@ -20,9 +20,11 @@ import type { Automation, AutomationRun, ColumnArming, Ticket } from "@volli/sha
 
 import { openRunSession, runAutomationOnTicket } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
@@ -142,9 +144,13 @@ async function render() {
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <ModelAccessProvider client={MODEL_ACCESS}>
-        <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
-      </ModelAccessProvider>,
+      // The header's door wears a tooltip, which needs the provider the app
+      // root mounts once.
+      <TooltipProvider>
+        <ModelAccessProvider client={MODEL_ACCESS}>
+          <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
+        </ModelAccessProvider>
+      </TooltipProvider>,
     );
   });
 }
@@ -237,6 +243,7 @@ beforeEach(() => {
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
+  useWorkspaceStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -331,11 +338,51 @@ describe("the split button", () => {
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
-  it("stays visible with no automations at all, says so, and links to the page", async () => {
+  it("stays visible with no automations at all, and says so in one line", async () => {
     await mount({});
 
     expect(control("Run Run once on this ticket")).not.toBeNull();
     expect(text()).toContain("No automations in this project yet.");
+    // The sentence is a report, not a door: the word "Automations" appears
+    // once under the eyebrow (VC-257), as the button's own label, and never as
+    // a link under the sentence.
+    expect(document.querySelector('[data-testid="ticket-rail-automations"] a')).toBeNull();
+    const heading = document.querySelector("h2");
+    expect(heading?.textContent).toBe("Automations");
+    expect(
+      [...document.querySelectorAll("button")].filter(
+        (candidate) => candidate.textContent === "Automations",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("keeps one door to the page in its header, whether the project lists nothing or something", async () => {
+    // The rail never authors (VC-112), so the page is where a record comes
+    // from — and a door that only existed inside the empty state vanished the
+    // moment the project had something to run.
+    await mount({ automations: [automation()], armings: [ARMING] });
+
+    const door = control("Open Automations");
+    expect(door.closest('[data-testid="ticket-rail-automations"]')).not.toBeNull();
+    await act(async () => {
+      door.click();
+    });
+
+    expect(useWorkspaceStore.getState().byProject.p1?.nav).toBe("automations");
+  });
+
+  it("offers that door before its reads have landed, too", async () => {
+    // Nothing about the page depends on what this column arms, so the door is
+    // not gated on the read the run control waits for.
+    const list = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockReturnValue(list.promise);
+    doors.armings.mockResolvedValue({ ok: true, armings: [] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    expect((control("Open Automations") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("presses nothing, and claims nothing, until its own reads have landed", async () => {
