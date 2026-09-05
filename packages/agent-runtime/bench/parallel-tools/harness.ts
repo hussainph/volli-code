@@ -33,7 +33,20 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /** Wall-clock, monotonic, in whole milliseconds since the run began. */
-const clock = (): number => Number(process.hrtime.bigint() / 1_000_000n);
+/**
+ * A monotonic millisecond clock measured from the moment one run began.
+ *
+ * Run-relative rather than absolute, and that is load-bearing rather than
+ * tidy: `ToolSample.startedAt` is asserted against a duration ("this call did
+ * not start until the approval settled"), and against `hrtime`'s own origin —
+ * time since boot — every such assertion passes on a number near 4×10⁹ no
+ * matter what the scheduler did. A test that cannot fail is worse than no
+ * test, because it gets quoted as evidence.
+ */
+function runClock(): () => number {
+  const origin = process.hrtime.bigint();
+  return () => Number((process.hrtime.bigint() - origin) / 1_000_000n);
+}
 
 /** A sleep that a cancelled run can actually get out of. */
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -78,7 +91,7 @@ export interface BenchTool {
 }
 
 /** Builds a latency-only tool that records when it ran. */
-function benchTool(spec: BenchTool, samples: ToolSample[]): AgentTool {
+function benchTool(spec: BenchTool, samples: ToolSample[], now: () => number): AgentTool {
   return {
     name: spec.name,
     label: spec.name,
@@ -86,16 +99,17 @@ function benchTool(spec: BenchTool, samples: ToolSample[]): AgentTool {
     parameters: Type.Object({ n: Type.Optional(Type.Number()) }),
     ...(spec.executionMode === undefined ? {} : { executionMode: spec.executionMode }),
     execute: async (toolCallId: string, _params: unknown, signal?: AbortSignal) => {
-      const startedAt = clock();
+      const startedAt = now();
       await sleep(spec.latencyMs, signal);
-      const endedAt = clock();
+      const endedAt = now();
       samples.push({ tool: spec.name, toolCallId, startedAt, endedAt });
-      return {
-        content: [{ type: "text" as const, text: `${spec.name} ok` }],
-        isError: false,
-      };
+      // `details` is what `AgentToolResult` actually requires, and there is no
+      // `isError` on it. Supplying the real shape is what lets this be an
+      // `AgentTool` by inference instead of a double cast that would hide the
+      // next mismatch as readily as it hid this one.
+      return { content: [{ type: "text" as const, text: `${spec.name} ok` }], details: undefined };
     },
-  } as unknown as AgentTool;
+  };
 }
 
 // --- scripted provider -----------------------------------------------------
@@ -295,8 +309,9 @@ export function peakConcurrency(samples: ToolSample[]): number {
 
 /** One agent run, start to finish, measured. */
 export async function runOnce(spec: RunSpec): Promise<RunResult> {
+  const now = runClock();
   const samples: ToolSample[] = [];
-  const tools = spec.tools.map((tool) => benchTool(tool, samples));
+  const tools = spec.tools.map((tool) => benchTool(tool, samples, now));
   const { streamFn, record } = scriptedProvider(spec.replies, {
     ...(spec.providerLatencyMs === undefined ? {} : { latencyMs: spec.providerLatencyMs }),
     ...(spec.usage === undefined ? {} : { usage: spec.usage }),
@@ -344,9 +359,9 @@ export async function runOnce(spec: RunSpec): Promise<RunResult> {
     }
   });
 
-  const startedAt = clock();
+  const startedAt = now();
   await agent.prompt("go");
-  const elapsedMs = clock() - startedAt;
+  const elapsedMs = now() - startedAt;
 
   return {
     mode: spec.mode,

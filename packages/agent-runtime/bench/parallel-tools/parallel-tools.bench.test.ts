@@ -53,14 +53,24 @@ describe("Pi tool execution modes", () => {
   }, 600_000);
 
   it("runs a batched read-only fan-out concurrently and keeps result order", async () => {
+    // Latencies DESCEND across the batch on purpose. With one latency for every
+    // call, completion order equals source order by construction and the
+    // ordering assertion below can never catch Pi persisting in completion
+    // order — it would pass against a broken Pi. Making the first call the
+    // slowest forces the two orders apart, so the invariant is actually put
+    // under load rather than merely observed holding.
     const spec = {
-      tools: [{ name: "browser_navigate", latencyMs: 120 }],
+      tools: [
+        { name: "slow", latencyMs: 240 },
+        { name: "middle", latencyMs: 120 },
+        { name: "quick", latencyMs: 20 },
+      ],
       replies: [
         {
           toolCalls: [
-            { name: "browser_navigate", args: { n: 0 } },
-            { name: "browser_navigate", args: { n: 1 } },
-            { name: "browser_navigate", args: { n: 2 } },
+            { name: "slow", args: { n: 0 } },
+            { name: "middle", args: { n: 1 } },
+            { name: "quick", args: { n: 2 } },
           ],
         },
         { text: "done" },
@@ -75,11 +85,16 @@ describe("Pi tool execution modes", () => {
     expect(parallel.peakConcurrency).toBe(3);
     expect(parallel.elapsedMs).toBeLessThan(sequential.elapsedMs);
 
+    // The divergence the ordering promise exists to survive: fastest call
+    // finishes first, slowest call is still persisted first.
+    expect(parallel.completionOrder).toEqual(["tc-1-2", "tc-1-1", "tc-1-0"]);
+    expect(parallel.completionOrder).not.toEqual(parallel.resultOrder);
+
     // Pi's documented promise: completion order may vary, persisted order is
-    // assistant source order. Volli's transcript and activity both depend on
-    // it, so it is asserted rather than assumed.
-    expect(parallel.resultOrder).toEqual(sequential.resultOrder);
+    // assistant source order. Volli's transcript and history both depend on
+    // it, so it is asserted under that divergence rather than assumed.
     expect(parallel.resultOrder).toEqual(["tc-1-0", "tc-1-1", "tc-1-2"]);
+    expect(parallel.resultOrder).toEqual(sequential.resultOrder);
   });
 
   it("lets ONE sequential-only tool force an entire batch back to sequential", async () => {
@@ -184,7 +199,14 @@ describe("Pi tool execution modes", () => {
     expect(first).toBeDefined();
     // The instantly-allowed call still did not begin until the slow approval
     // for its batch-mate had settled.
+    //
+    // `startedAt` is measured from the start of THIS run, which is what makes
+    // the comparison mean anything: against an absolute clock this read ~4×10⁹
+    // and the assertion passed regardless of what the scheduler did.
     expect(first!.startedAt).toBeGreaterThanOrEqual(approvalMs - 25);
+    // And it is bounded above, so a run that never gated at all fails here
+    // rather than sailing through the lower bound.
+    expect(first!.startedAt).toBeLessThan(approvalMs * 3);
   });
 });
 

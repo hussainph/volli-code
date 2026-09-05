@@ -12,6 +12,15 @@
  *     issued, sequential cost is the sum of those durations and parallel cost
  *     is the largest of them. The difference is measured, not modelled.
  *
+ *     One inflation is deliberate and worth naming rather than burying. The
+ *     gap between two tool results contains whatever happened in between,
+ *     including an approval wait — and Pi's preflight is serial even in
+ *     parallel mode, so approval time is exactly what concurrency CANNOT
+ *     recover. The saving reported here is therefore an UPPER BOUND. That errs
+ *     in favour of parallel mode while the conclusion drawn from it is against
+ *     parallel mode, so it is the safe direction to be wrong in: a tighter
+ *     measurement can only make the case weaker.
+ *
  *  2. **How many tokens does a turn spend re-sending tool results?** A result
  *     produced in round 1 of a turn is re-sent on rounds 2..R, because the
  *     transcript is replayed every round. That re-send is what Code Mode

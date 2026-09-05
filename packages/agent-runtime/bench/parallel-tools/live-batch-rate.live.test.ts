@@ -40,7 +40,7 @@ import { sleep } from "./harness";
 import { FALLBACK_PROFILE, type LatencyProfile } from "./scenarios";
 
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
-const TRIALS = Number(process.env.PI_BENCH_TRIALS ?? 3);
+const TRIALS = Number(process.env.PI_BENCH_TRIALS ?? 2);
 
 /**
  * The sentence arm B adds, and the whole of the treatment.
@@ -292,17 +292,17 @@ async function runTrial(
     if (event.type === "turn_end") settleBatch();
   });
 
-  const startedAt = Date.now();
   try {
     await agent.prompt(task.prompt);
   } catch (error) {
     record.failed = error instanceof Error ? error.message : String(error);
   }
   settleBatch();
-  // Real elapsed time is reported for reference only; the comparable number is
-  // the modelled one, because provider latency dwarfs the tool latency here and
-  // varies run to run.
-  void (Date.now() - startedAt);
+  // Real elapsed time is deliberately not recorded. It would be dominated by
+  // provider latency, which varies run to run and has nothing to do with the
+  // execution mode under study; the comparable numbers are the modelled
+  // sequential and parallel tool times above, which are exact for
+  // latency-only tools.
   return record;
 }
 
@@ -372,6 +372,14 @@ describe.skipIf(process.env.PI_LIVE_BENCH !== "1")("live batch rate", () => {
 
     // Volli's real composed system prompt, so arm A is the product's own
     // batching propensity rather than a bare prompt's.
+    //
+    // The bundle names only `read` while the Agent below is handed three
+    // tools, and that is faithful rather than a mismatch: `RuntimeToolBundle.
+    // tools` is typed to `CodingToolId` (`read`/`edit`/`write`/`execute`), and
+    // browser and web tools reach a real Session as ports through
+    // `sessionToolBindings`, never as bundle members. A production Session
+    // with `read` plus the browser and web ports composes exactly this string,
+    // so reproducing it is the point.
     const basePrompt = composeSystemPrompt({
       role: "ticket",
       tools: { tools: ["read"] },

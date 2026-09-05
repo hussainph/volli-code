@@ -17,7 +17,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { runRepeated, type RunSpec } from "./harness";
-import { FALLBACK_PROFILE, SCENARIOS, type LatencyProfile } from "./scenarios";
+import { FALLBACK_PROFILE, LONG_WAIT_SCALE, SCENARIOS, type LatencyProfile } from "./scenarios";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const REPEATS = Number(process.env.BENCH_REPEATS ?? 3);
@@ -91,7 +91,9 @@ export async function buildReport(): Promise<BenchReport> {
   say(`latency profile:  ${source}`);
   say(
     `  localFile=${profile.localFile}ms subprocess=${profile.subprocess}ms network=${profile.network}ms ` +
-      `browser=${profile.browser}ms sessionStart=${profile.sessionStart}ms provider=${profile.provider}ms`,
+      `browser=${profile.browser}ms sessionStart=${profile.sessionStart}ms ` +
+      `ticketAwait=${profile.ticketAwait}ms (scaled 1/${LONG_WAIT_SCALE} in session-fanout) ` +
+      `provider=${profile.provider}ms`,
   );
   say();
 

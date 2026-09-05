@@ -34,17 +34,28 @@ export interface LatencyProfile {
   browser: number;
   /** `session.start` — durable write, then return. */
   sessionStart: number;
+  /**
+   * `ticket.await` — parked until another Session moves a Ticket.
+   *
+   * Unbounded in principle. The real-Session audit measured a mean of ~131s
+   * over 241 calls, which is the value used: modelling it at network latency
+   * (as this file first did) made the `session-fanout` scenario look like a
+   * fan-out of fast calls when it is really a fan-out of long parks.
+   */
+  ticketAwait: number;
   /** One provider round trip. */
   provider: number;
 }
 
-/** Placeholder only; `run.ts` loads the measured profile and overrides it. */
+/** Placeholder only; `report.ts` loads the measured profile and overrides it. */
 export const FALLBACK_PROFILE: LatencyProfile = {
   localFile: 2,
   subprocess: 25,
   network: 400,
   browser: 900,
   sessionStart: 40,
+  // Measured: 130,600ms mean over 241 real calls (see the transcript audit).
+  ticketAwait: 130_600,
   provider: 1_400,
 };
 
@@ -61,6 +72,18 @@ export interface Scenario {
 }
 
 const done = (text: string): ScriptedReply => ({ text });
+
+/**
+ * How much the one genuinely long wait is shrunk so the bench stays runnable.
+ *
+ * `ticket.await` really does park for ~131s. Three of them, twice per repeat,
+ * is over half an hour of sleeping per bench run, which is not a benchmark
+ * anyone runs. The sensitivity sweep establishes that the saving is exactly
+ * `(n-1) x latency` at every latency tested, so scaling this scenario down and
+ * multiplying back is arithmetic rather than estimation — the `session-fanout`
+ * row reports scaled milliseconds, and its note carries the real figure.
+ */
+export const LONG_WAIT_SCALE = 100;
 
 /** N calls to one tool, all in a single assistant reply. */
 function batch(name: string, count: number): ScriptedReply {
@@ -114,10 +137,10 @@ export const SCENARIOS: Scenario[] = [
     id: "session-fanout",
     title: "Start three Sessions, then await their tickets",
     batched: true,
-    note: "Side-effecting fan-out. Fast to start and then a long wait, so the win is small in absolute terms and lands on calls Volli may not want overlapped at all.",
+    note: `Side-effecting fan-out, run at 1/${LONG_WAIT_SCALE} scale on the waits. The three starts are quick; the three waits are ~131s each in reality (measured over 241 real calls), so overlapping them would really save ~262s. Nearly all of this scenario's saving lands on calls Volli may not want overlapped at all.`,
     tools: (profile) => [
       { name: "session_start", latencyMs: profile.sessionStart },
-      { name: "ticket_await", latencyMs: profile.network },
+      { name: "ticket_await", latencyMs: profile.ticketAwait / LONG_WAIT_SCALE },
     ],
     replies: [batch("session_start", 3), batch("ticket_await", 3), done("three tickets landed")],
   },

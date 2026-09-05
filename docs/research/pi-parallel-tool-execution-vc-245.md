@@ -11,7 +11,7 @@ does it cost?
 > **Correction, and it reverses this note's original recommendation.** The
 > first two lanes were synthetic, and they were measuring a workload that does
 > not exist. An audit of 671 real Sessions shows parallel mode would have saved
-> **1.2% of tool time**, not the 23–51% the synthetic tasks suggested — and
+> **1.2% of tool time**, not the 32–45% the synthetic tasks suggested — and
 > that the token problem the synthetic lanes said was fully harvested is in
 > fact the largest thing in the system. **Do not flip the flag on the strength
 > of the synthetic numbers.** See [The real workload](#the-real-workload).
@@ -74,9 +74,16 @@ and parallel cost is the largest:
 |---|---|
 | time batched replies actually took | 8.53h |
 | time they would take overlapped | 6.95h |
-| **wall-clock saved** | **1.57h** |
+| **wall-clock saved** | **1.57h** (upper bound) |
 | total tool time across all Sessions | 127.56h |
 | **saved as share of all tool time** | **1.2%** |
+
+That 1.57h is an **upper bound**, not a point estimate. The gap between two
+tool results contains whatever happened in between, including any approval
+wait — and Pi's preflight is serial even in parallel mode, so approval time is
+precisely what concurrency cannot recover. The bound errs in favour of parallel
+mode while the conclusion drawn from it is against parallel mode, so a tighter
+measurement could only weaken the case further.
 
 1.57 hours spread over 671 Sessions is **~8 seconds per Session**. And 84% of
 it is `bash` — the one tool where concurrency is genuinely dangerous, since
@@ -109,42 +116,47 @@ Read from `dist/agent-loop.js` at the pinned 0.84.3, not from the README alone:
 ## Benchmark
 
 Median of 3 runs. Tool latencies from `profile.measured.json`
-(darwin-arm64, Node 24.18): local file 0.1ms, subprocess 1.4ms, network
-719.5ms measured over five real HTTPS round trips, `session.start` 5.6ms
-measured as write+fsync. Browser (900ms) and provider (1400ms) are **declared
-assumptions**, not measurements — neither can be measured from this package —
-and both are swept below.
+(darwin-arm64, Node 24.18): local file 0.4ms, subprocess 5.1ms, network
+554.5ms measured over five real HTTPS round trips, `session.start` 8ms
+measured as write+fsync, `ticket.await` 130,600ms measured by the transcript
+audit over 241 real calls. Browser (900ms) and provider (1400ms) are
+**declared assumptions**, not measurements — neither can be measured from this
+package — and both are swept below. Network latency varies run to run, so
+absolute milliseconds move between runs; the ratios do not.
 
 | scenario | batched | tools | model calls | tokens | seq ms | par ms | saved | speedup |
 |---|---|---|---|---|---|---|---|---|
-| control-single-call | no | 1 | 2 | 2120 | 2809 | 2807 | 2ms | 1.00× |
-| browser-tabs-batched | yes | 4 | 2 | 2120 | 6414 | 3708 | 2706ms | **1.73×** |
-| browser-tabs-unbatched | no | 4 | 5 | 5300 | 10620 | 10618 | 2ms | 1.00× |
-| repeat-search-filter | yes | 6 | 2 | 2120 | 7132 | 3526 | 3606ms | **2.02×** |
-| session-fanout | yes | 6 | 3 | 3180 | 6390 | 4936 | 1454ms | 1.29× |
-| mixed-batch-poisoned | yes | 4 | 2 | 2120 | 5519 | 5519 | 0ms | 1.00× |
+| control-single-call | no | 1 | 2 | 2120 | 2806 | 2806 | 0ms | 1.00× |
+| browser-tabs-batched | yes | 4 | 2 | 2120 | 6413 | 3706 | 2707ms | **1.73×** |
+| browser-tabs-unbatched | no | 4 | 5 | 5300 | 10629 | 10612 | 17ms | 1.00× |
+| repeat-search-filter | yes | 6 | 2 | 2120 | 6140 | 3381 | 2759ms | **1.82×** |
+| session-fanout | yes | 6 | 3 | 3180 | 8157 | 5528 | 2629ms | 1.48× |
+| mixed-batch-poisoned | yes | 4 | 2 | 2120 | 5517 | 5518 | -1ms | 1.00× |
+
+`session-fanout` runs its waits at 1/100 scale (see caveats); unscaled, the
+three overlapped 131s waits would save ~262s.
 
 Share of the whole turn, provider latency included:
 
 | scenario | turn (seq) | saved | share of turn |
 |---|---|---|---|
-| browser-tabs-batched | 6414ms | 2706ms | **42%** |
-| repeat-search-filter | 7132ms | 3606ms | **51%** |
-| session-fanout | 6390ms | 1454ms | 23% |
+| browser-tabs-batched | 6417ms | 2713ms | **42%** |
+| repeat-search-filter | 6140ms | 2782ms | **45%** |
+| session-fanout | 8155ms | 2622ms | 32% |
 | control / unbatched / poisoned | — | ~0ms | **0%** |
 
 Sensitivity — wall-clock saved, by batch size and per-call latency:
 
 | tool latency | n=2 | n=3 | n=5 | n=8 |
 |---|---|---|---|---|
-| 5ms | 8ms | 15ms | 26ms | 44ms |
-| 50ms | 52ms | 104ms | 205ms | 367ms |
-| 250ms | 253ms | 502ms | 1007ms | 1763ms |
-| 900ms | 903ms | 1806ms | 3612ms | 6316ms |
+| 5ms | 6ms | 12ms | 27ms | 49ms |
+| 50ms | 51ms | 103ms | 205ms | 357ms |
+| 250ms | 249ms | 504ms | 1007ms | 1764ms |
+| 900ms | 901ms | 1805ms | 3607ms | 6309ms |
 
 The saving is `(n-1) × latency`, as expected. It is only worth reaching for on
 tools in the hundreds of milliseconds — browser, web fetch, web search. It is
-worth nothing on `read`/`edit`/`write`, which measured at 0.1ms.
+worth nothing on `read`/`edit`/`write`, which measured at 0.4ms.
 
 ## Live batch rate
 
@@ -180,13 +192,23 @@ These hold as statements about Pi's mechanism. Findings 2 and 3 also made
 claims about *how often the mechanism applies*, and the real-Session audit
 corrects both — flagged inline.
 
-### 1. The mode is token-neutral. Asserted, not assumed.
+### 1. The mode is token-neutral.
 
 Every scenario reports identical `totalTokens` and identical model-call counts
 in both modes, and the bench **fails** if that ever stops being true. Pi
 executes whatever batch the model already emitted; it returns the same results
 in the same order either way. Nothing about context, spend or compaction
 pressure moves.
+
+**What that assertion does and does not show.** The scripted provider charges a
+fixed usage per reply and the bench tools return constant text, so the token
+check is, strictly, the model-call check wearing a second hat: it proves the
+mode neither adds nor drops a provider round trip. It could not detect token
+movement caused by *result content* differing between modes. Nothing in Pi's
+loop varies result content by mode — `executeToolCallsParallel` and
+`executeToolCallsSequential` build identical `toolResult` messages — so the
+conclusion holds; but it rests on that reading of the source, with the
+assertion guarding the round-trip half.
 
 Any claim that parallel execution saves tokens is wrong. That is Code Mode's
 job, and it remains unproven.
@@ -477,6 +499,21 @@ Both are out of the default `test` lane: the offline bench because it sleeps
 for real time, the live lane because it costs money and is skipped unless
 `PI_LIVE_BENCH=1`.
 
+## Ticket coverage
+
+This note covers VC-245 **§1 (establish the baseline)** and the **decision**.
+It deliberately stops there, because the baseline reversed the premise the rest
+of the ticket was scoped against.
+
+Not covered, and still open: §1's local Code Mode prototype and
+provider-hosted programmatic tool calling; **§2 entirely** (the three product
+shapes and its eight design questions); **§3 entirely** (the twelve safety and
+lifecycle rules, which need a prototype to demonstrate); the tested prototype;
+and the Code Mode column of the benchmark table, which here is modelled from
+real transcripts rather than measured from a build. The design note also does
+not yet map onto the Agent Tool Surface, Verb Registry or authority checks —
+that mapping belongs with the product shape in §2.
+
 ## Measurement caveats
 
 - Browser (900ms) and provider (1400ms) latencies in the offline bench are
@@ -494,3 +531,11 @@ for real time, the live lane because it costs money and is skipped unless
   `usage.input` alone understates a cached turn by orders of magnitude on
   Anthropic — a cached sonnet turn reports single-digit `input` for a prompt of
   thousands of tokens.
+- The live lane reports **means** of 2–3 trials, not medians. With n=2–3 the
+  distinction is largely cosmetic, but the ticket asks for medians and this is
+  not one.
+- Retries are not recorded anywhere in any lane, and the ticket asks for them.
+  No lane observed a retry, but none would have counted it.
+- `session-fanout` runs its `ticket.await` calls at 1/100 scale so the bench
+  stays runnable; the real measured wait is ~131s, so the true saving on that
+  shape is ~262s rather than the scaled figure in the table.
