@@ -913,6 +913,7 @@ function isInertJson(value: unknown, depth: number, budget: { nodes: number }): 
   if (value === null || typeof value === "boolean" || typeof value === "string") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every((entry) => isInertJson(entry, depth + 1, budget));
+  /* v8 ignore next -- JSON.parse produces only null, boolean, string, number, array and object, and every one is handled above; this is the floor that keeps `Object.entries` from being handed something it cannot walk. */
   if (!isRecord(value)) return false;
   return Object.entries(value).every(
     ([key, entry]) => safeKey(key) && isInertJson(entry, depth + 1, budget),

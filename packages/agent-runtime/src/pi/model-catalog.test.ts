@@ -229,6 +229,10 @@ describe("withRefreshableCatalog", () => {
       models: [
         model("acme", "acme-2", { name: "Acme 2 cached" }),
         { ...model("acme", "unpinned-addition"), __volliProtocolAdmission: 1 } as Model<Api>,
+        // Admitted under the current policy, but still only an overlay: a
+        // legacy entry may correct a baseline model, never add one, which is
+        // what "migrated as overlays" buys an upgrade.
+        { ...model("acme", "overlay-only"), __volliProtocolAdmission: 2 } as Model<Api>,
         model("other", "not-ours"),
       ],
       checkedAt: 1,
@@ -963,6 +967,29 @@ describe("piDevCatalogSource", () => {
     expect(result.rejected).toBe(1);
   });
 
+  it("lets a baseline model it cannot read contribute nothing to the guard", async () => {
+    // A baseline entry with no readable api or destination is not evidence of
+    // anything, so it widens nothing — and must not crash the guard either.
+    const unreadable = [
+      model("acme", "no-api", { api: "" } as Partial<Model<Api>>),
+      model("acme", "no-url", { baseUrl: "not a url" } as Partial<Model<Api>>),
+      acme,
+    ];
+    const source = piDevSource({
+      borrowed: feedEntry({ api: "", baseUrl: "not a url" }),
+      legitimate: feedEntry(),
+    });
+    const result = await source.fetchCatalog("acme", unreadable, { signal: signal() });
+
+    expect(result.models.map((entry) => entry.id)).toEqual([
+      "no-api",
+      "no-url",
+      "acme-1",
+      "legitimate",
+    ]);
+    expect(result.rejected).toBe(1);
+  });
+
   it("admits any api and origin the provider's own baseline already uses", async () => {
     // `opencode-go` really does serve three APIs across two origins, which is
     // why the guard compares against sets and not against one value.
@@ -1066,16 +1093,37 @@ describe("piDevCatalogSource", () => {
     expect(result.rejected).toBe(1);
   });
 
-  it("refuses a port or scheme change on an origin it otherwise recognizes", async () => {
+  it("refuses a port, scheme or transport change on an origin it recognizes", async () => {
     const source = piDevSource({
       ported: feedEntry({ baseUrl: "https://example.test:8443/v1" }),
       plaintext: feedEntry({ baseUrl: "http://example.test/v1" }),
       relative: feedEntry({ baseUrl: "/v1" }),
+      // Not a transport this module will reason about at all, whatever the host.
+      exotic: feedEntry({ baseUrl: "ftp://example.test/v1" }),
     });
     const result = await source.fetchCatalog("acme", [acme], { signal: signal() });
 
     expect(result.models).toEqual([acme]);
-    expect(result.rejected).toBe(3);
+    expect(result.rejected).toBe(4);
+  });
+
+  it("carries headers, sampling parameters and a numeric compat value", async () => {
+    const source = piDevSource({
+      "acme-new": feedEntry({
+        name: "",
+        headers: { "x-beta": "2026-09-03" },
+        samplingParams: { top_p: 0.95, stop: ["\n\n"] },
+        compat: { supportsStrictMode: true, maxRetries: 3 },
+      }),
+    });
+    const result = await source.fetchCatalog("acme", [acme], { signal: signal() });
+
+    const added = result.models[1];
+    expect(added?.headers).toEqual({ "x-beta": "2026-09-03" });
+    expect(added?.samplingParams).toEqual({ top_p: 0.95, stop: ["\n\n"] });
+    expect(added?.compat).toEqual({ supportsStrictMode: true, maxRetries: 3 });
+    // An entry that states no usable name is named by its id rather than dropped.
+    expect(added?.name).toBe("acme-new");
   });
 
   it("withholds an entry that claims a different provider or contradicts its id", async () => {
@@ -1164,11 +1212,16 @@ describe("piDevCatalogSource", () => {
       "bad-ladder": feedEntry({ thinkingLevelMap: { low: 3 } }),
       "ladder-not-object": feedEntry({ thinkingLevelMap: ["low"] }),
       "bad-headers": feedEntry({ headers: { "x-a": null } }),
+      "ladder-too-wide": feedEntry({
+        thinkingLevelMap: Object.fromEntries(
+          Array.from({ length: 600 }, (_unused, index) => [`level-${index}`, "low"]),
+        ),
+      }),
     });
     const result = await source.fetchCatalog("acme", [acme], { signal: signal() });
 
     expect(result.models).toEqual([acme]);
-    expect(result.rejected).toBe(3);
+    expect(result.rejected).toBe(4);
   });
 
   it("withholds an entry carrying a prototype-shaped key, in any position", async () => {
