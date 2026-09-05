@@ -57,6 +57,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
+import { withoutReasoning } from "./reasoning";
 import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
 
 /**
@@ -200,9 +201,29 @@ export function estimatedContextTokens(messages: readonly AgentMessage[]): numbe
  * message and its retained tail. Called on every path, compacted or not, so the
  * attachment has one way of turning history into messages rather than one for
  * the ordinary case and another for the compacted one.
+ *
+ * **The retained tail is expanded without its reasoning.** Pi's compaction is
+ * keep-tail: the summary replaces the older history and the most recent turns
+ * are replayed verbatim behind it. Their reasoning blocks were produced
+ * against the history the summary replaced, and a provider that binds a
+ * `thinking` block to everything sent before it (Claude's preserved thinking)
+ * refuses exactly that shape. The doc's repair is to strip `thinking` and
+ * `redacted_thinking` from every turn carried across and keep `text` and
+ * `tool_use`, which is what happens here — at the read rather than the write,
+ * so a compaction entry persisted before this rule existed is expanded under
+ * it too, and the durable entry stays exactly what Pi wrote (VC-242).
  */
 export function contextMessages(path: readonly Entry[]): AgentMessage[] {
-  return buildSessionContext(path).messages;
+  return buildSessionContext(path.map(withoutRetainedReasoning)).messages;
+}
+
+/** A compaction entry whose retained tail carries no reasoning; anything else as is. */
+function withoutRetainedReasoning(entry: Entry): Entry {
+  if (entry.type !== "compaction") return entry;
+  const retainedTail = entry.retainedTail.map(withoutReasoning);
+  return retainedTail.every((message, index) => message === entry.retainedTail[index])
+    ? entry
+    : { ...entry, retainedTail };
 }
 
 /** What one compaction attempt did. Only `compacted` changes anything. */
@@ -238,6 +259,20 @@ export interface CompactionInput {
   settings: CompactionSettings;
   /** Extra focus for the summary. Only an explicit request carries any. */
   customInstructions?: string;
+  /**
+   * The tail as this Session carries it across the summary, given the tail Pi
+   * chose to keep.
+   *
+   * The one shaping step the durable entry admits, and it exists for a byte
+   * identity: whatever the live context holds between the summary and the
+   * kept turns has to be what a later attach reads back from the entry, or
+   * every reasoning block produced after the compaction is bound to a prefix
+   * the resume cannot reproduce. The runtime uses it to put the skill
+   * resources it restores after a compaction INTO the entry rather than
+   * inserting them into the live array afterwards (VC-242). Reasoning is not
+   * this hook's concern; {@link contextMessages} strips it on every read.
+   */
+  retainedTail?: (tail: readonly AgentMessage[]) => AgentMessage[];
   signal?: AbortSignal;
 }
 
@@ -278,7 +313,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     type: "compaction",
     id: input.sidecar.idGenerator.next(),
     summary: compacted.summary,
-    retainedTail: compacted.retainedTail,
+    retainedTail: input.retainedTail?.(compacted.retainedTail) ?? compacted.retainedTail,
     tokensBefore: compacted.tokensBefore,
     usage: compacted.usage,
     details: compacted.details,

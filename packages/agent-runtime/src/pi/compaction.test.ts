@@ -285,6 +285,65 @@ describe("contextMessages", () => {
     ]);
   });
 
+  it("expands a retained tail without its reasoning, and everything after it whole (VC-242)", () => {
+    // Keep-tail compaction is the shape the preserved-thinking doc names as
+    // failing: the kept turns' reasoning was produced against the history the
+    // summary replaced, so it fails behind it. The repair is the doc's own —
+    // strip `thinking` and `redacted_thinking` from every turn carried across,
+    // keep `text` and `tool_use` — and it is applied at the read, so an entry
+    // written before the rule existed is expanded under it too. A reply made
+    // AFTER the compaction is bound to the compacted context itself, and is
+    // left exactly as the model produced it.
+    const kept = assistant("the recent answer", {
+      content: [
+        { type: "thinking", thinking: "", thinkingSignature: "bound-to-the-full-history" },
+        { type: "text", text: "the recent answer" },
+        { type: "toolCall", id: "tc-1", name: "read", arguments: { path: "a.ts" } },
+      ],
+    });
+    const later = assistant("after the summary", {
+      content: [
+        { type: "thinking", thinking: "", thinkingSignature: "bound-to-the-summary" },
+        { type: "text", text: "after the summary" },
+      ],
+    });
+    const entry: CompactionEntry = {
+      type: "compaction",
+      id: "c1",
+      seq: 0,
+      parentId: null,
+      timestamp: 0,
+      summary: "older history",
+      retainedTail: [user("recent request"), kept],
+      tokensBefore: 1,
+    };
+
+    const messages = contextMessages([
+      messageEntry(user("first")),
+      entry,
+      messageEntry(user("carry on")),
+      messageEntry(later),
+    ]);
+
+    expect(messages).toEqual([
+      { role: "compactionSummary", summary: "older history", tokensBefore: 1, timestamp: 0 },
+      user("recent request"),
+      {
+        ...kept,
+        content: [
+          { type: "text", text: "the recent answer" },
+          { type: "toolCall", id: "tc-1", name: "read", arguments: { path: "a.ts" } },
+        ],
+      },
+      user("carry on"),
+      later,
+    ]);
+    // The read is a projection, never an edit: Pi's durable entry still holds
+    // the tail exactly as Pi wrote it.
+    expect(entry.retainedTail[1]).toBe(kept);
+    expect((entry.retainedTail[1] as AssistantMessage).content[0]?.type).toBe("thinking");
+  });
+
   it("elides the Brief and the Turn Reminder the first message carried", () => {
     // "Everything before the last compaction entry" includes the first message,
     // and the first message is where Volli puts everything volatile it has to
@@ -379,6 +438,48 @@ describe("compactSession", () => {
     // The early exchange is summarized away; the recent tail survives verbatim.
     expect(JSON.stringify(outcome.messages)).not.toContain("a long early answer");
     expect(JSON.stringify(outcome.messages)).toContain("the recent answer");
+  });
+
+  it("persists the tail its caller shaped, and expands the context from that (VC-242)", async () => {
+    // The one shaping step the durable entry admits, and it exists for a byte
+    // identity: whatever sits between the summary and the kept turns in the
+    // live context has to be what a later attach reads back from the entry.
+    // The runtime uses it to put restored skill resources INTO the entry; the
+    // hook is handed Pi's tail and its answer is what is written and returned.
+    const sidecar = await memorySession();
+    const models = scriptedModels(["## Goal\nfinish the ticket"]);
+    const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+    const path = longPath();
+    const handed: (readonly AgentMessage[])[] = [];
+
+    const outcome = await compactSession({
+      sidecar,
+      path,
+      models,
+      model,
+      settings,
+      retainedTail: (tail) => {
+        handed.push(tail);
+        return [user("restored ahead of the tail"), ...tail];
+      },
+    });
+
+    expect(outcome.kind).toBe("compacted");
+    if (outcome.kind !== "compacted") return;
+    expect(handed).toEqual([[path[2]?.message, path[3]?.message]]);
+    expect(outcome.entry.retainedTail).toEqual([
+      user("restored ahead of the tail"),
+      path[2]?.message,
+      path[3]?.message,
+    ]);
+    expect(outcome.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "user",
+      "assistant",
+    ]);
+    expect(outcome.messages[1]).toEqual(user("restored ahead of the tail"));
+    expect(await sidecar.findEntriesOnBranch({ type: "compaction" })).toEqual([outcome.entry]);
   });
 
   it("summarizes through a request that shares no prefix with the Session", async () => {

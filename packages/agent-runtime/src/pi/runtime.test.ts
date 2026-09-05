@@ -25,10 +25,12 @@ import {
   type AssistantMessage,
   type Context,
   type CredentialStore,
+  type Message,
   type Model,
   type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
+import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
@@ -75,7 +77,13 @@ type ScriptStep = (
 ) => Promise<void> | void;
 
 interface EmitApi {
-  thinking(delta: string): void;
+  /**
+   * A reasoning block; signed when a signature is given. A signed block is
+   * what a provider binds to the prefix it was produced against and sends
+   * back as `thinking`; an unsigned one is what an aborted stream leaves, and
+   * pi-ai sends it back as plain text.
+   */
+  thinking(delta: string, signature?: string): void;
   text(delta: string): void;
   toolCall(name: string, args: Record<string, unknown>): void;
   finish(): void;
@@ -114,8 +122,12 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
     let index = 0;
 
     const emit: EmitApi = {
-      thinking(delta) {
-        message.content.push({ type: "thinking", thinking: delta });
+      thinking(delta, signature) {
+        message.content.push({
+          type: "thinking",
+          thinking: delta,
+          ...(signature === undefined ? {} : { thinkingSignature: signature }),
+        });
         stream.push({ type: "thinking_start", contentIndex: index, partial: message });
         stream.push({ type: "thinking_delta", contentIndex: index, delta, partial: message });
         stream.push({
@@ -250,6 +262,13 @@ interface ProviderCall {
   model: string;
   messages: string;
   /**
+   * The same messages before serialization, and the model they were for, so
+   * a test can ask what the provider adapter would actually have put on the
+   * wire — see {@link wireOf}.
+   */
+  context: readonly Message[];
+  piModel: Model<string>;
+  /**
    * The two halves of the Cache Prefix, as bytes rather than as objects
    * (VC-164): the provider reuses a byte-identical leading part of the
    * request, and a reworded tool description invalidates it exactly as a
@@ -269,12 +288,55 @@ function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
     calls.push({
       model: `${model.provider}/${model.id}`,
       messages: JSON.stringify(context.messages),
+      context: context.messages,
+      piModel: model,
       systemPrompt: context.systemPrompt,
       tools: JSON.stringify(context.tools ?? []),
       toolNames: (context.tools ?? []).map((tool) => tool.name),
     });
     return step(emit, context, signal, model);
   };
+}
+
+/**
+ * The messages array as the provider adapter would send it for `model`,
+ * one string per message.
+ *
+ * Pi's own projection and not a restatement of it: every pi-ai adapter runs
+ * `transformMessages` before it serializes, and that is where an aborted or
+ * errored assistant reply is dropped and where another model's reasoning is
+ * turned into plain text. What this runtime keeps in `agent.state.messages`
+ * is therefore not the prefix the provider checks; this is. Asked for a
+ * model rather than read off the call, so a context recorded before a model
+ * switch can be projected under the model that came after it.
+ */
+function wireOf(call: ProviderCall, model: Model<string> = call.piModel): string[] {
+  return transformMessages([...call.context], model).map((message) => JSON.stringify(message));
+}
+
+/**
+ * Assert that the wire array only grew between two consecutive calls, under
+ * one model: every message of the earlier call is the same bytes at the same
+ * index in the later one. This is the preserved-thinking doc's test for an
+ * integration — consecutive requests byte-identical up to the appended turns
+ * — read off real provider calls.
+ */
+function expectAppendOnly(earlier: ProviderCall, later: ProviderCall): void {
+  const before = wireOf(earlier, later.piModel);
+  const after = wireOf(later);
+  expect(after.length).toBeGreaterThanOrEqual(before.length);
+  expect(after.slice(0, before.length)).toEqual(before);
+}
+
+/** Every reasoning block a projected wire array still carries, by signature. */
+function signaturesOn(wire: readonly string[]): string[] {
+  return wire.flatMap((message) => {
+    const parsed = JSON.parse(message) as { role: string; content: unknown };
+    if (parsed.role !== "assistant" || !Array.isArray(parsed.content)) return [];
+    return (parsed.content as { type: string; thinkingSignature?: string }[]).flatMap((block) =>
+      block.type === "thinking" ? [block.thinkingSignature ?? ""] : [],
+    );
+  });
 }
 
 // --- fixtures --------------------------------------------------------------
@@ -6770,6 +6832,567 @@ describe("the Cache Prefix a Session sends", () => {
     // The prefix they never belonged to is untouched by their going.
     expect(calls[3]?.systemPrompt).toBe(calls[0]?.systemPrompt);
     expect(calls[3]?.tools).toBe(calls[0]?.tools);
+  });
+
+  it("only ever appends to the messages array: a tool round, a stopped reply, a model switch, a reattach (VC-242)", async () => {
+    // The third half of the prefix, and the one a provider that binds
+    // reasoning to its prefix checks hardest: every message before a
+    // `thinking` block has to be the same bytes on the next request as on the
+    // one that produced it. The doc's own test for an integration is to
+    // capture consecutive request bodies and diff the shared part of
+    // `messages`; this does that off real provider calls, projected through
+    // pi-ai's own `transformMessages` so what is compared is what would have
+    // gone on the wire rather than what this runtime holds in memory.
+    //
+    // Each step is a way a naive integration edits history: a tool round
+    // appends, a stopped reply is dropped on the wire whether or not it is in
+    // the array, another model's reasoning is turned to text for the model
+    // that cannot read it, and a reattach rebuilds the array from the sidecar.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const streaming = Promise.withResolvers<void>();
+    const catalog = [
+      { id: MODEL_ID, reasoning: true },
+      { id: CHAT_MODEL_ID, reasoning: true },
+    ];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-1");
+            emit.text("Reading the marker.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-2");
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          }),
+          recording(calls, haltOnAbort("half-written", streaming.resolve)),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-3");
+            emit.text("carried on");
+            emit.finish();
+          }),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-4");
+            emit.text("on the other model");
+            emit.finish();
+          }),
+        ]),
+        catalog,
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+    const stopped = handle.submitUserMessage("say something long");
+    await streaming.promise;
+    await handle.interrupt();
+    await stopped;
+    await handle.submitUserMessage("carry on");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage("and on another model");
+    const recovery = handle.recovery;
+    await handle.close();
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([recording(calls, settles("after the reattach"))]),
+        catalog,
+      ),
+    });
+    const reattached = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    expect(calls).toHaveLength(6);
+    // The stopped reply is not among what settled; everything else is,
+    // including the reattached Session's own reply, which reports through
+    // the same observer.
+    expect(settledTexts(attachment.observations)).toEqual([
+      "Reading the marker.",
+      "The token is volli-marker-42.",
+      "carried on",
+      "on the other model",
+      "after the reattach",
+    ]);
+    // Under any one model, the wire array of each call is the wire array of
+    // the call before it plus what was appended — through the tool round
+    // (0→1), the stopped reply (2→3), the model switch (3→4) and the
+    // reattach onto the original model (4→5).
+    for (let index = 1; index < calls.length; index += 1) {
+      expectAppendOnly(calls[index - 1]!, calls[index]!);
+    }
+
+    // What the reattached Session sends its own model is every reasoning
+    // block that model produced, signature and all, including the ones whose
+    // `thinking` text is empty — the shape a provider that omits thinking
+    // display returns, and the one a careless round trip through an
+    // intermediate type drops. The other model's block is not there: pi-ai
+    // turns it to text for a model that cannot read it, which is the doc's
+    // "let the API drop what the current model can't read" done client-side.
+    const replayed = wireOf(calls[5]!);
+    expect(signaturesOn(replayed)).toEqual(["sig-1", "sig-2", "sig-3"]);
+    expect(replayed.join("\n")).not.toContain("sig-4");
+    // The stopped reply reached the sidecar and the live array, and neither
+    // request after it carried it: the resume filter and pi-ai's wire filter
+    // agree, which is what makes the stop a non-edit.
+    expect(replayed.join("\n")).not.toContain("half-written");
+    // And the Brief is the first message and nowhere else. A nudge re-issued
+    // per turn is the most common history edit the doc names; this Session
+    // has none, and the first message is composed exactly once, on an empty
+    // context.
+    expect(replayed.filter((message) => message.includes("BEGIN TICKET BRIEF"))).toHaveLength(1);
+    expect(replayed[0]).toContain("BEGIN TICKET BRIEF");
+  });
+
+  it("carries a retained tail across a compaction without its reasoning, and restores resources from the durable entry (VC-242)", async () => {
+    // Keep-tail compaction is the shape the preserved-thinking doc names as
+    // failing: the kept turns' reasoning was produced against the history the
+    // summary replaced. The tail is admitted without it, and a reply produced
+    // on the compacted context is bound to that context and kept whole.
+    //
+    // The second half is the runtime's own insert. Restoring an activated
+    // skill between the summary and the tail is a message the model never
+    // produced, and it used to be recomputed on every attach — a prefix a
+    // resume could rebuild differently from the live array that produced the
+    // reasoning after it. It now rides inside the compaction entry, so the
+    // reattach reads the same bytes back rather than deriving them again.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const resource = skillPromptResource({
+      name: "house-style",
+      description: "How this repo writes things",
+      body: "latest-skill-marker: always spell the units out.",
+      authorPolicy: SKILL_POLICY_DEFAULT,
+      effectivePolicy: SKILL_POLICY_DEFAULT,
+      policyDiagnostic: null,
+      root: ".agents/skills/house-style",
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-1");
+            emit.text("first answer");
+            emit.finish();
+          }),
+          recording(calls, (emit) => {
+            emit.occupies(OVER_RESERVE);
+            emit.thinking("", "sig-2");
+            emit.text("second answer");
+            emit.finish();
+          }),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-3");
+            emit.text("third answer");
+            emit.finish();
+          }),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage(
+      "/house-style review this",
+      "queue",
+      "command-skill",
+      [],
+      [resource],
+    );
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    const recovery = handle.recovery!;
+    await handle.close();
+
+    const reattachedRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after restart"))])),
+    });
+    const reattached = await reattachedRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    expect(calls).toHaveLength(5);
+    const afterCompaction = wireOf(calls[3]!);
+    // The summary first, the restored skill second, then the kept tail: the
+    // pasted request and the reply that overflowed — without its reasoning.
+    expect(afterCompaction[0]).toContain("compacted into the following summary");
+    expect(afterCompaction[1]).toContain("restored verbatim after context compaction");
+    expect(afterCompaction[1]).toContain("latest-skill-marker");
+    expect(afterCompaction[2]).toContain("retained-paste");
+    expect(afterCompaction[3]).toContain("second answer");
+    expect(signaturesOn(afterCompaction)).toEqual([]);
+    expect(afterCompaction.join("\n")).not.toContain("first answer");
+
+    // The restore is in the entry Pi wrote, ahead of the tail, and not a
+    // message inserted into the live array after the fact.
+    const [entry] = compactionEntries(recovery.sessionFilePath);
+    const tail = entry?.["retainedTail"] as { role: string; content: unknown }[];
+    expect(tail[0]?.role).toBe("user");
+    expect(JSON.stringify(tail[0])).toContain("restored verbatim after context compaction");
+
+    // So the reattach reads the same bytes back: the compacted prefix is
+    // identical, the reply produced on it keeps its reasoning, and nothing was
+    // restored twice.
+    expectAppendOnly(calls[3]!, calls[4]!);
+    const replayed = wireOf(calls[4]!);
+    expect(signaturesOn(replayed)).toEqual(["sig-3"]);
+    expect(replayed.filter((message) => message.includes("latest-skill-marker"))).toHaveLength(1);
+  });
+
+  it("never compacts in the middle of a tool round", async () => {
+    // "Don't compact in the middle of a tool round": an assistant turn whose
+    // `tool_use` is still waiting on its `tool_result` goes back with its
+    // reasoning intact, so the model finishes the round with it. Safe today
+    // by construction — the threshold path is reached only from the idle
+    // prompt path, ahead of a message — and pinned here so a compaction added
+    // at the end of a turn, or between tool rounds, fails this rather than a
+    // provider.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          // The window is already spent when the round opens …
+          recording(calls, (emit) => {
+            emit.occupies(OVER_RESERVE);
+            emit.thinking("", "sig-1");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          // … and the round still finishes on the same context.
+          recording(calls, (emit) => {
+            emit.occupies(OVER_RESERVE);
+            emit.text("the marker reads volli-marker-42");
+            emit.finish();
+          }),
+          recording(calls, settles("## Goal\nread the marker")),
+          recording(calls, settles("after the summary")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("read the marker");
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    expect(calls).toHaveLength(4);
+    // The second call is the round's own continuation: the Session's tools,
+    // the tool result, the reasoning that asked for it, and no summary.
+    expect(calls[1]?.toolNames).not.toEqual([]);
+    expect(calls[1]?.messages).toContain("volli-marker-42");
+    expect(calls[1]?.messages).not.toContain("compacted into the following summary");
+    expect(signaturesOn(wireOf(calls[1]!))).toEqual(["sig-1"]);
+    expectAppendOnly(calls[0]!, calls[1]!);
+    // The compaction the measurement earned happens at the head of the next
+    // message, once the round is over.
+    expect(calls[2]?.toolNames).toEqual([]);
+    expect(calls[3]?.messages).toContain("compacted into the following summary");
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+    ]);
+  });
+});
+
+/**
+ * The sentence Anthropic sends when a replayed `thinking` block is bound to a
+ * prefix that has since changed, as the preserved-thinking doc prints it and
+ * as the SDK envelopes it. `transcript.test.ts` pins what the sanitizer and
+ * the classifier make of these bytes; what is pinned here is what the
+ * Session does about them.
+ */
+const SIGNATURE_REFUSED =
+  'messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to "drop_block". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header. The `system` prompt differs from when the block was created.';
+const SIGNATURE_REFUSED_ENVELOPE = `400 ${JSON.stringify({
+  type: "error",
+  error: { type: "invalid_request_error", message: SIGNATURE_REFUSED },
+  request_id: "req_011CVK9vX3mF7pQwLtRs2ZbN",
+})}`;
+/** The older refusal every thinking model sends when a block came back altered. */
+const BLOCK_MODIFIED =
+  "messages.3.content.0: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.";
+
+/** A reply that reasons, signed, and answers. */
+function reasons(signature: string, text: string): ScriptStep {
+  return (emit) => {
+    emit.thinking("", signature);
+    emit.text(text);
+    emit.finish();
+  };
+}
+
+/** Every context marker of ours the sidecar holds. */
+function contextMarkers(sessionFilePath: string): Record<string, unknown>[] {
+  return readJsonl(sessionFilePath).filter(
+    (entry) => entry["type"] === "custom" && entry["customType"] === "volli.context.v1",
+  );
+}
+
+describe("recovering a turn whose reasoning the provider refused", () => {
+  it("drops the conversation's reasoning, resumes the turn in place, and keeps the drop across a reattach", async () => {
+    // The one repair the doc names without the beta header: strip every
+    // reasoning block, keep each turn's text and tool calls, send it once
+    // more. Nothing a person can see is lost and nothing is asked of them —
+    // the same class of act as the overflow compaction, which loses far more.
+    // What makes it a recovery rather than a workaround is the second half:
+    // the drop is durable, so the sidecar replays the array the reasoning
+    // produced after it was bound to, instead of putting the refused blocks
+    // back and being refused again on the first turn after every restart.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, reasons("sig-1", "first answer")),
+          recording(calls, (emit) => emit.fail(SIGNATURE_REFUSED_ENVELOPE)),
+          recording(calls, reasons("sig-2", "second answer")),
+          recording(calls, reasons("sig-3", "third answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await expect(handle.submitUserMessage("second")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    await handle.submitUserMessage("third");
+    const recovery = handle.recovery!;
+    await handle.close();
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after the restart"))])),
+    });
+    const reattached = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    expect(calls).toHaveLength(5);
+    // The refused request did carry the block; the resumed one carried none;
+    // the turn after that carries only what was produced since.
+    expect(signaturesOn(wireOf(calls[1]!))).toEqual(["sig-1"]);
+    expect(signaturesOn(wireOf(calls[2]!))).toEqual([]);
+    expect(wireOf(calls[2]!).join("\n")).toContain("first answer");
+    expect(signaturesOn(wireOf(calls[3]!))).toEqual(["sig-2"]);
+    expectAppendOnly(calls[2]!, calls[3]!);
+    // One turn, still the same turn, and it completed — with two bills, like
+    // any resumed turn, and no Attention for a person to dismiss. The
+    // reattached Session reports through the same observer, so its reply and
+    // its turn are here too.
+    expect(settledTexts(attachment.observations)).toEqual([
+      "first answer",
+      "second answer",
+      "third answer",
+      "after the restart",
+    ]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+    ]);
+    expect(attentions(attachment.observations)).toEqual([]);
+
+    // Durable: one context marker, and the reattach replays the drop — the
+    // blocks before it gone, the ones after it whole, byte for byte what the
+    // live Session last sent.
+    expect(contextMarkers(recovery.sessionFilePath)).toEqual([
+      expect.objectContaining({ data: { kind: "reasoning-dropped" } }),
+    ]);
+    expectAppendOnly(calls[3]!, calls[4]!);
+    expect(signaturesOn(wireOf(calls[4]!))).toEqual(["sig-2", "sig-3"]);
+  });
+
+  it("drops once per turn and hands a second refusal to the person, legibly", async () => {
+    // A refusal with no reasoning left to drop is not about the reasoning.
+    // The dead end is the generic one with a Retry, and the sentence it
+    // carries is the provider's whole one: the setting and the header it
+    // names are readable, not redacted, and what the runtime already spent
+    // is on it so nobody reaches for the repair that was just tried.
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, reasons("sig-1", "first answer")),
+          recording(calls, (emit) => emit.fail(SIGNATURE_REFUSED)),
+          recording(calls, (emit) => emit.fail(SIGNATURE_REFUSED)),
+          recording(calls, settles("recovered by hand")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage("second");
+
+    expect(calls).toHaveLength(3);
+    expect(signaturesOn(wireOf(calls[2]!))).toEqual([]);
+    expect(attentions(attachment.observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "runtime-failure",
+        message: `${SIGNATURE_REFUSED} (after dropping this conversation's earlier reasoning)`,
+      }),
+    ]);
+    expect(kinds(attachment.observations).at(-1)).toBe("turn:interrupted");
+
+    // The Retry the surface offers is a new turn with its own budget, on the
+    // array the drop already left behind.
+    await expect(handle.retry("command-retry")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "retry",
+    });
+    expect(calls).toHaveLength(4);
+    expect(settledTexts(attachment.observations)).toEqual(["first answer", "recovered by hand"]);
+    expect(attentions(attachment.observations).at(-1)).toEqual(
+      expect.objectContaining({ state: "cleared", reason: "runtime-failure" }),
+    );
+    await handle.close();
+  });
+
+  it("answers the older 'cannot be modified' refusal the same way", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, reasons("sig-1", "first answer")),
+          recording(calls, (emit) => emit.fail(BLOCK_MODIFIED)),
+          recording(calls, settles("second answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage("second");
+
+    expect(calls).toHaveLength(3);
+    expect(signaturesOn(wireOf(calls[2]!))).toEqual([]);
+    expect(settledTexts(attachment.observations)).toEqual(["first answer", "second answer"]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("replays no reasoning at all when it had to withhold a reply from the middle of history, and only the once", async () => {
+    // The doc's table: removing a thinking block from the middle invalidates
+    // every one after it. A settled reply the sidecar disagrees about is
+    // withheld from exactly there, and the attach knows it did that; the
+    // replay drops every block rather than sending the later ones to be
+    // refused. This is the edit the resume filter genuinely makes — a stopped
+    // or errored reply is not one, because pi-ai never sends those.
+    //
+    // The disagreement is a fact of the sidecar and recurs on every attach
+    // after this one. The drop must not: the reasoning produced on the
+    // stripped replay was bound to that replay, and a later attach that read
+    // it back whole would be right to keep it. So the attach records the drop
+    // with the same marker the refused-turn recovery writes, and the next
+    // attach applies that marker rather than stripping everything again.
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([reasons("sig-1", "first answer"), reasons("sig-2", "second answer")]),
+      ),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    await firstHandle.submitUserMessage("first");
+    await firstHandle.submitUserMessage("second");
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+
+    // The first reply's settled marker is gone — a crash between the
+    // message append and the marker write — and only the first one's.
+    const retained = readJsonl(recovery.sessionFilePath).filter((entry) => {
+      const data = entry["data"] as { kind?: string; message?: { text?: string } } | undefined;
+      return !(
+        entry["type"] === "custom" &&
+        entry["customType"] === "volli.observation.v1" &&
+        data?.kind === "message-settled" &&
+        data.message?.text === "first answer"
+      );
+    });
+    writeLinearJsonl(recovery.sessionFilePath, retained);
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, reasons("sig-3", "safe retry"))])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    expect((await secondHandle.reconcile(null)).observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "attention", state: "raised", reason: "partial-turn" }),
+      ]),
+    );
+    await secondHandle.submitUserMessage("carry on");
+    const secondRecovery = secondHandle.recovery!;
+    await secondHandle.close();
+
+    const replayed = wireOf(calls[0]!);
+    expect(replayed.join("\n")).not.toContain("first answer");
+    expect(replayed.join("\n")).toContain("second answer");
+    expect(signaturesOn(replayed)).toEqual([]);
+    // The drop is on record, once.
+    expect(contextMarkers(secondRecovery.sessionFilePath)).toEqual([
+      expect.objectContaining({ data: { kind: "reasoning-dropped" } }),
+    ]);
+
+    // The same sidecar, the same disagreement, one more attach: the withheld
+    // reply stays withheld, the reasoning from before the drop stays gone, and
+    // the reply produced on the stripped replay keeps its own — the array is
+    // byte for byte what the previous attach last sent, plus the turn since.
+    const thirdRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("still going"))])),
+    });
+    const thirdHandle = await thirdRuntime.startSession({
+      ...attachment.spec,
+      recovery: secondRecovery,
+    });
+    await thirdHandle.submitUserMessage("once more");
+    await thirdHandle.close();
+
+    expect(calls).toHaveLength(2);
+    expectAppendOnly(calls[0]!, calls[1]!);
+    const replayedAgain = wireOf(calls[1]!);
+    expect(replayedAgain.join("\n")).not.toContain("first answer");
+    expect(signaturesOn(replayedAgain)).toEqual(["sig-3"]);
+    // Covered by the marker already there; the third attach wrote no second one.
+    expect(contextMarkers(secondRecovery.sessionFilePath)).toHaveLength(1);
   });
 });
 
