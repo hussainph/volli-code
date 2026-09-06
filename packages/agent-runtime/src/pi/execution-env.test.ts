@@ -8,7 +8,7 @@ import {
   type ShellCaptureOptions,
 } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vite-plus/test";
-import { piExecutionEnv, scopedEnvironment } from "./execution-env";
+import { piExecutionEnv, scopedEnvironment, sessionCommandEnvironment } from "./execution-env";
 
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), "volli-pi-env-"));
@@ -355,5 +355,73 @@ describe("scopedEnvironment", () => {
 
   it("uses the system PATH fallback when the host supplies no PATH", () => {
     expect(scopedEnvironment({})).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+  });
+});
+
+describe("sessionCommandEnvironment", () => {
+  // VC-270: a background shell needs the environment RECORD — `spawn` with
+  // pipes, not `exec` — so the record is built by one exported function that
+  // both `SanitizedEnvExecutionEnv.exec` and the shell host call. Two copies
+  // would drift, and the symptom would be an unattributed `volli` call from
+  // inside a background shell.
+  it("builds the same environment exec hands a command: sanitized set, identity, prefixed PATH", async () => {
+    const restore = hostVariables({
+      GITHUB_TOKEN: "host-secret",
+      VOLLI_SESSION: "host-session",
+      SSH_AUTH_SOCK: "/tmp/volli-test-agent.sock",
+    });
+    const options = {
+      pathPrefixes: ["/opt/volli/bin"],
+      identity: {
+        sessionId: "session-uuid-1",
+        ticketDisplayId: "VC-270",
+        sessionToken: "tok-shared",
+      },
+    };
+    const env = await piExecutionEnv(workspace(), options);
+    try {
+      const record = sessionCommandEnvironment(process.env, options);
+      // The record carries the identity, the shared token and the prefixed
+      // PATH, and the host's secret and its own VOLLI_SESSION in neither.
+      expect(record["PATH"]?.startsWith("/opt/volli/bin:")).toBe(true);
+      expect(record["VOLLI_SESSION"]).toBe("session-uuid-1");
+      expect(record["VOLLI_TICKET"]).toBe("VC-270");
+      expect(record["VOLLI_SESSION_TOKEN"]).toBe("tok-shared");
+      expect(record["SSH_AUTH_SOCK"]).toBe("/tmp/volli-test-agent.sock");
+      expect(record["GITHUB_TOKEN"]).toBeUndefined();
+      // The whole record, not a subset: every name the record carries is one
+      // exec's child could print, and there are no others.
+      const all = await ran(env, "printenv | sort");
+      const fromRecord = Object.entries(record)
+        .map(([name, value]) => `${name}=${value}`)
+        .sort()
+        .join("\n");
+      const observed = all.output
+        .split("\n")
+        .filter((line) => line.length > 0 && !/^(PWD|SHLVL|_|OLDPWD)=/.test(line))
+        .sort()
+        .join("\n");
+      expect(observed).toBe(fromRecord);
+    } finally {
+      restore();
+      await env.cleanup(BACKGROUND_CONTEXT);
+    }
+  });
+
+  it("lets a caller's own variables win over the sanitized set, identity included", () => {
+    const record = sessionCommandEnvironment(
+      { PATH: "/usr/bin", LANG: "C.UTF-8", HOME: "/Users/me" },
+      {
+        pathPrefixes: ["/opt/volli/bin"],
+        identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
+        overrides: { VOLLI_SESSION: "stated-explicitly", PATH: "/custom/bin" },
+      },
+    );
+    expect(record).toEqual({
+      PATH: "/opt/volli/bin:/custom/bin",
+      LANG: "C.UTF-8",
+      HOME: "/Users/me",
+      VOLLI_SESSION: "stated-explicitly",
+    });
   });
 });

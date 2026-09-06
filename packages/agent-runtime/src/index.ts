@@ -30,8 +30,10 @@ export {
 } from "./prompt-baseline";
 export {
   piExecutionEnv,
+  sessionCommandEnvironment,
   type PiExecutionEnvOptions,
   type PiSessionEnvIdentity,
+  type SessionCommandEnvironmentOptions,
 } from "./pi/execution-env";
 export {
   extractReadableMarkdown,
