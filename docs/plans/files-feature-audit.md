@@ -110,12 +110,11 @@ ticket whose worktree row is stale silently degrades to the main checkout
 
 ### 2.3 "Syntax highlighting isn't supported for most languages" — CONFIRMED with nuance
 
-- 30 shiki grammars are shipped; ~50 extensions map onto them
-  (`document-identity.ts` `EXTENSION_LANGUAGES`; `shiki-langs.ts`). Everything
-  else falls to plaintext: no Vue/Svelte/Astro, no Objective-C (`.m`/`.mm`, on
-  a macOS product), no Scala, Dart, Elixir, Lua, Haskell, OCaml, Zig, no
-  HCL/Terraform, no proto, no diff/patch, no `.env`, no shebang sniff for
-  extensionless scripts.
+- **Addressed by VC-125:** 56 shiki grammars now cover 91 extensions, with exact
+  filename rules for the supported config/shell dotfiles and a first-line
+  shebang sniff for extensionless scripts. Unknown and ignore-file formats
+  still fall back honestly to plaintext; the change adds grammars, not language
+  intelligence.
 - **Editing** is supported for any utf8 file ≤ 1 MiB regardless of language
   (explicit ⌘S). The gap is highlighting and intelligence, not editability.
 - Language *intelligence* exists only where Monaco workers run: TS/JS, JSON,
@@ -253,9 +252,9 @@ Ordered; each slice is independently shippable.
    rail adopts it.
 5. **"Open in <editor> / Terminal" menu** (high; ships with or before 4).
    Editor detection + launch IPC; menu on file rows/tabs, worktree-aware.
-6. **Language-coverage bump** (medium, cheap). Add the notable missing
-   grammars (vue, svelte, objective-c, diff, dotenv, hcl, proto, lua, scala,
-   dart, elixir…) and a shebang sniff; each grammar is one catalog line.
+6. **Language-coverage bump** — shipped in VC-125. Added the notable missing
+   grammars, filename/extension associations and a shebang sniff; chat tool
+   output now uses the same path rule with Streamdown's on-demand highlighter.
 7. **Deliberately out of scope** (record as won't-do): problems panel, status
    bar, project-wide TS service, in-app search-across-files, file
    create/rename/delete. The demotion exists precisely so these stay unbuilt.
