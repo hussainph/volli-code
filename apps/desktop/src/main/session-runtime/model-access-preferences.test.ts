@@ -54,6 +54,91 @@ describe("Model Access default selection", () => {
     expect(readModelAccessDefaults(ctx.db).global).toEqual(selection);
   });
 
+  it("round-trips the advanced tiers without disturbing the three that predate them", () => {
+    ctx = openTestDb();
+    const base = {
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      reasoningLevel: "medium" as const,
+    };
+    writeModelAccessDefault(ctx.db, "global", base, 1);
+    writeModelAccessDefault(ctx.db, "ticket", { ...base, modelId: "claude-opus" }, 2);
+    writeModelAccessDefault(ctx.db, "utility", { ...base, modelId: "claude-haiku" }, 3);
+
+    const fast = { ...base, modelId: "claude-haiku", reasoningLevel: "low" as const };
+    const deep = { ...base, modelId: "claude-opus", reasoningLevel: "high" as const };
+    const visual = { ...base, modelId: "claude-sonnet", reasoningLevel: "medium" as const };
+    writeModelAccessDefault(ctx.db, "fast", fast, 4);
+    writeModelAccessDefault(ctx.db, "deep", deep, 5);
+    expect(writeModelAccessDefault(ctx.db, "visual", visual, 6)).toEqual({
+      global: base,
+      ticket: { ...base, modelId: "claude-opus" },
+      utility: { ...base, modelId: "claude-haiku" },
+      fast,
+      deep,
+      visual,
+    });
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: base,
+      ticket: { ...base, modelId: "claude-opus" },
+      utility: { ...base, modelId: "claude-haiku" },
+      fast,
+      deep,
+      visual,
+    });
+
+    // Clearing one advanced tier is a write to that slot alone: its siblings
+    // and the three base rows keep what they hold.
+    writeModelAccessDefault(ctx.db, "deep", null, 7);
+    const after = readModelAccessDefaults(ctx.db);
+    expect(after.deep).toBeNull();
+    expect(after.fast).toEqual(fast);
+    expect(after.visual).toEqual(visual);
+    expect(after.ticket).toEqual({ ...base, modelId: "claude-opus" });
+  });
+
+  it("reads a blob written before tiers existed with the advanced three unset", () => {
+    ctx = openTestDb();
+    // The three-purpose shape VC-53 stored. On update it must read as exactly
+    // what it held — every configured model intact — with the tiers it
+    // predates (VC-259) simply absent, never invented.
+    const global = { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" };
+    const ticket = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" };
+    const utility = { providerId: "anthropic", modelId: "claude-haiku", reasoningLevel: "low" };
+    setAppState(
+      ctx.db,
+      MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
+      JSON.stringify({ global, ticket, utility }),
+      1,
+    );
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global,
+      ticket,
+      utility,
+      fast: null,
+      deep: null,
+      visual: null,
+    });
+
+    // The first tier-aware write persists the six-slot shape, and the three
+    // carried-over rows ride along untouched.
+    const fast = {
+      providerId: "anthropic",
+      modelId: "claude-haiku",
+      reasoningLevel: "low" as const,
+    };
+    writeModelAccessDefault(ctx.db, "fast", fast, 2);
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global,
+      ticket,
+      utility,
+      fast,
+      deep: null,
+      visual: null,
+    });
+  });
+
   it("reads a pre-purpose single default as the global purpose", () => {
     ctx = openTestDb();
     const selection = {
@@ -290,6 +375,57 @@ describe("Model Access default selection", () => {
     expect(readHiddenModels(ctx.db)).toEqual([
       { providerId: "opencode-go", modelId: "glm-5.3-flash" },
     ]);
+  });
+
+  it("repairs the advanced tiers exactly as it repairs global: rename followed, retirement cleared", () => {
+    ctx = openTestDb();
+    // Three fates across the advanced rows, in one refresh of one provider:
+    // Fast names a renamed model and must land on the new id; Deep names a
+    // model that is simply gone and must be cleared; Visual names a model that
+    // is still there and must not move. The base rows are the control group.
+    const kept = {
+      providerId: "opencode-go",
+      modelId: "glm-5.3-flash",
+      reasoningLevel: "high" as const,
+    };
+    writeModelAccessDefault(ctx.db, "global", kept, 1);
+    writeModelAccessDefault(ctx.db, "fast", { ...kept, modelId: "ox-alpha-free" }, 2);
+    writeModelAccessDefault(ctx.db, "deep", { ...kept, modelId: "retired" }, 3);
+    writeModelAccessDefault(ctx.db, "visual", kept, 4);
+
+    reconcileModelAccessPreferences(
+      ctx.db,
+      {
+        observedAt: 5,
+        providers: [],
+        models: [
+          {
+            providerId: "opencode-go",
+            modelId: "glm-5.3-flash",
+            label: "GLM-5.3-Flash",
+            state: "available",
+            reasoningLevels: ["high"],
+            acceptsImageInput: true,
+          },
+        ],
+        refresh: {
+          added: 1,
+          removed: 2,
+          rejected: 0,
+          refreshedProviderIds: ["opencode-go"],
+          failedProviderIds: [],
+        },
+      },
+      6,
+    );
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: kept,
+      fast: kept,
+      deep: null,
+      visual: kept,
+    });
   });
 
   it("leaves every preference alone for a provider whose feed failed", () => {
