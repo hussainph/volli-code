@@ -51,10 +51,12 @@ export interface FilePasteEvent {
  * own native drop listener on the form and routes what it catches into the
  * vendored attachment state, which none of these composers use — so a dropped
  * file would land there and be seen by nobody. Monaco is the same hazard on the
- * ticket surfaces: it treats a dropped file as text to insert. React registers
- * these at the root, so they run while the event is still descending, and
- * stopping the NATIVE event is what keeps it from reaching those listeners at
- * all.
+ * ticket surfaces: its native `dragover` listener stages a dotted drop-caret
+ * decoration, then its `drop` listener clears it. The outer attach handler
+ * consumes `drop` before Monaco sees it, so it must consume `dragover` too or
+ * that decoration is staged without ever being cleared. React registers these
+ * handlers at the root, while the event is still descending; stopping the
+ * NATIVE event is what keeps it from reaching those nested listeners at all.
  *
  * Passing `undefined` returns handlers that do nothing, so a surface that
  * cannot attach spreads the same props and simply declines every drop.
@@ -71,10 +73,13 @@ export function fileAttachHandlers(
       onAttach(dropped);
     },
     onDragOverCapture: (event) => {
-      // Without this the drop is never delivered: the default action for a
-      // dragover is "reject", and only preventing it makes this a target.
+      // Without preventDefault the drop is never delivered: the default action
+      // for dragover is "reject". Propagation must stop for the same files the
+      // outer surface claims, or a nested Monaco stages its dotted drop target
+      // and never receives the captured drop that would clear it (VC-261).
       if (onAttach !== undefined && event.dataTransfer?.types.includes("Files") === true) {
         event.preventDefault();
+        event.nativeEvent.stopPropagation();
       }
     },
     onPasteCapture: (event) => {
