@@ -13,12 +13,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage",
-    "smoke": "vp test run --config vite.smoke.config.ts"
+    "smoke": "vp test run --config vite.smoke.config.ts",
+    "bench": "vp test run --config vite.bench.config.ts",
+    "bench:live": "vp test run --config vite.bench-live.config.ts",
+    "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.74",
-    "@earendil-works/pi-agent-core": "0.84.3",
-    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-agent-core": "0.85.0",
+    "@earendil-works/pi-ai": "0.85.0",
     "@mozilla/readability": "^0.6.0",
     "@volli/shared": "workspace:*",
     "jsdom": "^30.0.1",

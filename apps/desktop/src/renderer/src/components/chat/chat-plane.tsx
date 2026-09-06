@@ -66,7 +66,7 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
-  weaveCompactionBoundaries,
+  weaveContextNotices,
   type ChatSegment,
   type ComposerIntent,
   type InteractionSubmission,
@@ -82,6 +82,7 @@ import {
   CompactionBoundary,
   CompactionProgress,
 } from "@renderer/components/chat/compaction-boundary-ui";
+import { ReasoningDropNotice } from "@renderer/components/chat/reasoning-drop-notice-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -938,13 +939,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
-  // The turns with the Session's compaction boundaries laid between them. Both
-  // inputs are held to their identity — the turn list by `useStableList`, the
-  // compactions by the fold that only replaces the array when one lands — so
-  // this recomputes when the conversation moves and not once per frame.
+  // The turns with durable context notices laid between them. Every input is
+  // held to its identity — the turn list by `useStableList`, the notice lists
+  // by folds that replace an array only when one lands — so this recomputes
+  // when the conversation moves and not once per frame.
   const rows = React.useMemo(
-    () => weaveCompactionBoundaries(turns, session.compactions),
-    [session.compactions, turns],
+    () => weaveContextNotices(turns, session.compactions, session.reasoningDrops),
+    [session.compactions, session.reasoningDrops, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
@@ -1031,6 +1032,11 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
                     <CompactionBoundary
                       key={`compaction:${row.compaction.sequence}`}
                       compaction={row.compaction}
+                    />
+                  ) : row.kind === "reasoning-drop" ? (
+                    <ReasoningDropNotice
+                      key={`reasoning-drop:${row.drop.sequence}`}
+                      drop={row.drop}
                     />
                   ) : (
                     <ChatTurn

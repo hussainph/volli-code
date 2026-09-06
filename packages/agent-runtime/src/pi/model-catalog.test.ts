@@ -197,7 +197,9 @@ describe("withRefreshableCatalog", () => {
     const canonical = model("opencode-go", "glm-5.3-flash");
     const wrapped = withRefreshableCatalog(
       baseProvider("opencode-go", [alias]),
-      scriptedSource({ models: [canonical] }),
+      // The complete feed can briefly carry both names during a rename. The
+      // canonical id must win rather than exposing two rows for one model.
+      scriptedSource({ models: [alias, canonical] }),
     );
 
     await wrapped.refreshModels?.(refreshContext().context);

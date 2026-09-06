@@ -8,15 +8,72 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import {
+  applyShellOutputUpdate,
+  BACKGROUND_CONTEXT,
+  FileError,
+  withAbortSignal,
+  type Context,
+  type ShellExecOptions,
+  type ShellOutputCaptureOptions,
+  type ShellOutputUpdate,
+  type ShellOutputView,
+} from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 
 type SandboxOverrides = Partial<NonNullable<ScopedExecutionEnvOptions["sandbox"]>>;
+
+/**
+ * The cancellation an operation runs under, as Pi 0.85 expresses it.
+ *
+ * Every `FileSystem`/`Shell` method lost its trailing `abortSignal?` and gained
+ * a trailing chord `Context`; a signal reaches one by being wrapped onto the
+ * empty root. Tests that are not about cancellation pass nothing at all, which
+ * this environment reads exactly as an absent `abortSignal` was read before.
+ */
+function under(signal: AbortSignal): Context {
+  return withAbortSignal(signal, BACKGROUND_CONTEXT);
+}
+
+/**
+ * What a consumer of `exec` actually sees in 0.85: one bounded view, rebuilt
+ * from the updates the environment publishes.
+ *
+ * `applyShellOutputUpdate` is Pi's own reducer, so these assertions are about
+ * the sequence a real consumer would fold rather than about a shape this file
+ * invented. Stdout and stderr are merged — the release's decision, not this
+ * environment's — so there is one `text` here where there used to be two.
+ */
+function collected(
+  capture: ShellOutputCaptureOptions = { limits: { maxBytes: 50 * 1024, maxLines: 2_000 } },
+) {
+  const updates: ShellOutputUpdate[] = [];
+  let view: ShellOutputView | undefined;
+  const options: ShellExecOptions = {
+    capture,
+    onUpdate: (update) => {
+      updates.push(update);
+      view = applyShellOutputUpdate(view, update);
+    },
+  };
+  return {
+    options,
+    updates,
+    get text(): string {
+      return view?.text ?? "";
+    },
+    get view(): ShellOutputView | undefined {
+      return view;
+    },
+  };
+}
 
 function roots() {
   const parent = mkdtempSync(join(tmpdir(), "volli-scoped-env-"));
@@ -130,7 +187,7 @@ describe("ScopedExecutionEnv", () => {
 
     const controller = new AbortController();
     controller.abort();
-    expect(await env.absolutePath("inside.txt", controller.signal)).toMatchObject({
+    expect(await env.absolutePath("inside.txt", under(controller.signal))).toMatchObject({
       ok: false,
       error: { code: "aborted" },
     });
@@ -300,10 +357,10 @@ describe("ScopedExecutionEnv", () => {
       }) as never,
     });
 
-    const progress: string[] = [];
+    const seen = collected();
     const execution = env.exec("echo safe", {
+      ...seen.options,
       env: { VOLLI_TEST_FLAG: "yes", GITHUB_TOKEN: "never-pass" },
-      onStdout: (chunk) => progress.push(chunk),
     });
     await vi.waitFor(() => expect(spawns).toHaveLength(1));
     running.stdout.write("safe\\n");
@@ -311,9 +368,9 @@ describe("ScopedExecutionEnv", () => {
 
     await expect(execution).resolves.toEqual({
       ok: true,
-      value: { stdout: "safe\\n", stderr: "", exitCode: 0 },
+      value: { exitCode: 0, truncation: expect.objectContaining({ truncated: false }) },
     });
-    expect(progress).toEqual(["safe\\n"]);
+    expect(seen.text).toBe("safe\\n");
     expect(srt.calls.wraps[0]).toMatchObject([
       "echo safe",
       "/bin/bash",
@@ -410,7 +467,8 @@ describe("ScopedExecutionEnv", () => {
       processKill: callbackKill,
     });
     const callbackRun = callbackEnv.exec("echo output", {
-      onStdout: () => {
+      capture: { limits: { maxBytes: 1_024, maxLines: 100 } },
+      onUpdate: () => {
         throw new Error("sink failed");
       },
     });
@@ -430,7 +488,7 @@ describe("ScopedExecutionEnv", () => {
       spawn: (() => abortedChild) as never,
       processKill: abortKill,
     });
-    const abortRun = abortEnv.exec("sleep 10", { abortSignal: controller.signal });
+    const abortRun = abortEnv.exec("sleep 10", undefined, under(controller.signal));
     await vi.waitFor(() => expect(abortedChild.listenerCount("close")).toBeGreaterThan(0));
     controller.abort();
     await expect(abortRun).resolves.toMatchObject({ ok: false, error: { code: "aborted" } });
@@ -447,7 +505,7 @@ describe("ScopedExecutionEnv", () => {
       spawn: (() => running) as never,
       processKill,
     });
-    const run = env.exec("sleep 10", { abortSignal: controller.signal });
+    const run = env.exec("sleep 10", undefined, under(controller.signal));
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
 
     vi.useFakeTimers();
@@ -525,60 +583,118 @@ describe("ScopedExecutionEnv", () => {
     expect(srt.calls.cleanups).toBe(3);
   });
 
-  it("caps stdout and stderr independently by bytes without splitting UTF-8", async () => {
+  it("bounds the merged view by the caller's budget, republishing a window that has slid", async () => {
     const { worktree } = roots();
     const running = child();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox(),
       spawn: (() => running) as never,
     });
-    const run = env.exec("output");
+    // 0.85 moved the budget from this environment to its caller: `exec` keeps
+    // what `capture.limits` asks for and nothing more, and reports what it
+    // dropped rather than silently returning a prefix.
+    const seen = collected({ limits: { maxBytes: 8, maxLines: 100 } });
+    const run = env.exec("output", seen.options);
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
-    const oversized = Buffer.concat([Buffer.alloc(999_999, 0x61), Buffer.from("€extra")]);
-    running.stdout.write(oversized);
-    running.stdout.emit("data", "not captured after the stream cap");
-    running.stderr.write(oversized);
+    running.stdout.write("aaaa\n");
+    running.stdout.write("bbbb\n");
     running.emit("close", 0);
 
-    await expect(run).resolves.toEqual({
+    await expect(run).resolves.toMatchObject({
       ok: true,
-      value: { stdout: "a".repeat(999_999), stderr: "a".repeat(999_999), exitCode: 0 },
+      value: {
+        exitCode: 0,
+        // Totals are what the command produced, not what survived the budget:
+        // the bash tool renders `[Showing lines 2-2 of 2]` off exactly these.
+        truncation: { truncated: true, truncatedBy: "bytes", totalBytes: 10, totalLines: 2 },
+      },
+    });
+    expect(seen.text).toBe("bbbb");
+    // The first line left the window, so the second update could not be an
+    // append — what a consumer folds is the bounded window again.
+    expect(seen.updates.map((update) => update.kind)).toEqual(["replace", "replace"]);
+  });
+
+  it("does not truncate output exactly at both limits", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({ limits: { maxBytes: 5, maxLines: 1 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("abcde");
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: {
+        truncation: { truncated: false, truncatedBy: null, totalBytes: 5, totalLines: 1 },
+      },
+    });
+    expect(seen.text).toBe("abcde");
+  });
+
+  it("uses Pi's line precedence when one chunk crosses both limits", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({ limits: { maxBytes: 5, maxLines: 1 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("aa\nbbbb\n");
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: {
+        truncation: { truncated: true, truncatedBy: "lines", totalBytes: 8, totalLines: 2 },
+      },
     });
   });
 
-  it("preserves a multibyte character split across output chunks before byte decoding", async () => {
+  it("reports a single over-long line as a partial one, cut on a character boundary", async () => {
     const { worktree } = roots();
     const running = child();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox(),
       spawn: (() => running) as never,
     });
-    const run = env.exec("output");
+    const seen = collected({ limits: { maxBytes: 16, maxLines: 100 } });
+    const run = env.exec("output", seen.options);
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
-    running.stdout.write(Buffer.alloc(999_997, 0x61));
-    running.stdout.write(Buffer.from([0xe2]));
-    running.stdout.write(Buffer.from([0x82, 0xac]));
+    running.stdout.write(Buffer.concat([Buffer.alloc(20, 0x61), Buffer.from("€")]));
     running.emit("close", 0);
 
-    await expect(run).resolves.toEqual({
+    await expect(run).resolves.toMatchObject({
       ok: true,
-      value: { stdout: `${"a".repeat(999_997)}€`, stderr: "", exitCode: 0 },
+      value: {
+        exitCode: 0,
+        truncation: { truncated: true, lastLinePartial: true, totalBytes: 23, totalLines: 1 },
+        // How long the line really was, which is the only way the tool that
+        // renders this can say "showing the last 16B of a 23B line".
+        lastLineBytes: 23,
+      },
     });
+    // Sixteen bytes of a twenty-three byte line, ending on the three-byte
+    // character rather than in the middle of it.
+    expect(seen.text).toBe(`${"a".repeat(13)}€`);
   });
 
-  it("streams split UTF-8 separately to stdout and stderr callbacks and flushes them at close", async () => {
+  it("decodes each stream on its own while merging both into one view", async () => {
     const { worktree } = roots();
     const running = child();
     const env = await ScopedExecutionEnv.create(worktree, {
       sandbox: sandbox(),
       spawn: (() => running) as never,
     });
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const run = env.exec("output", {
-      onStdout: (chunk) => stdout.push(chunk),
-      onStderr: (chunk) => stderr.push(chunk),
-    });
+    const seen = collected();
+    const run = env.exec("output", seen.options);
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
     running.stdout.write(Buffer.from([0xe2]));
     running.stderr.write(Buffer.from([0xe2]));
@@ -588,12 +704,209 @@ describe("ScopedExecutionEnv", () => {
     running.stderr.write(Buffer.from([0xe2]));
     running.emit("close", 0);
 
-    await expect(run).resolves.toEqual({
-      ok: true,
-      value: { stdout: "€", stderr: "€", exitCode: 0 },
+    await expect(run).resolves.toMatchObject({ ok: true, value: { exitCode: 0 } });
+    // Two whole characters and two flushed lead bytes. 0.85 merges the streams,
+    // but the merge happens on decoded text: one shared decoder — which is what
+    // Pi's own environment uses — would have completed stdout's lead byte with
+    // stderr's continuation and produced one character where there are two.
+    expect(seen.text).toBe("€€��");
+    expect(seen.updates.map((update) => update.kind)).toEqual([
+      "replace",
+      "append",
+      "append",
+      "append",
+    ]);
+
+    // A child can keep writing after its group was killed, and its pipes are
+    // still attached here. Nothing published then would be about a command the
+    // caller has not already been told the outcome of.
+    const published = seen.updates.length;
+    running.stdout.write("after the fact");
+    expect(seen.updates).toHaveLength(published);
+  });
+
+  it("names the line limit when that is the budget the output crossed", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
     });
-    expect(stdout).toEqual(["€", "�"]);
-    expect(stderr).toEqual(["€", "�"]);
+    // Two independent limits, whichever is crossed first — and which one it was
+    // is what the bash tool's notice says out loud, so it has to be right.
+    const seen = collected({ limits: { maxBytes: 1_000, maxLines: 2 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("aa\nbb\ncc\n");
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: {
+        exitCode: 0,
+        truncation: { truncated: true, truncatedBy: "lines", totalLines: 3, totalBytes: 9 },
+      },
+    });
+    expect(seen.text).toBe("bb\ncc");
+  });
+
+  it("keeps a head-retained window from the front, counting everything that arrived", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    // `retain: "head"` is the half of the contract Pi's own bash tool never
+    // asks for. It is honoured anyway, because the environment is the thing the
+    // interface names and a caller is entitled to either end.
+    const seen = collected({ limits: { maxBytes: 8, maxLines: 100, retain: "head" } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    // Far past the internal guard on the retained buffer, so this also proves
+    // the totals are counted as bytes arrive rather than measured off whatever
+    // the guard left behind.
+    running.stdout.write("aa\n".repeat(40));
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: { exitCode: 0, truncation: { truncated: true, totalBytes: 120, totalLines: 40 } },
+    });
+    expect(seen.text).toBe("aa\naa\naa");
+  });
+
+  it("keeps a tail-retained window from the end past the same guard", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({ limits: { maxBytes: 8, maxLines: 100 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("aa\n".repeat(40));
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: { exitCode: 0, truncation: { truncated: true, totalBytes: 120, totalLines: 40 } },
+    });
+    expect(seen.text).toBe("aa\naa\naa");
+  });
+
+  /**
+   * The spool moved in 0.85. In 0.84 the collector above this environment kept
+   * a truncated command's complete output by calling `createTempFile` and
+   * `appendFile` on the environment itself; now the environment owns it, behind
+   * `capture.spill`. Honouring it here rather than declining it is what keeps
+   * the spool inside the Session workspace — the one directory this boundary
+   * lets a contained command write.
+   */
+  it("spools a truncated command's complete output into the workspace, from its first byte", async () => {
+    const { worktree } = roots();
+    const running = child();
+    let opening = 0;
+    const opened = Promise.withResolvers<void>();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      fileOperations: {
+        mkdtemp: async (prefix) => {
+          opening += 1;
+          await opened.promise;
+          return mkdtemp(prefix);
+        },
+        writeFile: async (path, content) => writeFile(path, content),
+        rm: async (path, options) => rm(path, options),
+      },
+    });
+    const seen = collected({ limits: { maxBytes: 6, maxLines: 100 }, spill: true });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+
+    // Under the budget: held back, because a command whose output fits should
+    // leave no file behind at all.
+    running.stdout.write("aaa\n");
+    expect(opening).toBe(0);
+    // Over it: the held prefix and this chunk reach the spool together.
+    running.stdout.write("bbb\n");
+    await vi.waitFor(() => expect(opening).toBe(1));
+    // And this one arrives while the spool is still being opened, so it has to
+    // queue behind it rather than race it.
+    running.stdout.write("ccc\n");
+    opened.resolve();
+    running.emit("close", 0);
+
+    const result = await run;
+    expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } });
+    const spillPath = result.ok ? result.value.spillPath : undefined;
+    expect(spillPath).toBeDefined();
+    expect(dirname(spillPath!)).toContain(".volli-bash-");
+    expect(readFileSync(spillPath!, "utf8")).toBe("aaa\nbbb\nccc\n");
+    // The view stays bounded while the spool holds everything, and the path
+    // still reaches the consumer — through a metadata update, since it is
+    // discovered after the bytes it belongs to.
+    expect(seen.text).toBe("ccc");
+    expect(seen.view?.spillPath).toBe(spillPath);
+    expect(seen.updates.some((update) => update.kind === "metadata")).toBe(true);
+
+    await env.cleanup();
+    expect(existsSync(spillPath!)).toBe(false);
+  });
+
+  it("fails a command whose complete output could not be preserved", async () => {
+    const { worktree } = roots();
+    const unopenable = child();
+    const unopenableEnv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => unopenable) as never,
+      fileOperations: {
+        mkdtemp: async () => Promise.reject(new Error("no room for a spool")),
+        writeFile: async () => undefined,
+        rm: async () => undefined,
+      },
+    });
+    const cannotOpen = unopenableEnv.exec("output", {
+      capture: { limits: { maxBytes: 4, maxLines: 100 }, spill: true },
+    });
+    await vi.waitFor(() => expect(unopenable.listenerCount("close")).toBeGreaterThan(0));
+    unopenable.stdout.write("more than four bytes\n");
+    unopenable.emit("close", 0);
+
+    // A spool that cannot be written is a failed command rather than a quietly
+    // shorter one: the truncation notice names a path, and a named path holding
+    // nothing is worse than an error. Pi's own environment answers the same way.
+    await expect(cannotOpen).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "unknown",
+        message: expect.stringContaining("preserve complete shell output"),
+      },
+    });
+
+    const unwritable = child();
+    const append = vi
+      .spyOn(NodeExecutionEnv.prototype, "appendFile")
+      .mockResolvedValue({ ok: false, error: new FileError("permission_denied", "read-only") });
+    const unwritableEnv = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => unwritable) as never,
+    });
+    const cannotWrite = unwritableEnv.exec("output", {
+      capture: { limits: { maxBytes: 4, maxLines: 100 }, spill: true },
+    });
+    await vi.waitFor(() => expect(unwritable.listenerCount("close")).toBeGreaterThan(0));
+    unwritable.stdout.write("more than four bytes\n");
+    unwritable.emit("close", 0);
+
+    await expect(cannotWrite).resolves.toMatchObject({
+      ok: false,
+      error: { code: "unknown", message: expect.stringContaining("read-only") },
+    });
+    append.mockRestore();
+    await unwritableEnv.cleanup();
   });
 
   it("forwards append-file cancellation to the underlying environment", async () => {
@@ -601,10 +914,14 @@ describe("ScopedExecutionEnv", () => {
     const append = vi.spyOn(NodeExecutionEnv.prototype, "appendFile");
     const env = await ScopedExecutionEnv.create(worktree);
     const controller = new AbortController();
+    const context = under(controller.signal);
 
-    await env.appendFile("inside.txt", "x", controller.signal);
+    await env.appendFile("inside.txt", "x", context);
 
-    expect(append).toHaveBeenCalledWith(join(env.cwd, "inside.txt"), "x", controller.signal);
+    // 0.84's Node environment took a third argument and ignored it, so this was
+    // forwarded through a cast on the promise that it would one day mean
+    // something. In 0.85 it does: `appendFile` reads `context.abortSignal`.
+    expect(append).toHaveBeenCalledWith(join(env.cwd, "inside.txt"), "x", context);
     await env.cleanup();
     append.mockRestore();
   });
@@ -625,7 +942,7 @@ describe("ScopedExecutionEnv", () => {
         rm: lateRemove,
       },
     });
-    expect(await lateAbort.createTempFile({ abortSignal: controller.signal })).toMatchObject({
+    expect(await lateAbort.createTempFile(undefined, under(controller.signal))).toMatchObject({
       ok: false,
       error: { code: "aborted" },
     });
@@ -678,12 +995,16 @@ describe("ScopedExecutionEnv", () => {
       processKill,
     });
     const controller = new AbortController();
-    const run = env.exec("echo", {
-      abortSignal: controller.signal,
-      onStdout: () => {
-        throw new Error("stop");
+    const run = env.exec(
+      "echo",
+      {
+        capture: { limits: { maxBytes: 1_024, maxLines: 100 } },
+        onUpdate: () => {
+          throw new Error("stop");
+        },
       },
-    });
+      under(controller.signal),
+    );
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
     running.stdout.write("output");
     await vi.waitFor(() => expect(running.kill).toHaveBeenCalledWith("SIGTERM"));
@@ -735,7 +1056,7 @@ describe("ScopedExecutionEnv", () => {
 
     const abort = new AbortController();
     abort.abort();
-    expect(await enabledEnv.exec("echo never", { abortSignal: abort.signal })).toMatchObject({
+    expect(await enabledEnv.exec("echo never", undefined, under(abort.signal))).toMatchObject({
       ok: false,
       error: { code: "aborted" },
     });
@@ -751,7 +1072,7 @@ describe("ScopedExecutionEnv", () => {
       ok: false,
       error: { code: "permission_denied" },
     });
-    expect(await enabledEnv.createTempFile({ abortSignal: abort.signal })).toMatchObject({
+    expect(await enabledEnv.createTempFile(undefined, under(abort.signal))).toMatchObject({
       ok: false,
       error: { code: "aborted" },
     });
@@ -785,15 +1106,17 @@ describe("ScopedExecutionEnv", () => {
       spawn: (() => running) as never,
       processKill: fallbackKill,
     });
-    const output = env.exec("output");
+    const seen = collected();
+    const output = env.exec("output", seen.options);
     await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
     running.stdout.emit("data", "text stdout");
     running.stderr.emit("data", "text stderr");
     running.emit("close", null);
-    await expect(output).resolves.toEqual({
-      ok: true,
-      value: { stdout: "text stdout", stderr: "text stderr", exitCode: 1 },
-    });
+    // A close with no code is still an exit, and 1 is what it has always been
+    // reported as. Both streams arrive in one view now, in the order the child
+    // produced them.
+    await expect(output).resolves.toMatchObject({ ok: true, value: { exitCode: 1 } });
+    expect(seen.text).toBe("text stdouttext stderr");
 
     const launchError = child();
     const launchEnv = await ScopedExecutionEnv.create(worktree, {

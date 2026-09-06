@@ -230,8 +230,9 @@ export function ComposerForm({
         useBoardStore.getState().addTicket(projectId, ticketStatus, ticketTitle, options),
       // The same ticket-chat door ⌘T and the tab strip's "+" go through, told
       // the three things only a kickoff knows: the model this composer picked,
-      // the opening turn, and a title (the turn is a stock instruction, so
-      // letting the first message name the Session would name it badly).
+      // the opening turn, and its fallback title. The turn is a stock
+      // instruction, so its queued metadata lets the model refine that fallback
+      // without briefly naming the Session after the instruction itself.
       startChat: (projectId, ticketId, chat) => startTicketChat(projectId, ticketId, chat),
       openTicketWorkspace: (projectId, ticketId) =>
         useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId),
