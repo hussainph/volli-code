@@ -259,7 +259,13 @@ async function render(element: React.ReactNode): Promise<void> {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root?.render(<ModelAccessProvider client={MODEL_ACCESS}>{element}</ModelAccessProvider>);
+    // Both providers the app root mounts once: the page's and the rail's
+    // controls wear tooltips, and every door reads the model catalog.
+    root?.render(
+      <TooltipProvider>
+        <ModelAccessProvider client={MODEL_ACCESS}>{element}</ModelAccessProvider>
+      </TooltipProvider>,
+    );
   });
 }
 
@@ -481,11 +487,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
 
   it("the Automations page's Run button, through its Ticket chooser", async () => {
     installApi({ list: vi.fn(async () => ({ ok: true, automations: [MANUAL] })) });
-    await render(
-      <TooltipProvider>
-        <AutomationsPage />
-      </TooltipProvider>,
-    );
+    await render(<AutomationsPage />);
 
     await act(async () => {
       control("Run Manual sweep").click();
@@ -540,11 +542,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     // The schedule's Target is the Project (VC-112), so this door reaches the
     // OTHER channel — and it must not quietly become a Ticket Run.
     installApi({ list: vi.fn(async () => ({ ok: true, automations: [NIGHTLY] })) });
-    await render(
-      <TooltipProvider>
-        <AutomationsPage />
-      </TooltipProvider>,
-    );
+    await render(<AutomationsPage />);
 
     await act(async () => {
       control("Run Nightly sweep").click();
@@ -586,11 +584,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         }),
       ),
     });
-    await render(
-      <TooltipProvider>
-        <AutomationsPage />
-      </TooltipProvider>,
-    );
+    await render(<AutomationsPage />);
 
     await act(async () => {
       control("Run Nightly sweep now").click();

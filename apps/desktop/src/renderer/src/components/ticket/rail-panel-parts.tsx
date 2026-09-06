@@ -24,6 +24,7 @@ import { errorMessage, type DiffStat } from "@volli/shared";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
+import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
@@ -45,6 +46,34 @@ export const RAIL_PANEL_INSET = "px-4 group-data-[narrow=true]/rail:px-3";
 
 /** The same inset expressed as a horizontal MARGIN, for blocks that float inside a page. */
 export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
+
+/**
+ * A Now-page section's title line: the uppercase eyebrow at the left, whatever
+ * the block offers at the right — Sessions' `+ Chat`, History's count,
+ * Automations' door to its page. Inset by the rows' own `px-2` rather than the
+ * section's edge, so the label sits over its list instead of hanging left of
+ * it.
+ *
+ * `ui/section-heading.tsx` deliberately owns only the ink, because across the
+ * app the row around it is drawn nine ways. Inside THIS rail it is drawn one
+ * way, and the blocks that stack on the Now page have to be indistinguishable
+ * as objects: a second copy of this row is how one block silently keeps an old
+ * gap after its neighbour's control is retuned.
+ */
+export function RailSectionHeadingRow({
+  label,
+  children,
+}: {
+  label: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+      <SectionHeading>{label}</SectionHeading>
+      {children}
+    </div>
+  );
+}
 
 /**
  * One repository-card row's shared frame: full-width, quiet hover, seam above
