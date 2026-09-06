@@ -100,6 +100,7 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
   type RuntimeObservation,
+  type RuntimeShellPort,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -314,6 +315,14 @@ export type PiRuntimeContext =
 export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 
 /**
+ * The runtime's shell port with the one lifecycle door the adapter drives
+ * (VC-270): the attachment ending. Required rather than optional, for
+ * {@link DesktopBrowserPort}'s reason — it is what keeps a Session's shells
+ * from outliving it.
+ */
+export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+
+/**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
  * port is handed over without `acquire`/`release`, so `sessionToolBindings`
  * offers the six it recorded and the provider sees the array it was promised.
@@ -403,6 +412,25 @@ export interface PiAdapterOptions {
     sessionId: string;
     attachmentId: string;
   }) => DesktopBrowserPort;
+  /**
+   * The desktop's background shell capability for one Session (VC-270),
+   * scoped on {@link resolveBrowserPort}'s terms and resolved once per
+   * attachment. Absent means a Session is offered no shell tool. The port's
+   * `dispose` is required here, because it is the door that kills every
+   * shell the Session started when the attachment ends — a port without it
+   * would leak processes past their Session.
+   *
+   * `workspacePath` rides with the scope because the port decides where a
+   * shell may run: the directory the Session Engine prepared, and nothing
+   * outside it.
+   */
+  resolveShellPort?: (scope: {
+    projectId: string;
+    ticketId: string | null;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+  }) => DesktopShellPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -639,6 +667,13 @@ function piNativeAdapter(
           sessionId: spec.sessionId,
           attachmentId: spec.attachmentId,
         }),
+        shell: options.resolveShellPort?.({
+          projectId: context.projectId,
+          ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
+          workspacePath: spec.directory,
+        }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
@@ -722,6 +757,8 @@ interface PiBindingOptions {
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
   browser: DesktopBrowserPort | undefined;
+  /** The Session's scoped background shell capability; `undefined` is "no shells". */
+  shell: DesktopShellPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -736,6 +773,7 @@ class PiBinding implements BindingHandle {
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
+  readonly #shell: DesktopShellPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -769,6 +807,7 @@ class PiBinding implements BindingHandle {
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
+    this.#shell = options.shell;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
@@ -843,6 +882,8 @@ class PiBinding implements BindingHandle {
     // names six, and is handed a port without the pair so it binds six.
     const wantsBrowser = context.toolSurface.includes("browser_tabs");
     const wantsHoldPair = context.toolSurface.includes("browser_acquire");
+    // One name stands for the three (VC-270), on the browser's reasoning.
+    const wantsShell = context.toolSurface.includes("shell_start");
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -857,6 +898,11 @@ class PiBinding implements BindingHandle {
       // cannot keep it must fail the attachment loudly.
       throw new Error(
         "This Session's frozen Agent Tool Surface includes the Browser, but this build wired no Browser host. Retry the attachment on a build that carries one.",
+      );
+    }
+    if (wantsShell && this.#shell === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes background shells, but this build wired no shell host. Retry the attachment on a build that carries one.",
       );
     }
     // The verb half of the frozen record, read back rather than re-derived from
@@ -942,6 +988,7 @@ class PiBinding implements BindingHandle {
       ...(wantsBrowser && this.#browser !== undefined
         ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
         : {}),
+      ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1166,6 +1213,10 @@ class PiBinding implements BindingHandle {
     this.#released = true;
     this.#abort.abort();
     this.#browser?.dispose?.();
+    // Before the handle closes: the execution environment's cleanup revokes
+    // the attachment's token, and a shell still being SIGTERMed should not
+    // outlive the identity it was spawned under (VC-270).
+    this.#shell?.dispose();
     await this.#handle?.close();
   }
 
