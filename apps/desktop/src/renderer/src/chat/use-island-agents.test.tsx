@@ -216,11 +216,17 @@ describe("what a row says", () => {
   });
   it("reads an idle row that completed as done", () => {
     expect(islandAgentState({ activity: "idle", outcome: "completed" })).toBe("done");
-    expect(islandAgentState({ activity: "idle", outcome: null })).toBe("done");
   });
   it("reads an idle row that was interrupted or whose executor failed as failed", () => {
     expect(islandAgentState({ activity: "idle", outcome: "interrupted" })).toBe("failed");
     expect(islandAgentState({ activity: "idle", outcome: "failed" })).toBe("failed");
+  });
+  // The newborn case (VC-269 fix-first): a child that has not yet completed a
+  // first turn reads `idle` with no outcome for one beat before its first
+  // `turn.started` lands. That is "not finished yet", not "done" — the chip
+  // must not draw a freshly delegated helper as already finished.
+  it("reads a newborn child — idle with no turn outcome yet — as working, not done", () => {
+    expect(islandAgentState({ activity: "idle", outcome: null })).toBe("working");
   });
 
   it("carries indeterminate progress, and promoted from the open tabs under any owner", async () => {

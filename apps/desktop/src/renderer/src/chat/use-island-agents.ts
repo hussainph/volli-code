@@ -94,9 +94,11 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
  *    `waiting` to `IslandAgent["state"]` and give `AgentDot` a resting dot.
  *  • `idle` is `done` or `failed` by `outcome` (VC-269 ruling): a turn that
  *    completed is done; one that was interrupted or whose executor failed is
- *    failed. `null` — no turn has ended, and none is open — reads as done:
- *    nothing is known to have gone wrong, and a child that never began has
- *    nothing to dim for.
+ *    failed. `outcome === null` on an idle row is the NEWBORN case (fix-first,
+ *    review c5714a22): a child sits `idle` for one beat between its row
+ *    appearing and its first `turn.started` landing, before any turn has ever
+ *    ended — that is "not finished yet", not "done", so it reads `working`
+ *    rather than lying that a freshly delegated helper already finished.
  */
 export function islandAgentState(
   record: Pick<ChatSessionRecord, "activity" | "outcome">,
@@ -108,6 +110,7 @@ export function islandAgentState(
     case "waiting":
       return "working";
     case "idle":
+      if (record.outcome === null) return "working";
       return record.outcome === "interrupted" || record.outcome === "failed" ? "failed" : "done";
   }
 }
