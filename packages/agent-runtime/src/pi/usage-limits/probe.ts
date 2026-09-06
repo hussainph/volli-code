@@ -1,18 +1,22 @@
 /**
  * The on-demand read: one GET per subscribed provider, no model call.
  *
- * Two providers have an endpoint that answers "how much of my subscription is
- * left" without spending any of it — Anthropic's `/api/oauth/usage` and
- * Codex's `/backend-api/wham/usage`. Both take the same OAuth access token the
- * turns use, so the probe asks Pi for it through `Models.getAuth`, which runs
- * Pi's own refresh under Pi's own lock; nothing here reads `auth.json` or
- * mints a token.
+ * Three providers have an endpoint that answers "how much of my subscription
+ * is left" without spending any of it — Anthropic's `/api/oauth/usage`,
+ * Codex's `/backend-api/wham/usage`, and OpenCode Go's `/zen/go/v1/usage`.
+ * Each takes the same credential the turns use, so the probe asks Pi for it
+ * through `Models.getAuth`, which runs Pi's own refresh under Pi's own lock;
+ * nothing here reads `auth.json` or mints a token.
  *
  * Three things the probe is careful about, in the order they bite:
  *
- * - **An API key has no windows.** An `api_key` credential is metered by
- *   invoice, and the endpoint would refuse it anyway. The probe reports
- *   `unsupported` without a request, and the fold treats that as final.
+ * - **Which credential a subscription wears is the reader's to say.** On
+ *   Anthropic and Codex an `api_key` is metered by invoice, and the endpoint
+ *   would refuse it anyway: the probe reports `unsupported` without a request,
+ *   and the fold treats that as final. OpenCode Go is a subscription driven by
+ *   an API key, so its reader accepts one — and reads the console's 403
+ *   ("OpenCode Go subscription required": a Zen-only key) as the same final
+ *   `unsupported`, because no later read of that key will grow windows.
  * - **The usage endpoint has its own rate limit**, independent of chat. A 429
  *   is honoured for `Retry-After` when stated and five minutes otherwise, and
  *   the attempt reports `probeFailed` — which the fold reads as "keep the last
@@ -33,6 +37,7 @@ import type { UsageLimits } from "@volli/shared";
 
 import { anthropicUsageFromEndpoint } from "./anthropic";
 import { codexUsageFromEndpoint } from "./codex";
+import { opencodeGoUsageFromEndpoint } from "./opencode-go";
 
 /** How long a 429 holds the endpoint off when it names no `Retry-After`. */
 export const USAGE_PROBE_COOLDOWN_MS = 5 * 60_000;
@@ -108,6 +113,18 @@ export interface UsageProbeInput {
 /** One provider's usage endpoint and how to read it. */
 interface UsageReader {
   url: string;
+  /**
+   * Whether an `api_key` credential is a subscription here. False for a
+   * provider whose subscription is OAuth-only (an API key is invoiced, not
+   * windowed); true for one that hands subscribers a key.
+   */
+  acceptsApiKey: boolean;
+  /**
+   * A status the endpoint answers when the credential is valid but carries no
+   * subscription — final for that credential, so it reads as `unsupported`
+   * rather than a failed attempt. Absent means every refusal is an attempt.
+   */
+  noSubscriptionStatus?: number;
   /** Headers beyond `authorization`, which every reader sends. */
   headers(accessToken: string): Record<string, string>;
   parse(body: unknown, checkedAt: number): UsageLimits;
@@ -116,11 +133,13 @@ interface UsageReader {
 const READERS: Readonly<Record<string, UsageReader>> = {
   anthropic: {
     url: "https://api.anthropic.com/api/oauth/usage",
+    acceptsApiKey: false,
     headers: () => ({ "anthropic-beta": "oauth-2025-04-20" }),
     parse: anthropicUsageFromEndpoint,
   },
   "openai-codex": {
     url: "https://chatgpt.com/backend-api/wham/usage",
+    acceptsApiKey: false,
     headers: (accessToken): Record<string, string> => {
       // The endpoint needs the ChatGPT account the token belongs to, and the
       // token says which: pi-ai reads the same claim off the same JWT for
@@ -130,6 +149,15 @@ const READERS: Readonly<Record<string, UsageReader>> = {
       return accountId === undefined ? {} : { "chatgpt-account-id": accountId };
     },
     parse: codexUsageFromEndpoint,
+  },
+  "opencode-go": {
+    url: "https://opencode.ai/zen/go/v1/usage",
+    acceptsApiKey: true,
+    // `EntitlementError`: the key is a Zen key with no Go subscription behind
+    // it. Zen is pay-as-you-go credit, which has no windows to show.
+    noSubscriptionStatus: 403,
+    headers: () => ({}),
+    parse: opencodeGoUsageFromEndpoint,
   },
 };
 
@@ -151,11 +179,8 @@ export async function probeUsageLimits(input: UsageProbeInput): Promise<UsagePro
   try {
     const check = await input.models.checkAuth(input.providerId, { signal: input.signal });
     if (check === undefined) return { kind: "none" };
-    if (check.type !== "oauth") {
-      return {
-        kind: "read",
-        limits: { checkedAt, windows: [], unavailable: { reason: "unsupported" } },
-      };
+    if (check.type !== "oauth" && !reader.acceptsApiKey) {
+      return { kind: "read", limits: unsupported(checkedAt) };
     }
     if (!input.schedule.allows(input.providerId, checkedAt, input.force)) return { kind: "held" };
     const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
@@ -177,6 +202,9 @@ export async function probeUsageLimits(input: UsageProbeInput): Promise<UsagePro
         input.now() + (retryAfterMs ?? USAGE_PROBE_COOLDOWN_MS),
       );
       return { kind: "read", limits: probeFailed(checkedAt) };
+    }
+    if (response.status === reader.noSubscriptionStatus) {
+      return { kind: "read", limits: unsupported(checkedAt) };
     }
     if (!response.ok) return { kind: "read", limits: probeFailed(checkedAt) };
     const body = await readJson(response);
@@ -244,4 +272,8 @@ async function readJson(response: Response): Promise<unknown> {
 
 function probeFailed(checkedAt: number): UsageLimits {
   return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
+}
+
+function unsupported(checkedAt: number): UsageLimits {
+  return { checkedAt, windows: [], unavailable: { reason: "unsupported" } };
 }

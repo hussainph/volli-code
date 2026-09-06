@@ -74,6 +74,14 @@ const ANTHROPIC_BODY = {
   five_hour: { utilization: 37, resets_at: "2026-03-01T14:00:00Z" },
   seven_day: { utilization: 4, resets_at: "2026-03-05T09:30:00Z" },
 };
+const OPENCODE_GO_BODY = {
+  usage: {
+    rolling: { status: "ok", percent: 4, resetsAt: "2026-03-01T16:27:38Z" },
+    weekly: { status: "ok", percent: 3, resetsAt: "2026-03-08T00:00:00Z" },
+    monthly: { status: "ok", percent: 1, resetsAt: "2026-03-13T06:06:01Z" },
+  },
+};
+const goKey: AuthCheck = { type: "api_key", source: "OPENCODE_API_KEY" };
 const CODEX_BODY = {
   plan_type: "plus",
   rate_limit: {
@@ -159,6 +167,62 @@ describe("probeUsageLimits", () => {
     expect(calls[0]?.headers.authorization).toBe(`Bearer ${CODEX_TOKEN}`);
     const limits = (outcome as { limits: UsageLimits }).limits;
     expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly"]);
+  });
+
+  it("reads OpenCode Go's usage endpoint with the API key it is driven by", async () => {
+    const { fetch, calls } = scripted(() => json(OPENCODE_GO_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "opencode-go",
+        models: models(goKey, { auth: { apiKey: "sk-go-key" }, source: "OPENCODE_API_KEY" }),
+        fetch,
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        url: "https://opencode.ai/zen/go/v1/usage",
+        headers: { authorization: "Bearer sk-go-key", accept: "application/json" },
+      },
+    ]);
+    const limits = (outcome as { limits: UsageLimits }).limits;
+    expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly", "monthly"]);
+  });
+
+  it("reads Go's 403 as unsupported — a Zen key with no Go subscription — and marks nothing fresh", async () => {
+    const schedule = new UsageProbeSchedule();
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "opencode-go",
+        models: models(goKey, { auth: { apiKey: "sk-zen-only" }, source: "OPENCODE_API_KEY" }),
+        fetch: scripted(
+          () =>
+            new Response(
+              JSON.stringify({
+                type: "error",
+                error: { type: "EntitlementError", message: "OpenCode Go subscription required." },
+              }),
+              { status: 403 },
+            ),
+        ).fetch,
+        schedule,
+      }),
+    );
+    expect(outcome).toEqual({
+      kind: "read",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "unsupported" } },
+    });
+    // A refresh still asks: the fold has made the verdict final, not the schedule.
+    expect(schedule.allows("opencode-go", NOW + 1, false)).toBe(true);
+  });
+
+  it("keeps a 403 on an OAuth-only reader as a failed attempt, not a verdict", async () => {
+    const outcome = await probeUsageLimits(
+      input({ fetch: scripted(() => new Response("{}", { status: 403 })).fetch }),
+    );
+    expect(outcome).toMatchObject({
+      kind: "read",
+      limits: { unavailable: { reason: "probeFailed" } },
+    });
   });
 
   it("sends no account header when the token carries no account claim", async () => {

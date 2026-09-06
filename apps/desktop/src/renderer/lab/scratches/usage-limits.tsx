@@ -105,6 +105,42 @@ const AHEAD: UsageLimits = {
 };
 
 /**
+ * OpenCode Go: an API-key subscription with a third, monthly window — the
+ * first use of `kind: "monthly"`, and the tallest account on the page. Three
+ * rows must still read as one control, and `Monthly · resets in 12d 4h` is
+ * the longest label-plus-countdown a real provider produces.
+ */
+const OPENCODE_GO: UsageLimits = {
+  checkedAt: NOW - 2 * 60_000,
+  windows: [
+    {
+      id: "session",
+      kind: "session",
+      label: "Session",
+      usedPercent: 22,
+      resetsAt: iso(NOW + 3 * HOUR + 40 * 60_000),
+      windowDurationMins: 300,
+    },
+    {
+      id: "weekly",
+      kind: "weekly",
+      label: "Weekly",
+      usedPercent: 47,
+      resetsAt: iso(NOW + 4 * DAY + 12 * HOUR),
+      windowDurationMins: 10_080,
+    },
+    {
+      id: "monthly",
+      kind: "monthly",
+      label: "Monthly",
+      usedPercent: 58,
+      resetsAt: iso(NOW + 12 * DAY + 4 * HOUR),
+      windowDurationMins: 28 * 1_440,
+    },
+  ],
+};
+
+/**
  * The edges: a session window fully spent with time left (no fill at all,
  * hairline standing alone), one whose reset has passed with nothing newer
  * reported yet (`resets now`, hairline at the left edge), and the whole
@@ -181,6 +217,9 @@ export default function UsageLimitsScratch() {
       </Frame>
       <Frame label="Healthy · Codex">
         <ModelAccessUsage limits={CODEX} now={NOW} />
+      </Frame>
+      <Frame label="Three windows · OpenCode Go">
+        <ModelAccessUsage limits={OPENCODE_GO} now={NOW} />
       </Frame>
       <Frame label="Spent · reset passed · stale">
         <ModelAccessUsage limits={EDGES} now={NOW} />

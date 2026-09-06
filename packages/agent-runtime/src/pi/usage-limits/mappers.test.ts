@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { anthropicHeadersToUpdate, anthropicUsageFromEndpoint } from "./anthropic";
 import { codexHeadersToUpdate, codexUsageFromEndpoint } from "./codex";
+import { opencodeGoUsageFromEndpoint } from "./opencode-go";
 import { headerUsageUpdate } from "./passive";
 import {
   epochSecondsToIso,
@@ -351,11 +352,113 @@ describe("codexUsageFromEndpoint", () => {
   });
 });
 
+// --- OpenCode Go -------------------------------------------------------------
+
+/** The route as it serves from `dev`: three named windows, ISO resets. */
+const OPENCODE_GO_BODY = {
+  usage: {
+    rolling: { status: "ok", percent: 4, resetsAt: "2026-03-01T16:27:38.287Z" },
+    weekly: { status: "ok", percent: 3, resetsAt: "2026-03-08T00:00:00.287Z" },
+    monthly: { status: "ok", percent: 1, resetsAt: "2026-03-13T06:06:01.287Z" },
+  },
+};
+
+describe("opencodeGoUsageFromEndpoint", () => {
+  it("reads the three named windows in order, with fixed lengths for the two that have one", () => {
+    expect(opencodeGoUsageFromEndpoint(OPENCODE_GO_BODY, NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [
+        {
+          id: "session",
+          kind: "session",
+          label: "Session",
+          usedPercent: 4,
+          resetsAt: "2026-03-01T16:27:38.287Z",
+          windowDurationMins: 300,
+        },
+        {
+          id: "weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 3,
+          resetsAt: "2026-03-08T00:00:00.287Z",
+          windowDurationMins: 10_080,
+        },
+        {
+          id: "monthly",
+          kind: "monthly",
+          label: "Monthly",
+          usedPercent: 1,
+          resetsAt: "2026-03-13T06:06:01.287Z",
+          // 13 Feb → 13 Mar 2026: 28 days.
+          windowDurationMins: 28 * 1_440,
+        },
+      ],
+    });
+  });
+
+  it("gives the monthly window the length of the calendar month ending at its reset", () => {
+    const monthly = (resetsAt: string) =>
+      opencodeGoUsageFromEndpoint({ usage: { monthly: { percent: 1, resetsAt } } }, NOW).windows[0]
+        ?.windowDurationMins;
+    expect(monthly("2026-08-13T06:06:01Z")).toBe(31 * 1_440);
+    expect(monthly("2026-05-01T00:00:00Z")).toBe(30 * 1_440);
+    // No reset, no length: the row still draws, without a hairline.
+    expect(
+      opencodeGoUsageFromEndpoint({ usage: { monthly: { percent: 1 } } }, NOW).windows[0],
+    ).toEqual({ id: "monthly", kind: "monthly", label: "Monthly", usedPercent: 1 });
+  });
+
+  it("reads rate-limited as nothing left, whatever percent rides beside it", () => {
+    const limits = opencodeGoUsageFromEndpoint(
+      {
+        usage: {
+          rolling: { status: "rate-limited", percent: 97, resetsAt: "2026-03-01T13:00:00Z" },
+        },
+      },
+      NOW,
+    );
+    expect(limits.windows[0]?.usedPercent).toBe(100);
+  });
+
+  it("skips a window the body omits or cannot state, and clamps one past the bar", () => {
+    const limits = opencodeGoUsageFromEndpoint(
+      {
+        usage: {
+          rolling: { status: "ok", percent: 130 },
+          weekly: { status: "ok" },
+          monthly: null,
+        },
+      },
+      NOW,
+    );
+    expect(limits.windows.map((window) => window.id)).toEqual(["session"]);
+    expect(limits.windows[0]?.usedPercent).toBe(100);
+  });
+
+  it("reports a failed probe for a body that is not the route's shape", () => {
+    const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
+    expect(opencodeGoUsageFromEndpoint(undefined, NOW)).toEqual(failed);
+    expect(opencodeGoUsageFromEndpoint([], NOW)).toEqual(failed);
+    expect(opencodeGoUsageFromEndpoint({ usage: null }, NOW)).toEqual(failed);
+    expect(opencodeGoUsageFromEndpoint({ usage: {} }, NOW)).toEqual(failed);
+    // The pull request's draft shape, which the route never served.
+    expect(
+      opencodeGoUsageFromEndpoint(
+        { rollingUsage: { status: "ok", usagePercent: 4, resetInSec: 3_600 } },
+        NOW,
+      ),
+    ).toEqual(failed);
+  });
+});
+
 describe("headerUsageUpdate", () => {
   it("delegates to the mapper the provider owns and to nothing for anyone else", () => {
     expect(headerUsageUpdate("openai-codex", CODEX_HEADERS, NOW)?.windows).toHaveLength(2);
     expect(headerUsageUpdate("anthropic", ANTHROPIC_HEADERS, NOW)?.windows).toHaveLength(2);
     expect(headerUsageUpdate("openai", ANTHROPIC_HEADERS, NOW)).toBeNull();
+    // Go puts nothing on a turn's response: on-demand only.
+    expect(headerUsageUpdate("opencode-go", ANTHROPIC_HEADERS, NOW)).toBeNull();
   });
 });
 
