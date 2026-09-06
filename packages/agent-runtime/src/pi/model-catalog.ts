@@ -98,18 +98,35 @@
  *    `openai-codex`, which models.dev has never carried at all. There is no
  *    uncovered remainder to keep a second source of truth alive for.
  *
- * 3. {@link PiFileModelsStore} makes complete refreshed lists durable beside
- *    Pi's own `auth.json`. Every execution/inspection path awaits restore before
- *    its first model lookup. Exact baseline ids are rebased onto current Pi
+ * 3. {@link PiFileModelsStore} makes refreshed lists durable beside Pi's own
+ *    `auth.json`. Every execution/inspection path awaits restore before its
+ *    first model lookup. Exact baseline ids are rebased onto current Pi
  *    protocol; refreshed-only ids restore only with this policy version's
  *    admission proof *and* a fresh pass through the same redirection guard,
  *    because a cache outlives the fetch that filled it and a bump can retire
- *    the origin an entry was admitted against. The complete-list format marker
- *    also distinguishes new
- *    caches from VC-135's legacy append-only overlays, which are migrated as
- *    overlays so an upgrade cannot accidentally erase the rest of a provider.
- *    The cache takes no credential lock and treats unreadable data as empty:
- *    atomic whole-file writes are enough for public, recoverable data.
+ *    the origin an entry was admitted against.
+ *
+ *    A restored list is merged *over* the baseline the running package ships,
+ *    exactly as Pi's own overlay is, and never stands in for it. The cache is
+ *    always at least as old as the last fetch, and the baseline can be newer
+ *    than that — a bump lands new models in the static catalog, and the
+ *    staleness rule above may then refuse every feed until pi.dev republishes.
+ *    A cache that replaced the baseline outright would hide exactly the models
+ *    the bump was taken for, for as long as that window lasts; measured, then
+ *    fixed. Nothing is lost by merging: under this policy a persisted list
+ *    already carries every baseline id the feed did not withdraw, so the only
+ *    ids the merge can add back are ones the package gained since.
+ *
+ *    The complete-list format marker distinguishes these caches from VC-135's
+ *    legacy overlays, which restore as replace-only overlays so an upgrade
+ *    cannot accidentally add a model the old policy never admitted. The cache
+ *    takes no credential lock and treats unreadable data as empty: atomic
+ *    whole-file writes are enough for public, recoverable data.
+ *
+ *    The `If-None-Match` validator is held per process rather than read back
+ *    from this store: the cost is one unconditional GET per provider per
+ *    launch, against documents of tens of KB, which is not worth widening the
+ *    {@link CatalogSource} contract for.
  *
  * The coupling bet, stated so a future bump knows where to look: this file
  * targets `refreshModels` / `RefreshModelsContext` / `ModelsStore`, the typed
@@ -340,8 +357,9 @@ export function withRefreshableCatalog(
     ...base,
     [CATALOG_DIAGNOSTIC]: diagnostic,
     // Before a successful restore/refresh the immutable Pi baseline remains
-    // available. Afterwards the source's list is complete authority: retaining
-    // absent baseline ids here would make removals and renames impossible.
+    // available. Afterwards the published list is served whole; it is built
+    // over the baseline below, so a refreshed-only id the feed dropped is gone
+    // and a baseline id is never missing.
     getModels: () => refreshed ?? base.getModels(),
     refreshModels: async (context: RefreshModelsContext): Promise<void> => {
       // Restore phase: pi calls this once with network disallowed before any
@@ -363,7 +381,7 @@ export function withRefreshableCatalog(
           !(await context.publish({
             update: () => {
               refreshed = complete
-                ? reconcileCatalog(base.id, restored)
+                ? mergeCatalog(base.id, base.getModels(), restored)
                 : mergeLegacyCatalog(base.id, base.getModels(), restored);
             },
           }))
@@ -513,6 +531,27 @@ function markCatalogAdmissions(
   );
 }
 
+/**
+ * A restored list over the current baseline: baseline order, a restored entry
+ * replacing the baseline model of the same id, restored-only ids appended in
+ * their own order. The same shape {@link admitPiDevCatalog} publishes, so a
+ * restart and a refresh agree about what the picker shows.
+ */
+function mergeCatalog(
+  providerId: string,
+  baseline: readonly Model<Api>[],
+  overlay: readonly Model<Api>[],
+): Model<Api>[] {
+  const overlayById = new Map(overlay.map((model) => [model.id, model]));
+  const baselineIds = new Set(baseline.map((model) => model.id));
+  const merged = baseline.map((model) => overlayById.get(model.id) ?? model);
+  for (const model of overlay) {
+    if (!baselineIds.has(model.id)) merged.push(model);
+  }
+  return reconcileCatalog(providerId, merged);
+}
+
+/** A VC-135 overlay may correct a baseline model and may never add one. */
 function mergeLegacyCatalog(
   providerId: string,
   baseline: readonly Model<Api>[],
@@ -826,7 +865,7 @@ function piDevModel(
 
   const thinkingLevelMap = feedThinkingLevelMap(raw.thinkingLevelMap);
   const headers = feedHeaders(raw.headers);
-  const compat = feedInertRecord(raw.compat);
+  const compat = feedCompat(raw.compat);
   const samplingParams = feedInertRecord(raw.samplingParams);
   if (thinkingLevelMap === null || headers === null) return undefined;
   if (compat === null || samplingParams === null) return undefined;
@@ -906,6 +945,38 @@ function feedInertRecord(value: unknown): Record<string, unknown> | undefined | 
   return isInertJson(value, 0, { nodes: 0 }) ? value : null;
 }
 
+/**
+ * `compat`, as inert JSON whose *named* flags carry the type pi reads them as.
+ *
+ * The vocabulary is still not enumerated — an unknown key rides through, so
+ * the next capability flag arrives without a bump — but the naming convention
+ * pi follows is stable enough to check against: every `supports*` / `requires*`
+ * key is a boolean, and the three enum-valued selectors are strings. A flag of
+ * the wrong type is not inert: pi reads `supportsStrictMode: "false"` as true
+ * and changes the tool encoding on the wire. The whole entry is withheld for
+ * that, exactly as a mistyped `thinkingLevelMap` value withholds it.
+ */
+function feedCompat(value: unknown): Record<string, unknown> | undefined | null {
+  const compat = feedInertRecord(value);
+  if (compat === undefined || compat === null) return compat;
+  return compatFlagsWellTyped(compat) ? compat : null;
+}
+
+const COMPAT_FLAG_KEY = /^(?:supports|requires)[A-Z]/u;
+const COMPAT_SELECTOR_KEYS: ReadonlySet<string> = new Set([
+  "maxTokensField",
+  "thinkingFormat",
+  "sessionAffinityFormat",
+]);
+
+function compatFlagsWellTyped(compat: Record<string, unknown>): boolean {
+  return Object.entries(compat).every(([key, entry]) => {
+    if (COMPAT_FLAG_KEY.test(key)) return typeof entry === "boolean";
+    if (COMPAT_SELECTOR_KEYS.has(key)) return typeof entry === "string";
+    return true;
+  });
+}
+
 function isInertJson(value: unknown, depth: number, budget: { nodes: number }): boolean {
   if (depth > MAX_INERT_DEPTH) return false;
   budget.nodes += 1;
@@ -976,7 +1047,9 @@ function safeStoredProtocol(model: PersistedCatalogModel, guard: RedirectionGuar
   // after adding them, which is the worst shape a bug like this can take.
   if (destination === undefined || !guard.origins.has(destination)) return false;
   if (typeof model.reasoning !== "boolean") return false;
-  if (model.compat !== undefined && !isRecord(model.compat)) return false;
+  if (model.compat !== undefined) {
+    if (!isRecord(model.compat) || !compatFlagsWellTyped(model.compat)) return false;
+  }
   if (model.headers !== undefined && !headerRecord(model.headers)) return false;
   if (model.samplingParams !== undefined && !isRecord(model.samplingParams)) return false;
   if (model.thinkingLevelMap !== undefined) {
@@ -992,9 +1065,6 @@ function headerRecord(value: Record<string, unknown>): boolean {
   return Object.values(value).every((entry) => typeof entry === "string" || entry === null);
 }
 
-/** Build one provider's protocol classes from exact baseline joins. */
-/** Reduce one class's members to the evidence they actually agree on. */
-/** Additive opt-ins at least two members corroborate; see {@link ADDITIVE_COMPAT_KEYS}. */
 function withoutAdmissionMarker(model: Model<Api>): Model<Api> {
   const persisted = model as PersistedCatalogModel;
   const { [PROTOCOL_ADMISSION_FIELD]: _admission, ...runtimeModel } = persisted;
@@ -1016,7 +1086,6 @@ function protocolOf(model: Model<Api>): CatalogModelProtocol {
   return protocol;
 }
 
-/** Whether interleaved reasoning is declared, and under which field name. */
 /** Invalid legacy/cache entries fail closed rather than becoming runnable protocol. */
 function storedModelFacts(model: Model<Api>): CatalogModelFacts | undefined {
   const id = nonEmptyString(model.id);
@@ -1083,7 +1152,6 @@ function storedTiers(value: unknown): ModelCostTier[] | undefined | null {
   return tiers;
 }
 
-/** Price mapping is all-or-nothing: a cost with unmappable tiers is no cost. */
 /** The input modalities pi models, de-duplicated; anything else is not one. */
 function inputModalities(value: unknown): ("text" | "image")[] | undefined {
   if (!Array.isArray(value)) return undefined;

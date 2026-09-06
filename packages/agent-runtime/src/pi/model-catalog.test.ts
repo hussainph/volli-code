@@ -272,7 +272,40 @@ describe("withRefreshableCatalog", () => {
     });
     await wrapped.refreshModels?.(context);
 
-    expect(wrapped.getModels().map((entry) => entry.id)).toEqual(["admitted-under-2"]);
+    expect(wrapped.getModels().map((entry) => entry.id)).toEqual([
+      "acme-1",
+      "acme-2",
+      "admitted-under-2",
+    ]);
+  });
+
+  it("restores a cache over a baseline that gained models since it was written", async () => {
+    // The window the header comment names: a pi-ai bump ships `acme-3` in the
+    // static catalog, the cache on disk predates it, and pi.dev may be older
+    // than the bump for hours. A cache that replaced the baseline would hide
+    // the one model the bump was taken for; a merge shows it at once.
+    const bumped = [model("acme", "acme-1"), model("acme", "acme-3")];
+    const wrapped = withRefreshableCatalog(
+      baseProvider("acme", bumped),
+      scriptedSource({ models: [] }),
+    );
+    const stored = {
+      models: [
+        model("acme", "acme-1", { name: "Acme 1 cached" }),
+        { ...model("acme", "acme-remote"), __volliProtocolAdmission: 2 },
+      ],
+      __volliCatalogFormat: 2,
+      checkedAt: 1,
+    } as never;
+    await wrapped.refreshModels?.(
+      refreshContext({ stored, allowNetwork: false, force: undefined }).context,
+    );
+
+    expect(wrapped.getModels().map((entry) => [entry.id, entry.name])).toEqual([
+      ["acme-1", "Acme 1 cached"],
+      ["acme-3", "acme-3"],
+      ["acme-remote", "acme-remote"],
+    ]);
   });
 
   it("rebases cached facts onto the current baseline protocol after a Pi change", async () => {
@@ -403,24 +436,34 @@ describe("withRefreshableCatalog", () => {
       { baseUrl: 7 },
       { reasoning: "yes" },
       { compat: [] },
+      // A named flag of the wrong type is executable, not inert: pi reads the
+      // string "false" as true. Checked here as it is checked at admission.
+      { compat: { supportsStrictMode: "false" } },
       { headers: { bad: 1 } },
       { samplingParams: [] },
       { thinkingLevelMap: [] },
       { thinkingLevelMap: { low: 1 } },
     ];
-    for (const protocol of invalid) expect(await restore(protocol)).toEqual([]);
+    // The baseline is always there; only the cached model is at stake.
+    for (const protocol of invalid) {
+      expect((await restore(protocol)).map((entry) => entry.id)).toEqual(["baseline"]);
+    }
     await expect(restore({ thinkingLevelMap: undefined })).resolves.toEqual([
+      expect.objectContaining({ id: "baseline" }),
       expect.objectContaining({ id: "pipeline" }),
     ]);
 
     await expect(
       restore({
-        compat: {},
+        compat: { supportsStrictMode: true, maxTokensField: "max_tokens", unknownFlag: 3 },
         headers: { "x-string": "yes", "x-null": null },
         samplingParams: {},
         thinkingLevelMap: { off: null, low: "low" },
       }),
-    ).resolves.toEqual([expect.objectContaining({ id: "pipeline" })]);
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "baseline" }),
+      expect.objectContaining({ id: "pipeline" }),
+    ]);
   });
 
   it("restores a cached model whose provider defers its baseUrl to runtime", async () => {
@@ -541,6 +584,45 @@ describe("supersededModelId", () => {
 });
 
 describe("a provider the source does not carry", () => {
+  it("keeps a restored list and a bumped baseline both when the feed goes absent", async () => {
+    // The state the required edge cases miss when they start from a bare
+    // baseline: a provider that already had a refreshed list, then a pi-ai
+    // bump, then a feed the staleness rule refuses. Nothing may disappear —
+    // not the model the feed added, and not the model the bump added.
+    const file = join(scratch(), "volli-models.json");
+    await new PiFileModelsStore(file).write("acme", {
+      models: [
+        model("acme", "acme-1"),
+        { ...model("acme", "acme-remote"), __volliProtocolAdmission: 2 } as Model<Api>,
+      ],
+      checkedAt: 1,
+      __volliCatalogFormat: 2,
+    } as never);
+    const models = createModels();
+    models.setProvider(baseProvider("acme", [model("acme", "acme-1"), model("acme", "acme-3")]));
+    const catalogs = attachRefreshableCatalog(
+      models,
+      {
+        fetchCatalog: async (providerId) => {
+          throw new CatalogSourceAbsent(providerId, "is older than the built-in catalog");
+        },
+      },
+      { store: new PiFileModelsStore(file) },
+    );
+
+    await catalogs.restore();
+    const ids = (): string[] =>
+      models
+        .getProvider("acme")
+        ?.getModels()
+        .map((entry) => entry.id) ?? [];
+    expect(ids()).toEqual(["acme-1", "acme-3", "acme-remote"]);
+
+    const result = await catalogs.refresh({ force: true });
+    expect(result.errors.size).toBe(0);
+    expect(ids()).toEqual(["acme-1", "acme-3", "acme-remote"]);
+  });
+
   it("keeps pi's catalog and reports neither success nor failure", async () => {
     // models.dev has no `openai-codex` provider at all. Before this, every
     // refresh recorded a provider error for it and Model Access offered a
@@ -1271,6 +1353,25 @@ describe("piDevCatalogSource", () => {
       supportsSomethingNew: true,
       order: ["a", "b"],
     });
+  });
+
+  it("withholds a named compat flag of the wrong type, and carries an unknown one", async () => {
+    // `supportsStrictMode: "false"` is truthy to pi and flips the tool encoding
+    // on the wire, so it is not inert data. The vocabulary is not enumerated:
+    // the *naming* is what is checked, so the next `supports*` flag still
+    // arrives without a bump, and a key this rule does not know stays free.
+    const source = piDevSource({
+      "string-flag": feedEntry({ compat: { supportsStrictMode: "false" } }),
+      "numeric-requirement": feedEntry({ compat: { requiresToolResultName: 1 } }),
+      "numeric-selector": feedEntry({ compat: { maxTokensField: 1 } }),
+      good: feedEntry({
+        compat: { supportsSomethingNew: true, thinkingFormat: "openai", futureKnob: "any" },
+      }),
+    });
+    const result = await source.fetchCatalog("acme", [acme], { signal: signal() });
+
+    expect(result.models.map((entry) => entry.id)).toEqual(["acme-1", "good"]);
+    expect(result.rejected).toBe(3);
   });
 
   it("withholds compat that is not bounded inert JSON", async () => {
