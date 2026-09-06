@@ -296,24 +296,38 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
   }
 
-  /** One submit into the parent, with its receipt read rather than dropped. */
-  async function submitNotice(entry: DelegationRef, text: string): Promise<void> {
+  /**
+   * One submit into the parent, with its receipt read rather than dropped.
+   *
+   * Never awaited by a caller, and the reason is a deadlock rather than
+   * taste: a `message.submit` into an IDLE parent opens a turn and answers
+   * when that turn ends, and every caller here sits inside a stream
+   * listener — the runtime paces each publish by its slowest listener, so a
+   * listener parked on the parent's own turn would hold the very frames that
+   * turn needs to publish. The refusal, if any, lands in the log.
+   */
+  function submitNotice(entry: DelegationRef, text: string): void {
     const ids = noticeIds(entry.operationId);
-    const result = await ports.runtime.command({
-      commandId: ids.commandId,
-      sessionId: entry.parentSessionId,
-      command: {
-        kind: "message.submit",
-        delivery: "steer",
-        message: { id: ids.messageId, role: "user", parts: [{ type: "text", text }] },
-      },
-    });
-    const receipt = result.receipt;
-    if (receipt !== null && receipt.status === "rejected") {
-      report(
-        `subagent notice for ${shortSessionId(entry.childSessionId)} was refused by parent ${shortSessionId(entry.parentSessionId)}: ${receipt.code} ${receipt.detail}`,
-      );
-    }
+    const who = `subagent notice for ${shortSessionId(entry.childSessionId)} to parent ${shortSessionId(entry.parentSessionId)}`;
+    void ports.runtime
+      .command({
+        commandId: ids.commandId,
+        sessionId: entry.parentSessionId,
+        command: {
+          kind: "message.submit",
+          delivery: "steer",
+          message: { id: ids.messageId, role: "user", parts: [{ type: "text", text }] },
+        },
+      })
+      .then((result) => {
+        const receipt = result.receipt;
+        if (receipt !== null && receipt.status === "rejected") {
+          report(`${who} was refused: ${receipt.code} ${receipt.detail}`);
+        }
+      })
+      .catch((error: unknown) => {
+        report(`${who} failed: ${errorText(error)}`);
+      });
   }
 
   /**
@@ -332,13 +346,13 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       return "parent-stopped";
     }
     if (projection.liveExecutor !== null) {
-      await submitNotice(entry, text);
+      submitNotice(entry, text);
       return "delivered";
     }
     let delivered = false;
     const unsubscribe = await ports.runtime.subscribe(
       { sessionId: entry.parentSessionId, afterSequence: throughSequence },
-      async (emission) => {
+      (emission) => {
         if (delivered || !isSessionStreamFrame(emission)) return;
         const kind = emission.event.payload.kind;
         if (kind === "session.stopped") {
@@ -352,7 +366,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         if (kind !== "attachment.opened") return;
         delivered = true;
         unsubscribe();
-        await submitNotice(entry, text);
+        submitNotice(entry, text);
       },
       (error) => {
         report(

@@ -619,10 +619,11 @@ describe("deliver — a notice waits for a parent that can read it", () => {
     h.setReceipt("rejected");
 
     await completeChildTurn(h);
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(h.parentCommands()).toHaveLength(1);
     expect(h.reports).toEqual([
-      expect.stringMatching(/was refused by parent .*: no_live_executor/),
+      expect.stringMatching(/notice for .* was refused: no_live_executor/),
     ]);
   });
 
