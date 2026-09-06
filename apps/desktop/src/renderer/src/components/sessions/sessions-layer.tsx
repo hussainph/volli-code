@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { errorMessage } from "@volli/shared";
+
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import {
@@ -21,8 +23,13 @@ import {
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
+import {
+  hydrateBackgroundShells,
+  subscribeBackgroundShells,
+} from "@renderer/stores/background-shells";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
@@ -196,6 +203,21 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   // (`stores/project-sessions.ts`), and the sidebar's Active band and the
   // board's active-session ring both read what it feeds.
   React.useEffect(() => subscribeProjectSessionActivity(), []);
+
+  // Background shells (VC-270), pushed from main's one host for the reason
+  // the channels above are mounted here. Hydrated once behind the
+  // subscription, so a window opened after a shell started still lists it.
+  React.useEffect(() => {
+    const stop = subscribeBackgroundShells(window.api.shells);
+    void hydrateBackgroundShells(window.api.shells)
+      .then((result) => {
+        if (!result.ok) toastError(`Could not load background shells: ${result.error}`);
+      })
+      .catch((reason: unknown) => {
+        toastError(`Could not load background shells: ${errorMessage(reason)}`);
+      });
+    return stop;
+  }, []);
 
   // And the catalog those events are read against: which harnesses beyond the
   // four this renderer ships main will actually launch. Pulled once here so a
