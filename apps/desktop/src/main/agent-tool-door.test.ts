@@ -17,7 +17,11 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_AUTHORITY_POLICY, NO_AUTOMATION_TRIGGER } from "@volli/shared";
+import {
+  DEFAULT_AUTHORITY_POLICY,
+  defaultModelRequiredForTier,
+  NO_AUTOMATION_TRIGGER,
+} from "@volli/shared";
 import type {
   AuthorityPolicy,
   AutomationRun,
@@ -521,6 +525,90 @@ describe("session_start through the Agent Tool Surface", () => {
     );
   });
 
+  /**
+   * A tier names a kind of work (VC-259). The door hands it to the facade as
+   * the override's `tier` half and reports what it RESOLVED to — the model and
+   * level the Session actually recorded — with the tier beside it, so the
+   * caller can see the swap it asked for happened and was not silent.
+   */
+  describe("tier", () => {
+    it("hands a tier to the facade and reports what it resolved to", async () => {
+      const h = harness();
+
+      const result = await h.call({ ticket: "VC-1", tier: "fast" });
+
+      expect(h.startInputs[0]?.modelOverride).toEqual({ tier: "fast" });
+      expect(result.text).toContain(
+        "Model: openai-codex/gpt-5.6-sol at reasoning high (fast tier).",
+      );
+    });
+
+    it("lets a Ticket Session name a tier under the same cap it already had", async () => {
+      const h = harness();
+
+      const result = await h.call({ ticket: "VC-1", tier: "deep" }, "ticket-tier", TICKET_CALLER);
+
+      expect(result.text).toContain("(deep tier)");
+      expect(h.startInputs[0]).toMatchObject({
+        modelOverride: { tier: "deep" },
+        delegation: { parentSessionId: TICKET_CALLER.sessionId, claimToolCallId: "ticket-tier" },
+      });
+    });
+
+    it("carries an explicit reasoning level beside the tier", async () => {
+      const h = harness();
+
+      await h.call({ ticket: "VC-1", tier: "visual", reasoning: "low" });
+
+      expect(h.startInputs[0]?.modelOverride).toEqual({ tier: "visual", reasoningLevel: "low" });
+    });
+
+    it("refuses a tier beside an exact model, starting nothing", async () => {
+      const h = harness();
+
+      const result = await h.call({
+        ticket: "VC-1",
+        tier: "fast",
+        model: { providerId: "anthropic", modelId: "claude-opus" },
+      });
+
+      expect(result.text).toBe("`tier` and `model` are alternatives; pass one.");
+      expect(h.startInputs).toEqual([]);
+    });
+
+    it("refuses a tier it does not know, naming the ones it does", async () => {
+      const h = harness();
+
+      const result = await h.call({ ticket: "VC-1", tier: "utility" });
+
+      expect(result.text).toBe("`tier` must be one of: fast, deep, visual, ticket, global.");
+      expect(h.startInputs).toEqual([]);
+    });
+
+    it("says which tier resolved to nothing when the facade refuses", async () => {
+      const h = harness({
+        startError: new StructuredSessionsError(
+          "DEFAULT_MODEL_REQUIRED",
+          defaultModelRequiredForTier("visual"),
+        ),
+      });
+
+      const result = await h.call({ ticket: "VC-1", tier: "visual" });
+
+      expect(result.text).toContain("The visual tier resolved to nothing.");
+      expect(result.text).toContain("Choose a default model in Settings");
+    });
+
+    it("names no tier on a start that asked for none", async () => {
+      const h = harness();
+
+      const result = await h.call({ ticket: "VC-1" });
+
+      expect(result.text).toContain("Model: openai-codex/gpt-5.6-sol at reasoning high.");
+      expect(result.text).not.toContain("tier");
+    });
+  });
+
   it("refuses in words the model can act on, never by throwing", async () => {
     for (const input of [
       {},
@@ -528,6 +616,7 @@ describe("session_start through the Agent Tool Surface", () => {
       { ticket: "VC-1", message: "   " },
       { ticket: "VC-1", model: { providerId: "anthropic" } },
       { ticket: "VC-1", reasoning: "telepathic" },
+      { ticket: "VC-1", tier: 7 },
     ]) {
       const h = harness();
       const result = await h.call(input);

@@ -10,6 +10,8 @@ import type {
   TicketEventActor,
 } from "@volli/shared";
 
+import { defaultModelRequiredForTier } from "@volli/shared";
+
 import {
   createSessions,
   STRUCTURED_ADAPTER_ID,
@@ -54,7 +56,7 @@ function sessions(
   return {
     commands,
     sessions: createSessions({
-      readDefaultModel: () => MODEL,
+      readDefaultModel: async () => MODEL,
       readModelSelection: async () => MODEL,
       ticketBelongsToProject: () => true,
       skills: NO_SKILLS,
@@ -72,11 +74,14 @@ function sessions(
 }
 
 describe("Sessions", () => {
-  it("asks the default-model port with the Role AND the project — the chain's project rung (VC-126)", async () => {
+  it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {
+    // The Role decides the rung (VC-53): a Ticket Session reads the `ticket`
+    // tier, a project chat the `global` one. Spoken as a tier since VC-259,
+    // because an override can name any rung and the port answers in one word.
     const asked: Array<[string, string | null]> = [];
     const { sessions: door } = sessions({
-      readDefaultModel: (role, projectId) => {
-        asked.push([role, projectId]);
+      readDefaultModel: async (tier, projectId) => {
+        asked.push([tier, projectId]);
         return MODEL;
       },
     });
@@ -96,7 +101,7 @@ describe("Sessions", () => {
 
     expect(asked).toEqual([
       ["ticket", "project-1"],
-      ["project", "project-2"],
+      ["global", "project-2"],
     ]);
   });
 
@@ -435,10 +440,25 @@ describe("Sessions", () => {
     expect(commands.filter((request) => request.command.kind === "model.select")).toHaveLength(1);
   });
 
+  it("backfills from the global tier with no project — the rung every Role inherits", async () => {
+    const asked: Array<[string, string | null]> = [];
+    const { sessions: door } = sessions({
+      readModelSelection: async () => null,
+      readDefaultModel: async (tier, projectId) => {
+        asked.push([tier, projectId]);
+        return MODEL;
+      },
+    });
+
+    await door.attach({ operationId: "operation-backfill", sessionId: "session-legacy" });
+
+    expect(asked).toEqual([["global", null]]);
+  });
+
   it("refuses a backfill it cannot make honestly", async () => {
     const { commands, sessions: door } = sessions({
       readModelSelection: async () => null,
-      readDefaultModel: () => null,
+      readDefaultModel: async () => null,
     });
 
     await expect(
@@ -594,7 +614,7 @@ describe("Sessions", () => {
       // The no-default + --model case: nothing to merge a level from, so the
       // override runs at Volli's central "medium" — validated like any other.
       const { commands, sessions: door } = sessions({
-        readDefaultModel: () => null,
+        readDefaultModel: async () => null,
         inspectModelAccess: async () => access,
       });
 
@@ -615,7 +635,7 @@ describe("Sessions", () => {
 
     it("requires a default or an explicit model before honoring a reasoning-only override", async () => {
       const { commands, sessions: door } = sessions({
-        readDefaultModel: () => null,
+        readDefaultModel: async () => null,
         inspectModelAccess: async () => access,
       });
 
@@ -726,7 +746,7 @@ describe("Sessions", () => {
       // model and no default is unanswerable, and it refuses before anything
       // durable exists exactly as it always did.
       const { commands, sessions: door } = sessions({
-        readDefaultModel: () => null,
+        readDefaultModel: async () => null,
         inspectModelAccess: async () => access,
       });
 
@@ -754,6 +774,161 @@ describe("Sessions", () => {
     });
   });
 
+  /**
+   * A named tier (VC-259): the override names a KIND of work and the port
+   * answers with the model the user configured for it. The Session is still
+   * pinned to that model — `model.select` carries a selection, never a tier
+   * name — so a later Settings change never moves a running Session.
+   */
+  describe("model tier override", () => {
+    const FAST: ModelSelection = {
+      providerId: "anthropic",
+      modelId: "claude-opus",
+      reasoningLevel: "low",
+    };
+    const access: ModelAccessSnapshot = {
+      observedAt: 1,
+      providers: [],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          label: "Claude Opus",
+          state: "available",
+          reasoningLevels: ["low", "medium", "high"],
+          acceptsImageInput: true,
+        },
+      ],
+    };
+
+    it("asks the port for the named tier and records what it resolved to, level included", async () => {
+      const asked: Array<[string, string | null]> = [];
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: async (tier, projectId) => {
+          asked.push([tier, projectId]);
+          return tier === "fast" ? FAST : MODEL;
+        },
+      });
+
+      const started = await door.start({
+        ...startInput("operation-fast"),
+        modelOverride: { tier: "fast" },
+      });
+
+      // The tier replaces the Role's rung: one question to the port, in the
+      // tier's name, with the project so its own pin still comes first.
+      expect(asked).toEqual([["fast", "project-1"]]);
+      expect(started.model).toEqual(FAST);
+      expect(commands[1]).toMatchObject({
+        command: { kind: "model.select", selection: FAST },
+      });
+    });
+
+    it("never inspects Model Access for a bare tier — the row was validated when it was saved", async () => {
+      let inspections = 0;
+      const { sessions: door } = sessions({
+        readDefaultModel: async () => FAST,
+        inspectModelAccess: async () => {
+          inspections += 1;
+          return access;
+        },
+      });
+
+      await door.create({
+        ...startInput("operation-unasked-tier"),
+        modelOverride: { tier: "deep" },
+      });
+
+      expect(inspections).toBe(0);
+    });
+
+    it("lets an explicit reasoning level override the tier's stored one, validated against the model", async () => {
+      const { sessions: door } = sessions({
+        readDefaultModel: async () => FAST,
+        inspectModelAccess: async () => access,
+      });
+
+      const started = await door.start({
+        ...startInput("operation-deep-high"),
+        modelOverride: { tier: "deep", reasoningLevel: "high" },
+      });
+
+      expect(started.model).toEqual({ ...FAST, reasoningLevel: "high" });
+    });
+
+    it("refuses a level the tier's model cannot run, naming its levels", async () => {
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: async () => FAST,
+        inspectModelAccess: async () => access,
+      });
+
+      await expect(
+        door.start({
+          ...startInput("operation-deep-max"),
+          modelOverride: { tier: "deep", reasoningLevel: "max" },
+        }),
+      ).rejects.toMatchObject({
+        code: "MODEL_UNAVAILABLE",
+        message: expect.stringContaining("valid: low, medium, high"),
+      });
+      expect(commands).toEqual([]);
+    });
+
+    it("refuses a tier that resolves to nothing, naming the tier — never a substitute", async () => {
+      const { commands, sessions: door } = sessions({ readDefaultModel: async () => null });
+
+      await expect(
+        door.start({ ...startInput("operation-empty-visual"), modelOverride: { tier: "visual" } }),
+      ).rejects.toMatchObject({
+        code: "DEFAULT_MODEL_REQUIRED",
+        message: defaultModelRequiredForTier("visual"),
+      });
+      expect(commands).toEqual([]);
+    });
+
+    it("names the tier in the refusal even when a reasoning level rode along", async () => {
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: async () => null,
+        inspectModelAccess: async () => access,
+      });
+
+      await expect(
+        door.start({
+          ...startInput("operation-empty-fast-level"),
+          modelOverride: { tier: "fast", reasoningLevel: "low" },
+        }),
+      ).rejects.toMatchObject({
+        code: "DEFAULT_MODEL_REQUIRED",
+        message: defaultModelRequiredForTier("fast"),
+      });
+      expect(commands).toEqual([]);
+    });
+
+    it("records the tier's answer as asked when told to, without inspecting", async () => {
+      // An Automation Run's door (VC-133): the tier resolves at Run time and
+      // the Session carries what it resolved to, with the attach as the judge.
+      let inspections = 0;
+      const { commands, sessions: door } = sessions({
+        readDefaultModel: async () => FAST,
+        inspectModelAccess: async () => {
+          inspections += 1;
+          return access;
+        },
+      });
+
+      const created = await door.create({
+        ...startInput("operation-recorded-tier"),
+        modelOverride: { tier: "fast", reasoningLevel: "max", whenUnavailable: "record" },
+      });
+
+      expect(created.model).toEqual({ ...FAST, reasoningLevel: "max" });
+      expect(commands[1]).toMatchObject({
+        command: { kind: "model.select", selection: { ...FAST, reasoningLevel: "max" } },
+      });
+      expect(inspections).toBe(0);
+    });
+  });
+
   it("refuses a ticket outside the requested project before creating a Session", async () => {
     const { commands, sessions: door } = sessions({ ticketBelongsToProject: () => false });
 
@@ -765,7 +940,7 @@ describe("Sessions", () => {
   });
 
   it("requires a user-configured default before creating a Session", async () => {
-    const { commands, sessions: door } = sessions({ readDefaultModel: () => null });
+    const { commands, sessions: door } = sessions({ readDefaultModel: async () => null });
 
     await expect(door.start(startInput("operation-no-default"))).rejects.toMatchObject({
       code: "DEFAULT_MODEL_REQUIRED",
@@ -985,7 +1160,7 @@ describe("Sessions", () => {
   it("never records session_started for a create that refuses before creating", async () => {
     const startedEvents: unknown[] = [];
     const { sessions: door } = sessions({
-      readDefaultModel: () => null,
+      readDefaultModel: async () => null,
       recordSessionStarted: (event) => startedEvents.push(event),
     });
 

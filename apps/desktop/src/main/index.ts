@@ -18,6 +18,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  acceptsImageInputIn,
   applySkillModes,
   BLOB_URL_SCHEME,
   diffManagedContent,
@@ -1397,21 +1398,27 @@ app.whenReady().then(async () => {
           runtime: sessionRuntime,
           // The inheritance chain, in rung order (VC-112, VC-126): the
           // project's own runtime preference first — `projects.session_model`
-          // (migration 024, NULL = inherit) — then the app-wide per-purpose
-          // record, Role in and purpose out (VC-53): a Ticket Session resolves
-          // the execution default, a project chat the orchestration one —
-          // stated by `resolveDefaultModel`, never substituted. One closure so
-          // every door — renderer chat, CLI start, an Automation Run — walks
+          // (migration 024, NULL = inherit) — then the app-wide tier ladder
+          // from the named rung down (VC-53, VC-259): a Ticket Session's
+          // default reads `ticket`, a project chat's `global`, and a
+          // `session_start` tier reads its own row — stated by
+          // `resolveDefaultModel`, never substituted. One closure so every
+          // door — renderer chat, the tool door, an Automation Run — walks
           // the same rungs.
-          readDefaultModel: (role, projectId) => {
+          //
+          // The catalog is consulted for exactly one rung: `visual`'s fallback
+          // holds only when the model it lands on can read images, and only
+          // Model Access knows. Every other tier stays a pure walk over
+          // stored defaults and pays for no inspection.
+          readDefaultModel: async (tier, projectId) => {
             const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
-            return (
-              project?.sessionModel ??
-              resolveDefaultModel(
-                readModelAccessDefaults(sessionDb),
-                role === "ticket" ? "ticket" : "global",
-              )
-            );
+            const pinned = project?.sessionModel ?? null;
+            if (pinned !== null) return pinned;
+            const sees =
+              tier === "visual"
+                ? acceptsImageInputIn((await piRuntimeHost.inspectModelAccess({})).models)
+                : undefined;
+            return resolveDefaultModel(readModelAccessDefaults(sessionDb), tier, sees);
           },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,

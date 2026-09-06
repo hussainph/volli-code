@@ -33,14 +33,17 @@
 
 import type Database from "better-sqlite3";
 import {
+  AGENT_MODEL_TIERS,
   autoTitleFromKickoff,
   DEFAULT_KICKOFF_MESSAGE,
   displayTicketId,
+  isAgentModelTier,
   REASONING_LEVELS,
   shortSessionId,
   VERB_TOOLS,
 } from "@volli/shared";
 import type {
+  AgentModelTier,
   Automation,
   AuthorityPolicy,
   Project,
@@ -65,7 +68,7 @@ import type {
 } from "./session-runtime/delegation-policy";
 import { sessionCreateCommandId } from "./session-runtime/sessions";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
-import type { StartSessionPorts } from "./session-runtime/start-session";
+import type { StartSessionModelChoice, StartSessionPorts } from "./session-runtime/start-session";
 import {
   sendSessionMessageOperation,
   stopSessionOperation,
@@ -170,9 +173,17 @@ function optionalText(
   return { ok: true, value: raw };
 }
 
-/** The model override halves, validated the way the socket door validates them. */
+/**
+ * The model override halves, validated the way the socket door validates them.
+ *
+ * `model` and `tier` (VC-259) are alternatives: an exact id, or a kind of work
+ * the user's tier table resolves. Both at once is refused in words before
+ * anything is built, because the facade's own type has no shape for the pair
+ * and a silent precedence between them would be exactly the swap the ticket
+ * forbids. `reasoning` rides beside either and wins over a tier's stored level.
+ */
 function readModelOverride(input: Readonly<Record<string, unknown>>):
-  | { ok: true; model?: { providerId: string; modelId: string }; reasoning?: ReasoningLevel }
+  | { ok: true; choice?: StartSessionModelChoice; reasoning?: ReasoningLevel }
   | {
       ok: false;
       text: string;
@@ -186,6 +197,17 @@ function readModelOverride(input: Readonly<Record<string, unknown>>):
     }
     model = { providerId: candidate.providerId, modelId: candidate.modelId };
   }
+  const rawTier = input.tier;
+  let tier: AgentModelTier | undefined;
+  if (rawTier !== undefined && rawTier !== null) {
+    if (!isAgentModelTier(rawTier)) {
+      return { ok: false, text: `\`tier\` must be one of: ${AGENT_MODEL_TIERS.join(", ")}.` };
+    }
+    tier = rawTier;
+  }
+  if (model !== undefined && tier !== undefined) {
+    return { ok: false, text: "`tier` and `model` are alternatives; pass one." };
+  }
   const rawReasoning = input.reasoning;
   let reasoning: ReasoningLevel | undefined;
   if (rawReasoning !== undefined && rawReasoning !== null) {
@@ -197,9 +219,11 @@ function readModelOverride(input: Readonly<Record<string, unknown>>):
     }
     reasoning = rawReasoning as ReasoningLevel;
   }
+  const choice: StartSessionModelChoice | undefined =
+    tier !== undefined ? { tier } : model !== undefined ? { model } : undefined;
   return {
     ok: true,
-    ...(model === undefined ? {} : { model }),
+    ...(choice === undefined ? {} : { choice }),
     ...(reasoning === undefined ? {} : { reasoning }),
   };
 }
@@ -409,7 +433,7 @@ async function startSessionTool(
         ...(message.value === undefined ? {} : { message: message.value }),
         ...(title.value === undefined ? {} : { title: title.value }),
         ...(() => {
-          const built = startSessionModelOverride(override.model, override.reasoning);
+          const built = startSessionModelOverride(override.choice, override.reasoning);
           return built === undefined ? {} : { modelOverride: built };
         })(),
         ...(delegation === undefined ? {} : { delegation }),
@@ -421,10 +445,17 @@ async function startSessionTool(
     // is not a thing any other Volli surface accepts back, so handing one to a
     // model would be handing it an id it cannot use.
     const handle = shortSessionId(started.sessionId);
+    // What the tier RESOLVED to, beside the tier's name: the one line that
+    // lets a caller see the swap it asked for actually happened, and to what.
+    // A silent tier is the failure mode every other tool with tiers reports.
+    const tier =
+      override.choice !== undefined && "tier" in override.choice
+        ? ` (${override.choice.tier} tier)`
+        : "";
     return {
       text: [
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
-        `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}.`,
+        `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
         started.state === "ready"
           ? "It is attached and its kickoff turn has been submitted. It runs on its own from here and does not report back into this Session; use `volli session peek` to look in on it."
           : "It was created but its attachment needs recovery, so no kickoff was submitted. A person can retry it from the app.",
