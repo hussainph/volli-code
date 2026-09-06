@@ -41,6 +41,7 @@
 import type { SessionRole } from "./agent-runtime";
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
+import type { SessionTurnOutcome } from "./session-ledger";
 import type { SessionProvenance } from "./session-provenance";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
@@ -185,6 +186,17 @@ export interface ChatSessionRecord {
    * navigator row exists to save them.
    */
   waitingOn: ChatWaitingReason | null;
+  /**
+   * How the latest turn ended, or `null` while one is open or before any has
+   * started (VC-269) — {@link SessionProjection.lastTurnOutcome}, carried
+   * verbatim. It is what tells an `idle` row that finished from an `idle` row
+   * that broke: `activity` alone reads both as the same quiet, and the one
+   * surface that must not (a parent's subagent cluster) would otherwise draw
+   * a crashed helper as done. Independent of `activity`'s precedence — a
+   * `stopped` row keeps the outcome of whatever turn it had — so a reader
+   * that cares about the stop reads `activity` first, as the island does.
+   */
+  outcome: SessionTurnOutcome | null;
   /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
   lastActivityAt: number;
   /**

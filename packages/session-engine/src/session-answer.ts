@@ -1,4 +1,9 @@
-import type { ListSessionEventsQuery, SessionEvent, TranscriptReference } from "@volli/shared";
+import type {
+  ListSessionEventsQuery,
+  SessionEvent,
+  SessionTurnOutcome,
+  TranscriptReference,
+} from "@volli/shared";
 
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
 
@@ -14,16 +19,19 @@ import type { SessionTranscriptArtifact } from "./transcript-artifacts";
  *
  * Unlike the transcript tail, the message is returned IN FULL: the tail is a
  * glance ("is it alive, what is it doing"), and this is the deliverable.
+ *
+ * The three ended states ARE {@link SessionTurnOutcome}, the ledger's own
+ * word for how a turn ended, so this fold and `projectSession`'s
+ * `lastTurnOutcome` (VC-269) share one vocabulary; a test here pins that they
+ * read the same history the same way.
  */
 export type SessionAnswerState =
   /** No turn has started; nothing was asked of it yet. */
   | "not-started"
   /** A turn is open — the answer, if any, is not final. */
   | "running"
-  | "completed"
-  | "interrupted"
   | "stopped"
-  | "failed";
+  | SessionTurnOutcome;
 
 export interface SessionAnswer {
   state: SessionAnswerState;

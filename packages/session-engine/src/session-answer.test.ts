@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionEvent } from "@volli/shared";
+import { projectSession } from "@volli/shared";
+import type { Session, SessionEvent } from "@volli/shared";
 
 import { foldSessionAnswerState, readSessionAnswer } from "./session-answer";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
@@ -115,6 +116,64 @@ describe("foldSessionAnswerState — how the latest turn ended", () => {
         failure(3),
       ]).state,
     ).toBe("completed");
+  });
+
+  // The drift pin (VC-269): `projectSession.lastTurnOutcome` is the same fold
+  // in the ledger's vocabulary, minus the states a projection already carries
+  // elsewhere. Every ended state here must be the projection's outcome, and
+  // every not-ended state must be its null — across every order of the events
+  // that can end a turn, not one hand-picked sequence.
+  it("agrees with projectSession's lastTurnOutcome on every turn-ending history", () => {
+    const session: Session = {
+      id: SESSION,
+      projectId: "p",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: "parent",
+      title: "Helper",
+      createdAt: 0,
+    };
+    const attachment = {
+      id: "a",
+      sessionId: SESSION,
+      adapterId: "pi",
+      venue: { id: "local", kind: "local" as const },
+      continuity: "fresh" as const,
+      native: null,
+      authority: null,
+    };
+    const enders: readonly SessionEvent["payload"][] = [
+      { kind: "turn.completed", attachmentId: "a", turnId: "t1" },
+      { kind: "turn.interrupted", attachmentId: "a", turnId: "t1" },
+      { kind: "attachment.closed", attachmentId: "a", outcome: "completed" },
+      { kind: "attachment.closed", attachmentId: "a", outcome: "interrupted" },
+      { kind: "attachment.closed", attachmentId: "a", outcome: "failed" },
+      {
+        kind: "attachment.failed",
+        attachment,
+        failure: { code: "runtime_failed", detail: null, diagnostic: null },
+      },
+      { kind: "turn.started", attachmentId: "a", turnId: "t2" },
+    ];
+    const histories: SessionEvent[][] = [[]];
+    for (const first of enders) {
+      histories.push([event(2, first)]);
+      for (const second of enders) histories.push([event(2, first), event(3, second)]);
+    }
+    for (const tail of histories) {
+      const events = [
+        event(0, { kind: "attachment.opened", attachment }),
+        event(1, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+        ...tail,
+      ];
+      const answer = foldSessionAnswerState(events).state;
+      const projected = projectSession(session, events).lastTurnOutcome;
+      const expected = answer === "running" || answer === "not-started" ? null : answer;
+      expect({ tail: tail.map((e) => e.payload), projected }).toEqual({
+        tail: tail.map((e) => e.payload),
+        projected: expected,
+      });
+    }
   });
 });
 

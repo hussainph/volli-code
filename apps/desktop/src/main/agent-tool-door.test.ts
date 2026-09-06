@@ -1046,6 +1046,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
                 stopped: null,
                 modelSelection: null,
                 turnActive: true,
+                lastTurnOutcome: null,
                 authorityDenials: 0,
                 usage: {
                   inputTokens: 0,

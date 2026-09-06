@@ -31,6 +31,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     stopped: null,
     modelSelection: null,
     turnActive: true,
+    lastTurnOutcome: null,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 0,

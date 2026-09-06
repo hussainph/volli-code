@@ -47,6 +47,10 @@ export function chatSessionRecord(
     live,
     activity: chatActivity(projection, live),
     waitingOn: chatWaitingOn(projection),
+    // Verbatim from the fold (VC-269): the projection already folds the
+    // attachment's failure into the turn's outcome, so there is nothing for
+    // this row to re-derive and no second reading of "failed" to drift.
+    outcome: projection.lastTurnOutcome,
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
     role: projection.session.role,

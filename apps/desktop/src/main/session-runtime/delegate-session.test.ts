@@ -104,6 +104,7 @@ function projection(id: string, overrides: Partial<SessionProjection> = {}): Ses
     stopped: null,
     modelSelection: null,
     turnActive: true,
+    lastTurnOutcome: null,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
