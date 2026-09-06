@@ -20,6 +20,7 @@ import type { ActivityKind } from "./session-activity";
 import { NON_CODING_TOOL_IDS, type AuthorityDenialCause } from "./authority";
 import type {
   CompactionReason,
+  ReasoningDropCause,
   ReasoningLevel,
   RuntimeFailure,
   RuntimeObservation,
@@ -207,6 +208,23 @@ export interface CompactionEvent {
   runId?: string;
 }
 
+/**
+ * A provider dropped reasoning from a request, and the turn succeeded anyway.
+ *
+ * A count and a closed vocabulary word: no path, because a structural pointer
+ * like `messages.1.content.0` describes the shape of a specific conversation,
+ * and this side channel carries nothing about one. The product observation
+ * keeps the paths; this keeps the fact that it happened and how often, which
+ * is what makes the rate visible without making the conversation visible.
+ */
+export interface ProviderReasoningDroppedEvent {
+  kind: "provider-reasoning-dropped";
+  cause: ReasoningDropCause;
+  /** Blocks dropped across every request in this Turn. */
+  count: number;
+  runId?: string;
+}
+
 /** Attachment lifecycle, with failures reduced to their bounded reason. */
 export interface AttachmentEvent {
   kind: "attachment";
@@ -241,6 +259,7 @@ export type ObservabilityEvent =
   | ToolEvent
   | AuthorityEvent
   | CompactionEvent
+  | ProviderReasoningDroppedEvent
   | AttachmentEvent
   | AttentionEvent
   | DroppedEvent;
@@ -371,6 +390,18 @@ export class ObservabilityReducer {
           ...(observation.failure === undefined
             ? {}
             : { failureReason: observation.failure.reason }),
+        };
+      // The worst cause in the turn, not each one: a turn that lost blocks to
+      // a prefix mismatch AND to a model fallback is first of all a prefix
+      // mismatch, because that is the one that says the integration edited
+      // history. One event per turn either way.
+      case "provider-reasoning-dropped":
+        return {
+          kind: "provider-reasoning-dropped",
+          cause: observation.causes.includes("prefix-mismatch")
+            ? "prefix-mismatch"
+            : (observation.causes[0] ?? "unknown"),
+          count: observation.count,
         };
       case "attention":
         return { kind: "attention", phase: observation.state, reason: observation.reason };

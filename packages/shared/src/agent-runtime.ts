@@ -1098,6 +1098,7 @@ export type RuntimeObservation =
   | TurnObservation
   | CompactionProgressObservation
   | CompactionObservation
+  | ProviderReasoningDroppedObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
   | UsageObservation
@@ -1105,6 +1106,57 @@ export type RuntimeObservation =
   | AuthorityObservation
   | AttentionObservation
   | InteractionObservation;
+
+/**
+ * Why a provider dropped reasoning this runtime had sent it.
+ *
+ * Volli's own words for Anthropic's `input_transformations` entries, spelled
+ * out rather than passed through: the provider's vocabulary is not ours to
+ * leak into durable history or telemetry, and a type it adds later must land
+ * as `unknown` rather than as a new string nobody has read. The same rule
+ * `ATTEMPT_STOP_REASONS` follows, for the same reason.
+ *
+ * - `prefix-mismatch` — the block was bound to a prefix that has since changed.
+ *   This is the one that means Volli edited history: something before the block
+ *   is not the bytes it was signed against.
+ * - `model-mismatch` — the block was written by a model that cannot read it
+ *   back. A server-side fallback does this with nobody touching the picker.
+ * - `unknown` — a transformation type this build has no word for.
+ */
+export const REASONING_DROP_CAUSES = ["prefix-mismatch", "model-mismatch", "unknown"] as const;
+
+export type ReasoningDropCause = (typeof REASONING_DROP_CAUSES)[number];
+
+/**
+ * The provider silently dropped reasoning from the request this turn sent.
+ *
+ * Under the thinking-binding beta a mismatched `thinking` block is no longer a
+ * 400 — it is dropped, the request succeeds, and the only trace is a top-level
+ * `input_transformations` array that pi-ai records as a diagnostic on the
+ * assistant message. So this is the ONLY way a person can learn that the model
+ * answered them without the reasoning it had built up (VC-254).
+ *
+ * Not an {@link AttentionObservation}: nothing is blocked, no action clears it,
+ * and the turn it describes completed normally. It is a fact about the turn,
+ * closer to a compaction than to a failure — which is also why it carries a
+ * `turnId` and is reported at most once per turn however many blocks went.
+ *
+ * `paths` are the provider's structural pointers (`messages.1.content.0`), kept
+ * because they are what makes a report actionable when someone diffs two
+ * request bodies. They name positions, never content.
+ */
+export interface ProviderReasoningDroppedObservation {
+  kind: "provider-reasoning-dropped";
+  turnId: string;
+  /** How many blocks the provider dropped across every request in this Turn. Always at least one. */
+  count: number;
+  /** Every distinct cause in this Turn's transformations, in Volli's words. */
+  causes: readonly ReasoningDropCause[];
+  /** Every distinct provider structural pointer to what it dropped. */
+  paths: readonly string[];
+  occurredAt?: number;
+  recoveryCursor?: string;
+}
 
 /**
  * The Session's authority decided whether one tool call could run.

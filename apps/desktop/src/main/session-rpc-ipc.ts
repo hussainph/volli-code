@@ -80,9 +80,9 @@ const ROUTED_PROCEDURES = SESSION_RPC_IPC_PROCEDURES satisfies readonly SessionR
 type PublishedProcedure<Procedure extends SessionRouterProcedure> = Procedure;
 
 /**
- * Development-only, and staying that way. The lab bridge serves these over
- * HTTP; a production client has no debug pane to feed and no business reading
- * a diagnostic log over the same channel it runs Sessions on.
+ * Development-only, and staying that way. No transport serves these today; a
+ * production client has no debug pane to feed and no business reading a
+ * diagnostic log over the same channel it runs Sessions on.
  */
 type DeliberatelyMainOnlyProcedure = PublishedProcedure<
   "labDiagnostics.list" | "labDiagnostics.subscribe"

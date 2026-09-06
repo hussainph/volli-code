@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import {
   createEditTool,
   createReadTool,
@@ -5,6 +6,17 @@ import {
 } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it } from "vite-plus/test";
 import { normalizeToolPath } from "./pi-tool-path";
+
+/**
+ * The five arguments a 0.85 harness tool takes after its params: the required
+ * progress callback, the tool context, the replay invocation, and the chord
+ * context cancellation now rides on. None of them decides a path, so all four
+ * are the emptiest thing that type-checks — what this file is reading out of Pi
+ * is the string that reaches `env.absolutePath`, and nothing else.
+ */
+function inertToolArguments(env: unknown) {
+  return [() => {}, { env } as never, undefined as never, BACKGROUND_CONTEXT] as const;
+}
 
 /**
  * What Pi's own normalization produces, read out of Pi rather than asserted from
@@ -28,9 +40,7 @@ async function whatPiWouldOpen(
     tool.execute(
       "tool-call-1",
       { path, content: "", edits: [{ oldText: "a", newText: "b" }] },
-      undefined,
-      undefined,
-      { env } as never,
+      ...inertToolArguments(env),
     ),
   ).rejects.toThrow("recorded");
   if (seen === undefined) throw new Error("Pi never resolved a path");
@@ -82,9 +92,11 @@ describe("normalizeToolPath", () => {
       },
     };
     await expect(
-      createReadTool().execute("tool-call-1", { path: "@a\u3000b.txt" }, undefined, undefined, {
-        env,
-      } as never),
+      createReadTool().execute(
+        "tool-call-1",
+        { path: "@a\u3000b.txt" },
+        ...inertToolArguments(env),
+      ),
     ).rejects.toThrow("recorded");
     expect(seen).toBe(normalizeToolPath("@a\u3000b.txt"));
   });

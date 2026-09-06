@@ -80,6 +80,7 @@ import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import {
   getAutomation,
+  getAutomationRun,
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
@@ -1522,7 +1523,7 @@ app.whenReady().then(async () => {
                 },
         });
   /**
-   * Model-call titling (VC-81): the one main-side hook both doors feed.
+   * Model-call titling (VC-81): the one main-side hook every auto-title door feeds.
    *
    * The ladder itself is stated once in `@volli/shared`
    * (`resolveAutoTitleModel`); this only supplies the three rungs it reads
@@ -2004,6 +2005,7 @@ app.whenReady().then(async () => {
       ? createAutomationRunner({
           engine: automationEngine,
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
+          findRun: (runId) => getAutomationRun(sessionDb, runId),
           findTicket: (ticketId) => getTicket(sessionDb, ticketId),
           findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
           listRunsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
@@ -2057,6 +2059,14 @@ app.whenReady().then(async () => {
             const snapshot = await sessionRuntime.projection({ sessionId });
             return chatSessionRecord(snapshot.projection).activity;
           },
+          // A Run's saved name is its launch fallback, not a permanent title.
+          // Its Instructions supply the action and, for a Ticket Run, the
+          // Ticket supplies the distinguishing subject. The runner carries the
+          // exact fallback into the shared guard, so a later human rename still
+          // wins byte-for-byte.
+          ...(autoTitler === null
+            ? {}
+            : { refineAutoTitle: (input) => void autoTitler.refine(input) }),
           // A Run that names no Ticket (VC-130's schedule Target) OMITS the
           // property rather than sending `undefined` for it: the Electron
           // transport would carry that by structured clone, and an HTTP one

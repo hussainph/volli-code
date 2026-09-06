@@ -39,16 +39,19 @@ import {
   createReadTool,
   createWriteTool,
   type AgentHarnessTool,
+  type AgentHarnessToolInvocation,
   type AgentTool,
   type AgentToolResult,
   type ExecutionEnv,
   type ExecutionToolContext,
+  type JsonValue,
 } from "@earendil-works/pi-agent-core/node";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import { sessionToolBindings, verbEntry } from "@volli/shared";
 import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
 import type {
   CodingToolId,
@@ -65,6 +68,62 @@ import type {
 /** Run one product verb in the host's process, exactly as the Session spec supplies it. */
 export type CallVerbPort = NonNullable<SessionRuntimeSpec["callVerb"]>;
 
+/**
+ * The replay identity 0.85 hands a harness tool, for a Session that has no
+ * harness underneath it.
+ *
+ * `AgentHarnessToolInvocation` exists so a tool can recognise its own durable
+ * effect across a replay: Pi's runtime mints `invocationId` from the reserved
+ * result-entry id, `operationId`/`turnId` from the drive it is running under,
+ * and backs the memos with the session's lane store. Volli drives tools through
+ * the plain `Agent` instead, which knows one thing at this seam — the tool call
+ * — and has neither an operation nor a turn to name. Inventing ids that LOOK
+ * durable would be worse than repeating the one real id, so all three name the
+ * same call and nothing above may read them as durable.
+ *
+ * Memos are an ordinary `Map` for the same reason: nothing here survives the
+ * call, so a memo cannot either. That is the honest answer rather than a
+ * degraded one — without durable replay a tool re-does its work anyway, which
+ * is exactly what a memo that always reads back empty produces. Every harness
+ * tool this bundle loads — `read`, `edit`, `write`, `bash` — takes `_invocation`
+ * and never touches it; this exists so the seam is defined rather than
+ * accidental.
+ */
+function callInvocation(toolCallId: string): AgentHarnessToolInvocation {
+  const memos = new Map<string, JsonValue>();
+  return {
+    invocationId: toolCallId,
+    operationId: toolCallId,
+    turnId: toolCallId,
+    /* v8 ignore start -- unreachable, and kept correct rather than stubbed: no tool in this bundle reads or writes a memo, and one cannot be called here without a tool that does. Written as a working per-call map so that a tool which later wants one finds the behaviour the interface promises. */
+    getMemo: async (name) => memos.get(name),
+    setMemo: async (name, value) => {
+      if (value === undefined) memos.delete(name);
+      else memos.set(name, value);
+    },
+    /* v8 ignore stop */
+  };
+}
+
+/**
+ * One of Pi's context-injected harness tools, as an `AgentTool` the `Agent` can
+ * call.
+ *
+ * 0.85 moved three things across this seam. Cancellation stopped being a bare
+ * `AbortSignal` parameter and became `context.abortSignal`, so the run's signal
+ * is wrapped onto {@link BACKGROUND_CONTEXT} — an empty root carrying no values
+ * and no cancellation — and a run with no signal gets that root unchanged.
+ * `TODO_CONTEXT` would be the wrong marker: it means "a real context exists and
+ * should be threaded here", and the `Agent` genuinely has none to thread.
+ *
+ * `onUpdate` became required, so a run that supplied none is given a callback
+ * that discards. The harness's second `options` argument — its request to
+ * checkpoint the partial result durably — is dropped rather than forwarded,
+ * because the `Agent`'s own update callback takes no such argument and Volli
+ * has no durable per-tool checkpoint to write it to. The partial result itself
+ * still reaches the caller on every update, which is the whole of what the
+ * transcript renders.
+ */
 function bindContext<TParameters extends TSchema, TDetails>(
   tool: AgentHarnessTool<ExecutionToolContext, TParameters, TDetails>,
   env: ExecutionEnv,
@@ -72,7 +131,14 @@ function bindContext<TParameters extends TSchema, TDetails>(
   return {
     ...tool,
     execute: (toolCallId, params, signal, onUpdate) =>
-      tool.execute(toolCallId, params, signal, onUpdate, { env }),
+      tool.execute(
+        toolCallId,
+        params,
+        (partialResult) => onUpdate?.(partialResult),
+        { env },
+        callInvocation(toolCallId),
+        piContext(signal),
+      ),
   };
 }
 

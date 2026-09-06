@@ -338,6 +338,67 @@ describe("ObservabilityReducer lifecycle facts", () => {
     expect(leaks(event)).toBe(false);
   });
 
+  it("reduces a dropped-reasoning turn to a count and one cause, keeping no paths", () => {
+    // The side channel's own rule: a count and a closed vocabulary word. The
+    // provider's structural pointers name positions in a specific
+    // conversation, so they stay on the product observation and never reach
+    // telemetry (VC-254).
+    const event = freshReducer().reduce({
+      kind: "provider-reasoning-dropped",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+    });
+    expect(event).toEqual({
+      kind: "provider-reasoning-dropped",
+      cause: "prefix-mismatch",
+      count: 2,
+    });
+    expect(JSON.stringify(event)).not.toContain("messages.1.content.0");
+  });
+
+  it("reports a server-side model fallback as the model mismatch it is", () => {
+    expect(
+      freshReducer().reduce({
+        kind: "provider-reasoning-dropped",
+        turnId: "turn-1",
+        count: 1,
+        causes: ["model-mismatch"],
+        paths: [],
+      }),
+    ).toEqual({ kind: "provider-reasoning-dropped", cause: "model-mismatch", count: 1 });
+  });
+
+  it("calls a turn that lost blocks both ways a prefix mismatch", () => {
+    // The one that says the integration edited history outranks the one that
+    // says the provider answered on another model.
+    expect(
+      freshReducer().reduce({
+        kind: "provider-reasoning-dropped",
+        turnId: "turn-1",
+        count: 3,
+        causes: ["model-mismatch", "prefix-mismatch"],
+        paths: [],
+      }),
+    ).toMatchObject({ cause: "prefix-mismatch", count: 3 });
+  });
+
+  it("says `unknown` rather than nothing when a drop names no cause at all", () => {
+    // Defensive, and deliberately so: the causes array is built from the
+    // provider's own transformations, and a report that named none would
+    // otherwise reduce to an event with no cause field at all.
+    expect(
+      freshReducer().reduce({
+        kind: "provider-reasoning-dropped",
+        turnId: "turn-1",
+        count: 1,
+        causes: [],
+        paths: [],
+      }),
+    ).toEqual({ kind: "provider-reasoning-dropped", cause: "unknown", count: 1 });
+  });
+
   it("reduces attachment phases, bounding a failure to its reason", () => {
     expect(freshReducer().reduce({ kind: "attachment", state: "started" })).toEqual({
       kind: "attachment",

@@ -165,7 +165,10 @@ export class DocumentRegistry<Model extends RegistryModel, ViewState> {
     let entry = this.entries.get(key);
     if (entry === undefined) {
       const uri = documentUri(input.identity);
-      const language = detectDocumentLanguage(input.identity);
+      // The seed is the file as read at open: the one moment the `#!` sniff
+      // for an extensionless script gets to run. Later seeds refresh the
+      // baseline, never the language.
+      const language = detectDocumentLanguage(input.identity, input.seed.value);
       entry = {
         identity: input.identity,
         uri,
