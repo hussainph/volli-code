@@ -820,8 +820,20 @@ function planTodos(value: unknown): unknown[] | null {
 }
 
 function contentDetail(context: ActivityContext): ActivityDetail | null {
-  const text = readableText(context.input) ?? readableText(context.output);
+  const text =
+    writtenContent(context.input) ?? readableText(context.input) ?? readableText(context.output);
   return text === null ? null : { view: "output", text: clampLines(text) };
+}
+
+/**
+ * The file a Write call created, from the call's own input record
+ * (`{ path, content }`). The generic reader below does not take a plain-text
+ * `content` field, and the call's output is only the harness confirmation —
+ * without this the row would show "ok" instead of the file (VC-125).
+ */
+function writtenContent(input: unknown): string | null {
+  if (!isRecord(input) || typeof input.content !== "string") return null;
+  return input.content.trim().length > 0 ? input.content : null;
 }
 
 function diffDetail(context: ActivityContext): ActivityDetail | null {

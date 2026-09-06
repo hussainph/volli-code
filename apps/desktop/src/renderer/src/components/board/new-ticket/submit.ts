@@ -82,6 +82,11 @@ export interface KickoffChat {
    * for the socket door; kickoff asks it the same question.
    */
   title: string;
+  /**
+   * This is a fallback rather than a permanent human name. Its opening turn
+   * may therefore send it through the shared model refinement.
+   */
+  refineTitle: true;
   /** The opening turn, queued for release the moment an executor is live. */
   message: string;
   /**
@@ -196,6 +201,7 @@ export async function runKickoff(
   deps.toastSuccess(`${displayId} created`);
   const chat: KickoffChat = {
     title: autoTitleFromKickoff(DEFAULT_KICKOFF_MESSAGE, displayId),
+    refineTitle: true,
     message: DEFAULT_KICKOFF_MESSAGE,
     ...(opts.model === undefined ? {} : { model: opts.model }),
   };

@@ -966,6 +966,33 @@ describe("presenters", () => {
     expect(row.detail).toEqual({ view: "output", text: "line one\nline two" });
   });
 
+  it("write-file reads the file from a record-shaped Write input", () => {
+    // Pi sends the call as `{ path, content }`, not a bare string: the output
+    // is only the harness confirmation, so the input record is where the file
+    // lives (VC-125).
+    const row = describeActivity(
+      tool("write-file", {
+        input: { path: "src/new.ts", content: "line one\nline two\n" },
+        output: "ok",
+      }),
+    );
+    expect(row.detail).toEqual({ view: "output", text: "line one\nline two\n" });
+  });
+
+  it("write-file falls back to the confirmation when the record holds no file", () => {
+    const row = describeActivity(
+      tool("write-file", { input: { path: "src/new.ts", content: "  " }, output: "ok" }),
+    );
+    expect(row.detail).toEqual({ view: "output", text: "ok" });
+  });
+
+  it("write-file skips a record input with no text content", () => {
+    const row = describeActivity(
+      tool("write-file", { input: { path: "src/new.ts" }, output: "ok" }),
+    );
+    expect(row.detail).toEqual({ view: "output", text: "ok" });
+  });
+
   it("fetch-url falls back to duration when the harness reports no size", () => {
     const row = describeActivity(
       tool("fetch-url", { descriptor: { startedAt: 0, endedAt: 2400 } }),

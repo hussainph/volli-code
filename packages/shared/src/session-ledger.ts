@@ -7,6 +7,7 @@ import type {
   CompactionReason,
   ModelSelection,
   PromptResource,
+  ReasoningDropCause,
   SessionRole,
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
@@ -544,6 +545,16 @@ export type SessionEventPayload =
       detail: string;
     }
   | {
+      /** A provider recovered a request by removing earlier reasoning. */
+      kind: "context.reasoning_dropped";
+      attachmentId: string;
+      turnId: string;
+      count: number;
+      causes: readonly ReasoningDropCause[];
+      /** Structural positions only; never conversation content. */
+      paths: readonly string[];
+    }
+  | {
       kind: "transcript.referenced";
       attachmentId: string | null;
       turnId: string | null;
@@ -696,6 +707,7 @@ type ObservedSessionEventKind =
   | "turn.interrupted"
   | "context.compacted"
   | "context.compaction_failed"
+  | "context.reasoning_dropped"
   | "transcript.referenced"
   | "attention.raised"
   | "attention.cleared"
@@ -817,6 +829,15 @@ export function observationPayload(
         attachmentId: observation.attachmentId,
         reason: observation.reason,
         detail: observation.detail,
+      };
+    case "context.reasoning_dropped":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        count: observation.count,
+        causes: observation.causes,
+        paths: observation.paths,
       };
     case "transcript.referenced":
       return {
@@ -1408,6 +1429,7 @@ export function projectSession(
       // Session is no more or less active for having compacted.
       case "context.compacted":
       case "context.compaction_failed":
+      case "context.reasoning_dropped":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":

@@ -8,8 +8,12 @@
  * Automation, and that is a ruling rather than an omission (VC-112): an
  * authoring form in a 300px rail would be a worse copy of the Automations page,
  * and the page is the one surface that owns the record's lifecycle. What the
- * rail offers instead is a door to that page — from the menu always, and from
- * the empty state's own sentence.
+ * empty rail offers instead is ONE door to that page, in the header row beside
+ * the eyebrow — where the Sessions block below keeps its own control. It used
+ * to be a text link under the empty state's sentence, which put the word
+ * "Automations" two lines under the heading AUTOMATIONS (VC-257): the same noun
+ * twice in one glance. Moving that existing door fixes the layout without
+ * expanding navigation into populated or unread states.
  *
  * Four rules the drawing carries:
  *
@@ -26,14 +30,15 @@
  *    reason: the cache cannot tell "nothing armed" from "not asked yet", nor a
  *    value that was just confirmed from one that merely survived.
  *  - **Never hidden when empty.** A project with no Automations still draws the
- *    button, says so in one line, and links to the page. Hidden-when-empty is
- *    how a feature never gets discovered.
+ *    Run button, says so in one line, and puts its existing page door in the
+ *    header. Hidden-when-empty is how a feature never gets discovered.
  *  - **By hand is universal.** Running from here is unaffected by the
  *    machine-local switch (VC-112) — the switch governs what starts an
  *    Automation BESIDES a person. A switched-off Automation is offered with the
  *    page's own words beside it rather than dimmed or withheld.
  */
 import * as React from "react";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
@@ -73,7 +78,10 @@ import {
   ModelPill,
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  RAIL_PANEL_INSET,
+  RailSectionHeadingRow,
+} from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -99,8 +107,8 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Segmented } from "@renderer/components/ui/segmented";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -152,6 +160,7 @@ export function TicketAutomationsPanel({
   // (`automation-run-menu.tsx` states the rule once, for this rail and for the
   // board card's own menu).
   const rail = useAutomationRunOffer(projectId, ticket.status);
+  const empty = rail.ready && !rail.listsAny;
 
   // The Runs, on the same clock — a Run started from the board's armed window,
   // the palette or another window lands here without this rail having asked.
@@ -179,9 +188,9 @@ export function TicketAutomationsPanel({
 
   return (
     <section className={SECTION} aria-label="Automations" data-testid="ticket-rail-automations">
-      <div className="mb-1 flex items-center px-2">
-        <SectionHeading>Automations</SectionHeading>
-      </div>
+      <RailSectionHeadingRow label="Automations">
+        {empty ? <AutomationsPageDoor projectId={projectId} /> : null}
+      </RailSectionHeadingRow>
       <AutomationRunControl
         rail={rail}
         models={models}
@@ -189,28 +198,16 @@ export function TicketAutomationsPanel({
         onRun={run}
         onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
-      {!rail.ready || rail.listsAny ? null : (
-        // Visible, plain, and a door. The button above still presses — Run once
-        // names no record, so an empty project is not an empty control. The
-        // sentence waits for the read, though: "no automations here" is a claim
+      {empty ? (
+        // Visible and plain: one line, a report and never an action — the
+        // header's own door is 20px above it, and a second copy of the same
+        // door inside the empty state would be the same offer twice in one
+        // glance. The button above still presses — Run once names no record,
+        // so an empty project is not an empty control. Both the sentence and
+        // its page door wait for the read: "no automations here" is a claim
         // about the project, and an unread cache cannot make it.
-        <>
-          <p className="px-2 text-label text-muted-foreground">
-            No automations in this project yet.
-          </p>
-          {/* The door OUT of the empty state is the page, because the rail
-              never authors (VC-112) — and a link is the primitive for a
-              control that is read rather than aimed at. */}
-          <Button
-            variant="link"
-            size="sm"
-            className="self-start"
-            onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
-          >
-            Automations
-          </Button>
-        </>
-      )}
+        <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
+      ) : null}
       <TicketRuns projectId={projectId} runs={runs} />
       <RunOnceDialog
         request={runOnce}
@@ -222,6 +219,39 @@ export function TicketAutomationsPanel({
         onStarted={() => void refreshTicketRuns(ticket.id)}
       />
     </section>
+  );
+}
+
+/**
+ * The empty rail's one door to the Automations page, in the header row.
+ *
+ * An icon at `icon-xs` ghost — the rung the Sessions header's own control sits
+ * at, level with a text-label eyebrow — and not a word, because the word is
+ * already on the line: the eyebrow says AUTOMATIONS, and a control beside it
+ * saying it again is the redundancy this replaces. The tooltip carries the
+ * verb for anyone who hovers, and the label carries it for anyone who cannot.
+ *
+ * The glyph is the rail's own "leaves this surface" mark (`RailRowActions`'
+ * Open in tab, the repository card's View PR): pressing it navigates the
+ * workspace away from this Ticket, which is exactly what a Run from the button
+ * under it never does (VC-234).
+ */
+function AutomationsPageDoor({ projectId }: { projectId: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Open Automations"
+          data-testid="ticket-rail-automations-page"
+          onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
+        >
+          <ArrowSquareOutIcon weight="bold" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">Open Automations</TooltipContent>
+    </Tooltip>
   );
 }
 

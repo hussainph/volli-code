@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import {
   NON_CODING_TOOL_IDS,
@@ -106,7 +106,73 @@ describe("read tool", () => {
       );
       expect(text).toContain("recompressed as JPEG");
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Pi 0.85 removed `signal` from a harness tool's `execute` outright:
+   * cancellation now rides a chord `Context` that arrives as the last argument.
+   * The `Agent` Volli drives has no context to hand down, so `bindContext` wraps
+   * the run's signal onto an empty one — and if it ever stopped doing that, a
+   * cancelled turn would keep reading files with nothing left to stop it, which
+   * is silent rather than loud. This is the assertion that makes it loud.
+   */
+  it("carries a cancelled turn into a Pi file tool, which now reads it off the context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-cancel-"));
+    const env = new NodeExecutionEnv({ cwd: root });
+    try {
+      await writeFile(join(root, "note.txt"), "the note\n");
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env);
+
+      const live = await read!.execute(
+        "call-2",
+        { path: "note.txt" },
+        new AbortController().signal,
+      );
+      expect(resultText(live as AgentToolResult<undefined>)).toContain("the note");
+
+      await expect(
+        read!.execute("call-3", { path: "note.txt" }, AbortSignal.abort()),
+      ).rejects.toThrow();
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("execute tool", () => {
+  /**
+   * 0.85 made a harness tool's `onUpdate` required, where the `Agent`'s is
+   * optional. The adapter therefore always hands Pi a callback and forwards
+   * only what the caller asked for — including nothing, when a run supplied no
+   * callback at all. What it deliberately drops is the harness's second
+   * argument, its request to checkpoint the partial result durably: the
+   * `Agent`'s callback has no parameter for it and Volli has no per-tool
+   * durable checkpoint to write it to.
+   */
+  it("forwards a Pi tool's progress to the Agent's update callback, and runs without one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-execute-"));
+    const env = new NodeExecutionEnv({ cwd: root });
+    try {
+      const [execute] = createSessionTools({ tools: { tools: ["execute"] } }, env);
+      const updates: AgentToolResult<unknown>[] = [];
+
+      const withCallback = await execute!.execute(
+        "call-1",
+        { command: "printf hello" },
+        undefined,
+        (partial) => updates.push(partial),
+      );
+      expect(resultText(withCallback as AgentToolResult<undefined>)).toContain("hello");
+      expect(updates.length).toBeGreaterThan(0);
+
+      const withoutCallback = await execute!.execute("call-2", { command: "printf hello" });
+      expect(resultText(withoutCallback as AgentToolResult<undefined>)).toContain("hello");
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
       await rm(root, { recursive: true, force: true });
     }
   });

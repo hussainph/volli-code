@@ -355,7 +355,7 @@ describe("RpcDiagnosticLog", () => {
     const sensitive = log.record({
       procedure: "session.command",
       phase: "error",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: "INTERNAL_SERVER_ERROR",
       message:
         'token=super-secret prompt="do not leak" provider={"raw":"body"} /Users/alice/private.txt',
@@ -363,7 +363,7 @@ describe("RpcDiagnosticLog", () => {
     log.record({
       procedure: "session.snapshot",
       phase: "success",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: null,
       message: null,
     });
@@ -372,7 +372,7 @@ describe("RpcDiagnosticLog", () => {
     log.record({
       procedure: "session.reconcile",
       phase: "start",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: null,
       message: null,
     });
@@ -1519,7 +1519,7 @@ describe("Session tRPC router", () => {
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
       diagnostics,
-      transport: "lab-http",
+      transport: "electron-ipc",
     });
 
     await caller.session.snapshot({ sessionId: "session-1" });

@@ -33,6 +33,7 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import { StructuredSessionsError, type Sessions } from "../session-runtime/sessions";
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
@@ -83,6 +84,8 @@ export interface AutomationRunnerDeps {
   engine: AutomationEngine;
   /** Projection reads belong to the host, never to IPC. */
   findAutomation(automationId: string): Automation | undefined;
+  /** The frozen Run projection that owns a pending delivery's launch title. */
+  findRun(runId: string): AutomationRun | undefined;
   findTicket(ticketId: string): AutomationRunTicket | undefined;
   /** Whether a Project scope names a project this host actually has. */
   findProject(projectId: string): boolean;
@@ -125,6 +128,12 @@ export interface AutomationRunnerDeps {
   readSessionActivity(
     sessionId: string,
   ): Promise<"working" | "waiting" | "idle" | "stopped" | null>;
+  /**
+   * Refines the Run's launch title from its Instructions and Ticket context.
+   * The Automation name remains the exact fallback and guard baseline, so a
+   * person's rename wins.
+   */
+  refineAutoTitle?(input: AutoTitleRequest): void;
   /** Fired after the complete Run projection exists. */
   onRunStarted?(event: { run: AutomationRun; projectId: string }): void;
   /** Detached-half diagnostics; defaults to `console.error`. */
@@ -377,16 +386,48 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     }
   }
 
+  function refineDeliveryTitle(delivery: AutomationRunDelivery): void {
+    if (deps.refineAutoTitle === undefined) return;
+    try {
+      const run = deps.findRun(delivery.runId);
+      if (run === undefined) {
+        log(
+          `[volli] automation Run ${delivery.runId} could not refine its Session title: the Run was not found`,
+        );
+        return;
+      }
+      deps.refineAutoTitle({
+        sessionId: delivery.sessionId,
+        firstMessage: delivery.text,
+        heuristicTitle: run.automationName ?? UNBOUND_RUN_LABEL,
+        ...(run.automationName === null ? {} : { automation: { name: run.automationName } }),
+      });
+    } catch (error) {
+      // Like every failure inside auto-titling, this is detached background
+      // work: the launch fallback already stands, so delivery continues and
+      // the diagnostic stays out of the person's mutation surfaces.
+      log(
+        `[volli] automation Run ${delivery.runId} could not refine its Session title: ${errorMessage(error)}`,
+      );
+    }
+  }
+
   async function deliver(delivery: AutomationRunDelivery): Promise<void> {
     let result: InstructionDeliveryResult;
     try {
-      result = await deps.deliverInstructions({
+      const pending = deps.deliverInstructions({
         sessionId: delivery.sessionId,
         commandId: delivery.messageCommandId,
         messageId: delivery.messageId,
         text: delivery.text,
         resources: delivery.resources,
       });
+      // Match the chat client's first-message rule: once delivery starts, the
+      // subject is known and titling need not wait for the whole model turn to
+      // finish. Even if the turn is later refused, these are still the exact
+      // Instructions the Run attempted — the same subject its retry will use.
+      refineDeliveryTitle(delivery);
+      result = await pending;
     } catch (error) {
       // Do not clear the intent. The same durable Session command id means the
       // next ready attach reconciles/replays safely after a crash or recovery.

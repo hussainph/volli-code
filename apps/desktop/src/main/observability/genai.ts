@@ -286,6 +286,21 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
           ...(event.outcome === "failed" ? { [ERROR_TYPE]: "compaction_failed" } : {}),
         }),
       };
+    // A span rather than an error: the turn succeeded, and what is worth
+    // finding later is how often a model answered with less reasoning than the
+    // request carried, and why (VC-254).
+    case "provider-reasoning-dropped":
+      return {
+        name: "volli.agent.reasoning_dropped",
+        kind: "internal",
+        durationMs: 0,
+        failed: false,
+        attributes: present({
+          ...runId,
+          [`${VOLLI}.reasoning_dropped.cause`]: event.cause,
+          [`${VOLLI}.reasoning_dropped.count`]: event.count,
+        }),
+      };
     case "attachment":
       return {
         name: "volli.agent.attachment",
@@ -349,6 +364,7 @@ const METRIC = {
   toolWaitDuration: "volli.agent.tool.wait.duration",
   authorityDecisions: "volli.agent.authority.decision.count",
   compactions: "volli.agent.compaction.count",
+  reasoningDropped: "volli.agent.reasoning_dropped.count",
   dropped: "volli.observability.dropped.count",
 } as const;
 
@@ -536,6 +552,14 @@ export function observabilityMetrics(event: ObservabilityEvent): readonly Observ
           [`${VOLLI}.compaction.outcome`]: event.outcome,
           [`${VOLLI}.compaction.reason`]: event.reason,
         }),
+      );
+    case "provider-reasoning-dropped":
+      return metric(
+        METRIC.reasoningDropped,
+        "counter",
+        "{block}",
+        event.count,
+        present({ [`${VOLLI}.reasoning_dropped.cause`]: event.cause }),
       );
     case "dropped":
       return metric(

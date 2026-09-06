@@ -2099,6 +2099,16 @@ class DefaultSessionRuntime implements SessionRuntime {
           detail: observation.detail,
         });
         break;
+      case "context.reasoning_dropped":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          turnId: observation.turnId,
+          count: observation.count,
+          causes: observation.causes,
+          paths: observation.paths,
+        });
+        break;
       case "authority.denied":
         event = await this.ports.engine.observe({
           ...base,

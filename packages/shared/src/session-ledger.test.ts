@@ -331,6 +331,30 @@ describe("observationPayload", () => {
     });
   });
 
+  it("round-trips a provider reasoning drop without adding provider vocabulary", () => {
+    const observation: SessionObservation = {
+      id: "reasoning-drop-1",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: systemProvenance,
+      kind: "context.reasoning_dropped",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+    };
+
+    expect(observationPayload(observation, attribution)).toEqual({
+      kind: "context.reasoning_dropped",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+    });
+  });
+
   it("maps every externally observed fact without inventing a command", () => {
     const attachment = {
       id: "attachment-1",

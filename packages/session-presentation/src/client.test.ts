@@ -1630,6 +1630,46 @@ describe("auto-title on delivery", () => {
     ]);
   });
 
+  it("refines a composed start's seeded fallback from its opening message", async () => {
+    const { client, sessionId, renames } = await readyWithTitle("Work on VC-42");
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+          autoTitleBaseline: "Work on VC-42",
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "Work on VC-42",
+        refineFrom: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+      },
+    ]);
+  });
+
+  it("protects a human rename made after a composed start was seeded", async () => {
+    const { client, renames } = await readyWithTitle("My release review");
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+          autoTitleBaseline: "Work on VC-42",
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    expect(renames).toEqual([]);
+  });
+
   it("leaves every user title alone, including one that resembles the old default", async () => {
     const { client, renames } = await readyWithTitle("Chat 1");
 

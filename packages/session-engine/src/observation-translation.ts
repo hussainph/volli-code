@@ -31,6 +31,7 @@ import type {
   CompactionObservation,
   CompactionProgressObservation,
   CompactionReason,
+  ProviderReasoningDroppedObservation,
   RuntimeActivityObservation,
   RuntimeObservation,
   SessionInteraction,
@@ -159,6 +160,15 @@ export type TranslatedObservation =
       reason: CompactionReason;
       detail: string;
     })
+  | (TranslatedObservationBase & {
+      /** The provider recovered a request by removing earlier reasoning. */
+      kind: "context.reasoning_dropped";
+      turnId: string;
+      count: number;
+      causes: ProviderReasoningDroppedObservation["causes"];
+      paths: ProviderReasoningDroppedObservation["paths"];
+    })
+
   /**
    * What one model operation consumed. Named after the executor's own entry id
    * rather than counted, so the same operation seen live and replayed after a
@@ -351,6 +361,8 @@ export class RuntimeObservationTranslator {
       // the overlay a live turn is filling belongs to the turn it is still in.
       case "compaction":
         return emit(this.#compactionObservation(observation));
+      case "provider-reasoning-dropped":
+        return emit(this.#providerReasoningDroppedObservation(observation));
       case "delta":
         return this.#translateDelta(observation, emit);
       case "message-settled":
@@ -399,6 +411,8 @@ export class RuntimeObservationTranslator {
         return [];
       case "compaction":
         return [this.#compactionObservation(observation)];
+      case "provider-reasoning-dropped":
+        return [this.#providerReasoningDroppedObservation(observation)];
       case "message-settled": {
         const settled = this.#settledObservation(observation);
         return settled === null ? [] : [settled];
@@ -656,6 +670,23 @@ export class RuntimeObservationTranslator {
       entryId: observation.entryId,
       tokensBefore: observation.tokensBefore,
       tokensAfter: observation.tokensAfter,
+    };
+  }
+
+  /** One provider recovery, named by the sidecar marker replay will offer again. */
+  #providerReasoningDroppedObservation(
+    observation: ProviderReasoningDroppedObservation,
+  ): Extract<TranslatedObservation, { kind: "context.reasoning_dropped" }> {
+    const eventIdentity = observation.recoveryCursor ?? `live:${++this.#sequence}`;
+    return {
+      id: `${this.#namespace}:reasoning-drop:${this.#attachmentId}:${eventIdentity}`,
+      kind: "context.reasoning_dropped",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      turnId: observation.turnId,
+      count: observation.count,
+      causes: observation.causes,
+      paths: observation.paths,
     };
   }
 

@@ -43,68 +43,9 @@
  * placement are testable without mounting a session.
  */
 import type { CompactionReason } from "@volli/shared";
-import type { UIMessage } from "ai";
 
 import { formatTokens } from "./context-usage";
 import type { TranscriptCompaction } from "./transcript";
-
-/**
- * What the transcript draws, in order: the turns it always drew, and the
- * boundaries between them.
- *
- * A turn row carries the very array {@link weaveCompactionBoundaries} was
- * handed, never a copy — the turn list is held to its identity upstream so a
- * settled reply does not re-render every turn above it, and a copy here would
- * throw that away for every row on screen.
- */
-export type TranscriptRow =
-  | { kind: "turn"; messages: readonly UIMessage[] }
-  | { kind: "compaction"; compaction: TranscriptCompaction };
-
-/**
- * Lays each compaction into the turn list at the point it happened.
- *
- * A boundary goes after the whole turn its anchor message belongs to, never
- * inside one. Compaction genuinely can land mid-turn — the threshold path runs
- * at the head of a message and the overflow path runs after a refused reply —
- * but a turn is one utterance, and a rule drawn through the middle of one would
- * claim a seam the reader has no way to act on. The turn boundary is the
- * nearest place the division is legible.
- *
- * Total over anything the fold can hand it, which is the property that matters:
- * an anchor no turn claims (a message the projection dropped, a list already
- * scrolled past) still draws its boundary, at the end, rather than vanishing.
- * A compaction that reports itself is worth more misplaced than lost.
- */
-export function weaveCompactionBoundaries(
-  turns: readonly (readonly UIMessage[])[],
-  compactions: readonly TranscriptCompaction[],
-): readonly TranscriptRow[] {
-  if (compactions.length === 0) return turns.map((messages) => ({ kind: "turn", messages }));
-
-  const rows: TranscriptRow[] = [];
-  // Consumed left to right. The fold appends in frame order, so this list is
-  // already in the order the boundaries have to be drawn in.
-  const pending = [...compactions];
-  const takeAnchored = (claims: (compaction: TranscriptCompaction) => boolean) => {
-    while (pending.length > 0 && claims(pending[0]!)) {
-      rows.push({ kind: "compaction", compaction: pending.shift()! });
-    }
-  };
-
-  // An unanchored compaction happened before anything had been said, so it can
-  // only be a prefix: once a message has a position, no later anchor is null.
-  takeAnchored((compaction) => compaction.afterMessageId === null);
-  for (const messages of turns) {
-    rows.push({ kind: "turn", messages });
-    const spoken = new Set(messages.map((message) => message.id));
-    takeAnchored(
-      (compaction) => compaction.afterMessageId !== null && spoken.has(compaction.afterMessageId),
-    );
-  }
-  for (const compaction of pending) rows.push({ kind: "compaction", compaction });
-  return rows;
-}
 
 /**
  * What the boundary says, in the reader's words rather than the executor's.

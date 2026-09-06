@@ -38,13 +38,16 @@
  */
 
 import {
-  buildSessionContext,
   calculateContextTokens,
   compact,
+  createBranchSummaryMessage,
+  createCompactionSummaryMessage,
   estimateTokens,
   getLastAssistantUsage,
   getOrThrow,
+  insertEntry,
   prepareCompaction,
+  setValue,
   shouldCompact,
   type AgentMessage,
   type CompactionEntry,
@@ -52,12 +55,14 @@ import {
   type CustomEntry,
   type Entry,
   type MessageEntry,
-  type ProvisionedEntry,
+  type NewEntry,
   type Session,
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
+import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
+import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
 
 /**
@@ -214,7 +219,73 @@ export function estimatedContextTokens(messages: readonly AgentMessage[]): numbe
  * it too, and the durable entry stays exactly what Pi wrote (VC-242).
  */
 export function contextMessages(path: readonly Entry[]): AgentMessage[] {
-  return buildSessionContext(path.map(withoutRetainedReasoning)).messages;
+  const elided = path.map(withoutRetainedReasoning);
+  return contextEntries(elided).flatMap(entryToContextMessages);
+}
+
+/**
+ * The last compaction entry and everything after it; the whole path when there
+ * is none.
+ *
+ * PI-RESTATED(0.85.0): Pi's `buildContextEntries`. Until 0.85.0 this module called Pi's
+ * own function — `buildSessionContext` — precisely so that one rule existed in
+ * one place. 0.85.0 made that module private: it is still there, at
+ * `harness/session/context.js`, but the package's `exports` map no longer
+ * offers any path that reaches it, and the root re-export was dropped. So the
+ * rule is restated here, under protest, and the tests that used to prove this
+ * module agreed with Pi now prove it against Pi's documented behaviour instead.
+ *
+ * Kept deliberately literal against the upstream source rather than tidied, so
+ * the next bump can diff the two by eye. The one thing NOT carried across is
+ * `SessionContextBuildOptions.entryProjectors`, which Pi applies to `custom`
+ * entries: this runtime passed none, so custom entries contributed nothing then
+ * and contribute nothing now. Volli's own acceptance markers are already
+ * message entries by the time they reach here — {@link conversationPath} does
+ * that — which is why dropping them at this step loses no user turn.
+ */
+function contextEntries(path: readonly Entry[]): Entry[] {
+  for (let index = path.length - 1; index >= 0; index--) {
+    const entry = path[index];
+    if (entry?.type === "compaction") return [entry, ...path.slice(index + 1)];
+  }
+  return [...path];
+}
+
+/**
+ * Whether a persisted message may be replayed to a model at all.
+ *
+ * Pi's `isContextMessage`: a reply that errored, was aborted, or is still
+ * deferred is an honest record of what happened and not something to send back
+ * as if it had been said. Note that pi-ai's `transformMessages` drops the same
+ * three at the wire, which is what makes this filter and the resume filter
+ * agree instead of merely coincide (VC-242).
+ */
+function replayableMessage(message: AgentMessage): boolean {
+  return (
+    message.role !== "assistant" ||
+    (message.stopReason !== "error" &&
+      message.stopReason !== "aborted" &&
+      message.stopReason !== "deferred")
+  );
+}
+
+/** Pi's `sessionEntryToContextMessages`, restated for the reason above. */
+function entryToContextMessages(entry: Entry): AgentMessage[] {
+  switch (entry.type) {
+    case "message":
+      return replayableMessage(entry.message) ? [entry.message] : [];
+    case "compaction":
+      return [
+        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+        ...entry.retainedTail.filter(replayableMessage),
+      ];
+    case "branch_summary":
+      return entry.summary
+        ? [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)]
+        : [];
+    case "custom":
+      return [];
+  }
 }
 
 /** A compaction entry whose retained tail carries no reasoning; anything else as is. */
@@ -299,26 +370,38 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   const prepared = getOrThrow(prepareCompaction([...input.path], input.settings));
   if (prepared === undefined) return { kind: "skipped" };
 
+  const context = piContext(input.signal);
+  // No reasoning level and no retry policy: the two `undefined`s Pi 0.85.0 moved
+  // ahead of the context are the same two defaults 0.84.3 applied when the
+  // arguments were optional, spelled out because they no longer are.
   const result = await compact(
     prepared,
     input.models,
     input.model,
     input.customInstructions,
-    input.signal,
+    undefined,
+    undefined,
+    undefined,
+    context,
   );
   if (!result.ok) return { kind: "failed", message: sanitizeDiagnostic(result.error.message) };
 
   const compacted = result.value;
-  const provisioned: ProvisionedEntry<CompactionEntry> = {
+  const provisioned: NewEntry<CompactionEntry> = {
     type: "compaction",
     id: input.sidecar.idGenerator.next(),
+    parentId: null,
     summary: compacted.summary,
     retainedTail: input.retainedTail?.(compacted.retainedTail) ?? compacted.retainedTail,
     tokensBefore: compacted.tokensBefore,
     usage: compacted.usage,
     details: compacted.details,
+    // Pi's own compaction hook did not write this one; this module is the
+    // caller Pi does not have. The flag exists so a hook-driven compaction can
+    // be told from an application-driven one, and ours is the latter.
+    fromHook: false,
   };
-  const entry = await input.sidecar.appendEntry<CompactionEntry>(durableJson(provisioned), "main");
+  const entry = await appendCompactionEntry(input.sidecar, durableJson(provisioned), context);
   return {
     kind: "compacted",
     entry,
@@ -334,6 +417,40 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
       "compaction",
     ),
   };
+}
+
+/**
+ * Append one compaction entry to the main branch and return it as stored.
+ *
+ * PI-RESTATED(0.85.0): Pi removed `Session.appendEntry`. What replaced it is a commit: a
+ * branch append is now `insertEntry` plus the `setValue` that advances the
+ * branch tip, both inside one `mutate` so a reader can never observe an entry
+ * that no branch points at. `Branch.appendMessage` and `Branch.appendCustomEntry`
+ * wrap exactly that for their two entry types; there is no wrapper for a
+ * compaction entry, so this is the same two writes done by hand, copied from
+ * `StorageBackedSession.appendToBranch` rather than invented.
+ *
+ * The stored entry is completed from the commit's own `seq` and `timestamp`
+ * rather than read back: those two fields are the only difference between what
+ * this wrote and what is on disk, and the commit result reports both. Pi
+ * applies them with `materializeCommittedEntry`, which its `exports` map does
+ * not offer either — the same privacy that cost this module
+ * `buildSessionContext`.
+ */
+async function appendCompactionEntry(
+  sidecar: Session,
+  entry: NewEntry<CompactionEntry>,
+  context: Context,
+): Promise<CompactionEntry> {
+  return sidecar.mutate(async (mutator, mutationContext) => {
+    const tip = await mutator.getValue(MAIN_BRANCH_TIP, mutationContext);
+    const parented = { ...entry, parentId: tip?.value ?? null };
+    const commit = await mutator.commit(
+      [insertEntry(parented), setValue(MAIN_BRANCH_TIP, parented.id)],
+      mutationContext,
+    );
+    return { ...parented, seq: commit.firstSeq, timestamp: commit.timestamp };
+  }, context);
 }
 
 /**

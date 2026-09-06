@@ -36,6 +36,7 @@ import { createAutomationRunner } from "./automations/run";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   getAutomation,
+  getAutomationRun,
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForTicket,
@@ -615,6 +616,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
   const runner = createAutomationRunner({
     engine,
     findAutomation: (automationId) => getAutomation(db, automationId),
+    findRun: (runId) => getAutomationRun(db, runId),
     findTicket: (ticketId) => {
       const found = getTicket(db, ticketId);
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
