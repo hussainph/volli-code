@@ -564,6 +564,34 @@ describe("createAutoTitler().refine", () => {
     expect(h.retitle).not.toHaveBeenCalled();
   });
 
+  it("runs one refinement per Session at a time, so a duplicate request bills no second call", async () => {
+    let answer!: (result: { text: string; usage: null }) => void;
+    const held = new Promise<{ text: string; usage: null }>((resolve) => {
+      answer = resolve;
+    });
+    let calls = 0;
+    const h = harness({
+      // The first call is held open until the test releases it; later calls
+      // answer immediately, so the post-release refinement below completes.
+      completeUtility: () =>
+        calls++ === 0 ? held : Promise.resolve({ text: "Second title", usage: null }),
+    });
+    const first = h.refine({});
+    // Let the first request reach the model before the duplicate arrives:
+    // the reads ahead of the call are the window a Retry attach lands in.
+    await vi.waitFor(() => expect(h.completeUtility).toHaveBeenCalledOnce());
+    await h.refine({});
+    expect(h.completeUtility).toHaveBeenCalledOnce();
+
+    answer({ text: "Login button dead on Safari", usage: null });
+    await first;
+    expect(h.retitle.mock.calls).toEqual([[SESSION_ID, "Login button dead on Safari"]]);
+
+    // The latch is released with the call, whichever way it ended.
+    await h.refine({ heuristicTitle: "Login button dead on Safari" });
+    expect(h.completeUtility).toHaveBeenCalledTimes(2);
+  });
+
   it("does nothing when the session no longer exists", async () => {
     const h = harness({ readSession: async () => null });
     await h.refine({});

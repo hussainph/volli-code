@@ -147,7 +147,27 @@ async function bill(
 }
 
 export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
+  /**
+   * Sessions with a refinement already running. One Session is only ever
+   * titled from one opening message, so a second request that arrives while
+   * the first is still out at the model is a duplicate — a Retry attach
+   * resuming an Automation's delivery beside its own boot, or a crash-window
+   * replay — and running it would bill a second call whose answer the
+   * byte-identical guard would drop anyway.
+   */
+  const inFlight = new Set<string>();
+
   async function refine(request: AutoTitleRequest): Promise<void> {
+    if (inFlight.has(request.sessionId)) return;
+    inFlight.add(request.sessionId);
+    try {
+      await refineOnce(request);
+    } finally {
+      inFlight.delete(request.sessionId);
+    }
+  }
+
+  async function refineOnce(request: AutoTitleRequest): Promise<void> {
     let session: AutoTitleSession | null;
     try {
       session = await options.readSession(request.sessionId);
