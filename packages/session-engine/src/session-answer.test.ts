@@ -88,6 +88,34 @@ describe("foldSessionAnswerState — how the latest turn ended", () => {
       ]).state,
     ).toBe("completed");
   });
+
+  it("reads an attachment failure mid-turn as a failed turn, and after one as no change", () => {
+    const started = event(1, { kind: "turn.started", attachmentId: "a", turnId: "t1" });
+    const failure = (sequence: number): SessionEvent =>
+      event(sequence, {
+        kind: "attachment.failed",
+        attachment: {
+          id: "a",
+          sessionId: SESSION,
+          adapterId: "pi",
+          venue: { id: "local", kind: "local" },
+          continuity: "fresh",
+          native: null,
+          authority: null,
+        },
+        failure: { code: "runtime_failed", detail: "Runtime failed", diagnostic: null },
+      });
+    expect(foldSessionAnswerState([started, failure(2)]).state).toBe("failed");
+    // The turn already had its answer; a later attachment failure is the
+    // process ending, not the turn losing what it said.
+    expect(
+      foldSessionAnswerState([
+        started,
+        event(2, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+        failure(3),
+      ]).state,
+    ).toBe("completed");
+  });
 });
 
 describe("readSessionAnswer — the last assistant message, in full", () => {
@@ -140,6 +168,70 @@ describe("readSessionAnswer — the last assistant message, in full", () => {
   it("answers the state alone when the composition holds no artifact store", async () => {
     const answer = await readSessionAnswer(
       { listEvents: async () => events },
+      { sessionId: SESSION },
+    );
+    expect(answer).toEqual({ state: "completed", text: null, unreadable: false, turns: 1 });
+  });
+
+  it("has no answer when the Session never spoke, though the turn finished", async () => {
+    // A turn that ran to completion saying nothing an artifact recorded: the
+    // state is the whole answer, and `unreadable` stays false — nothing failed.
+    const answer = await readSessionAnswer(
+      {
+        listEvents: async () => [
+          event(1, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+          referenced(2, "steer"),
+          event(3, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+        ],
+        readArtifact: async () => artifacts["steer"]!,
+      },
+      { sessionId: SESSION },
+    );
+    expect(answer).toEqual({ state: "completed", text: null, unreadable: false, turns: 1 });
+  });
+
+  it("joins the text parts alone, leaving reasoning and step markers out of the answer", async () => {
+    const mixed: SessionTranscriptArtifact = {
+      version: 1,
+      threadId: "thread",
+      branchId: "branch",
+      attemptId: "attempt",
+      turnId: "t1",
+      message: {
+        id: "m",
+        role: "assistant",
+        parts: [
+          { type: "step-start" },
+          { type: "reasoning", text: "thinking out loud" },
+          { type: "text", text: "The answer" },
+          { type: "text", text: "and its second line." },
+        ],
+      },
+    };
+    const answer = await readSessionAnswer(
+      {
+        listEvents: async () => [
+          event(1, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+          referenced(2, "mixed"),
+          event(3, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+        ],
+        readArtifact: async () => mixed,
+      },
+      { sessionId: SESSION },
+    );
+    expect(answer.text).toBe("The answer\nand its second line.");
+  });
+
+  it("reads an assistant message of pure whitespace as no answer, not as empty text", async () => {
+    const answer = await readSessionAnswer(
+      {
+        listEvents: async () => [
+          event(1, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+          referenced(2, "blank"),
+          event(3, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+        ],
+        readArtifact: async () => artifact("assistant", "   \n  "),
+      },
       { sessionId: SESSION },
     );
     expect(answer).toEqual({ state: "completed", text: null, unreadable: false, turns: 1 });
