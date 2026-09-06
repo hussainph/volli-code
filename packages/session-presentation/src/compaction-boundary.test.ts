@@ -10,8 +10,9 @@
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { compactionBoundaryCopy, weaveCompactionBoundaries } from "./compaction-boundary";
-import type { TranscriptCompaction } from "./transcript";
+import { compactionBoundaryCopy } from "./compaction-boundary";
+import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
+import { weaveContextNotices } from "./transcript-rows";
 
 function message(id: string, role: UIMessage["role"] = "assistant"): UIMessage {
   return { id, role, parts: [{ type: "text", text: id }] };
@@ -40,23 +41,35 @@ function failed(
   return { sequence, reason: "overflow", afterMessageId, outcome: "failed", detail };
 }
 
+function drop(sequence: number, afterMessageId: string | null): TranscriptReasoningDrop {
+  return {
+    sequence,
+    turnId: `turn-${sequence}`,
+    afterMessageId,
+    count: 1,
+    causes: ["prefix-mismatch"],
+  };
+}
+
 /** The rows as a readable shape: a turn is its ids, a boundary is its sequence. */
 function shape(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
 ) {
-  return weaveCompactionBoundaries(turns, compactions).map((row) =>
+  return weaveContextNotices(turns, compactions, []).map((row) =>
     row.kind === "turn"
       ? row.messages.map((held) => held.id).join("+")
-      : `—${row.compaction.sequence}—`,
+      : row.kind === "compaction"
+        ? `—${row.compaction.sequence}—`
+        : `!${row.drop.sequence}!`,
   );
 }
 
-describe("weaveCompactionBoundaries", () => {
+describe("weaveContextNotices", () => {
   it("draws nothing extra for a Session that has never compacted", () => {
     const turns = [[message("m1")], [message("m2")]];
 
-    const rows = weaveCompactionBoundaries(turns, []);
+    const rows = weaveContextNotices(turns, [], []);
 
     expect(rows).toEqual([
       { kind: "turn", messages: turns[0] },
@@ -97,6 +110,24 @@ describe("weaveCompactionBoundaries", () => {
 
   it("draws a boundary whose anchor no turn claims rather than losing it", () => {
     expect(shape([[message("m1")]], [compacted(9, "gone")])).toEqual(["m1", "—9—"]);
+  });
+
+  it("weaves provider recovery notices with compactions in durable sequence order", () => {
+    const rows = weaveContextNotices(
+      [[message("m1")], [message("m2")]],
+      [compacted(4, "m1")],
+      [drop(3, "m1"), drop(5, "m2")],
+    );
+
+    expect(
+      rows.map((row) =>
+        row.kind === "turn"
+          ? row.messages[0]!.id
+          : row.kind === "compaction"
+            ? `compaction:${row.compaction.sequence}`
+            : `drop:${row.drop.sequence}`,
+      ),
+    ).toEqual(["m1", "drop:3", "compaction:4", "m2", "drop:5"]);
   });
 });
 

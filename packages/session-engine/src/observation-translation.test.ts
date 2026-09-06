@@ -166,6 +166,62 @@ describe("live observation translation", () => {
     ]);
   });
 
+  it("gives a provider reasoning drop the same durable identity live and on replay", async () => {
+    const translator = tickingTranslator();
+    const sink = new Recorder();
+    const observation: RuntimeObservation = {
+      kind: "provider-reasoning-dropped",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+      occurredAt: 900,
+      recoveryCursor: "marker-7",
+    };
+
+    await translator.translate(observation, sink.emit);
+    sink.observations.push(...translator.replay(observation));
+
+    expect(sink.observations).toEqual([
+      {
+        id: `pi:reasoning-drop:${ATTACHMENT_ID}:marker-7`,
+        kind: "context.reasoning_dropped",
+        occurredAt: 900,
+        cursor: { entryId: "marker-7" },
+        turnId: "turn-1",
+        count: 2,
+        causes: ["prefix-mismatch", "model-mismatch"],
+        paths: ["messages.1.content.0", "messages.3.content.0"],
+      },
+      {
+        id: `pi:reasoning-drop:${ATTACHMENT_ID}:marker-7`,
+        kind: "context.reasoning_dropped",
+        occurredAt: 900,
+        cursor: { entryId: "marker-7" },
+        turnId: "turn-1",
+        count: 2,
+        causes: ["prefix-mismatch", "model-mismatch"],
+        paths: ["messages.1.content.0", "messages.3.content.0"],
+      },
+    ]);
+  });
+
+  it("gives a live provider recovery without a cursor a collision-safe fallback", async () => {
+    const { translate, sink } = composition();
+
+    await translate({
+      kind: "provider-reasoning-dropped",
+      turnId: "turn-1",
+      count: 1,
+      causes: ["unknown"],
+      paths: [],
+    });
+
+    expect(sink.of("context.reasoning_dropped")[0]?.id).toBe(
+      `pi:reasoning-drop:${ATTACHMENT_ID}:live:1`,
+    );
+  });
+
   it("records what one model operation consumed, under the executor's own entry id", async () => {
     const { translate, sink } = composition();
 

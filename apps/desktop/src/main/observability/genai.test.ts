@@ -255,6 +255,36 @@ describe("observabilitySpan — product events", () => {
     expect(failed.attributes).not.toHaveProperty("volli.compaction.tokens_before");
   });
 
+  it("records provider reasoning recovery as successful metadata", () => {
+    const event = {
+      kind: "provider-reasoning-dropped",
+      cause: "prefix-mismatch",
+      count: 3,
+      runId: "run-1",
+    } as const;
+
+    expect(observabilitySpan(event)).toEqual({
+      name: "volli.agent.reasoning_dropped",
+      kind: "internal",
+      durationMs: 0,
+      failed: false,
+      attributes: {
+        "volli.run.id": "run-1",
+        "volli.reasoning_dropped.cause": "prefix-mismatch",
+        "volli.reasoning_dropped.count": 3,
+      },
+    });
+    expect(observabilityMetrics(event)).toEqual([
+      {
+        name: "volli.agent.reasoning_dropped.count",
+        instrument: "counter",
+        unit: "{block}",
+        value: 3,
+        attributes: { "volli.reasoning_dropped.cause": "prefix-mismatch" },
+      },
+    ]);
+  });
+
   it("reports an attachment failure's bounded reason as the error type", () => {
     expect(
       observabilitySpan({ kind: "attachment", phase: "failed", failureReason: "configuration" })
