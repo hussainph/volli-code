@@ -58,6 +58,7 @@ import type {
 import type { HarnessAdapter, HarnessId, ResolvedAppearance } from "@volli/shared";
 import type {
   BrowserTabStateEvent,
+  BackgroundShellStateEvent,
   FirstPaintHint,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -292,6 +293,10 @@ import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BrowserTabHost } from "./browser/tab-host";
+import { BackgroundShellHost } from "./shell/background-shell-host";
+import { createAgentShellPort } from "./shell/agent-port";
+import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
+import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { desktopBrowserPort } from "./browser/agent-port";
 import { relayHoldNotices } from "./browser/hold-notices";
@@ -455,6 +460,13 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+function publishBackgroundShellEvent(event: BackgroundShellStateEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("volli:shell-state" satisfies VolliIpcEvent, event);
+  }
 }
 
 function publishBrowserTabEvent(event: BrowserTabStateEvent): void {
@@ -991,6 +1003,13 @@ app.whenReady().then(async () => {
                   "browser_console",
                   "browser_acquire",
                   "browser_release",
+                  // The desktop always carries the background shell host
+                  // (VC-270), so every new Session records the three shell
+                  // tools, appended last. A surface frozen before them keeps
+                  // its shorter list.
+                  "shell_start",
+                  "shell_output",
+                  "shell_kill",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1053,6 +1072,33 @@ app.whenReady().then(async () => {
    * for why that lifetime is the design rather than a limitation.
    */
   const sessionTokens = createSessionTokenRegistry();
+  /**
+   * The identity one attachment's commands run under, built once and shared
+   * by the execute tool's environment and the background shell port
+   * (VC-270). One mint per attachment is the whole point: a second mint
+   * would retire the token the execute tool had already exported.
+   */
+  const attachmentIdentities = createAttachmentIdentities({
+    mint: sessionTokens.mint,
+    revoke: sessionTokens.revoke,
+    ticketDisplayIdOf: (ticketId) => {
+      if (!dbHandle.ok) return null;
+      const ticket = getTicket(dbHandle.db, ticketId);
+      const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+      return ticket && ticketProject
+        ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
+        : null;
+    },
+  });
+  /**
+   * Every background shell a Session started (VC-270). Electron-free, so it
+   * is built here beside the tokens rather than in the ready path; its
+   * renderer doors are registered there, once a window can receive them.
+   */
+  const backgroundShells = new BackgroundShellHost({
+    publishState: (started) => publishBackgroundShellEvent({ shell: started }),
+    publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
+  });
 
   let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
@@ -1096,34 +1142,34 @@ app.whenReady().then(async () => {
             // exactly as `agentSessionEnv` exports them into a spawned PTY —
             // what lets `volli session done`/`blocked` resolve their context
             // and makes socket writes attribute to the Session (VC-51). The
-            // display id is looked up per attachment, so a Ticket renamed by a
-            // prefix change is right on the next attach.
-            const ticket =
-              identity.ticketId === null ? null : getTicket(dbHandle.db, identity.ticketId);
-            const ticketProject = ticket ? getProjectById(dbHandle.db, ticket.projectId) : null;
+            // identity is resolved through the one per-attachment store the
+            // shell port resolves through too (VC-270), so both doors export
+            // the same token — see `attachment-identity.ts`.
             return piExecutionEnv(workspacePath, {
               pathPrefixes: [runtimePaths.binDir],
-              identity: {
-                sessionId: identity.sessionId,
-                // Minted per ATTACHMENT, which is what `identity.attachmentId`
-                // names, so a structured Session's shell authenticates exactly
-                // as a spawned PTY's does (VC-163) — and the token dies with
-                // the attachment rather than with the Session.
-                sessionToken: sessionTokens.mint({
-                  sessionId: identity.sessionId,
-                  attachmentId: identity.attachmentId,
-                }),
-                ticketDisplayId:
-                  ticket && ticketProject
-                    ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
-                    : null,
-              },
+              identity: attachmentIdentities.resolve(identity),
               // The execution environment is owned by this attachment and its
               // cleanup runs on every close path. Revoke there so a copied
               // token cannot outlive the structured attachment that held it.
-              onCleanup: () => sessionTokens.revoke(identity.attachmentId),
+              onCleanup: () => attachmentIdentities.release(identity.attachmentId),
             });
           },
+          // The Session's background shells (VC-270): the one host, scoped to
+          // the Session, spawning through the same environment record and the
+          // same attachment identity the execute tool gets.
+          resolveShellPort: (scope) =>
+            createAgentShellPort({
+              host: backgroundShells,
+              scope: { projectId: scope.projectId, ticketId: scope.ticketId },
+              session: { sessionId: scope.sessionId, attachmentId: scope.attachmentId },
+              workspacePath: scope.workspacePath,
+              identity: attachmentIdentities.resolve({
+                sessionId: scope.sessionId,
+                attachmentId: scope.attachmentId,
+                ticketId: scope.ticketId,
+              }),
+              pathPrefixes: [runtimePaths.binDir],
+            }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a
@@ -2521,6 +2567,7 @@ app.whenReady().then(async () => {
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
+  registerBackgroundShellIpcHandlers(backgroundShells);
   // The Session cursor overlay (VC-239): one small transparent view over the
   // on-screen Browser Tab, loading the app's own cursor page under its own
   // partition and five-verb preload — never the app bridge, and never inside

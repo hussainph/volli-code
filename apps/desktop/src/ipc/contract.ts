@@ -1601,6 +1601,35 @@ export type BackgroundShellStateEvent =
   | { shell: BackgroundShellState; removedShellId?: never }
   | { shell?: never; removedShellId: string };
 
+export interface BackgroundShellIdInput {
+  shellId: string;
+}
+
+/** Every live shell the host holds, across Sessions; the renderer filters by Session. */
+export type BackgroundShellListResult = Result<{ shells: BackgroundShellState[] }>;
+
+/**
+ * A shell's whole retained output for a person's read, with its chrome. Read
+ * on demand rather than pushed: output is bounded but not small, and only an
+ * open output tab wants it. Moves no cursor of the model's.
+ */
+export type BackgroundShellTailResult = Result<{ output: string; shell: BackgroundShellState }>;
+
+/**
+ * The renderer's command surface for background shells (VC-270). Host IPC,
+ * not a durable domain API (docs/BOUNDARIES.md #5): shells are ephemeral
+ * machine resources like PTY planes, and nothing here writes history.
+ * A person's kill is a no-op on a shell already exited, not an error — they
+ * pressed the row, and the row is gone either way.
+ */
+export interface VolliShellIpcContract {
+  "volli:shell-list": { args: []; result: BackgroundShellListResult };
+  "volli:shell-tail": { args: [input: BackgroundShellIdInput]; result: BackgroundShellTailResult };
+  "volli:shell-kill": { args: [input: BackgroundShellIdInput]; result: Result };
+}
+
+export type ShellIpcChannel = keyof VolliShellIpcContract;
+
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
@@ -2141,6 +2170,7 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
+    VolliShellIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
@@ -2162,6 +2192,9 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
   | "volli:browser-tab-state"
+  // A background shell started, exited, or was forgotten with its Session's
+  // attachment (VC-270): one push, one store, the island's shell feed.
+  | "volli:shell-state"
   | "volli:terminal-data"
   | "volli:terminal-exit"
   | "volli:terminal-park-state"

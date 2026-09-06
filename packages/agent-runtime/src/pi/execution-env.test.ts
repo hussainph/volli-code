@@ -394,12 +394,12 @@ describe("sessionCommandEnvironment", () => {
       const all = await ran(env, "printenv | sort");
       const fromRecord = Object.entries(record)
         .map(([name, value]) => `${name}=${value}`)
-        .sort()
+        .toSorted()
         .join("\n");
       const observed = all.output
         .split("\n")
         .filter((line) => line.length > 0 && !/^(PWD|SHLVL|_|OLDPWD)=/.test(line))
-        .sort()
+        .toSorted()
         .join("\n");
       expect(observed).toBe(fromRecord);
     } finally {

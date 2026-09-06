@@ -208,7 +208,7 @@ export class BackgroundShellHost {
 
   /** The Session's shells, in start order. */
   list(sessionId: string): RuntimeShellRecord[] {
-    return this.ownedBy(sessionId).map((entry) => ({ ...entry.record }));
+    return this.ownedBy(sessionId).map((entry) => copyOf(entry.record));
   }
 
   /**
@@ -374,6 +374,11 @@ export class BackgroundShellHost {
       this.deps.publishRemoved(entry.record.shellId);
     }
   }
+}
+
+/** A record as handed out: a copy, so a caller never holds the live one. */
+function copyOf(record: RuntimeShellRecord): RuntimeShellRecord {
+  return { ...record };
 }
 
 /** Signal the process group, falling back to the process when the group is gone. */

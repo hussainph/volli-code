@@ -62,6 +62,10 @@ import type {
   BrowserTabResult,
   BrowserTabSetBoundsInput,
   BrowserTabStateEvent,
+  BackgroundShellIdInput,
+  BackgroundShellListResult,
+  BackgroundShellStateEvent,
+  BackgroundShellTailResult,
   AutomationArmInput,
   AutomationArmingsResult,
   AutomationArmResult,
@@ -421,6 +425,21 @@ const api = {
       ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+    },
+  },
+  /** Background shells a Session started (VC-270): the island's shell feed and its two verbs. */
+  shells: {
+    list: (): Promise<BackgroundShellListResult> => invoke("volli:shell-list"),
+    tail: (input: BackgroundShellIdInput): Promise<BackgroundShellTailResult> =>
+      invoke("volli:shell-tail", input),
+    kill: (input: BackgroundShellIdInput): Promise<Result> => invoke("volli:shell-kill", input),
+    /** Subscribes to shell starts, exits and removals; returns the unsubscribe. */
+    onShellState: (callback: (event: BackgroundShellStateEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BackgroundShellStateEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:shell-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
   },
   projects: {
