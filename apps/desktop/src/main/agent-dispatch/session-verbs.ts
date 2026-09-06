@@ -26,7 +26,7 @@ import type {
   SessionRecord,
   SessionUsageSummary,
 } from "@volli/shared";
-import { readSessionTranscriptTail } from "@volli/session-engine";
+import { readSessionAnswer, readSessionTranscriptTail } from "@volli/session-engine";
 
 import { getTicket } from "../db/tickets-repo";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
@@ -196,6 +196,9 @@ export async function sessionListVerb(
     const row = {
       id: shortSessionId(record.sessionId),
       kind: "chat",
+      // The Role (VC-9), so an orchestrator reading its fleet can tell the
+      // helpers it delegated to from the Sessions it started.
+      role: record.role,
       ticket:
         ticket && ticketProject
           ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
@@ -313,6 +316,44 @@ export async function sessionPeekVerb(
         text: entry.text,
         tools: entry.tools,
       })),
+    },
+  };
+}
+
+/**
+ * `volli session answer` — a chat Session's final message, in full (VC-9).
+ *
+ * The door a subagent's notice names: the parent reads its helper's answer
+ * here, as this command's output, so the child's words arrive as a tool
+ * result and never as the parent's own user. Any chat Session answers — a
+ * peek cuts every message to a line, and this is the one read that does not.
+ */
+export async function sessionAnswerVerb(
+  context: AgentCommandContext,
+  request: AgentRequest,
+): Promise<AgentResponse> {
+  const { options, projections, sessionEngine } = context;
+  const chat = chatProjectionForPublicId(projections, request.args["id"]);
+  if (!chat.ok) return chat.response;
+  const record = chatSessionRecord(chat.projection);
+  const answer = await readSessionAnswer(
+    {
+      listEvents: (query) => sessionEngine.listEvents(query),
+      ...(options.readTranscriptArtifact ? { readArtifact: options.readTranscriptArtifact } : {}),
+    },
+    { sessionId: record.sessionId },
+  );
+  return {
+    v: 1,
+    ok: true,
+    data: {
+      session: shortSessionId(record.sessionId),
+      role: record.role,
+      title: record.title,
+      state: answer.state,
+      turns: answer.turns,
+      unreadable: answer.unreadable,
+      answer: answer.text,
     },
   };
 }

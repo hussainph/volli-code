@@ -9,7 +9,7 @@
  * two policies wearing one name.
  */
 
-import type { ModelSelection } from "./agent-runtime";
+import type { ModelSelection, SessionRole } from "./agent-runtime";
 
 /**
  * The three jobs a default model is configured for.
@@ -50,6 +50,23 @@ export function resolveDefaultModel(
 ): ModelSelection | null {
   return purpose === "global" ? defaults.global : (defaults[purpose] ?? defaults.global);
 }
+
+/**
+ * Which purpose's default a Role reads (VC-53, VC-9): orchestration for a
+ * Board Session, execution for a Ticket Session, and the cost-efficient
+ * `utility` rung for a Subagent Session — a bounded delegation is exactly the
+ * background work that purpose was named for. Total over {@link SessionRole},
+ * so the next Role is a decision here rather than a silent `global`.
+ */
+export function modelPurposeForRole(role: SessionRole): ModelPurpose {
+  return MODEL_PURPOSE_FOR_ROLE[role];
+}
+
+const MODEL_PURPOSE_FOR_ROLE: Readonly<Record<SessionRole, ModelPurpose>> = Object.freeze({
+  project: "global",
+  ticket: "ticket",
+  subagent: "utility",
+});
 
 /**
  * The refusal every structured Session start states when no default resolves.

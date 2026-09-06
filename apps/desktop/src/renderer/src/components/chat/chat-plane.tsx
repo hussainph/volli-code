@@ -220,11 +220,25 @@ export interface ChatPlaneProps {
    */
   ticketId: string | null;
   onOpenFile(path: string): void;
+  /**
+   * Opens another Session in this host — a `delegate` row's child (VC-9).
+   * Optional because the lab has no session list to open it in; a row with
+   * nowhere to go renders its object as text, the way a file row does with
+   * no file host.
+   */
+  onOpenSession?(sessionId: string): void;
   /** The UI lab's own store, which owns its own transport. Omitted in the app. */
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }: ChatPlaneProps) {
+export function ChatPlane({
+  sessionId,
+  projectId,
+  ticketId,
+  onOpenFile,
+  onOpenSession,
+  store,
+}: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const sessionsStore = store ?? useChatSessionsStore;
   const {
@@ -924,12 +938,13 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
+      ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
       open: interactions,
       resolving,
       onResolve: answer,
     }),
-    [answer, interactions, onOpenFile, resolving, session.openedInteractions],
+    [answer, interactions, onOpenFile, onOpenSession, resolving, session.openedInteractions],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1384,6 +1399,8 @@ const MESSAGE_GAP = "flex flex-col gap-6";
 
 export interface TurnContext {
   onOpenFile(path: string): void;
+  /** Opens a `delegate` row's child Session (VC-9); absent where no host can. */
+  onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   /** The ones still open, so a gated row can draw the card it is waiting on. */
@@ -1576,7 +1593,13 @@ function renderSegment(
         </GuardedResponse>
       );
     case "bundle":
-      return <ActivityBundle rows={segment.rows} onOpenFile={context.onOpenFile} />;
+      return (
+        <ActivityBundle
+          rows={segment.rows}
+          onOpenFile={context.onOpenFile}
+          onOpenSession={context.onOpenSession}
+        />
+      );
     case "attention":
       return <GatedCall part={segment.part} context={context} />;
     default:
@@ -1599,7 +1622,7 @@ function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnCo
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
     <div className="space-y-1">
-      <ToolRow part={part} onOpenFile={context.onOpenFile} />
+      <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
       {interaction ? (
         <InteractionCard
           key={interaction.id}

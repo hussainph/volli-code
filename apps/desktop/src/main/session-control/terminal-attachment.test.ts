@@ -13,6 +13,8 @@ function projectionWith(attachments: SessionAttachmentProjection[]): SessionProj
       id: "session",
       projectId: "project",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Failed",
       createdAt: 1,
     },

@@ -229,7 +229,7 @@ Two consequences the UI must respect: `fetch-url` falls back to duration rather 
 
 Known gaps in the contract, worth closing before a second harness lands:
 
-- `delegate` has no `subject.agentName` or `outcome.childCount`, so the subagent name rides `nativeToolName` and any child count would ride free-text `summary`. That is stringly-typed where it should be structured.
+- ~~`delegate` has no `subject.agentName` or `outcome.childCount`, so the subagent name rides `nativeToolName` and any child count would ride free-text `summary`.~~ Closed by VC-9: `ActivitySubject.agentName` / `sessionId` and `ActivityOutcome.childCount` are structured, and Volli's own `session_delegate` row links to the child Session through `sessionId`. The `nativeToolName` reading survives for a harness that stamps neither.
 - `readActivityDescriptor` normalizes `diff` through the same trim used for labels, so a stamped diff loses its trailing newline. Content and labels should not share a normalizer.
 
 ## Bugs this fixes

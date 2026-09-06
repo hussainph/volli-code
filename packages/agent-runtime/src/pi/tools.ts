@@ -56,6 +56,7 @@ import { processReadImage } from "./read-image-processor";
 import type {
   CodingToolId,
   NonCodingToolId,
+  RuntimeVerbResult,
   RuntimeWebDocument,
   RuntimeWebSearchResults,
   SessionInteractionResolution,
@@ -288,7 +289,7 @@ function verbObjectSchema(
 export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
-): AgentTool<TSchema, undefined> {
+): AgentTool<TSchema, RuntimeVerbResult["details"]> {
   const entry = verbEntry(binding.verb);
   if (entry?.tool === undefined) {
     // Unreachable from a resolved surface — `resolveAgentToolSurface` admits
@@ -302,7 +303,11 @@ export function createVerbTool(
     label: entry.tool.name,
     description: entry.tool.description,
     parameters,
-    async execute(toolCallId, params, callSignal): Promise<AgentToolResult<undefined>> {
+    async execute(
+      toolCallId,
+      params,
+      callSignal,
+    ): Promise<AgentToolResult<RuntimeVerbResult["details"]>> {
       const withdrawn = new AbortController();
       const abandon = (): void => withdrawn.abort();
       const signals = [signal, callSignal].filter((one) => one !== undefined);
@@ -322,7 +327,9 @@ export function createVerbTool(
           },
           withdrawn.signal,
         );
-        return { content: [{ type: "text", text: result.text }], details: undefined };
+        // `details` is the host's structured aside for the transcript row; the
+        // model reads `content` and nothing else.
+        return { content: [{ type: "text", text: result.text }], details: result.details };
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }

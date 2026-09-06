@@ -4,7 +4,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ACTIVITY_METADATA_KEY, makeAgentError, MUTATION_PLAN_CONTRACT } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  makeAgentError,
+  MUTATION_PLAN_CONTRACT,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type {
   AgentRequest,
   AgentResponse,
@@ -1069,6 +1074,18 @@ describe("agent command service", () => {
     });
     expect(await engine.listEvents({ sessionId })).toEqual(beforeEvents);
 
+    // The Role is the Session's own statement (VC-9): a subagent on the same
+    // Ticket says so, rather than reading as a Ticket Session off its Ticket.
+    ctx.db.prepare("UPDATE sessions SET role = 'subagent' WHERE id = ?").run(sessionId);
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: { agentSurface: true },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      }),
+    ).toMatchObject({ ok: true, data: { agentSurface: { role: "subagent" } } });
+
     // Reading the frozen list folds the whole Session ledger, and identify
     // already folds it once. Only role-aware help wants it, so only role-aware
     // help asks — the command agents are told to run first does not pay.
@@ -2012,6 +2029,8 @@ describe("agent command service", () => {
       commandId: "structured-create",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Structured OpenCode Session",
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -2050,6 +2069,9 @@ describe("agent command service", () => {
           expect.objectContaining({
             id: structured.session.id.slice(0, 8),
             kind: "chat",
+            // The Role rides the row (VC-9), so a fleet reader can tell a
+            // helper it delegated to from the Sessions it started.
+            role: "project",
             ticket: null,
             title: "Structured OpenCode Session",
             ageMs: 100,
@@ -2090,6 +2112,8 @@ describe("agent command service", () => {
       commandId: "create-working",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Working",
       provenance,
     });
@@ -2122,6 +2146,8 @@ describe("agent command service", () => {
       commandId: "create-waiting",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Waiting",
       provenance,
     });
@@ -2169,6 +2195,8 @@ describe("agent command service", () => {
       commandId: "create-idle",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Idle",
       provenance,
     });
@@ -2178,6 +2206,8 @@ describe("agent command service", () => {
       commandId: "create-stopped",
       projectId: "project-one",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Stopped",
       provenance,
     });
@@ -2375,6 +2405,8 @@ describe("agent command service", () => {
         commandId: "chat-create",
         projectId: "project-one",
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: "Review VC-53",
         provenance: PROVENANCE,
       });
@@ -2602,6 +2634,67 @@ describe("agent command service", () => {
         data: { messages: 1, unreadable: 0, transcript: [] },
       });
     });
+
+    it("session.answer reads the last assistant message whole, with how the turn ended (VC-9)", async () => {
+      const { service, sessionEngine, sessionId, shortId } = await chatSession({
+        messages: [
+          { id: "m1", role: "user", parts: [{ type: "text", text: "Find the refresh" }] },
+          { id: "m2", role: "assistant", parts: [{ type: "text", text: "Looking…" }] },
+          {
+            id: "m3",
+            role: "assistant",
+            parts: [
+              { type: "reasoning", text: "weighing", state: "done" },
+              {
+                type: "text",
+                text: `It is refreshed in auth/refresh.ts, line 42.\n\n${"x".repeat(400)}`,
+                state: "done",
+              },
+            ],
+          },
+        ],
+      });
+      const answer = () =>
+        service.execute({
+          v: 1,
+          cmd: "session.answer",
+          args: { id: shortId },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+        });
+
+      // Mid-turn: the words so far, and the state that says they are not final.
+      expect(await answer()).toMatchObject({
+        ok: true,
+        data: {
+          session: shortId,
+          role: "project",
+          title: "Review VC-53",
+          state: "running",
+          turns: 1,
+          unreadable: false,
+          answer: `It is refreshed in auth/refresh.ts, line 42.\n\n${"x".repeat(400)}`,
+        },
+      });
+      await sessionEngine.observe({
+        id: "chat-turn-done",
+        kind: "turn.completed",
+        sessionId,
+        attachmentId: "attachment-1",
+        occurredAt: 9_000,
+        provenance: PROVENANCE,
+        turnId: "turn-1",
+      });
+      expect(await answer()).toMatchObject({ ok: true, data: { state: "completed" } });
+      // The same handle rules as a peek.
+      expect(
+        await service.execute({
+          v: 1,
+          cmd: "session.answer",
+          args: { id: "nosuchid" },
+          ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+        }),
+      ).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    });
   });
 
   it("records lifecycle signals in the Session ledger without changing planner history", async () => {
@@ -2810,6 +2903,8 @@ describe("agent command service", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -2854,6 +2949,8 @@ describe("agent command service", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -5852,6 +5949,8 @@ describe("reads over a session the socket did not start", () => {
       commandId: "structured-create",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -5970,6 +6069,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6010,6 +6111,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6042,6 +6145,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       commandId: "create-structured",
       projectId: "project-one",
       ticketId: "ticket-one",
+      role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6116,6 +6221,8 @@ describe("volli cost", () => {
       commandId: options.commandId,
       projectId: "p1",
       ticketId: options.ticketId,
+      role: roleImpliedByTicket(options.ticketId),
+      parentSessionId: null,
       title: options.commandId,
       provenance,
     });

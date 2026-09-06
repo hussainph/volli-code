@@ -46,6 +46,7 @@ import {
   sessionBlockedVerb,
   sessionDoneVerb,
   sessionListVerb,
+  sessionAnswerVerb,
   sessionPeekVerb,
 } from "./session-verbs";
 import {
@@ -144,6 +145,9 @@ export const AGENT_VERB_TABLE: {
   // The one verb that reads BOTH halves of the snapshot (VC-79), from this one
   // fold rather than by listing the world twice.
   "session.peek": { handle: sessionPeekVerb, projections: "load", envSession: "resolve" },
+  // The whole of a chat's last message (VC-9): resolves the handle against the
+  // same fold a peek does, then reads one artifact.
+  "session.answer": { handle: sessionAnswerVerb, projections: "load", envSession: "resolve" },
   // Identity is the whole requirement (VC-51): the signal needs no terminal
   // attachment, so it needs no terminal snapshot to find one in.
   "session.done": { handle: sessionDoneVerb, projections: "skip", envSession: "resolve" },

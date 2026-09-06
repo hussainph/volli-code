@@ -75,6 +75,8 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     waitingOn: null,
     lastActivityAt: 0,
     bornTicketless: false,
+    role: "ticket",
+    parentSessionId: null,
     ...overrides,
   };
 }

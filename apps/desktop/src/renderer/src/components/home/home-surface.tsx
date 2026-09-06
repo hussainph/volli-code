@@ -709,6 +709,22 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     [previewHomeFile, selectedId, selectedPath],
   );
 
+  /**
+   * Open another of this project's own Sessions from a chat — a `delegate`
+   * row's child (VC-9). The same adopt/open/activate a rail row or a dropped
+   * chat payload takes, so the child lands as an ordinary Home chat tab.
+   */
+  const openProjectSession = React.useCallback(
+    (sessionId: string) => {
+      if (selectedId === null) return;
+      const chat = useChatSessionsStore.getState();
+      chat.adoptChatSession(sessionId);
+      chat.openChatTab(selectedId, sessionId);
+      setHomeActiveTab(selectedId, chatTabId(sessionId));
+    },
+    [selectedId, setHomeActiveTab],
+  );
+
   /** What one pane's front tab draws — or, for a pane holding nothing, its menu. */
   const paneContent = (pane: ResolvedSplitViewPane): React.ReactNode => {
     if (selectedId === null || selected === null) return null;
@@ -765,6 +781,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             // Sessions, which is what makes their venue the main checkout.
             ticketId={null}
             onOpenFile={openProjectFile}
+            onOpenSession={openProjectSession}
           />
         ) : null}
         {paneBrowserTab !== undefined ? (

@@ -117,7 +117,12 @@ import { projectContainerName } from "./worktree/containers";
 import { ensure, listBranches, remove as removeWorktree, sweepOrphans } from "./worktree";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
-import { EMPTY_SESSION_USAGE_SUMMARY, MAX_INLINE_IMAGE_BYTES, PERSON_STARTED } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  MAX_INLINE_IMAGE_BYTES,
+  PERSON_STARTED,
+  roleImpliedByTicket,
+} from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
@@ -1447,6 +1452,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       commandId: "structured-create",
       projectId,
       ticketId: ticket.id,
+      role: roleImpliedByTicket(ticket.id),
+      parentSessionId: null,
       title: "Structured OpenCode Session",
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -1489,6 +1496,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         waitingOn: null,
         lastActivityAt: 500,
         bornTicketless: false,
+        role: "ticket",
+        parentSessionId: null,
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both
@@ -1516,6 +1525,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       commandId: "structured-create",
       projectId,
       ticketId: ticket.id,
+      role: roleImpliedByTicket(ticket.id),
+      parentSessionId: null,
       title: "Reattachable Run",
       provenance,
     });

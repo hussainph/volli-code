@@ -160,6 +160,7 @@ describe("startSessionOperation", () => {
         operationId: "generated-1",
         projectId: "project-one",
         ticketId: "ticket-one",
+        role: "ticket",
         title: "Work on VC-1",
         actor: { kind: "session", sessionId: "caller", ticketId: null },
       },

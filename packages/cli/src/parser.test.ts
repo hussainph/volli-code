@@ -943,6 +943,7 @@ describe("registry ↔ argv mechanics", () => {
       "automation.run",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
   });
 });

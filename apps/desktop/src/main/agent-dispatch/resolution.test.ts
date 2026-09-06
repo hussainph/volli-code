@@ -22,6 +22,7 @@ const SESSION: EnvSessionIdentity = {
   id: "session-1",
   projectId: "project-one",
   ticketId: "ticket-one",
+  role: "ticket",
 };
 
 function request(env: AgentRequest["ctx"]["env"]): AgentRequest {

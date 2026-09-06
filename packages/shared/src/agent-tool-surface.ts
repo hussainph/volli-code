@@ -66,7 +66,21 @@ import type { VerbToolKey } from "./verb-registry";
  * carries execution verbs and none of that family: merge submission is
  * VC-89's, credential-adjacent git is VC-45's, and a ticket executor that
  * needs stop over its own children is a VC-44 grant, never a bundle edit.
- * `subagent` stays empty until VC-9 defines what a Subagent Session is.
+ *
+ * `subagent` holds NO verb (VC-9), and each absence is a decision:
+ *
+ * - No agent-control verb — `session.start`, `session.stop`, `session.send`,
+ *   `automation.run` — and no `session.delegate`. A child cannot spawn, steer
+ *   or stop anything, whatever its context tells it, which makes "helpers do
+ *   not spawn" structural rather than kickoff prose. It also makes delegation
+ *   depth a bundle fact: with no `session.delegate` in the room there is no
+ *   grandchild to count, so no depth counter exists anywhere.
+ * - No `ticket.await`. A subagent is a bounded helper whose answer is its
+ *   last message; a helper parked on a Ticket gate is a helper that never
+ *   answers.
+ *
+ * What it does hold is decided by {@link ROLE_CAPABILITY_POLICY}, which is the
+ * capability half of the same decision.
  *
  * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
  * it is the default property this map exists to make true. A Ticket Session can
@@ -110,9 +124,45 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "session.send",
     "ticket.await",
     "automation.run",
+    "session.delegate",
   ]) as readonly VerbToolKey[],
-  ticket: Object.freeze(["ticket.await"]) as readonly VerbToolKey[],
+  // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
+  // needs "go look at this and tell me" as much as an orchestrator does, and
+  // what makes it safe is the CHILD's bundle, not the parent's Role. It is
+  // not the agent-control family — a subagent answers back here and cannot
+  // act on anything else — so VC-92's pairing rule does not pull the rest of
+  // that family in with it.
+  ticket: Object.freeze(["ticket.await", "session.delegate"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
+});
+
+/**
+ * Which capability tools a Role may be offered at all (VC-9).
+ *
+ * The bundle map above decides the verb half; this decides the other half, and
+ * it exists for one Role. A Board Session and a Ticket Session are bounded
+ * by nothing but their profile — every coding tool the venue loads and every
+ * port the host wired. A Subagent Session is bounded twice more: by this
+ * policy, and by its parent's own frozen surface (`within`, below).
+ *
+ * The one capability a subagent is never offered is `ask_user`. The person
+ * driving did not start that Session and is not in front of it; a question
+ * from it would arrive inside work they had handed to someone else, and its
+ * answer would be read by a model they never spoke to. Withholding the NAME
+ * here is what keeps the port from being wired: `sessionToolBindings` offers
+ * `ask_user` only where the frozen surface names it, so absence in the record
+ * is absence of the door. Everything else a subagent keeps — a helper that
+ * can read but not edit the tree it was asked to fix is a helper that reports
+ * a diff nobody applies.
+ *
+ * Total over {@link SessionRole} for the reason the bundle map is.
+ */
+const ROLE_CAPABILITY_POLICY: Readonly<
+  Record<SessionRole, { readonly withheld: readonly NonCodingToolId[] }>
+> = Object.freeze({
+  project: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
+  ticket: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
+  subagent: Object.freeze({ withheld: Object.freeze(["ask_user"]) as readonly NonCodingToolId[] }),
 });
 
 /** The verbs one Role holds before any grant. Registry data, never a live read. */
@@ -164,6 +214,16 @@ export interface AgentToolSurfaceInput {
    * closed rather than one that learns to.
    */
   grants?: readonly string[];
+  /**
+   * The surface this Session may not exceed: its parent's own frozen record,
+   * for a Subagent Session (VC-9).
+   *
+   * A child cannot get a port its parent lacked, and the parent's record — not
+   * the profile as it stands today — is what says what the parent had. Only
+   * the capability half is bounded by it; the verb half is the child's own
+   * bundle, which for a subagent is empty regardless. Absent for a root Role.
+   */
+  within?: readonly SessionToolId[];
 }
 
 /** A grant, bundle or capability that cannot become a tool. Fails a Session start. */
@@ -207,6 +267,12 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
     }
   }
   const granted = new Set<VerbToolKey>();
+  if (input.role === "subagent" && (input.grants ?? []).length > 0) {
+    // A subagent's bundle is the whole of its authority. A grant reaching it
+    // is a caller that has confused the two kinds of child — the peer executor
+    // VC-183 grants a scoped start to, and this bounded helper.
+    throw new AgentToolSurfaceError("A Subagent Session takes no verb grant");
+  }
   for (const grant of input.grants ?? []) {
     if (!isVerbToolKey(grant)) {
       // Both failures are one message on purpose: to the party holding a bad
@@ -219,12 +285,19 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
     granted.add(grant);
   }
   const verbs = new Set<VerbToolKey>([...roleVerbBundle(input.role), ...granted]);
+  const withheld = ROLE_CAPABILITY_POLICY[input.role].withheld;
+  const within = input.within;
+  const offered = (tool: SessionToolId): boolean =>
+    !(withheld as readonly string[]).includes(tool) &&
+    (within === undefined || within.includes(tool));
   return [
-    ...input.capabilities.coding,
+    ...input.capabilities.coding.filter(offered),
     // Canonical interaction order, taken from the vocabulary rather than from
     // the caller's array, so two Sessions that wired the same ports in
     // different orders resolve to the same surface and share a prefix.
-    ...NON_CODING_TOOL_IDS.filter((tool) => input.capabilities.interaction.includes(tool)),
+    ...NON_CODING_TOOL_IDS.filter(
+      (tool) => input.capabilities.interaction.includes(tool) && offered(tool),
+    ),
     ...VERB_TOOL_KEYS.filter((key) => verbs.has(key)),
   ];
 }
