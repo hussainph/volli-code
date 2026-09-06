@@ -106,8 +106,9 @@ function byIdPorts(
   return {
     ports: {
       sessionEngine: {
-        getSession: vi.fn(async ({ sessionId }: { sessionId: string }) =>
-          snapshots.find((one) => one.session.id === sessionId) ?? null,
+        getSession: vi.fn(
+          async ({ sessionId }: { sessionId: string }) =>
+            snapshots.find((one) => one.session.id === sessionId) ?? null,
         ),
         submit,
       } as unknown as StopSessionByIdPorts["sessionEngine"],

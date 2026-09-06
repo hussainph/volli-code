@@ -1856,9 +1856,10 @@ describe("volli:session-stop", () => {
     expect(
       await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
     ).toEqual({ ok: false, error: "Unknown session." });
-    expect(
-      invoke<SessionStopResult>("volli:session-stop", { sessionId: "" }),
-    ).toEqual({ ok: false, error: "Invalid session stop" });
+    expect(invoke<SessionStopResult>("volli:session-stop", { sessionId: "" })).toEqual({
+      ok: false,
+      error: "Invalid session stop",
+    });
   });
 });
 

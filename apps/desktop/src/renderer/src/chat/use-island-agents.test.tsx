@@ -158,9 +158,9 @@ describe("which rows are children", () => {
     });
     const probe = await mount();
     expect(probe.agents().map((one) => one.id)).toEqual(["child"]);
-    expect(subagentsOf(useProjectSessionsStore.getState().byProject[PROJECT], SESSION)).toHaveLength(
-      1,
-    );
+    expect(
+      subagentsOf(useProjectSessionsStore.getState().byProject[PROJECT], SESSION),
+    ).toHaveLength(1);
   });
 
   it("excludes a session_start peer child by role", async () => {
@@ -375,7 +375,10 @@ describe("the now channel", () => {
   });
 
   it("announces the last change when two children end in one reading — latest wins", async () => {
-    listing([record({ sessionId: "a", title: "First" }), record({ sessionId: "b", title: "Second" })]);
+    listing([
+      record({ sessionId: "a", title: "First" }),
+      record({ sessionId: "b", title: "Second" }),
+    ]);
     const probe = await mount();
 
     await act(async () =>

@@ -145,6 +145,7 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { SubagentPeekDialog } from "@renderer/components/chat/subagent-peek-dialog";
 import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
@@ -262,10 +263,36 @@ export function ChatPlane({
   const shellsApi = typeof window === "undefined" ? undefined : window.api?.shells;
   const [openShellId, setOpenShellId] = React.useState<string | null>(null);
   const closeShellOutput = React.useCallback(() => setOpenShellId(null), []);
+  // Where a subagent peeks (VC-269): one id, so one peek at a time is
+  // structural. Promotion to a tab is the host's own `onOpenSession` — the
+  // door the `delegate` transcript row already takes — threaded through the
+  // island's deps rather than a second door written here.
+  const [peekedAgentId, setPeekedAgentId] = React.useState<string | null>(null);
+  const closePeek = React.useCallback(() => setPeekedAgentId(null), []);
+  // Where focus lands when the peek closes: this plane's own agents cluster,
+  // the anchor the row's card reopens from (see `SubagentPeekDialog`). Read
+  // off the plane's subtree rather than the document so a split with two
+  // chats never hands focus to the other one's island.
+  const planeRef = React.useRef<HTMLDivElement>(null);
+  const peekReturnFocus = React.useCallback(
+    () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
+    [],
+  );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
+    peekSession: setPeekedAgentId,
+    ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
   });
+  // The peeked child as the island models it; a child that left the listing
+  // while peeked closes the overlay with it.
+  const peekedAgent = React.useMemo(
+    () =>
+      peekedAgentId === null
+        ? null
+        : (island.model.agents.find((agent) => agent.id === peekedAgentId) ?? null),
+    [island.model.agents, peekedAgentId],
+  );
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
@@ -1054,7 +1081,11 @@ export function ChatPlane({
   // caps its long-form prose against this pane's actual height. `vh` follows the
   // whole window and therefore misses a short top/bottom split.
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col [container-type:size]" style={planeStyle}>
+    <div
+      ref={planeRef}
+      className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+      style={planeStyle}
+    >
       <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           <Conversation className="min-h-0 bg-background">
@@ -1228,6 +1259,13 @@ export function ChatPlane({
       {shellsApi === undefined ? null : (
         <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
       )}
+      <SubagentPeekDialog
+        agent={peekedAgent}
+        onClose={closePeek}
+        returnFocus={peekReturnFocus}
+        {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}
+        {...(store === undefined ? {} : { store })}
+      />
     </div>
   );
 }

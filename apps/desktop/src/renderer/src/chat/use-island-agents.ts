@@ -52,7 +52,10 @@ import type {
 
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useProjectSessionsStore, type ProjectSessionRows } from "@renderer/stores/project-sessions";
+import {
+  useProjectSessionsStore,
+  type ProjectSessionRows,
+} from "@renderer/stores/project-sessions";
 import type { IslandFlashPush } from "./use-island-flash";
 import type { ChatSessionsStore } from "./use-session-controller";
 
@@ -191,9 +194,7 @@ export function useIslandAgents(
   const store = deps.store ?? useChatSessionsStore;
   const openTabs = useStore(
     store,
-    useShallow((state) =>
-      records.length === 0 ? NO_TABS : Object.values(state.openTabs).flat(),
-    ),
+    useShallow((state) => (records.length === 0 ? NO_TABS : Object.values(state.openTabs).flat())),
   );
   const agents = React.useMemo<readonly IslandAgent[]>(
     () =>
