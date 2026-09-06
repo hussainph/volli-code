@@ -167,6 +167,7 @@ function metadataOf(view: ShellOutputView): ShellOutputMetadata {
  * Pi's own bash tool, already decides how often a snapshot becomes a durable
  * checkpoint.
  */
+/** PI-RESTATED(0.85.0): bounded output publisher used by Pi's Node environment. */
 class BoundedOutput {
   readonly #maxBytes: number;
   readonly #maxLines: number;

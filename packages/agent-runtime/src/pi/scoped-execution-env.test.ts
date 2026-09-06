@@ -615,6 +615,49 @@ describe("ScopedExecutionEnv", () => {
     expect(seen.updates.map((update) => update.kind)).toEqual(["replace", "replace"]);
   });
 
+  it("does not truncate output exactly at both limits", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({ limits: { maxBytes: 5, maxLines: 1 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("abcde");
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: {
+        truncation: { truncated: false, truncatedBy: null, totalBytes: 5, totalLines: 1 },
+      },
+    });
+    expect(seen.text).toBe("abcde");
+  });
+
+  it("uses Pi's line precedence when one chunk crosses both limits", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+    });
+    const seen = collected({ limits: { maxBytes: 5, maxLines: 1 } });
+    const run = env.exec("output", seen.options);
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+    running.stdout.write("aa\nbbbb\n");
+    running.emit("close", 0);
+
+    await expect(run).resolves.toMatchObject({
+      ok: true,
+      value: {
+        truncation: { truncated: true, truncatedBy: "lines", totalBytes: 8, totalLines: 2 },
+      },
+    });
+  });
+
   it("reports a single over-long line as a partial one, cut on a character boundary", async () => {
     const { worktree } = roots();
     const running = child();

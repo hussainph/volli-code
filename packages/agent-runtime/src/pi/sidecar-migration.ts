@@ -38,23 +38,17 @@
  */
 
 import { readFile, rename, writeFile } from "node:fs/promises";
-
-/** The three ids that bind a sidecar to the attachment that owns it. */
-export interface SidecarIdentityRecord {
-  volliSessionId: string;
-  volliThreadId: string;
-  volliAttachmentId: string;
-}
-
-/** Where the branch tip and the identity live in 0.85.0's value store. */
-const BRANCH_TIP_NAMESPACE = "pi.branch.tip";
-const IDENTITY_NAMESPACE = "volli.identity.v1";
-const MAIN_BRANCH = "main";
+import {
+  MAIN_BRANCH,
+  MAIN_BRANCH_TIP,
+  SIDECAR_IDENTITY,
+  type SidecarIdentity,
+} from "./sidecar-storage";
 
 /** What one migration attempt found. */
 export type SidecarMigration =
   /** The file was written by 0.84.3 and now reads as 0.85.0. */
-  | { kind: "migrated"; entries: number; identity: SidecarIdentityRecord | null }
+  | { kind: "migrated"; entries: number; identity: SidecarIdentity | null }
   /** Already the current format, or not a session file at all. Untouched. */
   | { kind: "skipped"; reason: "current-format" | "unrecognized" | "empty" };
 
@@ -91,7 +85,7 @@ function isLegacyHeader(value: unknown): value is {
 }
 
 /** The identity this runtime wrote into 0.84.3's metadata bag, when it is whole. */
-function identityFrom(metadata: unknown): SidecarIdentityRecord | null {
+function identityFrom(metadata: unknown): SidecarIdentity | null {
   if (!isRecord(metadata)) return null;
   const sessionId = metadata["volliSessionId"];
   const threadId = metadata["volliThreadId"];
@@ -158,7 +152,7 @@ function scanRecords(lines: readonly string[]): { tip: string | null; maxSeq: nu
 }
 
 /**
- * Bring one sidecar file up to the 0.85.0 format, if it needs it.
+ * PI-RESTATED(0.85.0): bring one sidecar file up to the 0.85.0 format, if it needs it.
  *
  * Written through a temporary file and a rename, the way Pi publishes its own
  * storage: a half-written session file is a destroyed conversation, and a
@@ -218,8 +212,8 @@ export async function migrateLegacySidecar(path: string): Promise<SidecarMigrati
       kind: "value",
       op: "set",
       seq: ++seq,
-      namespace: BRANCH_TIP_NAMESPACE,
-      key: MAIN_BRANCH,
+      namespace: MAIN_BRANCH_TIP.namespace,
+      key: MAIN_BRANCH_TIP.key,
       value: tip,
     }),
   );
@@ -229,8 +223,8 @@ export async function migrateLegacySidecar(path: string): Promise<SidecarMigrati
         kind: "value",
         op: "set",
         seq: ++seq,
-        namespace: IDENTITY_NAMESPACE,
-        key: "",
+        namespace: SIDECAR_IDENTITY.namespace,
+        key: SIDECAR_IDENTITY.key,
         value: identity,
       }),
     );

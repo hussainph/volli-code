@@ -344,6 +344,14 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       reason: "overflow",
       detail: "Summarization failed: the model refused.",
     },
+    {
+      kind: "context.reasoning_dropped",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+    },
     { kind: "adapter.observed", attachmentId: null, name: "session-wide", native: null },
     {
       kind: "adapter.observed",
@@ -647,6 +655,45 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.reason has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.reasoning_dropped",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+          count: 0,
+          causes: ["prefix-mismatch"],
+          paths: [],
+        },
+        "payload",
+      ),
+    ).toThrow("payload.count must be positive");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.reasoning_dropped",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+          count: 1,
+          causes: "prefix-mismatch",
+          paths: [],
+        },
+        "payload",
+      ),
+    ).toThrow("payload.causes must be an array");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.reasoning_dropped",
+          attachmentId: "attachment-1",
+          turnId: "turn-1",
+          count: 1,
+          causes: ["future-provider-word"],
+          paths: [],
+        },
+        "payload",
+      ),
+    ).toThrow("payload.causes[0] has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         {
@@ -1189,6 +1236,24 @@ describe("the renderer-safe scrub", () => {
       },
     };
     expect(scrubSessionEventPayload(payload)).toEqual(payload);
+  });
+
+  it("keeps provider request coordinates behind the product edge", () => {
+    const payload: SessionEventPayload = {
+      kind: "context.reasoning_dropped",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch"],
+      paths: ["messages.1.content.0"],
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual({
+      kind: "context.reasoning_dropped",
+      attachmentId: "attachment-1",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch"],
+    });
   });
 
   // The stop fact is Volli's own vocabulary end to end — reason and actor

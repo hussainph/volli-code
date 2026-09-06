@@ -344,26 +344,30 @@ describe("ObservabilityReducer lifecycle facts", () => {
     // conversation, so they stay on the product observation and never reach
     // telemetry (VC-254).
     const event = freshReducer().reduce({
-      kind: "reasoning-dropped",
+      kind: "provider-reasoning-dropped",
       turnId: "turn-1",
       count: 2,
       causes: ["prefix-mismatch"],
       paths: ["messages.1.content.0", "messages.3.content.0"],
     });
-    expect(event).toEqual({ kind: "reasoning-dropped", cause: "prefix-mismatch", count: 2 });
+    expect(event).toEqual({
+      kind: "provider-reasoning-dropped",
+      cause: "prefix-mismatch",
+      count: 2,
+    });
     expect(JSON.stringify(event)).not.toContain("messages.1.content.0");
   });
 
   it("reports a server-side model fallback as the model mismatch it is", () => {
     expect(
       freshReducer().reduce({
-        kind: "reasoning-dropped",
+        kind: "provider-reasoning-dropped",
         turnId: "turn-1",
         count: 1,
         causes: ["model-mismatch"],
         paths: [],
       }),
-    ).toEqual({ kind: "reasoning-dropped", cause: "model-mismatch", count: 1 });
+    ).toEqual({ kind: "provider-reasoning-dropped", cause: "model-mismatch", count: 1 });
   });
 
   it("calls a turn that lost blocks both ways a prefix mismatch", () => {
@@ -371,7 +375,7 @@ describe("ObservabilityReducer lifecycle facts", () => {
     // says the provider answered on another model.
     expect(
       freshReducer().reduce({
-        kind: "reasoning-dropped",
+        kind: "provider-reasoning-dropped",
         turnId: "turn-1",
         count: 3,
         causes: ["model-mismatch", "prefix-mismatch"],
@@ -386,13 +390,13 @@ describe("ObservabilityReducer lifecycle facts", () => {
     // otherwise reduce to an event with no cause field at all.
     expect(
       freshReducer().reduce({
-        kind: "reasoning-dropped",
+        kind: "provider-reasoning-dropped",
         turnId: "turn-1",
         count: 1,
         causes: [],
         paths: [],
       }),
-    ).toEqual({ kind: "reasoning-dropped", cause: "unknown", count: 1 });
+    ).toEqual({ kind: "provider-reasoning-dropped", cause: "unknown", count: 1 });
   });
 
   it("reduces attachment phases, bounding a failure to its reason", () => {

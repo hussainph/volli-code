@@ -35,7 +35,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ReasoningDropCause, ReasoningDroppedObservation } from "@volli/shared";
+import type { ProviderReasoningDroppedObservation, ReasoningDropCause } from "@volli/shared";
 
 /**
  * The same message with no reasoning in it.
@@ -71,10 +71,26 @@ const INPUT_TRANSFORMATIONS_DIAGNOSTIC = "anthropic_input_transformations";
  * containment `ATTEMPT_STOP_REASONS` applies to stop reasons.
  */
 function dropCause(type: string | undefined): ReasoningDropCause {
-  if (type === undefined) return "unknown";
-  if (type.includes("prefix")) return "prefix-mismatch";
-  if (type.includes("model")) return "model-mismatch";
-  return "unknown";
+  switch (type) {
+    case "prefix_binding_mismatch":
+      return "prefix-mismatch";
+    case "model_binding_mismatch":
+      return "model-mismatch";
+    default:
+      return "unknown";
+  }
+}
+
+function diagnosticTransformations(
+  details: Record<string, unknown> | undefined,
+): Record<string, unknown>[] {
+  const transformations = details?.["transformations"];
+  return Array.isArray(transformations)
+    ? transformations.filter(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry),
+      )
+    : [];
 }
 
 /**
@@ -96,31 +112,30 @@ function dropCause(type: string | undefined): ReasoningDropCause {
  * common case — every turn on every model without the flag, and every clean
  * turn on the models with it.
  */
-export function reasoningDropped(
+export function providerReasoningDropped(
   message: AssistantMessage,
   turnId: string,
-): ReasoningDroppedObservation | undefined {
+): ProviderReasoningDroppedObservation | undefined {
   const transformations = message.diagnostics?.flatMap((diagnostic) =>
     diagnostic.type === INPUT_TRANSFORMATIONS_DIAGNOSTIC
-      ? ((diagnostic.details?.["transformations"] as unknown[] | undefined) ?? [])
+      ? diagnosticTransformations(diagnostic.details)
       : [],
   );
   if (transformations === undefined || transformations.length === 0) return undefined;
 
   const causes = new Set<ReasoningDropCause>();
-  const paths: string[] = [];
-  for (const entry of transformations) {
-    const transformation = entry as { type?: unknown; path?: unknown };
+  const paths = new Set<string>();
+  for (const transformation of transformations) {
     causes.add(
-      dropCause(typeof transformation.type === "string" ? transformation.type : undefined),
+      dropCause(typeof transformation["type"] === "string" ? transformation["type"] : undefined),
     );
-    if (typeof transformation.path === "string") paths.push(transformation.path);
+    if (typeof transformation["path"] === "string") paths.add(transformation["path"]);
   }
   return {
-    kind: "reasoning-dropped",
+    kind: "provider-reasoning-dropped",
     turnId,
     count: transformations.length,
     causes: [...causes],
-    paths,
+    paths: [...paths],
   };
 }

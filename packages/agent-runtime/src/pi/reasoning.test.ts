@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
-import { reasoningDropped, withoutReasoning } from "./reasoning";
+import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -92,18 +92,18 @@ function droppedDiagnostic(
   ];
 }
 
-describe("reasoningDropped", () => {
+describe("providerReasoningDropped", () => {
   it("says nothing about a turn the provider left alone", () => {
     // The overwhelmingly common case, and the one that must stay silent: every
     // turn on every model without the flag, and every clean turn on the models
     // with it. A notice that fired on a turn that lost nothing would teach a
     // person to ignore the one that matters.
     expect(
-      reasoningDropped(assistant([{ type: "text", text: "hello" }]), "turn-1"),
+      providerReasoningDropped(assistant([{ type: "text", text: "hello" }]), "turn-1"),
     ).toBeUndefined();
     const empty = assistant([{ type: "text", text: "hello" }]);
     empty.diagnostics = droppedDiagnostic([]);
-    expect(reasoningDropped(empty, "turn-1")).toBeUndefined();
+    expect(providerReasoningDropped(empty, "turn-1")).toBeUndefined();
   });
 
   it("ignores a diagnostic that is not about dropped input", () => {
@@ -111,7 +111,7 @@ describe("reasoningDropped", () => {
     // faults on it too. Only the one type is this function's business.
     const message = assistant([{ type: "text", text: "hello" }]);
     message.diagnostics = [{ type: "anthropic_stream_recovery", timestamp: 1, details: {} }];
-    expect(reasoningDropped(message, "turn-1")).toBeUndefined();
+    expect(providerReasoningDropped(message, "turn-1")).toBeUndefined();
   });
 
   it("reports what was dropped, in Volli's vocabulary, once for the turn", () => {
@@ -129,8 +129,8 @@ describe("reasoningDropped", () => {
       { type: "prefix_binding_mismatch", path: "messages.3.content.0" },
     ]);
 
-    expect(reasoningDropped(message, "turn-7")).toEqual({
-      kind: "reasoning-dropped",
+    expect(providerReasoningDropped(message, "turn-7")).toEqual({
+      kind: "provider-reasoning-dropped",
       turnId: "turn-7",
       count: 2,
       causes: ["prefix-mismatch"],
@@ -148,25 +148,59 @@ describe("reasoningDropped", () => {
       { type: "model_binding_mismatch", path: "messages.1.content.0" },
     ]);
 
-    expect(reasoningDropped(message, "turn-1")).toMatchObject({
+    expect(providerReasoningDropped(message, "turn-1")).toMatchObject({
       count: 1,
       causes: ["model-mismatch"],
     });
   });
 
   it("keeps a transformation type it has never seen out of the vocabulary", () => {
-    // Anthropic can add a type whenever it likes. It must arrive as `unknown`
-    // rather than as a new string on an observation nobody has read — the same
-    // containment pi's own stop reasons get.
+    // Substring similarity is not evidence: a future provider word containing
+    // "prefix" must still be unknown until Volli gives it an explicit meaning.
     const message = assistant([{ type: "text", text: "answered anyway" }]);
     message.diagnostics = droppedDiagnostic([
-      { type: "some_future_transformation", path: "messages.1.content.0" },
+      { type: "future_prefix_rewrite", path: "messages.1.content.0" },
       { path: "messages.2.content.0" },
     ]);
 
-    expect(reasoningDropped(message, "turn-1")).toMatchObject({
+    expect(providerReasoningDropped(message, "turn-1")).toMatchObject({
       count: 2,
       causes: ["unknown"],
+    });
+  });
+
+  it("ignores a malformed transformations payload instead of failing the Turn", () => {
+    const message = assistant([{ type: "text", text: "answered anyway" }]);
+    message.diagnostics = [
+      {
+        type: "anthropic_input_transformations",
+        timestamp: 1,
+        details: { transformations: { type: "prefix_binding_mismatch" } },
+      },
+    ];
+
+    expect(providerReasoningDropped(message, "turn-1")).toBeUndefined();
+  });
+
+  it("ignores malformed entries without miscounting the valid transformations", () => {
+    const message = assistant([{ type: "text", text: "answered anyway" }]);
+    message.diagnostics = [
+      {
+        type: "anthropic_input_transformations",
+        timestamp: 1,
+        details: {
+          transformations: [
+            "prefix_binding_mismatch",
+            null,
+            { type: "prefix_binding_mismatch", path: "messages.1.content.0" },
+          ],
+        },
+      },
+    ];
+
+    expect(providerReasoningDropped(message, "turn-1")).toMatchObject({
+      count: 1,
+      causes: ["prefix-mismatch"],
     });
   });
 
@@ -178,7 +212,7 @@ describe("reasoningDropped", () => {
       { type: "prefix_binding_mismatch", path: "messages.3.content.0" },
     ]);
 
-    expect(reasoningDropped(message, "turn-1")).toMatchObject({
+    expect(providerReasoningDropped(message, "turn-1")).toMatchObject({
       count: 3,
       causes: ["prefix-mismatch", "model-mismatch"],
     });

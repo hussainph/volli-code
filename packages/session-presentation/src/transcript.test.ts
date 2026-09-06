@@ -140,6 +140,17 @@ function compactionFailed(sequence: number): ChatSessionFrame {
   });
 }
 
+function reasoningDrop(sequence: number, turnId = "turn-1"): ChatSessionFrame {
+  return frame(sequence, {
+    kind: "context.reasoning_dropped",
+    attachmentId: "attachment-1",
+    turnId,
+    count: 2,
+    causes: ["prefix-mismatch", "model-mismatch"],
+    paths: ["messages.1.content.0", "messages.3.content.0"],
+  });
+}
+
 function opening(sequence: number, id: string): ChatSessionFrame {
   const interaction: RendererSessionInteraction = {
     id,
@@ -378,6 +389,32 @@ describe("appendFrames overlays", () => {
 
     expect(removed.overlay.size).toBe(0);
     expect(removed.messages).toEqual([]);
+  });
+});
+
+describe("provider reasoning notices", () => {
+  it("pins a durable notice after the latest settled message", () => {
+    const state = appendFrames(EMPTY_TRANSCRIPT, [
+      transcriptFrame(1, message("m1", "first")),
+      reasoningDrop(2),
+    ]);
+
+    expect(state.reasoningDrops).toEqual([
+      {
+        sequence: 2,
+        turnId: "turn-1",
+        afterMessageId: "m1",
+        count: 2,
+        causes: ["prefix-mismatch", "model-mismatch"],
+      },
+    ]);
+  });
+
+  it("keeps the existing list identity when later frames contain no notice", () => {
+    const noticed = appendFrames(EMPTY_TRANSCRIPT, [reasoningDrop(1)]);
+    const later = appendFrames(noticed, [turn(2, "turn.completed")]);
+
+    expect(later.reasoningDrops).toBe(noticed.reasoningDrops);
   });
 });
 

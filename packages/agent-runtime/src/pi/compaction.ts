@@ -38,7 +38,6 @@
  */
 
 import {
-  branchTip,
   calculateContextTokens,
   compact,
   createBranchSummaryMessage,
@@ -63,16 +62,8 @@ import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
 import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
+import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { sanitizeDiagnostic, sessionUsageFrom } from "./transcript";
-
-/**
- * The one branch this runtime reads and writes. Pi's own default branch name.
- *
- * Exported because the runtime needs the same name: Pi 0.85.0 moved appends and
- * branch scans onto an explicit `Branch` handle, so the name that used to be a
- * default inside Pi is now a value two modules here have to agree on.
- */
-export const MAIN_BRANCH = "main";
 
 /**
  * A model's usable window, or nothing when the catalog does not report one.
@@ -236,7 +227,7 @@ export function contextMessages(path: readonly Entry[]): AgentMessage[] {
  * The last compaction entry and everything after it; the whole path when there
  * is none.
  *
- * Pi's `buildContextEntries`, restated. Until 0.85.0 this module called Pi's
+ * PI-RESTATED(0.85.0): Pi's `buildContextEntries`. Until 0.85.0 this module called Pi's
  * own function — `buildSessionContext` — precisely so that one rule existed in
  * one place. 0.85.0 made that module private: it is still there, at
  * `harness/session/context.js`, but the package's `exports` map no longer
@@ -431,7 +422,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
 /**
  * Append one compaction entry to the main branch and return it as stored.
  *
- * Pi 0.85.0 removed `Session.appendEntry`. What replaced it is a commit: a
+ * PI-RESTATED(0.85.0): Pi removed `Session.appendEntry`. What replaced it is a commit: a
  * branch append is now `insertEntry` plus the `setValue` that advances the
  * branch tip, both inside one `mutate` so a reader can never observe an entry
  * that no branch points at. `Branch.appendMessage` and `Branch.appendCustomEntry`
@@ -452,10 +443,10 @@ async function appendCompactionEntry(
   context: Context,
 ): Promise<CompactionEntry> {
   return sidecar.mutate(async (mutator, mutationContext) => {
-    const tip = await mutator.getValue(branchTip(MAIN_BRANCH), mutationContext);
+    const tip = await mutator.getValue(MAIN_BRANCH_TIP, mutationContext);
     const parented = { ...entry, parentId: tip?.value ?? null };
     const commit = await mutator.commit(
-      [insertEntry(parented), setValue(branchTip(MAIN_BRANCH), parented.id)],
+      [insertEntry(parented), setValue(MAIN_BRANCH_TIP, parented.id)],
       mutationContext,
     );
     return { ...parented, seq: commit.seqs[0] ?? commit.firstSeq, timestamp: commit.timestamp };

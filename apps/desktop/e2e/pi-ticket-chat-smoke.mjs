@@ -114,6 +114,7 @@ const LIVE_RUNTIME_FRAME_KINDS = new Set([
   "turn.started",
   "turn.completed",
   "turn.interrupted",
+  "context.reasoning_dropped",
   "transcript.referenced",
 ]);
 /**

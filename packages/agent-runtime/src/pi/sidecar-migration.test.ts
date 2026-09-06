@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT, value } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import { JsonlSessionRepo, NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { describe, expect, it } from "vite-plus/test";
 import { migrateLegacySidecar } from "./sidecar-migration";
+import { SIDECAR_IDENTITY } from "./sidecar-storage";
 
 /**
  * A sidecar exactly as pi-agent-core 0.84.3 wrote one.
@@ -179,9 +180,66 @@ describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
     const [candidate] = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
     const session = await repo.open(candidate!, BACKGROUND_CONTEXT);
 
-    expect((await session.getValue(value("volli.identity.v1"), BACKGROUND_CONTEXT))?.value).toEqual(
-      { volliSessionId: "s1", volliThreadId: "t1", volliAttachmentId: "a1" },
-    );
+    expect((await session.getValue(SIDECAR_IDENTITY, BACKGROUND_CONTEXT))?.value).toEqual({
+      volliSessionId: "s1",
+      volliThreadId: "t1",
+      volliAttachmentId: "a1",
+    });
+  });
+
+  it("creates an empty main branch for a legacy sidecar with no entries", async () => {
+    const owned = fixture();
+    const [header] = readFileSync(owned.path, "utf8").trimEnd().split("\n");
+    writeFileSync(owned.path, `${header}\n`);
+
+    expect(await migrateLegacySidecar(owned.path)).toMatchObject({ kind: "migrated", entries: 0 });
+    const repo = repoFor(owned);
+    const [candidate] = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
+    const session = await repo.open(candidate!, BACKGROUND_CONTEXT);
+    const branch = await session.branch("main", BACKGROUND_CONTEXT);
+
+    expect(branch).toBeDefined();
+    expect(await branch!.findEntries({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).toEqual([]);
+  });
+
+  it("treats an entry without a lane as main inside an array transaction", async () => {
+    const owned = fixture();
+    const [header, first, second] = readFileSync(owned.path, "utf8").trimEnd().split("\n");
+    const firstEntry = JSON.parse(first!) as Record<string, unknown>;
+    const secondEntry = JSON.parse(second!) as Record<string, unknown>;
+    delete firstEntry["lane"];
+    delete secondEntry["lane"];
+    writeFileSync(owned.path, `${header}\n${JSON.stringify([firstEntry, secondEntry])}\n`);
+
+    await migrateLegacySidecar(owned.path);
+    const repo = repoFor(owned);
+    const [candidate] = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
+    const session = await repo.open(candidate!, BACKGROUND_CONTEXT);
+    const branch = await session.branch("main", BACKGROUND_CONTEXT);
+
+    expect(
+      (await branch!.findEntries({ order: "oldestFirst" }, BACKGROUND_CONTEXT)).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["entry-1", "entry-2"]);
+  });
+
+  it("reports a truly empty file without changing it", async () => {
+    const owned = fixture();
+    writeFileSync(owned.path, "");
+
+    expect(await migrateLegacySidecar(owned.path)).toEqual({ kind: "skipped", reason: "empty" });
+    expect(readFileSync(owned.path, "utf8")).toBe("");
+  });
+
+  it("replaces a stale temporary file left by an interrupted earlier attempt", async () => {
+    const owned = fixture();
+    const temporaryPath = `${owned.path}.volli-migration`;
+    writeFileSync(temporaryPath, "partial migration");
+
+    expect((await migrateLegacySidecar(owned.path)).kind).toBe("migrated");
+    expect(existsSync(temporaryPath)).toBe(false);
+    expect(readFileSync(owned.path, "utf8")).not.toContain("partial migration");
   });
 
   it("runs once and then leaves the file alone", async () => {
@@ -271,6 +329,6 @@ describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
     const repo = repoFor(owned);
     const [candidate] = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
     const session = await repo.open(candidate!, BACKGROUND_CONTEXT);
-    expect(await session.getValue(value("volli.identity.v1"), BACKGROUND_CONTEXT)).toBeUndefined();
+    expect(await session.getValue(SIDECAR_IDENTITY, BACKGROUND_CONTEXT)).toBeUndefined();
   });
 });

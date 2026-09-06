@@ -289,7 +289,7 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
     // A span rather than an error: the turn succeeded, and what is worth
     // finding later is how often a model answered with less reasoning than the
     // request carried, and why (VC-254).
-    case "reasoning-dropped":
+    case "provider-reasoning-dropped":
       return {
         name: "volli.agent.reasoning_dropped",
         kind: "internal",
@@ -553,7 +553,7 @@ export function observabilityMetrics(event: ObservabilityEvent): readonly Observ
           [`${VOLLI}.compaction.reason`]: event.reason,
         }),
       );
-    case "reasoning-dropped":
+    case "provider-reasoning-dropped":
       return metric(
         METRIC.reasoningDropped,
         "counter",

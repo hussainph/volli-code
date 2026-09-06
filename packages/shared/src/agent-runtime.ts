@@ -1031,7 +1031,7 @@ export type RuntimeObservation =
   | TurnObservation
   | CompactionProgressObservation
   | CompactionObservation
-  | ReasoningDroppedObservation
+  | ProviderReasoningDroppedObservation
   | TranscriptDeltaObservation
   | SettledMessageObservation
   | UsageObservation
@@ -1078,14 +1078,14 @@ export type ReasoningDropCause = (typeof REASONING_DROP_CAUSES)[number];
  * because they are what makes a report actionable when someone diffs two
  * request bodies. They name positions, never content.
  */
-export interface ReasoningDroppedObservation {
-  kind: "reasoning-dropped";
+export interface ProviderReasoningDroppedObservation {
+  kind: "provider-reasoning-dropped";
   turnId: string;
-  /** How many blocks the provider dropped. Always at least one. */
+  /** How many blocks the provider dropped across every request in this Turn. Always at least one. */
   count: number;
-  /** Every distinct cause in this turn's transformations, in Volli's words. */
+  /** Every distinct cause in this Turn's transformations, in Volli's words. */
   causes: readonly ReasoningDropCause[];
-  /** The provider's own structural pointers to what it dropped. */
+  /** Every distinct provider structural pointer to what it dropped. */
   paths: readonly string[];
   occurredAt?: number;
   recoveryCursor?: string;

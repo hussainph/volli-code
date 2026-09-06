@@ -34,12 +34,10 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  BACKGROUND_CONTEXT,
   createBashTool,
   createEditTool,
   createReadTool,
   createWriteTool,
-  withAbortSignal,
   type AgentHarnessTool,
   type AgentHarnessToolInvocation,
   type AgentTool,
@@ -53,6 +51,7 @@ import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import { sessionToolBindings, verbEntry } from "@volli/shared";
 import { createBrowserTool } from "./browser-tools";
+import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
 import type {
   CodingToolId,
@@ -138,7 +137,7 @@ function bindContext<TParameters extends TSchema, TDetails>(
         (partialResult) => onUpdate?.(partialResult),
         { env },
         callInvocation(toolCallId),
-        signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
+        piContext(signal),
       ),
   };
 }

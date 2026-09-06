@@ -29,11 +29,11 @@ import {
   contextWindowOf,
   conversationPath,
   estimatedContextTokens,
-  MAIN_BRANCH,
   occupiedContextTokens,
   type ConversationReader,
 } from "./compaction";
 import { piContext } from "./pi-context";
+import { MAIN_BRANCH } from "./sidecar-storage";
 
 const PROVIDER_ID = "anthropic";
 const MODEL_ID = "claude-haiku-4-5";

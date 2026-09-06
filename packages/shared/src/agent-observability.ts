@@ -217,10 +217,10 @@ export interface CompactionEvent {
  * keeps the paths; this keeps the fact that it happened and how often, which
  * is what makes the rate visible without making the conversation visible.
  */
-export interface ReasoningDroppedEvent {
-  kind: "reasoning-dropped";
+export interface ProviderReasoningDroppedEvent {
+  kind: "provider-reasoning-dropped";
   cause: ReasoningDropCause;
-  /** Blocks dropped in this turn. */
+  /** Blocks dropped across every request in this Turn. */
   count: number;
   runId?: string;
 }
@@ -259,7 +259,7 @@ export type ObservabilityEvent =
   | ToolEvent
   | AuthorityEvent
   | CompactionEvent
-  | ReasoningDroppedEvent
+  | ProviderReasoningDroppedEvent
   | AttachmentEvent
   | AttentionEvent
   | DroppedEvent;
@@ -395,9 +395,9 @@ export class ObservabilityReducer {
       // a prefix mismatch AND to a model fallback is first of all a prefix
       // mismatch, because that is the one that says the integration edited
       // history. One event per turn either way.
-      case "reasoning-dropped":
+      case "provider-reasoning-dropped":
         return {
-          kind: "reasoning-dropped",
+          kind: "provider-reasoning-dropped",
           cause: observation.causes.includes("prefix-mismatch")
             ? "prefix-mismatch"
             : (observation.causes[0] ?? "unknown"),

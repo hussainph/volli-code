@@ -31,6 +31,7 @@ import type {
   CompactionObservation,
   CompactionProgressObservation,
   CompactionReason,
+  ProviderReasoningDroppedObservation,
   RuntimeActivityObservation,
   RuntimeObservation,
   SessionInteraction,
@@ -158,6 +159,14 @@ export type TranslatedObservation =
       kind: "context.compaction_failed";
       reason: CompactionReason;
       detail: string;
+    })
+  | (TranslatedObservationBase & {
+      /** The provider recovered a request by removing earlier reasoning. */
+      kind: "context.reasoning_dropped";
+      turnId: string;
+      count: number;
+      causes: ProviderReasoningDroppedObservation["causes"];
+      paths: ProviderReasoningDroppedObservation["paths"];
     })
 
   /**
@@ -352,12 +361,8 @@ export class RuntimeObservationTranslator {
       // the overlay a live turn is filling belongs to the turn it is still in.
       case "compaction":
         return emit(this.#compactionObservation(observation));
-      // Reported through the observability side channel by the runtime and
-      // nowhere else, so there is no durable fact to translate. Giving a
-      // person a transcript notice for it needs a ledger event kind, a codec
-      // arm and a row to render — its own ticket, filed alongside VC-254.
-      case "reasoning-dropped":
-        return Promise.resolve();
+      case "provider-reasoning-dropped":
+        return emit(this.#providerReasoningDroppedObservation(observation));
       case "delta":
         return this.#translateDelta(observation, emit);
       case "message-settled":
@@ -406,8 +411,8 @@ export class RuntimeObservationTranslator {
         return [];
       case "compaction":
         return [this.#compactionObservation(observation)];
-      case "reasoning-dropped":
-        return [];
+      case "provider-reasoning-dropped":
+        return [this.#providerReasoningDroppedObservation(observation)];
       case "message-settled": {
         const settled = this.#settledObservation(observation);
         return settled === null ? [] : [settled];
@@ -665,6 +670,23 @@ export class RuntimeObservationTranslator {
       entryId: observation.entryId,
       tokensBefore: observation.tokensBefore,
       tokensAfter: observation.tokensAfter,
+    };
+  }
+
+  /** One provider recovery, named by the sidecar marker replay will offer again. */
+  #providerReasoningDroppedObservation(
+    observation: ProviderReasoningDroppedObservation,
+  ): Extract<TranslatedObservation, { kind: "context.reasoning_dropped" }> {
+    const eventIdentity = observation.recoveryCursor ?? `live:${++this.#sequence}`;
+    return {
+      id: `${this.#namespace}:reasoning-drop:${this.#attachmentId}:${eventIdentity}`,
+      kind: "context.reasoning_dropped",
+      occurredAt: observation.occurredAt ?? this.#now(),
+      ...recoveryCursor(observation.recoveryCursor),
+      turnId: observation.turnId,
+      count: observation.count,
+      causes: observation.causes,
+      paths: observation.paths,
     };
   }
 

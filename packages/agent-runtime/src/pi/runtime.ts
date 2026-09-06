@@ -6,7 +6,6 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
-  value as sessionValue,
   type AgentMessage,
   type AgentOptions,
   type Branch,
@@ -54,6 +53,8 @@ import {
   type DeliveryOutcome,
   type ObservabilitySink,
   type PromptResource,
+  type ProviderReasoningDroppedObservation,
+  type ReasoningDropCause,
   type RuntimeAttachmentHandle,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
@@ -78,7 +79,6 @@ import {
   contextWindowOf,
   conversationPath,
   estimatedContextTokens,
-  MAIN_BRANCH,
   occupiedContextTokens,
   type CompactionOutcome,
   type ConversationReader,
@@ -95,8 +95,9 @@ import {
 } from "./observability";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { piContext, type Context } from "./pi-context";
-import { reasoningDropped, withoutReasoning } from "./reasoning";
+import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
+import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
 import {
   assistantUsage,
@@ -493,8 +494,9 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  * Its own type rather than a new observation kind, because the observation
  * marker's reader quarantines and counts every entry of its type it cannot
  * validate, and a context fact is not a lost transcript fact — it is an
- * instruction to the replay. One kind so far: `reasoning-dropped`, written at
- * the moment {@link withoutReasoning} was applied to the whole live array —
+ * instruction to the replay. One kind so far: the frozen on-disk value
+ * `reasoning-dropped`, meaning Volli elided reasoning from replay. It is written
+ * at the moment {@link withoutReasoning} is applied to the whole live array —
  * by a refused turn's recovery, or by an attach that withheld a reply from
  * the middle of history — so a later attach applies the same edit to
  * everything before it and reproduces the array the reasoning after it was
@@ -505,11 +507,11 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
 
-interface ReasoningDroppedMarker {
+interface ReasoningElisionMarker {
   kind: "reasoning-dropped";
 }
 
-function isReasoningDroppedMarker(entry: Entry): boolean {
+function isReasoningElisionMarker(entry: Entry): boolean {
   return (
     entry.type === "custom" &&
     entry.customType === VOLLI_CONTEXT_MARKER &&
@@ -519,7 +521,7 @@ function isReasoningDroppedMarker(entry: Entry): boolean {
 }
 
 /**
- * The durable branch with every reasoning drop this Session made applied.
+ * The durable branch with every reasoning elision this Session made applied.
  *
  * Every message entry ahead of the newest `reasoning-dropped` marker loses its
  * reasoning, exactly as the live array did when the marker was written;
@@ -528,7 +530,7 @@ function isReasoningDroppedMarker(entry: Entry): boolean {
  * {@link contextMessages} strips it on every read regardless.
  */
 function withDroppedReasoning(entries: readonly Entry[]): Entry[] {
-  const droppedBefore = entries.findLastIndex(isReasoningDroppedMarker);
+  const droppedBefore = entries.findLastIndex(isReasoningElisionMarker);
   if (droppedBefore < 0) return [...entries];
   return entries.map((entry, index) =>
     index < droppedBefore && entry.type === "message"
@@ -538,7 +540,7 @@ function withDroppedReasoning(entries: readonly Entry[]): Entry[] {
 }
 
 /**
- * Whether a recorded reasoning drop already sits after every one of `entryIds`.
+ * Whether a recorded reasoning elision already sits after every one of `entryIds`.
  *
  * The question an attach that withholds a reply asks before stripping the
  * replay: if a `reasoning-dropped` marker is newer than everything withheld,
@@ -547,8 +549,11 @@ function withDroppedReasoning(entries: readonly Entry[]): Entry[] {
  * the stripped replay and may be kept. An id no entry on the branch carries
  * counts as withheld from before the beginning, which any marker covers.
  */
-function reasoningDroppedAfter(entries: readonly Entry[], entryIds: ReadonlySet<string>): boolean {
-  const newestDrop = entries.findLastIndex(isReasoningDroppedMarker);
+function reasoningElisionRecordedAfter(
+  entries: readonly Entry[],
+  entryIds: ReadonlySet<string>,
+): boolean {
+  const newestDrop = entries.findLastIndex(isReasoningElisionMarker);
   const newestWithheld = entries.findLastIndex((entry) => entryIds.has(entry.id));
   return newestDrop > newestWithheld;
 }
@@ -567,6 +572,7 @@ function reasoningDroppedAfter(entries: readonly Entry[], entryIds: ReadonlySet<
 type RecoverableObservation =
   | TurnObservation
   | CompactionObservation
+  | ProviderReasoningDroppedObservation
   | SettledMessageObservation
   | UsageObservation
   | RuntimeActivityObservation
@@ -655,6 +661,20 @@ function isRecoverableObservation(value: unknown): boolean {
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
+    case "provider-reasoning-dropped":
+      return (
+        typeof value["turnId"] === "string" &&
+        typeof value["count"] === "number" &&
+        wholeNumber(value["count"]) &&
+        value["count"] > 0 &&
+        Array.isArray(value["causes"]) &&
+        value["causes"].length > 0 &&
+        value["causes"].every((cause) =>
+          isOneOf(cause, ["prefix-mismatch", "model-mismatch", "unknown"]),
+        ) &&
+        Array.isArray(value["paths"]) &&
+        value["paths"].every((path) => typeof path === "string")
+      );
     case "usage":
       return (
         typeof value["entryId"] === "string" &&
@@ -888,33 +908,13 @@ async function assertOwnedRecoveryPath(root: string, candidate: string): Promise
   }
 }
 
-/** Who a sidecar belongs to: the three ids an attach must find unchanged. */
-interface SidecarIdentity {
-  volliSessionId: string;
-  volliThreadId: string;
-  volliAttachmentId: string;
-}
-
 /**
- * Where a sidecar records the attachment it belongs to.
+ * The sidecar identity now lives in the shared sidecar-storage contract.
  *
- * Until Pi 0.85.0 this was the JSONL session's `metadata` field — an opaque
- * application-owned bag, written at `create` and readable off `list` without
- * opening anything. 0.85.0 deleted it: `JsonlSessionMetadata` is now Pi's own
- * six fields and nothing else, and `JsonlSessionCreateOptions` no longer takes
- * a bag to put there.
- *
- * A session value is the replacement Pi offers, and it is a good one — durable,
- * inside the session, committed through the same mutation line as every entry.
- * The one thing it is not is readable without opening the session, which is why
- * the identity check moved after `open`. That reordering is worth naming: the
- * check exists so that an attachment cannot be handed another attachment's
- * conversation, and opening a file to find out whose it is does not weaken
- * that — the answer is the same and the refusal is the same. What it does mean
- * is that a refused sidecar was briefly open, so the caller closes it.
+ * Until Pi 0.85.0 this was the JSONL session's `metadata` field. The replacement
+ * is a session value, which is durable but readable only after `open`; a refused
+ * sidecar is therefore closed after the identity check fails.
  */
-const SIDECAR_IDENTITY = sessionValue<SidecarIdentity>("volli.identity.v1");
-
 /** Bind a freshly created sidecar to this attachment, once. */
 async function writeSidecarIdentity(
   sidecar: Session,
@@ -977,6 +977,20 @@ async function sidecarBranch(sidecar: Session, context: Context): Promise<Branch
   if (existing !== undefined) return existing;
   const [newest] = await sidecar.findEntries({ order: "desc", limit: 1 }, context);
   return sidecar.createBranch(MAIN_BRANCH, newest?.id ?? null, context);
+}
+
+function mergeProviderReasoningDrop(
+  current: ProviderReasoningDroppedObservation | undefined,
+  next: ProviderReasoningDroppedObservation,
+): ProviderReasoningDroppedObservation {
+  if (current === undefined) return next;
+  return {
+    kind: "provider-reasoning-dropped",
+    turnId: next.turnId,
+    count: current.count + next.count,
+    causes: [...new Set<ReasoningDropCause>([...current.causes, ...next.causes])],
+    paths: [...new Set([...current.paths, ...next.paths])],
+  };
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {
@@ -1241,12 +1255,12 @@ async function attachSession(
      */
     const withholdingUnrecorded =
       disagreedSettledEntryIds.size > 0 &&
-      !reasoningDroppedAfter(recoveredEntries, disagreedSettledEntryIds);
+      !reasoningElisionRecordedAfter(recoveredEntries, disagreedSettledEntryIds);
     /** The durable record that every reasoning block before this point was dropped. */
-    const recordReasoningDropped = async (): Promise<void> => {
+    const recordReasoningElision = async (): Promise<void> => {
       await mainBranch.appendCustomEntry(
         VOLLI_CONTEXT_MARKER,
-        { kind: "reasoning-dropped" } satisfies ReasoningDroppedMarker,
+        { kind: "reasoning-dropped" } satisfies ReasoningElisionMarker,
         piContext(),
       );
     };
@@ -1348,7 +1362,7 @@ async function attachSession(
       // safe across a crash between them: an attach that finds no record
       // strips the replay again, and one that finds a record without a notice
       // raises the notice again.
-      if (withholdingUnrecorded) await recordReasoningDropped();
+      if (withholdingUnrecorded) await recordReasoningElision();
       await persistObservation({
         kind: "attention",
         state: "raised",
@@ -1465,14 +1479,10 @@ async function attachSession(
      */
     let reasoningRecoveryUsed = false;
     /**
-     * Whether this turn has already said that the provider dropped reasoning.
-     *
-     * A turn can spend several provider calls — a tool round, a resumed
-     * refusal, a retry — and a mismatched prefix is dropped on every one of
-     * them. What a person needs to hear is that it happened this turn, once,
-     * not once per request the turn happened to make.
+     * Every provider transformation reported during this Turn, held until the
+     * Turn ends so one durable notice can carry the complete count and causes.
      */
-    let reasoningDropReported = false;
+    let pendingReasoningDrop: ProviderReasoningDroppedObservation | undefined;
     /**
      * Whether something already owns the live context, and what to wait for.
      *
@@ -1800,11 +1810,9 @@ async function attachSession(
      * the model was actually sent rather than from what the sidecar remembers
      * it once holding.
      */
-    const conversationBranch = async (signal?: AbortSignal): Promise<Entry[]> =>
+    const conversationBranch = async (): Promise<Entry[]> =>
       conversationPath(
-        withDroppedReasoning(
-          await mainBranch.findEntries({ order: "oldestFirst" }, piContext(signal)),
-        ),
+        withDroppedReasoning(await mainBranch.findEntries({ order: "oldestFirst" }, piContext())),
         conversationReader,
       );
 
@@ -2070,7 +2078,7 @@ async function attachSession(
       if (failed.reason === "reasoning" && !reasoningRecoveryUsed) {
         reasoningRecoveryUsed = true;
         agent.state.messages = agent.state.messages.map(withoutReasoning);
-        await recordReasoningDropped();
+        await recordReasoningElision();
         return true;
       }
       if (failed.reason !== "context" || overflowRecoveryUsed) return false;
@@ -2196,23 +2204,12 @@ async function attachSession(
         // metering is: this is a fact about the request that produced the
         // message, true whether or not the message itself said anything.
         //
-        // Once per turn, however many blocks went, because that is what a
-        // person needs to know — a per-block report on a long conversation is
-        // noise about one event. `reasoningDropped` returns nothing when the
-        // provider dropped nothing, which is every turn on every model that
-        // does not carry the flag.
-        const dropped = reasoningDropped(event.message as AssistantMessage, turnId);
-        if (dropped !== undefined && !reasoningDropReported) {
-          reasoningDropReported = true;
-          // The side channel only, for now. Making this durable Session
-          // history means a new ledger event kind, its codec arm and a
-          // transcript row to render it — a product surface of its own, and
-          // deliberately not smuggled into a dependency bump. What lands here
-          // is the half that has no surface to design: the fact is measured,
-          // counted and exported, so the rate is visible to whoever is
-          // watching a Session run. The visible notice is filed as its own
-          // ticket (VC-254).
-          recordObservability(dropped);
+        // A tool round can make several provider requests. Hold every drop and
+        // publish one complete Turn fact at `agent_end`, after the reply that
+        // anchors its transcript notice has settled.
+        const dropped = providerReasoningDropped(event.message as AssistantMessage, turnId);
+        if (dropped !== undefined) {
+          pendingReasoningDrop = mergeProviderReasoningDrop(pendingReasoningDrop, dropped);
         }
         const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
         if (outcome.kind === "settled") {
@@ -2229,7 +2226,11 @@ async function attachSession(
         return;
       }
       activityByToolCallId.clear();
-      reasoningDropReported = false;
+      if (pendingReasoningDrop !== undefined) {
+        const dropped = await persistObservation(pendingReasoningDrop);
+        pendingReasoningDrop = undefined;
+        await commitObservation(dropped);
+      }
       if (failure === undefined) {
         for (const reason of activeAttentionReasons) {
           const cleared = await persistObservation({
