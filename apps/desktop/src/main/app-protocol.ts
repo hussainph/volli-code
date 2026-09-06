@@ -5,6 +5,8 @@ export const PACKAGED_RENDERER_PROTOCOL = `${PACKAGED_RENDERER_SCHEME}:`;
 export const PACKAGED_RENDERER_HOST = "bundle";
 export const PACKAGED_RENDERER_ORIGIN = `${PACKAGED_RENDERER_SCHEME}://${PACKAGED_RENDERER_HOST}`;
 export const PACKAGED_RENDERER_ENTRY_URL = `${PACKAGED_RENDERER_ORIGIN}/index.html`;
+/** The Session cursor overlay page (VC-239), the build's second entry, on the same origin. */
+export const PACKAGED_RENDERER_CURSOR_URL = `${PACKAGED_RENDERER_ORIGIN}/cursor.html`;
 
 /**
  * Resolves one app-protocol request to a renderer asset.

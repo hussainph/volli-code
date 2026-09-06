@@ -10,6 +10,7 @@ import {
   protocol,
   session,
   shell,
+  systemPreferences,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
@@ -265,6 +266,7 @@ import {
   writeUpdateChannel,
 } from "./auto-update";
 import {
+  PACKAGED_RENDERER_CURSOR_URL,
   PACKAGED_RENDERER_ENTRY_URL,
   PACKAGED_RENDERER_HOST,
   PACKAGED_RENDERER_PROTOCOL,
@@ -280,6 +282,11 @@ import { BrowserTabHost } from "./browser/tab-host";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
 import { relayHoldNotices } from "./browser/hold-notices";
+import {
+  CURSOR_OVERLAY_PARTITION,
+  createCursorOverlay,
+  type CursorOverlay,
+} from "./browser/cursor-overlay";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -640,13 +647,21 @@ app.whenReady().then(async () => {
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
-  protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
+  const serveRendererAsset = (request: Request): Promise<Response> | Response => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
       return new Response("Not found", { status: 404 });
     }
     return net.fetch(pathToFileURL(assetPath).toString());
-  });
+  };
+  protocol.handle(PACKAGED_RENDERER_SCHEME, serveRendererAsset);
+  // The Session cursor overlay (VC-239) runs under its own partition, and a
+  // partition has its own protocol table: without this line the packaged
+  // overlay page would 404 on the very scheme the app renderer loads from.
+  // Same resolver, same read-only root, no wider reach.
+  session
+    .fromPartition(CURSOR_OVERLAY_PARTITION)
+    .protocol.handle(PACKAGED_RENDERER_SCHEME, serveRendererAsset);
 
   if (isDev) {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
@@ -905,6 +920,8 @@ app.whenReady().then(async () => {
   // attach-time browser-port resolver reads it lazily, long after boot — the
   // same bargain ptyManagerRef strikes with the worktree guards.
   let browserTabsRef: BrowserTabHost | null = null;
+  /** The Session cursor overlay (VC-239), built beside the host below; the port takes its driver lazily. */
+  let cursorOverlayRef: CursorOverlay | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -1092,6 +1109,9 @@ app.whenReady().then(async () => {
               // Session drives at foreground pace across workspace switches
               // (VC-252), and releases with the attachment.
               holdAwake: (tabId) => host.holdAwake(tabId),
+              // The Session cursor (VC-239): told where each action lands
+              // before it lands, and drawn only over the on-screen tab.
+              cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId),
             });
           },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web
@@ -2367,6 +2387,63 @@ app.whenReady().then(async () => {
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
+  // The Session cursor overlay (VC-239): one small transparent view over the
+  // on-screen Browser Tab, loading the app's own cursor page under its own
+  // partition and five-verb preload — never the app bridge, and never inside
+  // the page it sits over. Built lazily by the overlay on the first cursor.
+  const cursorPageUrl =
+    isDev && process.env["ELECTRON_RENDERER_URL"]
+      ? new URL("/cursor.html", process.env["ELECTRON_RENDERER_URL"]).toString()
+      : PACKAGED_RENDERER_CURSOR_URL;
+  const cursorOverlay = createCursorOverlay({
+    host: browserTabs,
+    ipc: ipcMain,
+    createView: () => {
+      const view = new WebContentsView({
+        webPreferences: {
+          preload: join(__dirname, "cursor-preload.cjs"),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          transparent: true,
+          session: session.fromPartition(CURSOR_OVERLAY_PARTITION),
+        },
+      });
+      view.setBackgroundColor("#00000000");
+      void view.webContents.loadURL(cursorPageUrl).catch((error: unknown) => {
+        console.error("[volli] could not load the Session cursor page:", errorMessage(error));
+      });
+      return view;
+    },
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // macOS is the one platform Electron reads the setting on; elsewhere the
+    // cursor moves, which is the default a person who never asked expects.
+    prefersReducedMotion: () =>
+      process.platform === "darwin" &&
+      systemPreferences.getAnimationSettings().prefersReducedMotion,
+  });
+  cursorOverlayRef = cursorOverlay;
+  // A smoke seam (VC-239), unset in every ordinary launch and undocumented:
+  // `browser-tab-smoke.mjs` starts no Session and takes no model turn, yet has
+  // to prove a hold and a visible cursor. It builds the SAME port the adapter
+  // builds — same host, same CDP wire, same overlay — in a Session's name it
+  // invents, and drives a tab exactly as a Session would. Nothing else reads
+  // this global, and a launch without the variable exposes nothing.
+  if (process.env["VOLLI_BROWSER_PROBE"] === "1") {
+    (globalThis as { volliBrowserProbe?: unknown }).volliBrowserProbe = {
+      port: (scope: { projectId: string; ticketId: string | null }, sessionId: string) =>
+        createAgentBrowserPort({
+          host: browserTabs,
+          scope,
+          session: { sessionId, attachmentId: `${sessionId}:probe` },
+          transportFor: (tabId) => debuggerTransport(browserTabs.webContentsOf(tabId)),
+          waitForLoad: loadWaiter((tabId) => browserTabs.webContentsOf(tabId)),
+          holdAwake: (tabId) => browserTabs.holdAwake(tabId),
+          cursorFor: (tabId) => cursorOverlay.driverFor(tabId),
+        }),
+      heldBy: (tabId: string) => browserTabs.heldBy(tabId),
+    };
+  }
   // Takeover and ask-to-leave reach the holding Session in-band, as one-line
   // steers into its live turn (VC-239) — the same door supervision uses, so
   // the Session does not have to learn a takeover by failing on it.

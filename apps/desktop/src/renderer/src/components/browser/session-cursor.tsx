@@ -35,12 +35,12 @@
  * but its id in common.
  */
 import * as React from "react";
-import { sessionColorInk } from "@volli/shared";
+import { pointDistance, sessionColorInk, sessionCursorGlideMs } from "@volli/shared";
 
-import { pointDistance, sessionCursorGlideMs } from "./session-cursor-motion";
+import type { SessionCursorGesture } from "../../../../ipc/cursor-contract";
 import "./session-cursor.css";
 
-export type SessionCursorGesture = "click" | "hover" | "type" | "scroll" | null;
+export type { SessionCursorGesture };
 
 export interface SessionCursorProps {
   /** The Session's identity colour, a hex from `sessionColor`. */

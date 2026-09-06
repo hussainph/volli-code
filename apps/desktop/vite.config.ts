@@ -426,6 +426,16 @@ export default defineConfig(({ mode }) => ({
     // Absolute — `outDir` otherwise resolves relative to `root` (src/renderer).
     outDir: fileURLToPath(new URL("./dist", import.meta.url)),
     emptyOutDir: true,
+    // Two pages, one build: the app, and the Session cursor overlay (VC-239)
+    // main places over a Browser Tab. A second ENTRY rather than a second
+    // build so the overlay shares the app's tokens and components by
+    // construction; it is served from the same volli-app://bundle/ root.
+    rollupOptions: {
+      input: {
+        index: fileURLToPath(new URL("./src/renderer/index.html", import.meta.url)),
+        cursor: fileURLToPath(new URL("./src/renderer/cursor.html", import.meta.url)),
+      },
+    },
     // STATIC ASSETS (established with the grain tile; PR 5's curated canvas
     // images inherit this). Every asset is imported through the module graph
     // from src/renderer/src/assets/ — NEVER a public/ directory: public assets
@@ -479,6 +489,21 @@ export default defineConfig(({ mode }) => ({
     definePackConfig({
       name: "electron-preload",
       entry: { preload: "src/preload/index.ts" },
+      format: "cjs",
+      outDir: "dist-electron",
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      clean: false,
+      outputOptions: { codeSplitting: false },
+      deps: packedElectronDeps,
+    }),
+    // The Session cursor overlay's own preload (VC-239): five verbs between
+    // main and the one view it draws the cursor in. Packed like the app
+    // preload — sandboxed, single-entry, no sibling chunks — and verified by
+    // the same standalone check.
+    definePackConfig({
+      name: "electron-cursor-preload",
+      entry: { "cursor-preload": "src/preload/cursor.ts" },
       format: "cjs",
       outDir: "dist-electron",
       sourcemap: true,

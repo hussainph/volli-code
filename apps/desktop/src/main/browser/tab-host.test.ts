@@ -72,6 +72,10 @@ class FakeWebContents {
     toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
     toJPEG: () => Buffer.from(this.captureBytes),
   }));
+  zoomFactor = 1;
+  getZoomFactor(): number {
+    return this.zoomFactor;
+  }
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -1031,6 +1035,75 @@ describe("BrowserTabHost holds (VC-239)", () => {
     stop();
     host.releaseHold(tabId, A);
     expect(events).toHaveLength(1);
+  });
+});
+
+describe("BrowserTabHost plane, for the cursor overlay (VC-239)", () => {
+  function openTab(): string {
+    return host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+    }).tabId;
+  }
+
+  it("names the attached tab and its page rect only while it is on screen, and 1x zoom for a tab that is gone", () => {
+    const one = openTab();
+    const two = openTab();
+    expect(host.attachedTabId()).toBeNull();
+    expect(host.pageBoundsOf(one)).toBeNull();
+
+    host.setBounds(one, { x: 10, y: 20, width: 800, height: 600 });
+    host.show(one);
+    expect(host.attachedTabId()).toBe(one);
+    expect(host.pageBoundsOf(one)).toEqual({ x: 10, y: 20, width: 800, height: 600 });
+    expect(host.pageBoundsOf(two)).toBeNull();
+    views[0]!.webContents.zoomFactor = 1.25;
+    expect(host.zoomFactorOf(one)).toBe(1.25);
+    expect(host.zoomFactorOf("missing")).toBe(1);
+
+    // DevTools takes its share of the plane; the page rect shrinks with it.
+    host.toggleDevTools(one);
+    expect(host.pageBoundsOf(one)?.height).toBeLessThan(600);
+
+    host.hide(one);
+    expect(host.attachedTabId()).toBeNull();
+    expect(host.pageBoundsOf(one)).toBeNull();
+  });
+
+  it("tells a plane listener about every attach, detach and layout, and stops when unsubscribed", () => {
+    const one = openTab();
+    const two = openTab();
+    const seen: (string | null)[] = [];
+    const stop = host.onPlaneChange((tabId) => seen.push(tabId));
+
+    host.show(one);
+    host.setBounds(one, { x: 0, y: 0, width: 640, height: 480 });
+    // A tab that is not on screen laying out is nothing to the overlay.
+    host.setBounds(two, { x: 0, y: 0, width: 640, height: 480 });
+    host.show(two);
+    host.hide(two);
+    expect(seen).toEqual([one, one, two, null]);
+
+    // A close of the on-screen tab detaches it; Chromium tearing it down does too.
+    host.show(one);
+    host.close(one);
+    host.show(two);
+    views[1]!.webContents.emit("destroyed");
+    expect(seen.slice(4)).toEqual([one, null, two, null]);
+
+    stop();
+    host.show(openTab());
+    expect(seen).toHaveLength(8);
+  });
+
+  it("answers the holder for the overlay's label, or null", () => {
+    const one = openTab();
+    expect(host.heldBy(one)).toBeNull();
+    expect(host.heldBy("missing")).toBeNull();
+    host.hold(one, { sessionId: "ses-a", attachmentId: "att-a" });
+    expect(host.heldBy(one)).toMatchObject({ kind: "session", sessionId: "ses-a" });
   });
 });
 

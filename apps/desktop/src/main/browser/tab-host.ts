@@ -249,6 +249,12 @@ export class BrowserTabHost {
   private attached: { entry: BrowserTabEntry; window: BrowserWindow } | null = null;
   private readonly holdListeners = new Set<(event: BrowserHoldEvent) => void>();
   /**
+   * Who watches which tab is ON SCREEN and where its page sits (VC-239): the
+   * cursor overlay, which draws only over the attached tab and must move
+   * with it. Told after every attach, detach and layout.
+   */
+  private readonly planeListeners = new Set<(attachedTabId: string | null) => void>();
+  /**
    * The colour each live holding Session was handed, assigned on its first
    * hold against the colours then in use and never revisited — so a Session
    * keeps its colour for as long as it lives whoever comes or goes after it.
@@ -271,6 +277,52 @@ export class BrowserTabHost {
     const split = browserSurfaceBounds(entry.bounds, devToolsOpen && entry.devToolsView !== null);
     entry.view.setBounds(split.page);
     if (split.devTools !== null) entry.devToolsView?.setBounds(split.devTools);
+    if (this.attached?.entry === entry) this.emitPlane();
+  }
+
+  private emitPlane(): void {
+    const attachedTabId = this.attached?.entry.state.tabId ?? null;
+    for (const listener of this.planeListeners) listener(attachedTabId);
+  }
+
+  // ---- the plane, for the cursor overlay (VC-239) -------------------------
+
+  /** The tab whose native page is attached to the window right now, or null. */
+  attachedTabId(): string | null {
+    return this.attached?.entry.state.tabId ?? null;
+  }
+
+  /**
+   * Where one tab's PAGE sits in window content coordinates while it is on
+   * screen — the plane minus the DevTools split — or null when it is not.
+   * The overlay maps page CSS pixels through this and the zoom factor.
+   */
+  pageBoundsOf(tabId: string): Rectangle | null {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined || this.attached?.entry !== entry) return null;
+    return browserSurfaceBounds(entry.bounds, entry.devToolsOpen && entry.devToolsView !== null)
+      .page;
+  }
+
+  /** The page's zoom, which scales its CSS pixels to the window's. 1 for a tab that is gone. */
+  zoomFactorOf(tabId: string): number {
+    const contents = this.tabs.get(tabId)?.view.webContents;
+    if (contents === undefined || contents.isDestroyed()) return 1;
+    return contents.getZoomFactor();
+  }
+
+  /** The holder as the renderer sees it, for the overlay's label and colour. */
+  heldBy(tabId: string): BrowserTabHolder | null {
+    const entry = this.tabs.get(tabId);
+    return entry === undefined ? null : this.holderOf(entry);
+  }
+
+  /** Attach, detach and layout changes of the on-screen tab. Returns the unsubscribe. */
+  onPlaneChange(listener: (attachedTabId: string | null) => void): () => void {
+    this.planeListeners.add(listener);
+    return () => {
+      this.planeListeners.delete(listener);
+    };
   }
 
   private attachDevTools(entry: BrowserTabEntry, window: BrowserWindow): void {
@@ -674,14 +726,17 @@ export class BrowserTabHost {
     });
     view.webContents.on("destroyed", () => {
       if (this.tabs.get(tabId) !== entry) return;
+      let wasAttached = false;
       if (this.attached?.entry === entry) {
         this.detachEntry(entry, this.attached.window);
         this.attached = null;
+        wasAttached = true;
       }
       this.destroyDevTools(entry);
       this.tabs.delete(tabId);
       this.endHoldOnClose(tabId, entry);
       this.deps.publishClosed(tabId);
+      if (wasAttached) this.emitPlane();
     });
     this.deps.publishState({ ...state });
     void view.webContents.loadURL(input.url).catch(() => undefined);
@@ -873,6 +928,7 @@ export class BrowserTabHost {
     if (this.attached?.entry !== entry) return;
     this.detachEntry(entry, this.attached.window);
     this.attached = null;
+    this.emitPlane();
   }
 
   /**

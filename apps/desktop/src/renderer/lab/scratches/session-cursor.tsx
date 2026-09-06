@@ -38,7 +38,11 @@
  * question. Their ids are fixed so the hashed colours are the same every load.
  */
 import * as React from "react";
-import { assignSessionColors } from "@volli/shared";
+import {
+  SESSION_CURSOR_GLIDE_MAX_MS,
+  SESSION_CURSOR_LABEL_PIN_MS,
+  assignSessionColors,
+} from "@volli/shared";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
@@ -48,10 +52,6 @@ import {
   SessionCursor,
   type SessionCursorGesture,
 } from "@renderer/components/browser/session-cursor";
-import {
-  SESSION_CURSOR_GLIDE_MAX_MS,
-  SESSION_CURSOR_LABEL_PIN_MS,
-} from "@renderer/components/browser/session-cursor-motion";
 import { Button } from "@renderer/components/ui/button";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Switch } from "@renderer/components/ui/switch";
