@@ -86,10 +86,16 @@ The product scope a Session acts within: `project`, `ticket`, or `subagent`.
 Project Sessions orchestrate project work; Ticket Sessions execute with explicit
 Ticket and worktree context; Subagent Sessions perform a bounded delegation and
 remain durable children of the Session that created them. Role determines the
-default context, tool bundle, and authority policy, not a separate Session type.
-A Project Session runs on the Main checkout with no worktree and no board
+default context, tool bundle, and authority policy, not a separate Session type,
+and it is stored on the Session rather than read off its Ticket (VC-9). A
+Project Session runs on the Main checkout with no worktree and no board
 involvement, and is recorded in Session history exactly as a Ticket Session is.
-_Avoid_: harness mode, agent mode, plan mode, scratch session
+A Subagent Session is started by a parent's `session_delegate` call, shares the
+parent's working directory and inherits its Ticket, holds every coding tool
+and no agent-control verb or `ask_user`, and its last message is delivered back
+into the parent as a marked message when its first turn completes; the parent
+is never parked on it.
+_Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread
 
 **Authority Snapshot**:
 The durable policy one attachment runs under: which actions are
