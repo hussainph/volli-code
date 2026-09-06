@@ -162,6 +162,34 @@ const OPTION_MARK =
   "flex size-5 shrink-0 items-center justify-center rounded-full text-ui tabular-nums transition-colors";
 
 /**
+ * The ask itself, as the model wrote it.
+ *
+ * Three things a wall of text taught this paragraph (VC-265):
+ *
+ *  - **The breaks a question was composed with are its paragraphs.** The ask
+ *    is plain text off the wire — `ask_user`'s `question` becomes the title
+ *    and the prompt's label verbatim — and a model that wrote it in
+ *    paragraphs sent newlines between them. A bare `<p>` folded every one
+ *    into a space, so the paragraphs read as one unbroken run. `pre-line`
+ *    keeps the breaks without signing up for `pre-wrap`'s preserved
+ *    indentation and run-in spaces.
+ *  - **A paragraph's rag is `pretty`'s, not `balance`'s.** Balance evens a
+ *    title's lines and stops being meaningful past a few; the ask is a
+ *    sentence that grew, and `pretty` keeps its last lines from orphaning
+ *    however long it gets. Long prose also takes the shared `leading-prose`
+ *    rhythm rather than the denser line height of a one-line UI label.
+ *  - **The pane can only spare so much of itself.** The card is anchored to
+ *    the bottom of the plane and grows upward, so an ask that ignored
+ *    `ask_user`'s own one-or-two-sentence guidance used to push the card past
+ *    the top of the transcript, where it cut off unreadable. The cap is a
+ *    fraction of the chat plane's size container rather than the window: a
+ *    top/bottom split can make a pane short without changing `vh`. Anything
+ *    the ask needs past its share scrolls inside it.
+ */
+const QUESTION_PROSE =
+  "max-h-[min(40cqh,16rem)] overflow-y-auto break-words text-sm leading-prose font-medium text-pretty whitespace-pre-line";
+
+/**
  * The row's own verb, on the row that is one press from a decision.
  *
  * Only where the click really is the whole act — `optionSubmitsOnSelect` on a
@@ -965,7 +993,7 @@ function QuestionStep({
       {/* A paragraph carrying the group's name, not a heading: the card sits
           inside a transcript with an outline of its own, and the request's
           identity is already on the form and in the live region. */}
-      <p id={headingId} className="text-sm font-medium text-balance text-foreground">
+      <p id={headingId} className={cn(QUESTION_PROSE, "text-foreground")}>
         {step.heading}
       </p>
       {interaction.detail ? (

@@ -147,8 +147,8 @@ describe("renameChatSession", () => {
     useChatSessionsStore.setState({ sessions: {} });
     useTicketSessionRecordsStore.setState({ byTicket: {} });
 
-    expect(await renameChatSession("project-chat", "Project chat")).toBe(true);
-    expect(renameMock).toHaveBeenCalledWith({ sessionId: "project-chat", title: "Project chat" });
+    expect(await renameChatSession("project-chat", "Board chat")).toBe(true);
+    expect(renameMock).toHaveBeenCalledWith({ sessionId: "project-chat", title: "Board chat" });
   });
 
   it("is a no-op on a blank title, and never calls main", async () => {

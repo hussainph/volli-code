@@ -356,6 +356,55 @@ describe("the ask-user card", () => {
   });
 });
 
+describe("the ask's own text", () => {
+  // Shaped like the asks a test or dev agent actually sends when it stops to
+  // check direction: several paragraphs, each with line breaks of its own.
+  const paragraphs = [
+    "Direction check before I write the tests.",
+    "The runner needs a real window, and CI has none, so I plan to gate the suite behind the flag and leave the driver to opt in.",
+    "The part I have not decided is where the gate lives.",
+    "Should it sit with the test, or with the runner?",
+  ].join("\n\n");
+  const longAsk = drawn(ask([askPrompt({ label: paragraphs })]));
+
+  it("keeps the line breaks the model wrote, as the paragraphs they are", () => {
+    // The ask is plain text off the wire and the breaks a model composed with
+    // are its paragraphs. A bare `<p>` folded each one into a space, so a
+    // five-paragraph question read as one unbroken run.
+    expect(longAsk).toContain("whitespace-pre-line");
+    expect(longAsk).toContain("Direction check before I write the tests.\n\nThe runner");
+  });
+
+  it("caps the ask at the chat pane's share and scrolls past it", () => {
+    // The card grows upward from the bottom of the plane, so an ask that
+    // ignored `ask_user`'s one-or-two-sentence guidance used to push the card
+    // past the top of the transcript. Container-height units follow the actual
+    // chat pane even when a top/bottom split makes it shorter than the window.
+    expect(longAsk).toContain("max-h-[min(40cqh,16rem)]");
+    expect(longAsk).toContain("overflow-y-auto");
+  });
+
+  it("gives long prose the readable rag and line height", () => {
+    // Balance and the UI rung's dense leading are for short labels; this is a
+    // paragraph that grew.
+    expect(longAsk).toContain("text-pretty");
+    expect(longAsk).toContain("leading-prose");
+  });
+
+  it("breaks an unspaced token rather than widening a narrow pane", () => {
+    expect(longAsk).toContain("break-words");
+  });
+
+  it("leaves a verdict title as the compact heading it was", () => {
+    const verdict = renderToStaticMarkup(
+      <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+    );
+    expect(verdict).toContain("text-balance");
+    expect(verdict).not.toContain("whitespace-pre-line");
+    expect(verdict).not.toContain("max-h-[min(40cqh,16rem)]");
+  });
+});
+
 /**
  * A permission whose options declare no refusal of their own, which is what
  * makes the words a redirection and stands the box open on the verdict card —

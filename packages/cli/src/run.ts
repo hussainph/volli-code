@@ -11,6 +11,7 @@ import {
   verbEntry,
   requiredSessionEnvTools,
   SESSION_ENV_TOOLS,
+  SESSION_ROLE_NAMES,
   workspaceDependenciesStatus,
 } from "@volli/shared";
 import type {
@@ -285,9 +286,10 @@ export function teachingErrorForParseResult(
   }
   if (runtime?.surface !== null && runtime?.surface !== undefined) {
     const carried = runtime.surface.tools.includes(entry.key);
+    const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
     const roleReason = carried
-      ? ` This ${runtime.surface.role} Session's frozen tool surface carries ${entry.key}.`
-      : ` This ${runtime.surface.role} Session's frozen tool surface does not carry ${entry.key}.`;
+      ? ` This ${roleName}'s frozen tool surface carries ${entry.key}.`
+      : ` This ${roleName}'s frozen tool surface does not carry ${entry.key}.`;
     const next = carried
       ? `Call the named ${entry.key} tool through this Session's Agent Tool Surface.`
       : `Use a Session whose frozen Agent Tool Surface carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;

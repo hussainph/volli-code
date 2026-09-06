@@ -52,8 +52,8 @@ describe("command palette section priority", () => {
             </Command.Group>
             <Command.Group heading="Sessions">
               <Command.Item
-                value="session Session Alpha · Project Session Alpha"
-                keywords={["Session", "Alpha · Project Session", "Alpha"]}
+                value="session Session Alpha · Board Session Alpha"
+                keywords={["Session", "Alpha · Board Session", "Alpha"]}
               >
                 Session
               </Command.Item>

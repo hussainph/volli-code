@@ -2,7 +2,7 @@
  * When Sessions were started — the Streak visual's whole input (VC-55).
  *
  * Stamps rather than rows, and every project's rather than the selected one's:
- * the chart is a field of many, which is what a Project Session's scope IS, and
+ * the chart is a field of many, which is what a Board Session's scope IS, and
  * one project's Sessions would be a different (and much smaller) claim. The
  * window arithmetic lives in `@volli/shared`'s `session-streak.ts`; this store
  * holds only the fetch.

@@ -96,7 +96,7 @@ describe("VenueChips", () => {
  * the part no unit test can — that the two scopes draw different objects.
  */
 describe("ChatEmptyState", () => {
-  it("offers a Project Session the whole menu, and draws its default", () => {
+  it("offers a Board Session the whole menu, and draws its default", () => {
     const markup = draw(<ChatEmptyState projectId="p1" ticketId={null} />);
 
     expect(markup).toContain('data-empty-visual="streak"');

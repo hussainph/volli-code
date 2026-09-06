@@ -45,7 +45,7 @@
       <span class="now">Now: Pi migration complete · authority work in progress</span>
 
       <section class="map" aria-label="The main AI request path">
-        <div class="node"><strong>1. Ticket or project</strong><span>A Ticket gives work scope and a worktree. A project Session uses the Main checkout.</span></div>
+        <div class="node"><strong>1. Ticket or project</strong><span>A Ticket gives work scope and a worktree. A Board Session uses the Main checkout.</span></div>
         <div class="arrow">↓</div>
         <div class="node"><strong>2. Session</strong><span>Volli creates durable identity, history, Commands, and Receipts before AI work begins.</span></div>
         <div class="arrow">↓</div>
@@ -110,7 +110,7 @@
         <details>
           <summary><strong>How does this reach the desktop UI?</strong></summary>
           <div class="inside">
-            <p>Electron main hosts SQLite and the runtime. Session RPC is the narrow bridge over IPC. React has a resident chat client and store that project Session events into UI state. React does not parse Pi events, own recovery, or access secrets.</p>
+            <p>Electron main hosts SQLite and the runtime. Session RPC is the narrow bridge over IPC. React has a resident chat client and store, projecting Session events into UI state. React does not parse Pi events, own recovery, or access secrets.</p>
             <p><strong>Read next:</strong> <a href="../apps/desktop/src/main/index.ts">main composition</a>; <a href="../apps/desktop/src/main/session-rpc-ipc.ts">IPC bridge</a>; <a href="../apps/desktop/src/renderer/src/chat/client.ts">renderer client</a>.</p>
           </div>
         </details>

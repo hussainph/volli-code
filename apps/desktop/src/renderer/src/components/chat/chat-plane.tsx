@@ -1009,8 +1009,11 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
+  // A size query container, not just an inline one: the pending question below
+  // caps its long-form prose against this pane's actual height. `vh` follows the
+  // whole window and therefore misses a short top/bottom split.
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
+    <div className="relative flex min-h-0 flex-1 flex-col [container-type:size]" style={planeStyle}>
       <FileMentionProvider onOpenFile={onOpenFile}>
         <Conversation className="min-h-0 bg-background">
           {/* The bottom padding clears the composer plus the h-16 gradient over

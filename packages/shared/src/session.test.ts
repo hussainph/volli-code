@@ -98,14 +98,14 @@ describe("createSessionRecord", () => {
     expect(session.createdAt).toBe(1000);
   });
 
-  it("defaults ticketId to null (Project Session)", () => {
+  it("defaults ticketId to null (Board Session)", () => {
     const session = createSessionRecord({
       id: "session-1",
       projectId: "proj-1",
       harnessId: "codex",
       launchKind: "shell",
       placement: "split",
-      title: "Project chat",
+      title: "Board chat",
       cwd: "/Users/dev/project",
       now: 0,
     });
@@ -165,7 +165,7 @@ describe("createSessionRecord", () => {
       harnessId: "claude-code",
       launchKind: "agent",
       placement: "tab",
-      title: "Project chat",
+      title: "Board chat",
       cwd: "/Users/dev/project",
       now: 0,
     });
@@ -197,7 +197,7 @@ describe("SessionRecord", () => {
       launchKind: "unknown",
       placement: "unknown",
       harnessSessionId: null,
-      title: "Project chat",
+      title: "Board chat",
       cwd: "/Users/dev/project",
       createdAt: 0,
       endedAt: null,

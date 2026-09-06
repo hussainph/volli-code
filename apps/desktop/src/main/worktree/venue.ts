@@ -84,7 +84,7 @@ export interface VenueTarget {
  * The directory is resolved by the SAME rule the Session runtime binds one by
  * (`session-runtime/location.ts`: `ticket.worktreePath ?? project.path`), so
  * this can never draw a tree the agent is not standing in. Three cases fall out
- * of that one rule rather than needing branches of their own: a Project Session
+ * of that one rule rather than needing branches of their own: a Board Session
  * (no ticket), a Ticket Session in its worktree, and a Ticket Session in the
  * main checkout — whether because the ticket runs unisolated (VC-96) or because
  * its worktree has not been materialised yet.

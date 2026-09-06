@@ -1,6 +1,7 @@
 /**
- * The ⌥ drag picker (VC-132), driven through the REAL packed app with a real
- * pointer and a real modifier key.
+ * The ⌥ drag picker (VC-132), driven through the packed app with Playwright's
+ * synthetic pointer and modifier input through Chromium's real event pipeline
+ * (not dispatchEvent shortcuts and not the host mouse or keyboard).
  *
  * What it proves, in dependency order:
  *   1. A drag over a column that offers something shows that column's Offered

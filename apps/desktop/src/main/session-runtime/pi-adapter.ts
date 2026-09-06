@@ -289,7 +289,7 @@ interface PiRuntimeContextFields {
  * The Role a Session attaches under, resolved with the identity it implies.
  *
  * Mirrors the runtime's own identity union rather than carrying an optional
- * Ticket: "ticketless" is what a project Session *is*, and a resolver that
+ * Ticket: "ticketless" is what a Board Session *is*, and a resolver that
  * returned a Ticket Session with a null Ticket would not typecheck here.
  */
 export type PiRuntimeContext =

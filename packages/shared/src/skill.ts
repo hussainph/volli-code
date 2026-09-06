@@ -229,7 +229,7 @@ export function isSkillName(value: string): boolean {
  * How much of itself a skill offers this project (VC-111, migration 023).
  *
  * THREE states rather than a switch, because the interesting one is in the
- * middle. A fresh Project Session's Volli-composed context measures ~10,400
+ * middle. A fresh Board Session's Volli-composed context measures ~10,400
  * tokens and ~9,800 of them — 94% — are the metadata-only skills index, one
  * name/path/description row per disclosed skill, re-sent as the stable prefix
  * of every turn. So "do I want this skill at all" and "do I want to pay for

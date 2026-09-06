@@ -40,7 +40,7 @@ export const EMPTY_VISUAL_LABELS: Record<EmptyVisual, string> = {
 type VisualMenu = readonly [EmptyVisual, ...EmptyVisual[]];
 
 /**
- * A Project Session's menu, in the order it is offered. Streak leads because it
+ * A Board Session's menu, in the order it is offered. Streak leads because it
  * is the default and because it is the widest field the app can draw.
  */
 const PROJECT_VISUALS: VisualMenu = ["streak", "board", "venue"];

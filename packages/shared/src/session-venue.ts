@@ -1,7 +1,7 @@
 /**
  * The VENUE: the checkout a Session runs in, measured (VC-55).
  *
- * A Project Session runs in the project's own main checkout — the user's
+ * A Board Session runs in the project's own main checkout — the user's
  * working tree — and a Ticket Session runs in a throwaway worktree. That
  * difference is "safe to let it run" against "it is editing my working tree",
  * and nothing on a chat surface used to say which one you were looking at. The
@@ -24,7 +24,7 @@
  *
  * Read off the checkout, never off the Session: a Ticket Session whose ticket
  * runs without an isolated worktree is standing in `main-checkout` exactly as a
- * Project Session is, and it must draw the same way. That is what lets one
+ * Board Session is, and it must draw the same way. That is what lets one
  * visual serve both scopes honestly.
  */
 export type VenueKind = "main-checkout" | "worktree";

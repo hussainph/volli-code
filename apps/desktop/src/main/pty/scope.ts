@@ -86,7 +86,7 @@ export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; e
 /**
  * Resolves a request to its session scope from the db: a ticket session
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
- * title) or a Project Session (default harness, `Terminal N`).
+ * title) or a Board Session (default harness, `Terminal N`).
  * The only failure is a ticket request naming a ticket that does not exist.
  *
  * `wrapperFor` and `adapterFor` travel together for the same reason: both
@@ -259,7 +259,7 @@ export async function resolveScope(
       },
     };
   }
-  // Project Session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
+  // Board Session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
   // injected the same way a ticket session gets it (decision #9). A project
   // that can't be resolved still spawns (no artifacts env) rather than failing.
   const project = getProjectById(db, request.workspaceId);
@@ -279,11 +279,11 @@ export async function resolveScope(
       env: project ? projectSessionEnv(project.path) : {},
       title: `Terminal ${sessionCount + 1}`,
       artifactsRoot: project?.path ?? null,
-      // Project Sessions never auto-launch a harness — just a bare shell.
+      // Board Sessions never auto-launch a harness — just a bare shell.
       launchCommand: null,
-      // Never worktree-backed — Project Sessions run in the renderer's cwd.
+      // Never worktree-backed — Board Sessions run in the renderer's cwd.
       worktree: null,
-      // Project Sessions are never a resume.
+      // Board Sessions are never a resume.
       resume: null,
     },
   };

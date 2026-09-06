@@ -335,7 +335,7 @@ async function startSessionTool(
   const operationId = `${session.sessionId}:${request.toolCallId}`;
   const claimRef = { parentSessionId: session.sessionId, toolCallId: request.toolCallId };
 
-  // Project Sessions retain the existing project-wide control bound. A Ticket
+  // Board Sessions retain the existing project-wide control bound. A Ticket
   // Session only reaches this handler because its frozen birth surface carried
   // a stored `session.start` grant, and that grant's scope is narrower than the
   // generic project lookup above: exactly its attached Ticket.
