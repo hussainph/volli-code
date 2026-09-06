@@ -1,4 +1,9 @@
-import { ACTIVITY_METADATA_KEY, type ActivityDescriptor, type ActivityKind } from "@volli/shared";
+import {
+  ACTIVITY_METADATA_KEY,
+  type ActivityBrowse,
+  type ActivityDescriptor,
+  type ActivityKind,
+} from "@volli/shared";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -59,6 +64,7 @@ function descriptor(
     outcome: overrides.outcome ?? null,
     startedAt: overrides.startedAt ?? null,
     endedAt: overrides.endedAt ?? null,
+    ...(overrides.browse === undefined ? {} : { browse: overrides.browse }),
   };
 }
 
@@ -1078,6 +1084,141 @@ describe("presenters", () => {
 
   it("treats blank output as no output at all", () => {
     expect(describeActivity(tool("run-command", { output: "   " })).detail).toBeNull();
+  });
+});
+
+/**
+ * Browser rows read from the descriptor's `browse` facet alone (VC-238): no
+ * tool name reaches this file, and a harness that renamed every browser tool
+ * would draw the same rows. Element actions name the element the page named;
+ * page actions name the page.
+ */
+describe("browse presenter", () => {
+  const browse = (
+    action: ActivityBrowse["action"],
+    patch: Partial<ActivityBrowse> = {},
+    label: string | null = "example.com/sign-in",
+  ): DynamicToolUIPart =>
+    tool("browse", {
+      descriptor: {
+        subject: { label, path: null, lineRange: null },
+        startedAt: 0,
+        endedAt: 2400,
+        browse: {
+          action,
+          tabId: "tab-1",
+          url: "https://example.com/sign-in",
+          title: "Sign in — Example",
+          target: null,
+          picture: null,
+          errorCount: null,
+          ownerSessionId: "s1",
+          ...patch,
+        },
+      },
+    });
+
+  it("reads a navigation as where the page went, and a history move by its direction", () => {
+    expect(describeActivity(browse("open"))).toMatchObject({
+      verb: "Opened",
+      object: "example.com/sign-in",
+      meta: "2.4s",
+      detail: null,
+    });
+    expect(describeActivity(browse("back"))).toMatchObject({ verb: "Went back", meta: null });
+    expect(describeActivity(browse("forward")).verb).toBe("Went forward");
+    expect(describeActivity(browse("reload")).verb).toBe("Reloaded");
+  });
+
+  it("reads an element action by the page's name for the element, with the page as its meta", () => {
+    expect(describeActivity(browse("click", { target: "Sign in" }))).toMatchObject({
+      verb: "Clicked",
+      object: "“Sign in”",
+      meta: "example.com/sign-in",
+    });
+    expect(describeActivity(browse("type", { target: "Email" }))).toMatchObject({
+      verb: "Typed into",
+      object: "“Email”",
+    });
+    expect(describeActivity(browse("select", { target: "Country" })).verb).toBe("Selected in");
+    expect(describeActivity(browse("hover", { target: "Menu" })).verb).toBe("Hovered");
+    // A ref stands in unquoted when the page gave the element no name.
+    expect(describeActivity(browse("click", { target: "e5" })).object).toBe("e5");
+    expect(describeActivity(browse("click")).object).toBeNull();
+  });
+
+  it("reads page-level actions by what was pressed, scrolled or waited", () => {
+    expect(describeActivity(browse("press", { target: "Enter" }))).toMatchObject({
+      verb: "Pressed",
+      object: "Enter",
+    });
+    expect(describeActivity(browse("scroll", { target: "down" }))).toMatchObject({
+      verb: "Scrolled",
+      object: "down",
+    });
+    expect(describeActivity(browse("wait"))).toMatchObject({ verb: "Waited", object: null });
+  });
+
+  it("reads the reads: page, screenshot, console with its error count, and a tab listing", () => {
+    expect(describeActivity(browse("read"))).toMatchObject({
+      verb: "Read page",
+      object: "example.com/sign-in",
+    });
+    expect(describeActivity(browse("screenshot", { picture: "picture-1" }))).toMatchObject({
+      verb: "Screenshot",
+      object: "example.com/sign-in",
+    });
+    expect(describeActivity(browse("console", { errorCount: 3 }))).toMatchObject({
+      verb: "Read console",
+      meta: "3 errors",
+      metaTone: "danger",
+    });
+    expect(describeActivity(browse("console", { errorCount: 1 })).meta).toBe("1 error");
+    expect(describeActivity(browse("console", { errorCount: 0 })).meta).toBe("no errors");
+    expect(describeActivity(browse("console")).meta).toBeNull();
+    const tabs = describeActivity(
+      tool("browse", {
+        output: { content: [{ type: "text", text: "No Browser Tabs are open" }] },
+        descriptor: {
+          browse: {
+            action: "tabs",
+            tabId: null,
+            url: null,
+            title: null,
+            target: null,
+            picture: null,
+            errorCount: null,
+            ownerSessionId: null,
+          },
+        },
+      }),
+    );
+    expect(tabs).toMatchObject({ verb: "Listed tabs", object: null });
+    // No tab to show a card for, so the listing itself is the detail.
+    expect(tabs.detail).toEqual({ view: "output", text: "No Browser Tabs are open" });
+  });
+
+  it("hands the facet to the row so the card can find its tab, and falls back to a plain row without one", () => {
+    const row = describeActivity(browse("click", { target: "Sign in", picture: "picture-9" }));
+    expect(row.browse).toMatchObject({ tabId: "tab-1", picture: "picture-9", ownerSessionId: "s1" });
+
+    // A browse descriptor with no facet — an adapter that stamped the kind
+    // and nothing else — still reads as a sentence.
+    const bare = describeActivity(
+      tool("browse", {
+        toolName: "browser_snapshot",
+        descriptor: { subject: { label: "example.com", path: null, lineRange: null } },
+      }),
+    );
+    expect(bare).toMatchObject({ verb: "Browsed", object: "example.com", browse: null });
+    expect(describeActivity(tool("run-command", { input: { command: "ls" } })).browse).toBeNull();
+  });
+
+  it("counts browsing in the bundle summary like any other kind", () => {
+    const rows = bundleOf(
+      segmentMessageParts([browse("open"), browse("click"), browse("click")], "m1"),
+    );
+    expect(summaryText(rows)).toEqual(["Browsed 3 times"]);
   });
 });
 
