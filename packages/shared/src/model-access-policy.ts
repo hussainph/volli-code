@@ -14,7 +14,7 @@ import type { ModelSelection } from "./agent-runtime";
 /**
  * The three jobs a default model is configured for.
  *
- * - `global` — orchestration: Home/project chats, and the base every other
+ * - `global` — orchestration: Board chats opened from Home, and the base every other
  *   purpose falls back to when it has no explicit choice of its own.
  * - `ticket` — execution: Ticket Sessions, the structured coding runs.
  * - `utility` — cost-efficient background work.
@@ -39,7 +39,7 @@ export const EMPTY_MODEL_ACCESS_DEFAULTS: ModelAccessDefaults = {
  * The default a purpose resolves to, or null when nothing is configured for it.
  *
  * `ticket` and `utility` fall back to `global` BY DEFINITION, not silently: an
- * unset ticket default *means* "use the project default", which is what the
+ * unset ticket default *means* "use the Board default", which is what the
  * settings row says when it is unset. What never happens is a model the user
  * configured nowhere — a fully unset profile resolves null, and the caller
  * refuses rather than substitutes (the DEFAULT_MODEL_REQUIRED invariant).

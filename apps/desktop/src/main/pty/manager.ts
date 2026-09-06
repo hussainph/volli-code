@@ -95,7 +95,7 @@ interface Session {
   /** The workspace this session is scoped to (future `volli` CLI/notifications consumer). */
   workspaceId: string;
   /**
-   * The ticket this session drives, or `null` for a Project Session. Held
+   * The ticket this session drives, or `null` for a Board Session. Held
    * in-memory so {@link PtyManager.interruptTicketSessions} can find every live
    * session of a ticket without a db round-trip (issue #78 backward-move interrupt).
    */
@@ -458,7 +458,7 @@ export class PtyManager {
       }
     }
 
-    // cwd resolution + guard. A renderer-supplied cwd (project Session / non-worktree
+    // cwd resolution + guard. A renderer-supplied cwd (Board Session / non-worktree
     // ticket) must live inside a registered project, same defense-in-depth as
     // the filesystem handlers. A worktree cwd is MAIN-derived (ensure returns
     // it), not renderer input, so it's validated against the app-owned worktree
@@ -488,7 +488,7 @@ export class PtyManager {
     // `.cursor/hooks.json`, which it reads from its working directory and
     // nowhere else per-ticket. Worktree sessions only: the alternative is
     // writing into the user's own checkout, which nothing justifies, so a
-    // Project Session runs cursor unhooked rather than politely vandalized.
+    // Board Session runs cursor unhooked rather than politely vandalized.
     // Refreshed every boot, because the command line names this launch's socket.
     if (worktreeOutcome !== null && this.agentRuntime !== null) {
       await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
@@ -585,7 +585,7 @@ export class PtyManager {
         // HOME and every credential survive it untouched). Then force TERM so
         // the terminal emulator negotiates 256-color regardless of the parent's
         // TERM; layer the ticket env (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR) on top
-        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for Project Sessions.
+        // for ticket sessions, or just VOLLI_ARTIFACTS_DIR for Board Sessions.
         //
         // Scrubbed against the merged built-in + registered set when it exists,
         // falling back to the built-ins for the same reason {@link adapterFor}

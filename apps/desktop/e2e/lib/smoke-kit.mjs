@@ -1466,7 +1466,7 @@ export async function goToBoard(page) {
     if (!(await boardReady.isVisible().catch(() => false))) {
       // Two steps since VC-54: the nav item selects HOME, and Home's permanent
       // first tab is the Board. The nav item alone lands on whichever Home tab
-      // was last in front, which may be a Project Session.
+      // was last in front, which may be a Board Session.
       const homeNav = page.getByRole("button", { name: "Home", exact: true });
       if (await homeNav.count()) await homeNav.first().click();
       const boardTab = tabStrip(page, HOME_TAB_STRIP).getByRole("tab", { name: "Board" });

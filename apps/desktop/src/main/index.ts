@@ -885,7 +885,7 @@ app.whenReady().then(async () => {
     return { ...report, provenance: outcome.kind, interactiveProvenance };
   };
   // The Pi-backed Agent Runtime is the structured product's one target
-  // executor, for Ticket Sessions and ticketless project chats alike. Model
+  // executor, for Ticket Sessions and ticketless Board chats alike. Model
   // access and selection come from this Pi host.
   // Pi's providers and the credential store behind them, built once here so
   // signing in and running a Session share one collection. Two would be two
@@ -1428,7 +1428,7 @@ app.whenReady().then(async () => {
           // project's own runtime preference first — `projects.session_model`
           // (migration 024, NULL = inherit) — then the app-wide per-purpose
           // record, Role in and purpose out (VC-53): a Ticket Session resolves
-          // the execution default, a project chat the orchestration one —
+          // the execution default, a Board chat the orchestration one —
           // stated by `resolveDefaultModel`, never substituted. One closure so
           // every door — renderer chat, CLI start, an Automation Run — walks
           // the same rungs.

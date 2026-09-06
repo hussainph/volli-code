@@ -173,7 +173,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     await sleep(1500);
 
-    // === Setup: two Project Session tabs, each writing its shell pid to a marker ======
+    // === Setup: two Board Session tabs, each writing its shell pid to a marker ======
     // The surface's default Session is a structured chat (which, with no
     // default model in this profile, refuses into the empty state) — parking
     // is a terminal-only tier, so tab 1 is minted explicitly through the
@@ -195,7 +195,7 @@ async function main() {
     await page.keyboard.press("Enter");
     const pid1 = await shellPidFromMarker(marker1);
 
-    // The Project Session strip's control is a split button — its press starts a chat,
+    // The Board Session strip's control is a split button — its press starts a chat,
     // its caret half opens the kinds. Parking is a terminal-only tier, so this
     // goes through the caret. The item's name carries its chord, hence the regex.
     await page.getByLabel("Other things to open").click();

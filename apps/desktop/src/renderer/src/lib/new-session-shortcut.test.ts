@@ -172,7 +172,7 @@ describe("newSessionLandingForChrome", () => {
     });
   });
 
-  it("mints a PROJECT Session from a Home chat tab, even with a ticket open behind it", () => {
+  it("mints a Board Session from a Home chat tab, even with a ticket open behind it", () => {
     // The fact that used to be `nav === "board"` is now WHICH HOME TAB is in
     // front: a Session tab keeps the ticket remembered behind it (VC-54
     // decision 1), and a chord fired there must not mint onto a ticket that is

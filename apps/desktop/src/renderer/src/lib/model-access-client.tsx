@@ -30,7 +30,7 @@ export interface ModelAccessClient {
   inspect(input: { refresh?: boolean }): Promise<ModelAccessSnapshot>;
   /** The per-purpose defaults — see {@link ModelAccessDefaults}. */
   defaults(): Promise<ModelAccessDefaults>;
-  /** Null clears a ticket/utility choice back to "use the project default". */
+  /** Null clears a ticket/utility choice back to "use the Board default". */
   setDefault(purpose: ModelPurpose, selection: ModelSelection | null): Promise<ModelAccessDefaults>;
   /** The models the user toggled out of composers and pickers. */
   hiddenModels(): Promise<readonly HiddenModelRef[]>;

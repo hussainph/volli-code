@@ -238,7 +238,7 @@ async function main() {
     await page.getByText("Home", { exact: true }).click();
 
     for (let i = 1; i <= N_SESSIONS; i++) {
-      // The Project Session strip's control is a split button (press = chat, caret =
+      // The Board Session strip's control is a split button (press = chat, caret =
       // the kinds); this benchmark measures PTYs, so EVERY tab takes the caret
       // — the surface's default Session is a structured chat now (which, with
       // no default model in this profile, refuses into the empty state), so

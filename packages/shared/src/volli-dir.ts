@@ -116,8 +116,8 @@ export function ticketSessionEnv(projectPath: string, displayId: string): Record
 }
 
 /**
- * Env vars injected at PTY creation for a Project Session (decision #9): just
- * {@link VOLLI_ARTIFACTS_DIR_ENV}, so an agent in a Project Session's terminal
+ * Env vars injected at PTY creation for a Board Session (decision #9): just
+ * {@link VOLLI_ARTIFACTS_DIR_ENV}, so an agent in a Board Session's terminal
  * can write project artifacts the same way a Ticket Session can.
  * `projectPath` must always be the MAIN repo's path (see {@link
  * ticketSessionEnv}).
@@ -146,7 +146,7 @@ export interface AgentSessionEnvironmentInput {
   inheritedPath: string;
 }
 
-/** Adds the agent-facing runtime contract to a ticket or Project Session environment. */
+/** Adds the agent-facing runtime contract to a ticket or Board Session environment. */
 export function agentSessionEnv(
   scopeEnv: Readonly<Record<string, string>>,
   input: AgentSessionEnvironmentInput,

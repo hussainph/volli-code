@@ -139,7 +139,7 @@ function usageWire(summary: SessionUsageSummary): Record<string, unknown> {
  * `key`:
  *
  * - Spend on NO Ticket is `key: null, label: null`. It is a real group — a
- *   Project Session's bill — and dropping it would make the rows add up to
+ *   Board Session's bill — and dropping it would make the rows add up to
  *   less than the total printed above them.
  * - Spend on a Ticket that has since been HARD-DELETED is `key: null,
  *   label: "(deleted ticket)"`. The attribution survived in the fact, so the

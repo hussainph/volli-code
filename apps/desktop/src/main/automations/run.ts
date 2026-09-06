@@ -202,7 +202,7 @@ export interface AutomationProjectRunRequest {
    * derived from the Trigger of the Automation being run: the schedule timer
    * (`main/index.ts`) arrives here `unattended`, and "Run now" on a Skipped
    * occurrence arrives here `attended` — same Automation, same schedule, same
-   * Project Session, and a person standing at one of them.
+   * Board Session, and a person standing at one of them.
    */
   attendance: AutomationRunAttendance;
 }
@@ -226,7 +226,7 @@ export interface AutomationRunner {
   /**
    * Runs an Automation against a PROJECT rather than a Ticket (VC-130): the
    * schedule's own door, and the one behind "Run now" on a Skipped occurrence.
-   * It opens a Project Session, because `ticketId === null` is that Role.
+   * It opens a Board Session, because `ticketId === null` is that Role.
    */
   runForProject(input: AutomationProjectRunRequest): Promise<RunAutomationOutcome>;
   /** Resume a persistent first-message intent after any successful Session attach. */

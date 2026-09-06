@@ -172,7 +172,7 @@ export interface ExportTicketEvent {
 export interface ExportSession {
   id: string;
   projectId: string;
-  /** `null` for a Project Session. */
+  /** `null` for a Board Session. */
   ticketId: string | null;
   title: string | null;
   createdAt: number;

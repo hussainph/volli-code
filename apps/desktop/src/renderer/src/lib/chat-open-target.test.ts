@@ -11,7 +11,7 @@ const worktrees = [
 describe("resolveChatOpenTarget", () => {
   // ---- relative paths: the scope's venue decides -----------------------------
 
-  it("keeps a relative path in the project venue for a project chat", () => {
+  it("keeps a relative path in the project venue for a Board chat", () => {
     expect(
       resolveChatOpenTarget({
         path: "src/x.ts",
@@ -85,7 +85,7 @@ describe("resolveChatOpenTarget", () => {
     ).toEqual({ kind: "ticket-file", ticketId: "t-12", relPath: "src/a.ts" });
   });
 
-  it("maps a main-checkout-absolute path to the project for a project chat", () => {
+  it("maps a main-checkout-absolute path to the project for a Board chat", () => {
     expect(
       resolveChatOpenTarget({
         path: `${projectPath}/docs/DESIGN.md`,

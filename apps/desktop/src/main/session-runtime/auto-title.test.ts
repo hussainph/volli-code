@@ -207,7 +207,7 @@ describe("createAutoTitler().refine", () => {
     );
   });
 
-  it("reads no ticket for a project chat", async () => {
+  it("reads no ticket for a Board chat", async () => {
     const readTicket = vi.fn(() => TICKET);
     const h = harness({ readTicket, readSession: async () => session({ ticketId: null }) });
     await h.refine({});

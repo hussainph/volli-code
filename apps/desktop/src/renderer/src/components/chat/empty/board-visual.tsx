@@ -1,7 +1,7 @@
 /**
  * BOARD — the project's five columns, in proportion (VC-55).
  *
- * The other field only a Project Session can draw: a ticket chat has one
+ * The other field only a Board Session can draw: a ticket chat has one
  * ticket, and one ticket in one column is not a distribution. Home's chat sits
  * one tab away from the board itself, so this is the same object seen from the
  * orchestrator's side — how much is waiting, how much is moving, how much is

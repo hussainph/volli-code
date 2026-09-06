@@ -1,7 +1,7 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKETLESS
- * (Project Session) chat, against the BUILT app — the ticketless twin of
- * `pi-ticket-chat-smoke.mjs`. Project Sessions attached OpenCode until commit
+ * (Board Session) chat, against the BUILT app — the ticketless twin of
+ * `pi-ticket-chat-smoke.mjs`. Board Sessions attached OpenCode until commit
  * 49a62640 moved them onto the same Pi runtime a ticket chat uses
  * (`apps/desktop/src/main/session-runtime/project-sessions.ts`), and commit
  * 0f0e7007 gave them the ticket composer's model semantics
@@ -34,7 +34,7 @@
  * ticket chat's does (check 3) — the "born ticketless" carve-outs that used
  * to hide it are gone.
  *
- * A Project Session is durable independently of whether its tab is restored.
+ * A Board Session is durable independently of whether its tab is restored.
  * Check 6 uses its one sidebar row after relaunch and proves that selecting it
  * adopts the SAME conversation from durable data, with no live executor
  * attached. It addresses the row by cardinality because auto-title can rename
@@ -76,7 +76,7 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const PROJECT = { id: "pi-project-chat-project", name: "Pi Project Chat", prefix: "SC" };
+const PROJECT = { id: "pi-project-chat-project", name: "Pi Board Chat", prefix: "SC" };
 const MODEL_PIN = {
   providerId: "openai-codex",
   modelId: "gpt-5.6-luna",
@@ -184,7 +184,7 @@ async function main() {
 
     await attempt(
       2,
-      "Home's own Chat control creates a ticketless (Project Session) chat tab",
+      "Home's own Chat control creates a ticketless (Board Session) chat tab",
       async () => {
         await goToHome(page);
         chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
@@ -283,7 +283,7 @@ async function main() {
 
       await attempt(
         6,
-        "after relaunch, the sidebar selects the Project Session and resumes BOTH messages from durable data, no live attach",
+        "after relaunch, the sidebar selects the Board Session and resumes BOTH messages from durable data, no live attach",
         async () => {
           // This isolated profile owns one Session. Address that durable row by
           // identity-by-cardinality rather than by its title: auto-title can

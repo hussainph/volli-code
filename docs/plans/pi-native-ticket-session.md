@@ -37,7 +37,7 @@ Volli is an opinionated agentic SDLC product, not a multi-harness client.
 - Harness feature parity is not a goal. Volli adopts useful jobs and gives them
   a Volli-native expression. Plans, Subagents, MCP, slash commands, and
   Automations are product decisions, not upstream checklists.
-- The product sequence is Ticket Sessions, then Project Sessions, then reusable
+- The product sequence is Ticket Sessions, then Board Sessions, then reusable
   Automations. Later work may add durable Subagent Sessions, native MCP/plugin
   surfaces, mobile supervision, cloud execution, and multiplayer.
 
@@ -91,7 +91,7 @@ This effort delivers:
 
 ## Explicitly out of scope
 
-- Project Sessions and project-level orchestration tools.
+- Board Sessions and project-level orchestration tools.
 - Durable Subagent Sessions and child-worktree concurrency.
 - Reusable Automations.
 - Plan mode or a first-class in-chat Plan object.
@@ -293,7 +293,7 @@ project, and globally installed Pi extensions do not auto-load.
 - The process-global sandbox configuration names no workspace path at all. Each
   root travels with its own command, so two Sessions rooted differently do not
   reach into each other.
-- A project Session's root is the user's real checkout, uncommitted work
+- A Board Session's root is the user's real checkout, uncommitted work
   included. That is weaker isolation than a worktree — the containment above is
   what it has instead of one, not a substitute for it.
 - Tool policy is enforced before execution, not inferred from UI presentation.
@@ -612,7 +612,7 @@ Session 5 implementation decisions (2026-08-09):
   re-verifies the prepared resource tree and executable on cache hits, fixes
   the restricted launch flags and absolute credential directory, and leaves
   `/login` plus the existing explicit Retry to the user.
-- Ticketless project Chats temporarily keep OpenCode through a private
+- Ticketless Board chats temporarily keep OpenCode through a private
   main-owned route. Runtime Catalog was Lab-only under this slice and never
   exposed over production renderer IPC or settings.
 - There is no production provider slash-command inventory to migrate in this
@@ -703,7 +703,7 @@ OpenCode; terminal OpenCode remains possible only as a manual companion command.
 
 Session 7 implementation decisions (2026-08-10):
 
-- Ticketless project chats moved to the singular Pi runtime rather than being
+- Ticketless Board chats moved to the singular Pi runtime rather than being
   disabled, honoring Session 0's "not disabled" decision: a role-discriminated
   runtime identity (`project` role with null ticket identity), a
   project-scoped Runtime Brief, and a durable `model.select` recorded at
@@ -811,7 +811,7 @@ The migration is complete when all of the following are true:
 
 After this effort completes, create separate decision/spec sessions for:
 
-1. Project Sessions, board authority, resource awareness, and model-task routing.
+1. Board Sessions, board authority, resource awareness, and model-task routing.
 2. Durable Subagent Sessions, parentage, worktree concurrency, and disclosure UI.
 3. Auto/Manage authority, classifier models, sandboxing, and permission UX.
 4. The compact `volli.*` agent tool API and context-budgeted tool bundles.

@@ -12,7 +12,7 @@
  * The rules, in order:
  *
  *  1. A RELATIVE path means "in my venue". A ticket chat's venue is its
- *     worktree; a project chat's is the main checkout. The scope answers it —
+ *     worktree; a Board chat's is the main checkout. The scope answers it —
  *     deliberately no cross-checkout guessing: a bare `src/x.ts` from a project
  *     session that happened to `cd` into a worktree is ambiguous, and a
  *     deterministic wrong-checkout read that fails with honest copy beats a

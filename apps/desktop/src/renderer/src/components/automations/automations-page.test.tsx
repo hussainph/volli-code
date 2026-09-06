@@ -683,7 +683,7 @@ describe("schedules (VC-130)", () => {
 
   it("runs a scheduled record at the PROJECT, without asking for a Ticket", async () => {
     // VC-112: the Trigger decides the Target, and a schedule names the Project.
-    // Pressing Play here therefore opens the Project Session the schedule
+    // Pressing Play here therefore opens the Board Session the schedule
     // itself would open — the by-hand Run and the automatic one are the same
     // work, and a Ticket dialog would quietly make them two.
     await mount({
