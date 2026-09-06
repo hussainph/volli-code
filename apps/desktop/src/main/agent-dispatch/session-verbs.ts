@@ -196,6 +196,9 @@ export async function sessionListVerb(
     const row = {
       id: shortSessionId(record.sessionId),
       kind: "chat",
+      // The Role (VC-9), so an orchestrator reading its fleet can tell the
+      // helpers it delegated to from the Sessions it started.
+      role: record.role,
       ticket:
         ticket && ticketProject
           ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)

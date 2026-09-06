@@ -86,6 +86,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     waitingOn: null,
     lastActivityAt: 1,
     bornTicketless: false,
+    role: "ticket",
     ...overrides,
   };
 }
@@ -288,6 +289,15 @@ describe("sessionSourceLabel", () => {
   it("names a chat row without displaying its attachment state", () => {
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe("Chat");
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
+  });
+
+  // The Role is the row's source (VC-9): a helper another Session started is
+  // named as one, so a person scanning the list can tell it from the chat
+  // that started it.
+  it("names a Subagent Session by its Role", () => {
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ role: "subagent" }) })).toBe(
+      "Subagent",
+    );
   });
 });
 

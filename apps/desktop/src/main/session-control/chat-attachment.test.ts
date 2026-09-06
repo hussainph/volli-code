@@ -108,6 +108,7 @@ describe("chatSessionRecord", () => {
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
     });
   });
 
@@ -124,6 +125,7 @@ describe("chatSessionRecord", () => {
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
     });
   });
 

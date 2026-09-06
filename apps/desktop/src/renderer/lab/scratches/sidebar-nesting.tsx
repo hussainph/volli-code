@@ -266,6 +266,7 @@ function chatRecord(
     activity: "idle",
     waitingOn: null,
     bornTicketless: overrides.ticketId === null,
+    role: overrides.ticketId === null ? "project" : "ticket",
     ...overrides,
   };
 }

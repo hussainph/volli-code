@@ -1495,6 +1495,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         waitingOn: null,
         lastActivityAt: 500,
         bornTicketless: false,
+        role: "ticket",
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both

@@ -38,6 +38,7 @@
  * they were never the surface that dropped chat Sessions.
  */
 
+import type { SessionRole } from "./agent-runtime";
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { SessionProvenance } from "./session-provenance";
@@ -191,6 +192,12 @@ export interface ChatSessionRecord {
    * it — see {@link SessionRecord.bornTicketless}, the terminal-row sibling.
    */
   bornTicketless: boolean;
+  /**
+   * The Role the Session was created under (VC-9). A listing names a helper
+   * another Session started as one, rather than as a chat indistinguishable
+   * from the chat that started it.
+   */
+  role: SessionRole;
 }
 
 /**

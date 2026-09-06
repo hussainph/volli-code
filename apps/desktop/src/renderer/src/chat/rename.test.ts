@@ -61,6 +61,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: false,
+      role: "ticket",
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,

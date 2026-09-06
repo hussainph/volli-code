@@ -2056,6 +2056,9 @@ describe("agent command service", () => {
           expect.objectContaining({
             id: structured.session.id.slice(0, 8),
             kind: "chat",
+            // The Role rides the row (VC-9), so a fleet reader can tell a
+            // helper it delegated to from the Sessions it started.
+            role: "project",
             ticket: null,
             title: "Structured OpenCode Session",
             ageMs: 100,

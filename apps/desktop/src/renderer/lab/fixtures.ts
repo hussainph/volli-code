@@ -355,6 +355,7 @@ function chat(
     // the app cannot produce.
     waitingOn: null,
     bornTicketless: overrides.ticketId === null,
+    role: overrides.ticketId === null ? "project" : "ticket",
     ...overrides,
   };
 }
