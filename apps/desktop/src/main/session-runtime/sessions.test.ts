@@ -409,7 +409,7 @@ describe("Sessions", () => {
     expect(births).toEqual([{ role: "subagent", parentSessionId: "parent-session" }]);
   });
 
-  it("refuses a Subagent Session that names no parent, before anything durable exists", async () => {
+  it("refuses a Subagent Session that names no parent, and a parent on any other Role, before anything durable exists", async () => {
     const { commands, sessions: door } = sessions();
 
     await expect(
@@ -418,6 +418,18 @@ describe("Sessions", () => {
         projectId: "project-1",
         ticketId: null,
         role: "subagent",
+        title: null,
+      }),
+    ).rejects.toMatchObject({ code: "PARENT_REQUIRED" });
+    // A Ticket Session with a parent is a caller that confused the two kinds
+    // of child: a `session.start` peer carries delegation ancestry, not this.
+    await expect(
+      door.create({
+        operationId: "operation-confused",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        parentSessionId: "parent-session",
         title: null,
       }),
     ).rejects.toMatchObject({ code: "PARENT_REQUIRED" });

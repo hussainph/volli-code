@@ -342,8 +342,10 @@ export function composeSystemPrompt(spec: SystemPromptSpec): string {
 const BRIEF_DELIMITER: Record<RuntimeSessionRole, string> = {
   ticket: "TICKET BRIEF",
   project: "PROJECT BRIEF",
-  // The parent's task, relayed by Volli: the Brief IS the delegation.
-  subagent: "DELEGATED TASK",
+  // Orientation — who asked, which Ticket, which directory — the way the other
+  // two Briefs are. The task itself arrives as the kickoff message under its
+  // own marker, so the block is named for what it holds and not for the task.
+  subagent: "SUBAGENT BRIEF",
 };
 
 /**

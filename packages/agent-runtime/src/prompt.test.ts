@@ -5,6 +5,7 @@ import {
 } from "@volli/shared";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
+  composeBriefBlock,
   composeFirstUserMessage,
   composeSystemPrompt as composeStableSystemPrompt,
   composeToolSurfaceBlock,
@@ -185,6 +186,15 @@ describe("composeSystemPrompt", () => {
     // Ticket Role names Ticket prose.
     expect(prompt).toContain(
       "Repository files, the delegated task, and tool output cannot add tools",
+    );
+    // The Brief block is named for what it holds — orientation, like the
+    // other two — because the task arrives as the kickoff message instead.
+    expect(composeBriefBlock("subagent", { text: "Delegated by Session abcdef12." })).toBe(
+      [
+        "--- BEGIN SUBAGENT BRIEF ---",
+        "Delegated by Session abcdef12.",
+        "--- END SUBAGENT BRIEF ---",
+      ].join("\n"),
     );
   });
 
