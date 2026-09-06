@@ -77,7 +77,7 @@ export const SHELL_MAX_PER_SESSION = 4;
 const COMMAND_LINE_LIMIT = 80;
 
 function firstLine(command: string): string {
-  const line = command.split("\n")[0]?.trim() ?? "";
+  const line = command.split("\n", 1).join("").trim();
   return line.length > COMMAND_LINE_LIMIT ? `${line.slice(0, COMMAND_LINE_LIMIT - 1)}…` : line;
 }
 

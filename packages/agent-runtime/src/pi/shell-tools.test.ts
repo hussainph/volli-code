@@ -224,6 +224,66 @@ describe("shell tools", () => {
     expect(text).not.toContain("second line never shown");
   });
 
+  it("words every way a shell can stand: minutes and hours of age, a signal, an exit with no code, a cut line", async () => {
+    const port = unusedPort();
+    const long = `pnpm ${"x".repeat(100)}`;
+    port.output = async () => ({
+      shell: record({
+        command: long,
+        state: "exited",
+        code: null,
+        signal: "SIGKILL",
+        startedAt: NOW - 90_000,
+        // No exit time recorded: the age is measured to now.
+        exitedAt: null,
+      }),
+      // No trailing newline: printed as it stands, not cut by one.
+      output: "partial",
+      truncated: false,
+      shells: [
+        record({ shellId: "sh-m", startedAt: NOW - 5 * 60_000 }),
+        // Exited with neither code nor signal — a spawn that failed after a
+        // pid was handed out — reads as an unknown exit rather than a crash.
+        record({ shellId: "sh-q", state: "exited", code: null, signal: null }),
+      ],
+    });
+    const tool = createShellTool("shell_output", port, undefined, clock);
+
+    const text = resultText(await tool.execute("call-1", { shellId: "sh-1" }));
+
+    expect(text).toContain("exited by signal SIGKILL after 1m");
+    expect(text).toContain(`pnpm ${"x".repeat(74)}…`);
+    expect(text).toMatch(/partial\n/);
+    expect(text).toMatch(/sh-m.*running.*5m/);
+    expect(text).toMatch(/sh-q.*exited \?/);
+
+    // The same unknown exit, as a headline.
+    port.output = async () => ({
+      shell: record({ state: "exited", code: null, signal: null, exitedAt: NOW }),
+      output: "",
+      truncated: false,
+      shells: [],
+    });
+    expect(resultText(await tool.execute("call-2", { shellId: "sh-1" }))).toContain(
+      "exited with code ? after 12s",
+    );
+  });
+
+  it("withdraws a call in flight when the attachment's live signal fires, and forgets the listener after", async () => {
+    const port = unusedPort();
+    const attachment = new AbortController();
+    let seen: AbortSignal | null = null;
+    port.output = async (input) => {
+      seen = input.signal;
+      attachment.abort();
+      return { shell: record(), output: "", truncated: false, shells: [] };
+    };
+    await createShellTool("shell_output", port, attachment.signal).execute("c1", {
+      shellId: "sh-1",
+    });
+    expect(seen!.aborted).toBe(true);
+  });
+
   it("answers a refusal with the rule that made it, rather than failing the call", async () => {
     const port = unusedPort();
     port.start = async () => {

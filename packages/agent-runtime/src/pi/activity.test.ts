@@ -769,6 +769,19 @@ describe("mapPiActivity", () => {
       activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
     );
     expect(exitedRead.descriptor.outcome).toMatchObject({ exitCode: 0 });
+    // A shell call that named nothing — no command, no shell id — still gets
+    // its marker rather than an empty label.
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-shell-bare",
+          toolName: "shell_output",
+          args: {},
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject.label,
+    ).toBe("(background · read)");
   });
 
   it("maps session_delegate to a delegate row naming the child Session (VC-9)", () => {

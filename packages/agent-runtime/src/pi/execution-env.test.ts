@@ -408,6 +408,10 @@ describe("sessionCommandEnvironment", () => {
     }
   });
 
+  it("builds a bare record from nothing: no prefixes, no identity, no PATH", () => {
+    expect(sessionCommandEnvironment({}, {})).toEqual({ PATH: "" });
+  });
+
   it("lets a caller's own variables win over the sanitized set, identity included", () => {
     const record = sessionCommandEnvironment(
       { PATH: "/usr/bin", LANG: "C.UTF-8", HOME: "/Users/me" },
