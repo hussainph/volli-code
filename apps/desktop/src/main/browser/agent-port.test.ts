@@ -542,6 +542,7 @@ describe("createAgentBrowserPort", () => {
     const failing = createAgentBrowserPort({
       host: fakeHost([state({ tabId: "user-1", createdBy: "user" })]).host,
       scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
       transportFor: () => ({
         send: async () => ({}),
         ensureReady: async () => {
