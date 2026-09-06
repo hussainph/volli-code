@@ -257,7 +257,7 @@ export function ChatPlane({
   ticketId,
   onOpenFile,
   store,
-  visible = true,
+  visible: surfaceVisible = true,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
@@ -1061,65 +1061,65 @@ export function ChatPlane({
         </div>
       ) : null}
       <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
-      <FileMentionProvider onOpenFile={onOpenFile}>
-        <Conversation className="min-h-0 bg-background">
-          {/* The bottom padding clears the composer plus the h-16 gradient over
+        <FileMentionProvider onOpenFile={onOpenFile}>
+          <Conversation className="min-h-0 bg-background">
+            {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-          <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-            {messages.length === 0 ? (
-              // Where this Session runs, drawn (VC-55). It replaces the bare
-              // mark that stood here — see `empty/chat-empty-state.tsx` for why
-              // that reversal is deliberate. What blocks TYPING still sits on
-              // the composer, where the typing is.
-              <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-              </ConversationEmptyState>
-            ) : (
-              <ContentColumn className={MESSAGE_GAP}>
-                {rows.map((row) =>
-                  row.kind === "compaction" ? (
-                    <CompactionBoundary
-                      key={`compaction:${row.compaction.sequence}`}
-                      compaction={row.compaction}
-                    />
-                  ) : row.kind === "reasoning-drop" ? (
-                    <ReasoningDropNotice
-                      key={`reasoning-drop:${row.drop.sequence}`}
-                      drop={row.drop}
-                    />
-                  ) : (
-                    <ChatTurn
-                      key={row.messages[0]?.id}
-                      messages={row.messages}
-                      context={turnContext}
-                      live={row.messages === liveTurn}
-                    />
-                  ),
-                )}
-                {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
-              </ContentColumn>
-            )}
-          </ConversationContent>
-          {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+            <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+              {messages.length === 0 ? (
+                // Where this Session runs, drawn (VC-55). It replaces the bare
+                // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                // that reversal is deliberate. What blocks TYPING still sits on
+                // the composer, where the typing is.
+                <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                  <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                </ConversationEmptyState>
+              ) : (
+                <ContentColumn className={MESSAGE_GAP}>
+                  {rows.map((row) =>
+                    row.kind === "compaction" ? (
+                      <CompactionBoundary
+                        key={`compaction:${row.compaction.sequence}`}
+                        compaction={row.compaction}
+                      />
+                    ) : row.kind === "reasoning-drop" ? (
+                      <ReasoningDropNotice
+                        key={`reasoning-drop:${row.drop.sequence}`}
+                        drop={row.drop}
+                      />
+                    ) : (
+                      <ChatTurn
+                        key={row.messages[0]?.id}
+                        messages={row.messages}
+                        context={turnContext}
+                        live={row.messages === liveTurn}
+                      />
+                    ),
+                  )}
+                  {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                  {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
+                </ContentColumn>
+              )}
+            </ConversationContent>
+            {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-            style={{ backgroundImage: COMPOSER_SCRIM }}
-          />
+            <div
+              className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+              style={{ backgroundImage: COMPOSER_SCRIM }}
+            />
 
-          {/* Glass, not a plug: this button only exists while the reader is
+            {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-          {messages.length > 0 ? (
-            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-          ) : null}
-        </Conversation>
-      </FileMentionProvider>
+            {messages.length > 0 ? (
+              <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+            ) : null}
+          </Conversation>
+        </FileMentionProvider>
       </BrowserCardHostContext.Provider>
 
       {/* Opaque, because the transcript scrolls the full height of the plane
@@ -1138,7 +1138,7 @@ export function ChatPlane({
               tab={browser.preview}
               api={browser.api}
               ownerLabel={browser.ownerLabel(browser.preview)}
-              visible={visible}
+              visible={surfaceVisible}
             />
           ) : null}
           {/* Above whatever the slot holds, card included. A card answers the
@@ -1237,10 +1237,7 @@ function useChatBrowserTabs(
     useShallow((state) => sessionBrowserTabs(state.byId, sessionId, children)),
   );
   const preview = useBrowserTabsStore((state) => previewedBrowserTab(state.byId, sessionId));
-  const sessionTitle = React.useCallback(
-    (id: string) => sessionTitleOf(rows, id),
-    [rows],
-  );
+  const sessionTitle = React.useCallback((id: string) => sessionTitleOf(rows, id), [rows]);
   const cardHost = React.useMemo(
     () => (api === undefined ? null : { sessionId, api, sessionTitle }),
     [api, sessionId, sessionTitle],

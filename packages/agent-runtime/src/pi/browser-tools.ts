@@ -154,8 +154,7 @@ function tabsEnvelope(list: RuntimeBrowserTabList): string {
     DISTRUST,
     marker("begin", "browser tab list", id),
     ...list.tabs.map(
-      (tab) =>
-        `${tab.tabId} (opened by ${tabOpener(tab)}) — ${tab.url} — title: ${tab.title}`,
+      (tab) => `${tab.tabId} (opened by ${tabOpener(tab)}) — ${tab.url} — title: ${tab.title}`,
     ),
     marker("end", "browser tab list", id),
     mintNotice("browser tab list"),
@@ -452,27 +451,27 @@ export function createBrowserTool(
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
-            const snap = await port.act({
-              tabId: params.tabId,
-              generation: params.generation,
-              kind: params.kind,
-              ...(params.ref === undefined ? {} : { ref: params.ref }),
-              ...(params.text === undefined ? {} : { text: params.text }),
-              ...(params.key === undefined ? {} : { key: params.key }),
-              ...(params.direction === undefined ? {} : { direction: params.direction }),
-              ...(params.waitMs === undefined ? {} : { waitMs: params.waitMs }),
-              signal: withdrawn,
-            });
-            // The page's own name for what was touched; the ref when it has
-            // none; the key or direction for page-level actions.
-            const target =
-              snap.target === null
-                ? (params.key ?? params.direction ?? null)
-                : (snap.target.name ?? snap.target.ref);
-            return text(
-              snapshotEnvelope(snap),
-              details(params.kind, snap, { target, picture: snap.picture }),
-            );
+              const snap = await port.act({
+                tabId: params.tabId,
+                generation: params.generation,
+                kind: params.kind,
+                ...(params.ref === undefined ? {} : { ref: params.ref }),
+                ...(params.text === undefined ? {} : { text: params.text }),
+                ...(params.key === undefined ? {} : { key: params.key }),
+                ...(params.direction === undefined ? {} : { direction: params.direction }),
+                ...(params.waitMs === undefined ? {} : { waitMs: params.waitMs }),
+                signal: withdrawn,
+              });
+              // The page's own name for what was touched; the ref when it has
+              // none; the key or direction for page-level actions.
+              const target =
+                snap.target === null
+                  ? (params.key ?? params.direction ?? null)
+                  : (snap.target.name ?? snap.target.ref);
+              return text(
+                snapshotEnvelope(snap),
+                details(params.kind, snap, { target, picture: snap.picture }),
+              );
             },
             asked(params.kind, params),
           ),

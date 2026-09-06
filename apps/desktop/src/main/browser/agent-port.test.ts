@@ -276,7 +276,9 @@ describe("createAgentBrowserPort", () => {
 
   it("refuses to touch a tab outside the Session's scope, as unknown rather than as forbidden", async () => {
     const scoped = port({
-      tabs: [state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" })],
+      tabs: [
+        state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" }),
+      ],
     });
 
     const attempt = scoped.snapshot({ tabId: "theirs", signal });
@@ -302,7 +304,13 @@ describe("createAgentBrowserPort", () => {
     expect(listing.tabs.find((tab) => tab.tabId === "mine")?.ownerSessionId).toBe("s1");
     expect(listing.tabs.find((tab) => tab.tabId === "user-1")?.ownerSessionId).toBeNull();
 
-    const attempt = scoped.act({ tabId: "sibling", generation: 1, kind: "click", ref: "e1", signal });
+    const attempt = scoped.act({
+      tabId: "sibling",
+      generation: 1,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
     await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
       "browser.unknown-tab",
     );

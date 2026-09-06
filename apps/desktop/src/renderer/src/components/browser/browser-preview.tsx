@@ -66,7 +66,10 @@ export function BrowserPreview({
     >
       <div className="flex h-7 items-center gap-2 border-b border-border/50 px-2 text-ui">
         <BrowserTabMark driven />
-        <span className="min-w-0 flex-1 truncate text-foreground" title={browserTabDisplayTitle(tab)}>
+        <span
+          className="min-w-0 flex-1 truncate text-foreground"
+          title={browserTabDisplayTitle(tab)}
+        >
           {browserTabDisplayTitle(tab)}
         </span>
         <span className="shrink-0 truncate text-muted-foreground">Driven by {ownerLabel}</span>

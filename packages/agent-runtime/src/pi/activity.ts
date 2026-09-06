@@ -262,9 +262,7 @@ function browseActionOf(
 ): ActivityBrowseAction {
   if (toolName === "browser_navigate") {
     const history = readField(input, "action");
-    return history === "back" || history === "forward" || history === "reload"
-      ? history
-      : fallback;
+    return history === "back" || history === "forward" || history === "reload" ? history : fallback;
   }
   if (toolName === "browser_act") {
     const kind = readField(input, "kind");
@@ -308,15 +306,16 @@ function withoutImageBytes(rawOutput: unknown): unknown {
   const result = recordOf(rawOutput);
   const content = readField(result, "content");
   if (result === null || !Array.isArray(content)) return rawOutput;
-  return {
-    ...result,
-    content: content.map((block) => {
-      const item = recordOf(block);
-      return item !== null && readField(item, "type") === "image" && "data" in item
+  const stripped: unknown[] = [];
+  for (const block of content) {
+    const item = recordOf(block);
+    stripped.push(
+      item !== null && readField(item, "type") === "image" && "data" in item
         ? { ...item, data: IMAGE_OMITTED }
-        : block;
-    }),
-  };
+        : block,
+    );
+  }
+  return { ...result, content: stripped };
 }
 
 function subjectFor(kind: ActivityKind, input: RuntimeActivityValue, toolName: string) {

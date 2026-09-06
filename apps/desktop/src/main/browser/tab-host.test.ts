@@ -970,7 +970,9 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     // Another Session's preview is another chat's pinned pane; it stays.
     expect(byId.get(other.tabId)?.presentation).toBe("preview");
     // The displaced tab was published so its card can update.
-    expect(published).toContainEqual(expect.objectContaining({ tabId: first.tabId, presentation: "headless" }));
+    expect(published).toContainEqual(
+      expect.objectContaining({ tabId: first.tabId, presentation: "headless" }),
+    );
   });
 });
 
@@ -1018,7 +1020,7 @@ describe("BrowserTabHost lifecycle (VC-238)", () => {
 
     const closed = host.closeHeadlessForTicket("ticket-1");
 
-    expect(closed.sort()).toEqual([a.tabId, b.tabId].sort());
+    expect(closed.toSorted()).toEqual([a.tabId, b.tabId].toSorted());
     expect(host.list({ projectId: "project-1" }).map((tab) => tab.tabId)).toEqual([
       shown.tabId,
       elsewhere.tabId,
@@ -1071,7 +1073,10 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     const pictureId = host.keepScreenshot(tab.tabId, png);
 
     expect(pictureId).toBe("picture-1");
-    expect(persisted.get("picture-1")).toEqual({ bytes: Buffer.from("png-bytes"), mime: "image/png" });
+    expect(persisted.get("picture-1")).toEqual({
+      bytes: Buffer.from("png-bytes"),
+      mime: "image/png",
+    });
     expect(pictures.dataUrl("picture-1")).toBe(`data:image/png;base64,${png}`);
   });
 
@@ -1095,7 +1100,8 @@ describe("BrowserTabHost limits (VC-238)", () => {
     });
 
   it("caps one Session's tabs with its own error, and lets another Session keep opening", () => {
-    for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1) agentTab("session-a", index);
+    for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1)
+      agentTab("session-a", index);
 
     expect(() => agentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
     expect(() => agentTab("session-a", 99)).toThrow(

@@ -337,10 +337,7 @@ export class BrowserTabHost {
   private publish(
     entry: BrowserTabEntry,
     update: Partial<
-      Pick<
-        BrowserTabState,
-        "error" | "generation" | "loading" | "presentation" | "title" | "url"
-      >
+      Pick<BrowserTabState, "error" | "generation" | "loading" | "presentation" | "title" | "url">
     > = {},
   ): void {
     const contents = entry.view.webContents;

@@ -69,7 +69,11 @@ export function BrowserTabsChip({
       <PopoverContent align="end" side="bottom" className="w-80 p-2">
         <ul className="flex flex-col gap-1" aria-label="Browser Tabs this chat holds">
           {tabs.map((tab) => (
-            <li key={tab.tabId} className="flex items-center gap-2 text-ui" data-browser-inventory-tab={tab.tabId}>
+            <li
+              key={tab.tabId}
+              className="flex items-center gap-2 text-ui"
+              data-browser-inventory-tab={tab.tabId}
+            >
               <BrowserTabMark driven />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-foreground">{browserTabDisplayTitle(tab)}</div>

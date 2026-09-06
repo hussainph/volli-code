@@ -70,7 +70,11 @@ describe("BrowserTabController", () => {
     const controller = new BrowserTabController(page.transport);
     const snapshot = await controller.snapshot();
 
-    const acted = await controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" });
+    const acted = await controller.act({
+      generation: snapshot.generation,
+      kind: "click",
+      ref: "e1",
+    });
 
     // What was acted on, in the page's own words, so the transcript can say
     // `Clicked "Save"` (VC-238). The name is page content and stays bounded.

@@ -384,8 +384,8 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
       refusal: null,
     });
     expect(readActivityBrowse(undefined)).toBeNull();
-    expect(
-      readActivityBrowse({ action: "click", refusal: "browser.stale-ref" })?.refusal,
-    ).toBe("browser.stale-ref");
+    expect(readActivityBrowse({ action: "click", refusal: "browser.stale-ref" })?.refusal).toBe(
+      "browser.stale-ref",
+    );
   });
 });

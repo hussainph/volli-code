@@ -1202,7 +1202,11 @@ describe("browse presenter", () => {
 
   it("hands the facet to the row so the card can find its tab, and falls back to a plain row without one", () => {
     const row = describeActivity(browse("click", { target: "Sign in", picture: "picture-9" }));
-    expect(row.browse).toMatchObject({ tabId: "tab-1", picture: "picture-9", ownerSessionId: "s1" });
+    expect(row.browse).toMatchObject({
+      tabId: "tab-1",
+      picture: "picture-9",
+      ownerSessionId: "s1",
+    });
 
     // A browse descriptor with no facet — an adapter that stamped the kind
     // and nothing else — still reads as a sentence.
@@ -1226,7 +1230,9 @@ describe("browse presenter", () => {
       meta: "refused",
       metaTone: "danger",
     });
-    expect(describeActivity(browse("open", { refusal: "browser.session-tab-limit" }))).toMatchObject({
+    expect(
+      describeActivity(browse("open", { refusal: "browser.session-tab-limit" })),
+    ).toMatchObject({
       meta: "refused",
       metaTone: "danger",
     });

@@ -765,7 +765,14 @@ function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): Act
     };
   }
   if (PAGE_INPUT_ACTIONS.has(facet.action)) {
-    return { verb, object: facet.target, openPath: null, meta: page, metaTone: "muted", detail: null };
+    return {
+      verb,
+      object: facet.target,
+      openPath: null,
+      meta: page,
+      metaTone: "muted",
+      detail: null,
+    };
   }
   if (facet.action === "wait") {
     return { verb, object: null, openPath: null, meta: page, metaTone: "muted", detail: null };
@@ -776,7 +783,12 @@ function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): Act
       verb,
       object: page,
       openPath: null,
-      meta: errors === null ? null : errors === 0 ? "no errors" : `${errors} ${errors === 1 ? "error" : "errors"}`,
+      meta:
+        errors === null
+          ? null
+          : errors === 0
+            ? "no errors"
+            : `${errors} ${errors === 1 ? "error" : "errors"}`,
       metaTone: errors !== null && errors > 0 ? "danger" : "muted",
       detail: null,
     };

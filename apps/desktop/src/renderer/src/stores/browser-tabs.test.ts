@@ -168,11 +168,9 @@ describe("strip and inventory selection (VC-238)", () => {
 
   it("finds the one tab a chat is previewing, or none", () => {
     const byId = Object.fromEntries(
-      [
-        agent("a", "s1", "headless"),
-        agent("b", "s1", "preview"),
-        agent("c", "s2", "preview"),
-      ].map((one) => [one.tabId, one]),
+      [agent("a", "s1", "headless"), agent("b", "s1", "preview"), agent("c", "s2", "preview")].map(
+        (one) => [one.tabId, one],
+      ),
     );
 
     expect(previewedBrowserTab(byId, "s1")?.tabId).toBe("b");

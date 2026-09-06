@@ -39,9 +39,7 @@ function snapshot(overrides: Partial<RuntimeBrowserSnapshot> = {}): RuntimeBrows
   };
 }
 
-function acted(
-  overrides: Partial<RuntimeBrowserActResult> = {},
-): RuntimeBrowserActResult {
+function acted(overrides: Partial<RuntimeBrowserActResult> = {}): RuntimeBrowserActResult {
   return { ...snapshot(), target: null, ...overrides };
 }
 

@@ -791,7 +791,9 @@ describe("mapPiActivity browser tools (VC-238)", () => {
       ownerSessionId: null,
       refusal: null,
     });
-    expect(facet("browser_act", { tabId: "t", generation: 2, kind: "press", key: "Enter" })).toMatchObject({
+    expect(
+      facet("browser_act", { tabId: "t", generation: 2, kind: "press", key: "Enter" }),
+    ).toMatchObject({
       action: "press",
       target: "Enter",
     });
@@ -873,7 +875,10 @@ describe("mapPiActivity browser tools (VC-238)", () => {
         { type: "image", mimeType: "image/png", data: "[image]" },
       ],
     });
-    expect(completed.descriptor.browse).toMatchObject({ action: "screenshot", picture: "picture-4" });
+    expect(completed.descriptor.browse).toMatchObject({
+      action: "screenshot",
+      picture: "picture-4",
+    });
   });
 
   it("carries the console's error count and labels a tab listing by nothing", () => {

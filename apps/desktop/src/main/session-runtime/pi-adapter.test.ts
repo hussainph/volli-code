@@ -751,8 +751,11 @@ describe("Pi native adapter attach", () => {
     });
 
     // The scope is the adapter's word, from the Session's own context — never
-    // a value the model or the port could invent.
-    expect(scopes).toEqual([{ projectId: "project-1", ticketId: "ticket-1" }]);
+    // a value the model or the port could invent. The Session id rides with it
+    // (VC-238): it is the owner every tab this port opens is stamped with.
+    expect(scopes).toEqual([
+      { projectId: "project-1", ticketId: "ticket-1", sessionId: SESSION_ID },
+    ]);
     await runtime.spec.browser?.tabs({ signal: new AbortController().signal });
     expect(listed).toEqual([false]);
 

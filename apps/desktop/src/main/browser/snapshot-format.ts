@@ -250,9 +250,7 @@ export function formatAXSnapshot(
   // inside quotes is the page talking, not a key of this map.
   const kept = minted.filter((one) => one.lineIndex < keptLines);
   const refs = new Map(kept.map((one) => [one.ref, one.backendDOMNodeId]));
-  const names = new Map(
-    kept.filter((one) => one.name !== "").map((one) => [one.ref, one.name]),
-  );
+  const names = new Map(kept.filter((one) => one.name !== "").map((one) => [one.ref, one.name]));
 
   return { text, refs, names, nextRef: refStart + minted.length, truncated };
 }

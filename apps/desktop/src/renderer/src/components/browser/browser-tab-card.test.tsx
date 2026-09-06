@@ -86,7 +86,11 @@ function host(overrides: Partial<BrowserApi> = {}): BrowserCardHost {
   };
 }
 
-async function draw(card: BrowserCardHost | null, browse: ActivityBrowse, note: string | null = null) {
+async function draw(
+  card: BrowserCardHost | null,
+  browse: ActivityBrowse,
+  note: string | null = null,
+) {
   await act(async () => {
     root?.render(
       <BrowserCardHostContext.Provider value={card}>
@@ -116,7 +120,10 @@ describe("BrowserTabCard", () => {
     expect(button("Hide")).toBeUndefined();
 
     await act(async () => button("Show")?.click());
-    expect(card.api.setPresentation).toHaveBeenCalledWith({ tabId: "tab-1", presentation: "preview" });
+    expect(card.api.setPresentation).toHaveBeenCalledWith({
+      tabId: "tab-1",
+      presentation: "preview",
+    });
     await act(async () => button("Open as tab")?.click());
     expect(card.api.setPresentation).toHaveBeenCalledWith({ tabId: "tab-1", presentation: "tab" });
     await act(async () => button("Close")?.click());

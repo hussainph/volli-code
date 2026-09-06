@@ -450,9 +450,7 @@ export const ToolRow = React.memo(function ToolRow({
       </div>
       {expandable ? (
         <Disclosure open={open}>
-          {card !== null ? (
-            <BrowserTabCard facet={card} note={refusalNote(part, card)} />
-          ) : null}
+          {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           <ToolDetail
             kind={row.kind}
             command={row.command}

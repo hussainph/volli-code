@@ -60,7 +60,10 @@ interface LivePicture {
  */
 export class BrowserPictureStore {
   private readonly live = new Map<string, LivePicture>();
-  private readonly minted = new Map<string, { tabId: string; generation: number; capturedAt: number; persisted: boolean }>();
+  private readonly minted = new Map<
+    string,
+    { tabId: string; generation: number; capturedAt: number; persisted: boolean }
+  >();
   private readonly liveLimit: number;
 
   constructor(private readonly deps: BrowserPictureStoreDependencies) {

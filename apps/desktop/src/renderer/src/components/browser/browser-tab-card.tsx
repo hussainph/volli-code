@@ -28,7 +28,11 @@ import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
-import { browserTabDisplayTitle, browserTabOwnerLabel, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import {
+  browserTabDisplayTitle,
+  browserTabOwnerLabel,
+  useBrowserTabsStore,
+} from "@renderer/stores/browser-tabs";
 import { cn } from "@renderer/lib/utils";
 
 /** What a card needs from the chat around it; absent (the lab) draws facts alone. */
@@ -102,7 +106,6 @@ function displayUrl(url: string | null): string | null {
     return url;
   }
 }
-
 
 export function BrowserTabCard({
   facet,
@@ -182,20 +185,36 @@ export function BrowserTabCard({
           {live.createdBy === "session" ? (
             live.presentation === "headless" ? (
               <>
-                <Button size="xs" variant="secondary" onClick={() => present("preview", "show Browser Tab")}>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => present("preview", "show Browser Tab")}
+                >
                   Show
                 </Button>
-                <Button size="xs" variant="ghost" onClick={() => present("tab", "open Browser Tab")}>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => present("tab", "open Browser Tab")}
+                >
                   Open as tab
                 </Button>
               </>
             ) : (
               <>
-                <Button size="xs" variant="secondary" onClick={() => present("headless", "hide Browser Tab")}>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => present("headless", "hide Browser Tab")}
+                >
                   Hide
                 </Button>
                 {live.presentation === "preview" ? (
-                  <Button size="xs" variant="ghost" onClick={() => present("tab", "open Browser Tab")}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => present("tab", "open Browser Tab")}
+                  >
                     Open as tab
                   </Button>
                 ) : null}
@@ -225,7 +244,10 @@ function TabStatus({ live, facet }: { live: BrowserTabState | undefined; facet: 
   }
   if (live.error !== null) {
     return (
-      <span className="flex min-w-0 shrink-0 items-center gap-1 text-destructive" title={live.error}>
+      <span
+        className="flex min-w-0 shrink-0 items-center gap-1 text-destructive"
+        title={live.error}
+      >
         <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
         <span className="max-w-48 truncate">{live.error}</span>
       </span>

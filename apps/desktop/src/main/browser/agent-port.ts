@@ -65,11 +65,7 @@ import type {
 
 import type { BrowserTabState } from "../../ipc/contract";
 import type { BrowserTabCreateOptions } from "./tab-host";
-import {
-  BrowserSessionTabLimitError,
-  BrowserTabLimitError,
-  isAllowedBrowserUrl,
-} from "./tab-host";
+import { BrowserSessionTabLimitError, BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
 
 /**
