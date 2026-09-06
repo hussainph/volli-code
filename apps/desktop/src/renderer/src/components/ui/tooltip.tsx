@@ -18,8 +18,31 @@ function TooltipProvider({
   );
 }
 
-function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
+/**
+ * A LABEL, and therefore never hoverable. Radix keeps tooltip content
+ * hoverable by default — a grace so a pointer can travel onto rich content —
+ * and this app has no rich tooltips (`TooltipContent` below holds one line and
+ * contains nothing). What the default DID do was hurt: over a column of 20px
+ * row actions, a label opening 6px above one action lands on the action above
+ * it, so moving up the column meant the pointer hit live tooltip text between
+ * every row — I-beam, close, next label opens over the next row, arrow, I-beam…
+ * a cursor flicker the Activity Island's cards caught live (VC-249). With
+ * hoverable content off the label closes the instant its trigger is left, and
+ * with `pointer-events-none` on the content (below) the pointer never sees it
+ * at all. A caller that genuinely needs the grace can still pass
+ * `disableHoverableContent={false}`; nothing in the app does.
+ */
+function Tooltip({
+  disableHoverableContent = true,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Root>) {
+  return (
+    <TooltipPrimitive.Root
+      data-slot="tooltip"
+      disableHoverableContent={disableHoverableContent}
+      {...props}
+    />
+  );
 }
 
 function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
@@ -73,7 +96,14 @@ function TooltipContent({
           // variant compiles to (0,2,0) against the unconditional `animate-in`'s
           // (0,1,0), so it wins on specificity rather than on source order
           // (verified in the browser, not by reading Tailwind's output).
-          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-4 py-1 text-ui text-balance text-background shadow-overlay ease-out fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
+          //
+          // `pointer-events-none select-none`: the other half of "a label, not a
+          // surface" (see `Tooltip` above). A label the pointer can land on is
+          // a surface — it changes the cursor, it swallows the hover of what is
+          // under it, and it can be selected as if it were prose. This one is
+          // transparent to the pointer the way a `<label>` painted over a
+          // control would be expected to be.
+          "pointer-events-none z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-control bg-foreground px-4 py-1 text-ui text-balance text-background shadow-overlay ease-out select-none fade-in-0 zoom-in-95 motion-reduce:animate-none! data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=instant-open]:animate-none",
           className,
         )}
         {...props}
