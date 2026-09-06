@@ -80,6 +80,13 @@ describe("paceOf", () => {
   it("has no reading for a window it cannot place", () => {
     expect(paceOf(window({ resetsAt: undefined }), NOW)).toBeNull();
   });
+
+  it("has no reading once the reset has passed, whatever was used", () => {
+    expect(paceOf(window({ usedPercent: 30 }), NOW + 2 * HOUR)).toBeNull();
+    expect(paceOf(window({ usedPercent: 30 }), NOW + 10 * HOUR)).toBeNull();
+    // A moment before the reset still reads.
+    expect(paceOf(window({ usedPercent: 30 }), NOW + 2 * HOUR - 1)).toBe("under");
+  });
 });
 
 describe("formatDuration", () => {

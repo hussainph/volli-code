@@ -113,11 +113,13 @@ export function elapsedShare(
  *
  * `ahead` means more has been used than the elapsed share would predict — the
  * allowance will run out before the reset if the rate holds. Null when the
- * window cannot be placed in time.
+ * window cannot be placed in time, and null once the reset has passed: a
+ * window that is over has no pace to be on, and reading its last figure as
+ * "under" would show headroom in a window nobody can spend from any more.
  */
 export function paceOf(window: UsageWindow, now: number): UsagePace | null {
   const elapsed = elapsedShare(window, now);
-  if (elapsed === null) return null;
+  if (elapsed === null || elapsed >= 1) return null;
   const difference = window.usedPercent - elapsed * 100;
   if (difference > USAGE_PACE_BAND_POINTS) return "ahead";
   if (difference < -USAGE_PACE_BAND_POINTS) return "under";

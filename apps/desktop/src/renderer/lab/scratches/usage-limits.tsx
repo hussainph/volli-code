@@ -8,9 +8,11 @@
  *   • THE HAIRLINE VERSUS THE EDGE. Pace is drawn, not written — when spending
  *     is on pace the hairline sits ON the bar's edge, ahead leaves a gap
  *     between them (the overrun, in bar-widths), under puts the edge past the
- *     hairline. Squint at the "Ahead" panel: if the hairline reads as a glitch
- *     in the fill rather than a second fact, the fix is the hairline's
- *     contrast, not a legend.
+ *     hairline. The hairline is the TIME LEFT, measured from the same left
+ *     edge as the fill, so the two agree exactly when pace is on; the Healthy
+ *     panel's weekly row (0.6% elapsed, 4% used) is the near-coincidence to
+ *     squint at. If the hairline reads as a glitch in the fill rather than a
+ *     second fact, the fix is the hairline's contrast, not a legend.
  *   • THE LONG COUNTDOWN. `resets in 6d 23h` beside `resets in 45m` — the
  *     weekly row must not read as a different control because its number is
  *     wider. tabular-nums is doing that work; check it survives a light canvas.
@@ -67,10 +69,10 @@ const AHEAD: UsageLimits = {
       id: "session",
       kind: "session",
       label: "Session",
-      // 94% used with 18 of 300 minutes left: nearly empty, and far ahead of
-      // the hairline near the bar's right end.
+      // 94% used with 2 of 5 hours still to come: a 6% stub at the left and
+      // the hairline out at 40%, the gap between them being the overrun.
       usedPercent: 94,
-      resetsAt: iso(NOW + 18 * 60_000),
+      resetsAt: iso(NOW + 2 * HOUR),
       windowDurationMins: 300,
     },
     {
@@ -88,6 +90,34 @@ const AHEAD: UsageLimits = {
       usedPercent: 8,
       // No reset stated: the row must survive without its countdown and without
       // a pace reading, and still line up with its neighbours.
+      windowDurationMins: 10_080,
+    },
+  ],
+};
+
+/**
+ * The edges: a session window fully spent with time left (no fill at all,
+ * hairline standing alone), and one whose reset has passed with nothing newer
+ * reported yet (`resets now`, hairline at the left edge, no pace — a window
+ * that is over has none). Both must still read as the same control.
+ */
+const EDGES: UsageLimits = {
+  checkedAt: NOW - 60_000,
+  windows: [
+    {
+      id: "session",
+      kind: "session",
+      label: "Session",
+      usedPercent: 100,
+      resetsAt: iso(NOW + 1 * HOUR + 30 * 60_000),
+      windowDurationMins: 300,
+    },
+    {
+      id: "weekly",
+      kind: "weekly",
+      label: "Weekly",
+      usedPercent: 71,
+      resetsAt: iso(NOW - 4 * 60_000),
       windowDurationMins: 10_080,
     },
   ],
@@ -141,6 +171,9 @@ export default function UsageLimitsScratch() {
       </Frame>
       <Frame label="Healthy · Codex">
         <ModelAccessUsage limits={CODEX} now={NOW} />
+      </Frame>
+      <Frame label="Spent · reset passed">
+        <ModelAccessUsage limits={EDGES} now={NOW} />
       </Frame>
       <Frame label="Unsupported / couldn't read">
         <ModelAccessUsage limits={UNSUPPORTED} now={NOW} />
