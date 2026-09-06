@@ -6,6 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { BackgroundShellState } from "../../../../ipc/contract";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
+
+// Sonner draws React components into a DOM this test has none of, and the
+// feed only ever hands it a string, so the wrapper is the right seam.
+const toasted: string[] = [];
+vi.mock("@renderer/lib/toast", () => ({
+  toastError: (message: string) => toasted.push(message),
+}));
+
 import {
   islandShellActions,
   projectIslandShells,
@@ -39,6 +47,9 @@ beforeEach(() => {
 const roots: Root[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  // After the roots are down, so unstubbing the act environment cannot
+  // strand a render that was still settling.
+  vi.unstubAllGlobals();
 });
 
 /** The smallest hook harness: mount a component that reads the hook into a ref. */
@@ -173,6 +184,50 @@ describe("useIslandShells", () => {
     });
     expect(result.current.shells).toEqual([]);
     expect(result.current.flash?.id).toBe("shell:sh-2:exited");
+  });
+
+  it("hands the mount both verbs, so openShell reaches the mount's own output door", async () => {
+    // VC-268's mount spreads these straight onto the island's actions. The
+    // feed owns HOW a shell is killed; the mount owns WHERE its tail opens.
+    const kill = vi.fn(async () => ({ ok: true as const }));
+    const openOutput = vi.fn();
+    useBackgroundShellsStore.getState().receive(shell());
+    const result = renderHook(() =>
+      useIslandShells("session-1", { openOutput, api: { kill }, onError: vi.fn() }),
+    );
+
+    result.current.openShell("sh-1");
+    expect(openOutput).toHaveBeenCalledWith("sh-1");
+
+    result.current.killShell("sh-1");
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith({ shellId: "sh-1" }));
+  });
+
+  it("falls back to the app's own bridge and toast when the mount injects neither", async () => {
+    // What production actually runs: no injection, so the kill goes through
+    // `window.api.shells` and a refusal is toasted rather than swallowed.
+    toasted.length = 0;
+    const kill = vi.fn(async () => ({ ok: false as const, error: "gone" }));
+    vi.stubGlobal("api", { shells: { kill } });
+    useBackgroundShellsStore.getState().receive(shell());
+    const result = renderHook(() => useIslandShells("session-1"));
+
+    result.current.killShell("sh-1");
+
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith({ shellId: "sh-1" }));
+    await vi.waitFor(() => expect(toasted).toEqual(["Could not kill the shell: gone"]));
+  });
+
+  it("leaves openShell inert when the mount named nowhere to open a tail", async () => {
+    // A surface with no output strip must not throw when the card is pressed;
+    // killing still works, because killing needs no destination.
+    const kill = vi.fn(async () => ({ ok: true as const }));
+    useBackgroundShellsStore.getState().receive(shell());
+    const result = renderHook(() => useIslandShells("session-1", { api: { kill } }));
+
+    expect(() => result.current.openShell("sh-1")).not.toThrow();
+    result.current.killShell("sh-1");
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith({ shellId: "sh-1" }));
   });
 
   it("keeps the same array across unrelated store changes, so the island's spring does not restart", () => {

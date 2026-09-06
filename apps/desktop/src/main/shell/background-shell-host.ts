@@ -138,8 +138,24 @@ class OutputRing {
     return this.slice(0);
   }
 
+  /**
+   * The retained bytes from `offsetInRetained` on, decoded once.
+   *
+   * The offset is a BYTE offset — the ring's bound and the tail cap are both
+   * byte bounds — so it can land inside a multi-byte character. Decoding from
+   * there would manufacture a U+FFFD the process never wrote, and, because a
+   * replacement character re-encodes to three bytes, could hand back MORE
+   * bytes than the bound the caller was promised. So the start is advanced
+   * past any continuation bytes to the next character boundary: the model
+   * loses at most the fragment of one character our own cut broke, and never
+   * reads a corruption we invented.
+   */
   private slice(offsetInRetained: number): string {
-    return Buffer.concat(this.#chunks).subarray(offsetInRetained).toString("utf8");
+    const retained = Buffer.concat(this.#chunks);
+    let from = Math.min(offsetInRetained, retained.length);
+    // 0b10xxxxxx is a UTF-8 continuation byte: still inside a character.
+    while (from < retained.length && (retained[from]! & 0xc0) === 0x80) from += 1;
+    return retained.subarray(from).toString("utf8");
   }
 }
 

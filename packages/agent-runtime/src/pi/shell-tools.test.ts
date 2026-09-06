@@ -130,7 +130,10 @@ describe("shell tools", () => {
     expect(fresh).not.toContain("line 2");
 
     const tail = resultText(await tool.execute("call-2", { shellId: "sh-1", tail: 12 }));
-    expect(tail).toContain("last 12 bytes");
+    // The GRANTED byte count, not the requested one: the fixture hands back
+    // 14 bytes for a request of 12, and the text must describe what arrived.
+    expect(tail).toContain("last 14 bytes");
+    expect(tail).not.toContain("last 12 bytes");
     expect(tail).toContain("line 2");
     // Truncation is stated, so the model knows the head is gone rather than
     // guessing from a line that starts mid-word.
@@ -139,6 +142,41 @@ describe("shell tools", () => {
       { shellId: "sh-1", tail: undefined },
       { shellId: "sh-1", tail: 12 },
     ]);
+  });
+
+  it("reports the bytes the host granted, never the megabyte the model asked for", async () => {
+    // The host clamps `tail` to its own cap. Echoing the request would
+    // promise a million bytes beside the handful actually handed back.
+    const port = unusedPort();
+    port.output = async () => ({
+      shell: record(),
+      output: "tail end\n",
+      truncated: true,
+      shells: [record()],
+    });
+    const tool = createShellTool("shell_output", port, undefined, clock);
+
+    const text = resultText(await tool.execute("call-1", { shellId: "sh-1", tail: 1_000_000 }));
+
+    expect(text).toContain("last 9 bytes");
+    expect(text).not.toContain("1000000");
+  });
+
+  it("counts bytes rather than UTF-16 code units, because every bound it states is bytes", async () => {
+    const port = unusedPort();
+    // Four characters, ten bytes: three 3-byte CJK codepoints and a newline.
+    port.output = async () => ({
+      shell: record(),
+      output: "\u8d77\u52d5\u4e2d\n",
+      truncated: false,
+      shells: [record()],
+    });
+    const tool = createShellTool("shell_output", port, undefined, clock);
+
+    const text = resultText(await tool.execute("call-1", { shellId: "sh-1" }));
+
+    expect(text).toContain("(10 bytes)");
+    expect(text).not.toContain("(4 bytes)");
   });
 
   it("reports an exited shell as exited with its code on the read, never as a stale running", async () => {
@@ -218,10 +256,49 @@ describe("shell tools", () => {
 
     const text = resultText(await tool.execute("call-1", { shellId: "sh-1" }));
 
-    expect(text).toContain("2 of 4");
+    // The cap counts running shells, so the footer states running against it
+    // and keeps the corpse in the list without charging it a slot.
+    expect(text).toContain("1 running of 4, 1 exited and still readable");
     expect(text).toMatch(/sh-1.*running.*12s.*pnpm dev/);
     expect(text).toMatch(/sh-2.*exited 0.*2h.*tests/);
     expect(text).not.toContain("second line never shown");
+  });
+
+  it("never tells the model it is over a cap it is nowhere near", async () => {
+    // Four corpses and one server: the cap counts RUNNING, so this Session
+    // holds one of four and may start three more. A footer that counted
+    // records would read "5 of 4" and stop the model starting anything.
+    const port = unusedPort();
+    const dead = (id: string): RuntimeShellRecord =>
+      record({ shellId: id, state: "exited", code: 0, exitedAt: NOW - 1_000 });
+    port.output = async () => ({
+      shell: record(),
+      output: "",
+      truncated: false,
+      shells: [dead("sh-1"), dead("sh-2"), dead("sh-3"), dead("sh-4"), record({ shellId: "sh-5" })],
+    });
+    const tool = createShellTool("shell_output", port, undefined, clock);
+
+    const text = resultText(await tool.execute("call-1", { shellId: "sh-5" }));
+
+    expect(text).toContain("1 running of 4, 4 exited and still readable");
+    expect(text).not.toMatch(/\b5 of 4\b/);
+  });
+
+  it("states only the cap when every shell it holds is running", async () => {
+    const port = unusedPort();
+    port.output = async () => ({
+      shell: record(),
+      output: "",
+      truncated: false,
+      shells: [record(), record({ shellId: "sh-2" })],
+    });
+    const tool = createShellTool("shell_output", port, undefined, clock);
+
+    const text = resultText(await tool.execute("call-1", { shellId: "sh-1" }));
+
+    expect(text).toContain("2 running of 4");
+    expect(text).not.toContain("still readable");
   });
 
   it("words every way a shell can stand: minutes and hours of age, a signal, an exit with no code, a cut line", async () => {

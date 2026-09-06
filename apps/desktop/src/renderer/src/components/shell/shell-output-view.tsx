@@ -18,7 +18,7 @@
 
 import * as React from "react";
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, shellCommandLine, shellStanding } from "@volli/shared";
 
 import type { BackgroundShellState } from "../../../../ipc/contract";
 import { toastError } from "@renderer/lib/toast";
@@ -30,12 +30,6 @@ export const SHELL_OUTPUT_POLL_MS = 500;
 
 /** Within this many pixels of the bottom counts as "following". */
 const FOLLOW_SLACK_PX = 8;
-
-function standing(shell: BackgroundShellState): string {
-  if (shell.state === "running") return "running";
-  if (shell.signal !== null) return `exited by ${shell.signal}`;
-  return `exited ${shell.code ?? "?"}`;
-}
 
 export interface ShellOutputViewProps {
   shellId: string;
@@ -97,10 +91,10 @@ export function ShellOutputView({ shellId, api, className }: ShellOutputViewProp
     <div className={cn("flex h-full min-h-0 flex-col", className)} data-shell-output={shellId}>
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 text-ui">
         <span className="min-w-0 truncate font-mono text-foreground">
-          {shell === null ? shellId : (shell.title ?? shell.command.split("\n")[0])}
+          {shell === null ? shellId : (shell.title ?? shellCommandLine(shell.command))}
         </span>
         <span className="shrink-0 text-muted-foreground" data-shell-standing>
-          {gone ? "gone" : shell === null ? "…" : standing(shell)}
+          {gone ? "gone" : shell === null ? "…" : shellStanding(shell)}
         </span>
       </div>
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">

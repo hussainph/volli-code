@@ -3,10 +3,21 @@
  * `shells` cluster reads, as a React hook over `./island-shells-model.ts`.
  *
  * Its own module, built before the island's mount (VC-268) exists, so the
- * mount plugs it in with one import and one spread:
+ * mount plugs it in with one import and one spread — the feed and BOTH its
+ * verbs, so the mount never has to rediscover how a shell is killed or where
+ * its output opens:
  *
- *     const { shells, flash } = useIslandShells(sessionId);
+ *     const { shells, flash, openShell, killShell } = useIslandShells(sessionId, {
+ *       openOutput: (shellId) => openShellOutputTab(shellId),
+ *     });
  *     model = { ...model, shells, flash: flash ?? model.flash };
+ *     actions = { ...actions, openShell, killShell };
+ *
+ * `openOutput` is the mount's to supply because WHERE a tail opens is the
+ * mount's decision, not the feed's; what it opens is
+ * `components/shell/shell-output-view.tsx`. Omit it and `openShell` is inert
+ * — a surface with nowhere to put a tail cannot open one — while `killShell`
+ * still works, because killing needs no destination.
  *
  * Everything here is a PROJECTION of `stores/background-shells.ts`, which is
  * itself a projection of main's BackgroundShellHost through one push. The
@@ -19,10 +30,15 @@
 
 import * as React from "react";
 
-import type { IslandFlash, IslandShell } from "@volli/session-presentation";
+import type { ActivityIslandActions, IslandFlash, IslandShell } from "@volli/session-presentation";
 
-import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
-import { projectIslandShells, shellTransitionFlashes } from "./island-shells-model";
+import { toastError } from "@renderer/lib/toast";
+import { useBackgroundShellsStore, type ShellsApi } from "@renderer/stores/background-shells";
+import {
+  islandShellActions,
+  projectIslandShells,
+  shellTransitionFlashes,
+} from "./island-shells-model";
 
 export {
   islandShellActions,
@@ -42,10 +58,23 @@ const NO_SHELLS: readonly IslandShell[] = [];
  * it reads. What is already in the store on mount is state, not news, so the
  * first projection announces nothing.
  */
-export function useIslandShells(sessionId: string): {
+/** What the mount supplies: where a tail opens, and the doors under test. */
+export interface IslandShellsDeps {
+  /** Where `openShell` puts a shell's tail. Omitted means it opens nowhere. */
+  openOutput?: (shellId: string) => void;
+  /** The preload bridge; production is `window.api.shells`. */
+  api?: Pick<ShellsApi, "kill">;
+  /** How a failed kill is reported; production toasts it. */
+  onError?: (message: string) => void;
+}
+
+export function useIslandShells(
+  sessionId: string,
+  deps: IslandShellsDeps = {},
+): {
   shells: readonly IslandShell[];
   flash: IslandFlash | null;
-} {
+} & Pick<ActivityIslandActions, "openShell" | "killShell"> {
   const byId = useBackgroundShellsStore((state) => state.byId);
   const shells = React.useMemo(() => {
     const projected = projectIslandShells(Object.values(byId), sessionId);
@@ -63,7 +92,22 @@ export function useIslandShells(sessionId: string): {
     }
     previous.current = stable;
   }, [stable]);
-  return { shells: stable, flash };
+
+  // The two verbs the island's card fires, wired to the bridge here so the
+  // mount spreads them rather than rebuilding them. The bridge is read at
+  // call time, not at render, so a surface that never kills never touches it.
+  const { openOutput, api, onError } = deps;
+  const { openShell, killShell } = React.useMemo(
+    () =>
+      islandShellActions({
+        api: { kill: (input) => (api ?? window.api.shells).kill(input) },
+        openOutput: (shellId) => openOutput?.(shellId),
+        onError: onError ?? ((message) => toastError(`Could not kill the shell: ${message}`)),
+      }),
+    [api, onError, openOutput],
+  );
+
+  return { shells: stable, flash, openShell, killShell };
 }
 
 /** The previous array when the projection reads the same, so consumers keyed on identity stay put. */

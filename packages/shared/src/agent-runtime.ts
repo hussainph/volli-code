@@ -762,6 +762,41 @@ export interface RuntimeShellRecord {
   exitedAt: number | null;
 }
 
+/**
+ * How a shell stands, in the words every surface says it in: `running`,
+ * `exited 0`, or `exited by SIGTERM`.
+ *
+ * Here rather than beside any one caller because three surfaces answer the
+ * same question — the tool result the model reads, the output pane's header,
+ * and any listing — and a Session must not be told its shell `exited 0` in
+ * one place and `exited by SIGKILL` in another. Takes the three fields it
+ * reads, so the desktop's renderer-facing shell state satisfies it as well as
+ * a {@link RuntimeShellRecord}.
+ */
+export function shellStanding(
+  shell: Pick<RuntimeShellRecord, "state" | "code" | "signal">,
+): string {
+  if (shell.state === "running") return "running";
+  if (shell.signal !== null) return `exited by ${shell.signal}`;
+  return `exited ${shell.code ?? "?"}`;
+}
+
+/**
+ * The one line a shell is named by: the first non-blank line of its command,
+ * trimmed. Deliberately NOT truncated — how short a name must be is the
+ * caller's business (the model's listing bounds it to fit a result; the
+ * Activity Island lets its own truncation chain do it), and a bound baked in
+ * here would be applied twice.
+ */
+export function shellCommandLine(command: string): string {
+  return (
+    command
+      .split("\n")
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? ""
+  );
+}
+
 /** What starting a shell comes to: its record, and what it printed in the settle window. */
 export interface RuntimeShellStartOutcome {
   shell: RuntimeShellRecord;

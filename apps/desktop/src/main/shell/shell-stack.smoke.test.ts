@@ -5,8 +5,11 @@
  * renderer. No model turn, no Electron, no display.
  *
  * What the ticket's smoke step asks for, minus the pixels: the island's mount
- * is VC-268, so "the glyph reads running" is read here off the projection the
- * mount will spread in — the same function, the same data.
+ * is VC-268, so "the glyph reads running" is read here off the four fields
+ * the island's row carries, folded from exactly what main pushed. The
+ * projection function itself belongs to the renderer and is tested there
+ * (`components/chat/island-shells.test.ts`); main does not import across the
+ * process boundary to reach it.
  */
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,8 +21,30 @@ import type { BackgroundShellState } from "../../ipc/contract";
 import { createAgentShellPort, type AgentShellPort } from "./agent-port";
 import { BackgroundShellHost } from "./background-shell-host";
 
-/** The island's projection, imported from the renderer's pure feed module. */
-import { projectIslandShells } from "../../renderer/src/components/chat/island-shells-model";
+/** The four fields the Activity Island's shell row carries. */
+interface IslandRow {
+  id: string;
+  command: string;
+  state: "running" | "exited";
+  code: number | null;
+}
+
+/**
+ * One Session's rows as the island reads them, in start order — the shape
+ * `useIslandShells` hands the mount, restated here over the pushed records so
+ * this smoke stays inside main.
+ */
+function islandRows(pushed: Iterable<BackgroundShellState>, sessionId: string): IslandRow[] {
+  return [...pushed]
+    .filter((shell) => shell.sessionId === sessionId)
+    .toSorted((a, b) => a.startedAt - b.startedAt)
+    .map((shell) => ({
+      id: shell.shellId,
+      command: shell.command,
+      state: shell.state,
+      code: shell.code,
+    }));
+}
 
 const text = (result: { content: { type: string; text?: string }[] }): string =>
   result.content.map((entry) => (entry.type === "text" ? (entry.text ?? "") : "")).join("\n");
@@ -57,7 +82,7 @@ describe("background shell stack smoke", () => {
     const start = createShellTool("shell_start", port);
     const output = createShellTool("shell_output", port);
     const kill = createShellTool("shell_kill", port);
-    const island = () => projectIslandShells([...pushed.values()], "session-1");
+    const island = () => islandRows(pushed.values(), "session-1");
 
     // 1. shell_start a sleeping echo: the first line comes back in the call.
     // Printed text that is not in the command itself, since every result

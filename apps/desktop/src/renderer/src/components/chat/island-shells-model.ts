@@ -8,19 +8,19 @@
  * `./island-shells.ts`.
  */
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, shellCommandLine } from "@volli/shared";
 import type { ActivityIslandActions, IslandFlash, IslandShell } from "@volli/session-presentation";
 
 import type { BackgroundShellState } from "../../../../ipc/contract";
 import type { ShellsApi } from "../../stores/background-shells";
 
-/** The name a shell row carries: the command's first line, the title if that is blank, the id as a last resort. */
+/**
+ * The name a shell row carries: the command's first line, the title if the
+ * command is all blank, the id as a last resort. Left untruncated on purpose
+ * — the island's own chain decides how much of it fits.
+ */
 function shellName(shell: BackgroundShellState): string {
-  const line = shell.command
-    .split("\n")
-    .find((one) => one.trim().length > 0)
-    ?.trim();
-  return line ?? shell.title ?? shell.shellId;
+  return shellCommandLine(shell.command) || shell.title || shell.shellId;
 }
 
 /** One Session's shells as the island models them, in start order. */

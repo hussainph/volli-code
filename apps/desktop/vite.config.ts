@@ -195,10 +195,14 @@ export default defineConfig(({ mode }) => ({
         // pair that deliberately does not.
         "src/components/board/board-summary.ts",
         "src/components/chat/chat-plane-model.ts",
-        // The Activity Island's shell feed (VC-270): one Session's shells as
-        // the island models them, and the flash per transition. Pure so the
-        // gate can reach the transition rules — a start announced twice, or
-        // an exit never announced, is invisible in a screenshot.
+        // The Activity Island's shell feed (VC-270). `-model.ts` is the pure
+        // half — one Session's shells as the island models them, the flash
+        // per transition, and the two verbs its card fires. `island-shells.ts`
+        // is the React hook over it and is listed DESPITE not being pure,
+        // because the rule that decides what gets announced lives in its
+        // effect: a start announced twice, or an exit never announced, is
+        // invisible in a screenshot and cannot be reached from the model half
+        // alone.
         "src/components/chat/island-shells.ts",
         "src/components/chat/island-shells-model.ts",
         // Which drawing an empty chat may offer, per scope (VC-55). A pure

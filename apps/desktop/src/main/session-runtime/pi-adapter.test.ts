@@ -861,6 +861,32 @@ describe("Pi native adapter attach", () => {
     expect("shell" in runtime.spec).toBe(false);
   });
 
+  it("binds no shell port to a Session frozen before background shells existed", async () => {
+    // The other half of the guard above. The host carries a port and would
+    // happily answer, but this Session's frozen surface does not name the
+    // shell tools — so it must not gain them. The tool array is what the
+    // provider Cache Prefix is computed over, and a Session that silently
+    // grew three names would lose its prefix on the next turn.
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
+      // The default surface: read, edit, write, execute, ask_user.
+      resolveShellPort: () => ({
+        start: unusedPortMethod,
+        output: unusedPortMethod,
+        kill: unusedPortMethod,
+        dispose,
+      }),
+    });
+
+    expect("shell" in runtime.spec).toBe(false);
+    expect(runtime.spec.tools.tools).not.toContain("shell_start");
+
+    // And the port it never bound is still released with the attachment, so
+    // a port resolved per attachment cannot outlive one.
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it("hands the desktop's shell port to a recorded surface, scoped to the Session, and disposes it on release (VC-270)", async () => {
     const scopes: unknown[] = [];
     const dispose = vi.fn();

@@ -132,9 +132,9 @@ describe("createAgentShellPort", () => {
     await mine.start({ command: "sleep 30", signal });
     await theirs.start({ command: "sleep 30", signal });
     // A subagent — any other Session — never sees the parent's shells.
-    expect((await theirs.output({ shellId: "x", signal }).catch((e) => e)).rule).toBe(
-      "shell.unknown",
-    );
+    await expect(theirs.output({ shellId: "x", signal })).rejects.toMatchObject({
+      rule: "shell.unknown",
+    });
 
     mine.dispose();
 

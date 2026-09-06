@@ -7,6 +7,8 @@ import {
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
+  shellCommandLine,
+  shellStanding,
   UtilityCompletionError,
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
@@ -259,6 +261,39 @@ describe("sessionToolIds", () => {
     for (const binding of sessionToolBindings({ tools: { tools: [] }, shell: shellPort })) {
       expect(binding).toMatchObject({ port: shellPort });
     }
+  });
+
+  it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
+    // Three surfaces ask this — the model's result text, the output pane's
+    // header, and any listing — and they must not disagree about what a
+    // shell did.
+    expect(shellStanding({ state: "running", code: null, signal: null })).toBe("running");
+    expect(shellStanding({ state: "exited", code: 0, signal: null })).toBe("exited 0");
+    expect(shellStanding({ state: "exited", code: 1, signal: null })).toBe("exited 1");
+    // A signal wins over the code, because a killed shell's code is null and
+    // "exited null" tells nobody anything.
+    expect(shellStanding({ state: "exited", code: null, signal: "SIGKILL" })).toBe(
+      "exited by SIGKILL",
+    );
+    // Exited with neither: the OS told us nothing, and the text says so
+    // rather than inventing a zero that would read as success.
+    expect(shellStanding({ state: "exited", code: null, signal: null })).toBe("exited ?");
+  });
+
+  it("names a shell by the first line that says something (VC-270)", () => {
+    expect(shellCommandLine("pnpm dev")).toBe("pnpm dev");
+    expect(shellCommandLine("  pnpm dev  ")).toBe("pnpm dev");
+    // The first NON-BLANK line: a command that opens with a newline still
+    // gets a name, rather than an empty row.
+    expect(shellCommandLine("\n\n  pnpm test --watch\nsecond line")).toBe("pnpm test --watch");
+    expect(shellCommandLine("pnpm dev\n# never shown")).toBe("pnpm dev");
+    // Nothing to name: empty, so a caller can fall back to a title or an id.
+    expect(shellCommandLine("   \n\t\n")).toBe("");
+    expect(shellCommandLine("")).toBe("");
+    // Never truncated here — how short is the caller's business, and a bound
+    // baked in would be applied twice.
+    const long = "x".repeat(500);
+    expect(shellCommandLine(long)).toBe(long);
   });
 
   it("refuses a port carrying only half of the hold pair", () => {

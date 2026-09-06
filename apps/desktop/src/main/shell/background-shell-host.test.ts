@@ -5,14 +5,7 @@ import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { BackgroundShellState } from "../../ipc/contract";
-import {
-  BackgroundShellHost,
-  SHELL_KILL_GRACE_MS,
-  SHELL_OUTPUT_MAX_BYTES,
-  SHELL_START_SETTLE_MS,
-  SHELL_TAIL_MAX_BYTES,
-  type BackgroundShellOwner,
-} from "./background-shell-host";
+import { BackgroundShellHost, type BackgroundShellOwner } from "./background-shell-host";
 
 const owner: BackgroundShellOwner = {
   sessionId: "session-1",
@@ -79,15 +72,55 @@ afterEach(() => {
 });
 
 describe("BackgroundShellHost", () => {
-  it("names its bounds as policy, at a sane scale", () => {
-    // 4 shells; a quarter-megabyte ring per shell, the PTY peek's own bound;
-    // a tail a model can afford to read; a settle window a server's first
-    // line fits in; a grace before SIGKILL that lets a server flush.
-    expect(SHELL_MAX_PER_SESSION).toBe(4);
-    expect(SHELL_OUTPUT_MAX_BYTES).toBe(256_000);
-    expect(SHELL_TAIL_MAX_BYTES).toBe(64_000);
-    expect(SHELL_START_SETTLE_MS).toBe(1_000);
-    expect(SHELL_KILL_GRACE_MS).toBe(5_000);
+  it("fails the call when the command could not be spawned at all", async () => {
+    // A spawn that never produced a pid is broken plumbing, not a judged
+    // refusal: it must throw something the tool layer lets through, so the
+    // call fails loudly rather than reading as a shell that printed nothing.
+    const { host, published } = harness();
+
+    const failed = await host
+      .start(owner, {
+        command: "whatever",
+        cwd: join(workspace(), "no-such-directory"),
+        title: null,
+        env: ENV,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failed).toBeInstanceOf(Error);
+    expect(failed).not.toBeInstanceOf(ShellRefusal);
+    expect((failed as Error).message).toContain("Could not start a background shell");
+    // Nothing was published and nothing is held: a shell that never ran is
+    // not a shell the Session owns.
+    expect(published).toEqual([]);
+    expect(host.list(owner.sessionId)).toEqual([]);
+  });
+
+  it("cuts the ring on a byte bound without splitting the read into invalid UTF-8", async () => {
+    // The ring is bounded in BYTES and a chunk may end mid-codepoint. The
+    // decode happens once per read, so a cut that lands inside a 3-byte
+    // character must still yield a readable string rather than throwing.
+    const { host } = harness({ outputMaxBytes: 16 });
+    // Ten 3-byte codepoints: 30 bytes into a 16-byte ring, so the front is
+    // cut at an offset that cannot fall on a character boundary.
+    const started = await host.start(owner, {
+      command: `printf '\u8d77\u52d5\u4e2d\u8d77\u52d5\u4e2d\u8d77\u52d5\u4e2d\u8d77'`,
+      cwd: workspace(),
+      title: null,
+      env: ENV,
+    });
+    await until(() => host.list(owner.sessionId)[0]?.state === "exited");
+
+    const read = host.read(owner, started.shell.shellId, 16);
+
+    // Never more than the bound promised: a cut that fell mid-character is
+    // advanced to the next boundary rather than decoded into a U+FFFD, which
+    // would re-encode to three bytes and overshoot.
+    expect(Buffer.byteLength(read.output)).toBeLessThanOrEqual(16);
+    expect(read.truncated).toBe(true);
+    // Whole characters only — no replacement character we manufactured.
+    expect(read.output).not.toContain("\ufffd");
+    expect(read.output).toMatch(/^[\u8d77\u52d5\u4e2d]+$/);
   });
 
   it("starts a command beside the caller, and returns what it printed in the settle window", async () => {

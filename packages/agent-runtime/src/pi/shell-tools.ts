@@ -27,12 +27,14 @@
 
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/node";
 import { Type } from "@earendil-works/pi-ai";
-import type {
-  NonCodingToolId,
-  RuntimeShellOutputOutcome,
-  RuntimeShellPort,
-  RuntimeShellRecord,
-  RuntimeShellState,
+import {
+  shellCommandLine,
+  shellStanding,
+  type NonCodingToolId,
+  type RuntimeShellOutputOutcome,
+  type RuntimeShellPort,
+  type RuntimeShellRecord,
+  type RuntimeShellState,
 } from "@volli/shared";
 import { ShellRefusal } from "../shell/refusal";
 
@@ -67,18 +69,30 @@ function detailsOf(shell: RuntimeShellRecord): ShellToolDetails {
 }
 
 /**
- * The per-Session cap, restated in the live-shells footer so the model can
- * see how close it is before a start is refused. The host enforces it; this
- * number is only what the text says. Kept equal to the host's by its test.
+ * The per-Session cap on RUNNING shells, restated in the held-shells footer
+ * so the model can see how close it is before a start is refused. The one
+ * number: the desktop's host imports this constant and enforces it against
+ * the Session's running shells, so there is no second copy to drift.
  */
 export const SHELL_MAX_PER_SESSION = 4;
 
 /** How long a command's first line is allowed to be in a listing. */
 const COMMAND_LINE_LIMIT = 80;
 
+/** The shared one-line name, bounded to what a result can afford to spend on it. */
 function firstLine(command: string): string {
-  const line = command.split("\n", 1).join("").trim();
+  const line = shellCommandLine(command);
   return line.length > COMMAND_LINE_LIMIT ? `${line.slice(0, COMMAND_LINE_LIMIT - 1)}…` : line;
+}
+
+/**
+ * Bytes, not UTF-16 code units. Every bound this tool states is a byte bound
+ * — the ring, the tail cap — so the sizes it reports must be bytes too, or a
+ * model reading a multi-byte log would be told a number that matches nothing
+ * it was promised.
+ */
+function bytesOf(value: string): number {
+  return new TextEncoder().encode(value).length;
 }
 
 /** An age as the model reads it: seconds under a minute, then minutes, then hours. */
@@ -90,30 +104,35 @@ function age(ms: number): string {
   return `${Math.floor(minutes / 60)}h`;
 }
 
-/** How a shell stands, in two words: `running` or `exited <code|signal>`. */
-function standing(shell: RuntimeShellRecord): string {
-  if (shell.state === "running") return "running";
-  if (shell.signal !== null) return `exited by ${shell.signal}`;
-  return `exited ${shell.code ?? "?"}`;
-}
-
 /** The name a shell is listed by: its title when the model gave one, else its command's first line. */
 function label(shell: RuntimeShellRecord): string {
   return shell.title ?? firstLine(shell.command);
 }
 
 /**
- * The live-shells footer every result carries (§4): id, state, age, label —
- * one line each, the cap stated, so the model can see what it holds without
- * a prompt channel telling it.
+ * The held-shells footer every result carries (§4): id, state, age, label —
+ * one line each, so the model can see what it holds without a prompt channel
+ * telling it.
+ *
+ * The count states RUNNING against the cap, because that is what the cap
+ * counts. An exited shell stays listed — its output is still readable until
+ * the attachment ends — but it occupies no slot, and folding the two into
+ * one `N of 4` would tell a model with four corpses and one server that it
+ * was over a limit it was nowhere near.
  */
-function liveShells(shells: readonly RuntimeShellRecord[], now: number): string {
+function heldShells(shells: readonly RuntimeShellRecord[], now: number): string {
   if (shells.length === 0) return "This Session holds no background shells.";
+  const running = shells.filter((shell) => shell.state === "running").length;
+  const exited = shells.length - running;
+  const count =
+    exited === 0
+      ? `${running} running of ${SHELL_MAX_PER_SESSION}`
+      : `${running} running of ${SHELL_MAX_PER_SESSION}, ${exited} exited and still readable`;
   return [
-    `Background shells this Session holds (${shells.length} of ${SHELL_MAX_PER_SESSION}):`,
+    `Background shells this Session holds (${count}):`,
     ...shells.map(
       (shell) =>
-        `- ${shell.shellId} · ${standing(shell)} · ${age(now - shell.startedAt)} · ${label(shell)}`,
+        `- ${shell.shellId} · ${shellStanding(shell)} · ${age(now - shell.startedAt)} · ${label(shell)}`,
     ),
   ].join("\n");
 }
@@ -139,12 +158,16 @@ function readText(
   now: number,
 ): string {
   const { shell, output } = outcome;
+  // What was GRANTED, never what was asked for: `tail` is the model's number
+  // and the host bounds it, so echoing the request would promise a megabyte
+  // beside the 64 kB actually handed back.
+  const granted = bytesOf(output);
   const what =
     tail === undefined
-      ? output.length === 0
+      ? granted === 0
         ? "No new output since the last read."
-        : `New output since the last read (${output.length} bytes):`
-      : `The last ${tail} bytes of everything retained (${output.length} bytes):`;
+        : `New output since the last read (${granted} bytes):`
+      : `The last ${granted} bytes of everything retained:`;
   return [
     headline(shell, now),
     what,
@@ -152,7 +175,7 @@ function readText(
     ...(outcome.truncated
       ? ["Volli dropped earlier bytes at its own bound; the output above starts mid-stream."]
       : []),
-    liveShells(outcome.shells, now),
+    heldShells(outcome.shells, now),
   ].join("\n");
 }
 
@@ -289,9 +312,9 @@ export function createShellTool(
                 `Started background shell ${started.shell.shellId} (pid ${started.pid}): ${firstLine(started.shell.command)}`,
                 started.output.length === 0
                   ? "It printed nothing in its first second. Read it later with shell_output."
-                  : `Output so far (${started.output.length} bytes):`,
+                  : `Output so far (${bytesOf(started.output)} bytes):`,
                 ...outputBlock(started.output),
-                liveShells(started.shells, at),
+                heldShells(started.shells, at),
               ].join("\n"),
               detailsOf(started.shell),
             );
@@ -325,9 +348,9 @@ export function createShellTool(
             const at = now();
             return text(
               [
-                `Killed background shell ${killed.shell.shellId} (${standing(killed.shell)}): ${firstLine(killed.shell.command)}`,
+                `Killed background shell ${killed.shell.shellId} (${shellStanding(killed.shell)}): ${firstLine(killed.shell.command)}`,
                 "Its output stays readable with shell_output until this attachment ends.",
-                liveShells(killed.shells, at),
+                heldShells(killed.shells, at),
               ].join("\n"),
               detailsOf(killed.shell),
             );
