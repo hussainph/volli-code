@@ -178,7 +178,7 @@ describe("stopSessionById", () => {
   });
 
   it("re-reads the target by id after the durable write, and reports a failed act", async () => {
-    const snapshots = [projection()];
+    const snapshots = [projection({ attachments: [openAttachment()] })];
     const command = vi.fn(async (request: { command: { kind: string } }) => {
       if (request.command.kind === "adapter.release") throw new Error("executor is gone");
       return { receipt: { status: "accepted" } };
@@ -218,7 +218,7 @@ describe("stopSessionById", () => {
       stopSessionById(byIdPorts([terminal]).ports, { operationId: "op", sessionId: TARGET }),
     ).rejects.toThrow(/terminal session/);
 
-    const refused = byIdPorts([projection()], {
+    const refused = byIdPorts([projection({ attachments: [openAttachment()] })], {
       submit: vi.fn(async () => ({ receipt: { status: "rejected" } })),
     });
     await expect(
@@ -229,6 +229,48 @@ describe("stopSessionById", () => {
       ),
     );
     expect(refused.command).not.toHaveBeenCalled();
+  });
+
+  // Fix-first (review c5714a22): a not-live target — no open structured
+  // attachment, so nothing for the runtime acts to touch — must be refused by
+  // name rather than durably recorded as a quiet no-op success. This is the
+  // "already-idle/done child" case the island's stop button races against.
+  it("refuses a target with no open attachment as not live, and writes nothing", async () => {
+    const notLive = byIdPorts([projection()]);
+    await expect(
+      stopSessionById(notLive.ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(
+      new SuperviseSessionError(
+        `Session ${TARGET.slice(0, 8)} is not live; there is nothing running to stop.`,
+      ),
+    );
+    expect(notLive.submit).not.toHaveBeenCalled();
+    expect(notLive.command).not.toHaveBeenCalled();
+
+    const closed = byIdPorts([
+      projection({ attachments: [openAttachment({ status: "closed", closedAt: 9 })] }),
+    ]);
+    await expect(
+      stopSessionById(closed.ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(/is not live/);
+    expect(closed.submit).not.toHaveBeenCalled();
+  });
+
+  // A previously-recorded stop with its attachment still open is a legitimate
+  // retry of the runtime release (VC-86) — "live" is about the attachment, not
+  // about `stopped`, so this must not be refused.
+  it("does not refuse a retry of a previously-stopped, still-live target", async () => {
+    const retry = byIdPorts([
+      projection({
+        stopped: { at: 5, reason: null, by: { kind: "user" } },
+        attachments: [openAttachment()],
+        turnActive: true,
+      }),
+    ]);
+    await expect(
+      stopSessionById(retry.ports, { operationId: "op", sessionId: TARGET }),
+    ).resolves.toMatchObject({ previouslyStopped: true, interrupted: true, released: true });
+    expect(retry.submit).not.toHaveBeenCalled();
   });
 });
 

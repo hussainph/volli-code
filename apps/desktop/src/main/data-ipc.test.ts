@@ -1840,6 +1840,26 @@ describe("volli:session-stop", () => {
     });
   });
 
+  // Fix-first (review c5714a22): a not-live target — no open attachment, so
+  // nothing for the runtime acts to touch — is refused by name through the
+  // door's ordinary `{ ok: false }` shape, the same as every other mutation's
+  // refusal, and NOT durably recorded as a quiet success.
+  it("refuses a not-live target as an ordinary ok:false, and writes nothing", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const { sessionId } = await structuredSession(sessionEngine);
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
+    );
+
+    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId });
+
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("is not live") });
+    const projection = await sessionEngine.getSession({ sessionId });
+    expect(projection?.stopped).toBeNull();
+  });
+
   it("refuses without a runtime, and words an unknown session as the operation does", async () => {
     const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
     handlers.clear();

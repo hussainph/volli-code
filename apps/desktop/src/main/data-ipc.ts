@@ -1071,8 +1071,9 @@ export function registerDataIpcHandlers(
 
     // The person's stop (VC-269): the agent tool's three acts behind a door
     // the renderer can reach, with `{ kind: "user" }` as the durable actor.
-    // A refusal the operation words (unknown id, a terminal session, an
-    // unrecorded stop) is the error; anything else is a bug and throws.
+    // A refusal the operation words (unknown id, a terminal session, a
+    // not-live target, an unrecorded stop) is the error; anything else is a
+    // bug and throws.
     "volli:session-stop": async (input: SessionStopInput): Promise<SessionStopResult> => {
       const runtime = options.sessionRuntime;
       if (runtime === undefined) {

@@ -181,6 +181,17 @@ export interface StopSessionByIdInput {
  * as the tool, with `{ kind: "user" }` as the durable actor and the target
  * named by id. No project bound and no self-guard — a person is not a Session,
  * and the renderer only ever names Sessions it is already showing.
+ *
+ * NOT-LIVE IS A NAMED REFUSAL (fix-first, review c5714a22), checked before the
+ * durable write: a target with no open structured attachment has nothing for
+ * the runtime acts to touch, and the island's stop button races the row's own
+ * state (it shows only while the child reads `working`) — by the time the
+ * click reaches here the child may already have gone idle or fully closed.
+ * Recording `session.stop` anyway would durably stamp a no-op as a quiet
+ * success; refusing by name lets the door word it and the renderer toast it,
+ * the same as every other mutation. A target `stopped` once already but whose
+ * attachment is still open is a legitimate RETRY of the runtime release, not
+ * a not-live target, so liveness reads the attachment alone.
  */
 export async function stopSessionById(
   ports: StopSessionByIdPorts,
@@ -195,6 +206,11 @@ export async function stopSessionById(
   if (terminalSessionRecord(target) !== null) {
     throw new SuperviseSessionError(
       "That is a terminal session; stop addresses structured chat Sessions only.",
+    );
+  }
+  if (latestStructuredAttachment(target.attachments)?.status !== "open") {
+    throw new SuperviseSessionError(
+      `Session ${shortSessionId(input.sessionId)} is not live; there is nothing running to stop.`,
     );
   }
   return stopResolvedSession(ports, target, read, {
