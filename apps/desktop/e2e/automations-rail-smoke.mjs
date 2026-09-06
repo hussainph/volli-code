@@ -6,10 +6,13 @@
  *
  * What it proves, in dependency order:
  *   1. With no Automations in the project at all, the rail still draws its run
- *      control, says so in one line, and links to the Automations page — the
- *      button is never hidden when empty.
+ *      control, says so in one line, and its header's door reaches the
+ *      Automations page — the button is never hidden when empty, and the empty
+ *      state itself carries no link (VC-257: the word "Automations" once sat
+ *      two lines under the eyebrow AUTOMATIONS).
  *   2. With a column armed, the split button's default half names that
- *      Automation, because the Ticket sits in that column.
+ *      Automation, because the Ticket sits in that column — and the header's
+ *      door is still there, which the old empty-state link never was.
  *   3. The caret menu is that column's Offered list plus "Run once…" — a
  *      switched-off Automation among them, offered with its own note rather
  *      than withheld (running by hand is universal, VC-112).
@@ -151,24 +154,31 @@ try {
 
   const rail = () => page.locator('[data-testid="ticket-rail-automations"]');
 
+  /** The header's door to the page — the rail's one, in every state (VC-257). */
+  const pageDoor = () => rail().getByRole("button", { name: "Open Automations", exact: true });
+
   await must(
     1,
-    "with nothing to run, the control is still there and links to the page",
+    "with nothing to run, the control is still there and the header's door reaches the page",
     async () => {
       await openTicket();
       const control = page.getByLabel("Run Run once on this ticket");
       await control.waitFor({ timeout: 15000 });
       const said = await rail().innerText();
-      // The door out of the empty state is the page, because the rail never
-      // authors (VC-112).
-      await rail().getByRole("button", { name: "Automations", exact: true }).click();
+      // The empty state is one line and never a door: the word "Automations"
+      // must not appear under the sentence as a control of its own (VC-257).
+      const strayLinks = await rail()
+        .getByRole("button", { name: "Automations", exact: true })
+        .count();
+      // The door is the header's, because the rail never authors (VC-112).
+      await pageDoor().click();
       await page
         .getByRole("heading", { name: "Automations", exact: true })
         .waitFor({ timeout: 15000 });
       await backToBoard();
       return {
-        ok: said.includes("No automations in this project yet."),
-        detail: said.replaceAll("\n", " ").slice(0, 200),
+        ok: said.includes("No automations in this project yet.") && strayLinks === 0,
+        detail: `${said.replaceAll("\n", " ").slice(0, 200)} · stray "Automations" links: ${strayLinks}`,
       };
     },
   );
@@ -223,7 +233,15 @@ try {
       await openTicket();
       const armed = page.getByLabel("Run Review sweep on this ticket");
       await armed.waitFor({ timeout: 15000 });
-      return { ok: true, detail: "Doing is armed with Review sweep, and the button says so" };
+      // The door survives the project having records — the old empty-state
+      // link did not, which left a rail with something to run and no way to
+      // the page that authors it (VC-257).
+      await pageDoor().waitFor({ timeout: 5000 });
+      return {
+        ok: true,
+        detail:
+          "Doing is armed with Review sweep, the button says so, and the header's door is there",
+      };
     },
   );
 
