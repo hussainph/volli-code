@@ -13,7 +13,12 @@ import {
   type ModelSelection,
 } from "@volli/shared";
 
-import { createAutoTitler, type AutoTitleSession, type AutoTitlerOptions } from "./auto-title";
+import {
+  createAutoTitler,
+  type AutoTitleRequest,
+  type AutoTitleSession,
+  type AutoTitlerOptions,
+} from "./auto-title";
 
 const SESSION_ID = "session-1";
 
@@ -70,7 +75,7 @@ interface Harness {
   retitle: ReturnType<typeof vi.fn<AutoTitlerOptions["retitle"]>>;
   recordUsage: ReturnType<typeof vi.fn<AutoTitlerOptions["recordUsage"]>>;
   inspectModelAccess: ReturnType<typeof vi.fn<AutoTitlerOptions["inspectModelAccess"]>>;
-  refine(input: { firstMessage?: string; heuristicTitle?: string }): Promise<void>;
+  refine(input: Partial<Omit<AutoTitleRequest, "sessionId">>): Promise<void>;
 }
 
 function harness(
@@ -186,6 +191,20 @@ describe("createAutoTitler().refine", () => {
     const sent = h.completeUtility.mock.calls[0]?.[0].user ?? "";
     expect(sent).toContain('<ticket id="VC-52">');
     expect(sent).toContain("Rate limit the public search endpoint");
+  });
+
+  it("marks a Run's reusable Instructions as Automation context", async () => {
+    const h = harness({}, session({ title: "Two-opinion review" }));
+    await h.refine({
+      firstMessage: "Review this change from two perspectives",
+      heuristicTitle: "Two-opinion review",
+      automation: { name: "Two-opinion review" },
+    });
+    expect(h.completeUtility.mock.calls[0]?.[0].user).toBe(
+      autoTitlePrompt("Review this change from two perspectives", TICKET, {
+        name: "Two-opinion review",
+      }),
+    );
   });
 
   it("reads no ticket for a project chat", async () => {

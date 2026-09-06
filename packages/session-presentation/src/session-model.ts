@@ -21,6 +21,15 @@ export interface QueuedMessage {
   id: string;
   text: string;
   /**
+   * A non-null launch title this opening message is allowed to refine.
+   *
+   * Ordinarily only a title-less Session is auto-named. Composed starts seed a
+   * useful fallback before their stock kickoff can deliver, so they carry that
+   * exact title here as the byte-identical guard baseline. Any other current
+   * title is a person's rename and remains untouchable.
+   */
+  autoTitleBaseline?: string;
+  /**
    * Skill bodies the text's `/slug` references resolved to at submit — the
    * message-scoped half of the message, delivered beside the text as RESOURCE
    * blocks rather than spliced into it (VC-49). Carried on the message object
@@ -53,6 +62,9 @@ export function enqueueMessage(
   const entry: QueuedMessage = {
     id: message.id,
     text,
+    ...(message.autoTitleBaseline === undefined
+      ? {}
+      : { autoTitleBaseline: message.autoTitleBaseline }),
     ...(message.resources === undefined ? {} : { resources: message.resources }),
     ...(attachments.length === 0 ? {} : { attachments }),
   };

@@ -1,5 +1,5 @@
 /**
- * Model-call Session titling (VC-81): the one hook both Session doors feed.
+ * Model-call Session titling (VC-81): the one hook every auto-title door feeds.
  *
  * The shipped heuristic names a Session instantly and stays the offline,
  * unconfigured and failed-call answer. Behind it, one utility completion asks
@@ -43,6 +43,7 @@ import {
   resolveDefaultModel,
   sanitizeAutoTitle,
   UtilityCompletionError,
+  type AutoTitleAutomation,
   type AutoTitleTicket,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -95,10 +96,10 @@ export interface AutoTitlerOptions {
 }
 
 /**
- * One refinement request — the shape both doors send and every seam between
+ * One refinement request — the shape every door sends and every seam between
  * them passes along. Declared once here and imported by the CLI door, the IPC
- * contract and the renderer handler, so the triple never travels as three
- * structurally-identical inline types.
+ * contract, the renderer handler and the Automation runner, so the common
+ * fields never travel as structurally-identical inline types.
  */
 export interface AutoTitleRequest {
   sessionId: string;
@@ -106,6 +107,8 @@ export interface AutoTitleRequest {
   firstMessage: string;
   /** The heuristic title the door wrote, the byte-identical guard's baseline. */
   heuristicTitle: string;
+  /** Present when the message is reusable Automation Instructions rather than a one-off turn. */
+  automation?: AutoTitleAutomation;
 }
 
 export interface AutoTitler {
@@ -231,7 +234,7 @@ export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
         // Capped and delimited: a title is six words, and the opening decides
         // them. A pasted file behind the question is billed input that buys
         // nothing, and unbounded text is where instruction-shaped content hides.
-        user: autoTitlePrompt(request.firstMessage, ticket),
+        user: autoTitlePrompt(request.firstMessage, ticket, request.automation),
         signal,
       });
     } catch (failure) {

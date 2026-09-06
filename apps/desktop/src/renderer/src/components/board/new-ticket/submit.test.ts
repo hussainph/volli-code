@@ -129,6 +129,7 @@ describe("runKickoff", () => {
     // Brief at attach, so the opening turn is only the instruction to begin.
     expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", {
       title: "Work on VC-42",
+      refineTitle: true,
       message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
       model: MODEL,
     });
@@ -178,6 +179,7 @@ describe("runKickoff", () => {
     // default", and an explicit undefined key would be a second way to say it.
     expect(deps.startChat).toHaveBeenCalledWith("p1", "tk", {
       title: "Work on VC-7",
+      refineTitle: true,
       message: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
     });
   });
