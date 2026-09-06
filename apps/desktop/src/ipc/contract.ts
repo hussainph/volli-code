@@ -1563,6 +1563,44 @@ export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
 export type BrowserTabStateEvent =
   | { tab: BrowserTabState; closedTabId?: never }
   | { tab?: never; closedTabId: string };
+// ---- background shells (VC-270) ---------------------------------------------
+
+/**
+ * Renderer-safe state for one background shell a Session started. Product
+ * identity and bounded chrome facts cross IPC; the process handle, the
+ * environment it was spawned with and its output never do — the tail is a
+ * separate, explicit read.
+ *
+ * Shells are live resources, not ledger facts: they die with the attachment
+ * that started them, do not survive a relaunch, and the tool calls that
+ * started and read them are the durable record.
+ */
+export interface BackgroundShellState {
+  /** Host-minted opaque id, never a pid. */
+  shellId: string;
+  sessionId: string;
+  projectId: string;
+  ticketId: string | null;
+  /** The command as the model gave it; the island shows its first line. */
+  command: string;
+  title: string | null;
+  state: "running" | "exited";
+  /** Exit code once exited; `null` while running and when a signal ended it. */
+  code: number | null;
+  signal: string | null;
+  startedAt: number;
+  exitedAt: number | null;
+  pid: number;
+}
+
+/**
+ * A complete shell snapshot pushed on start and on exit, or the id of a shell
+ * the host forgot when its Session's attachment ended.
+ */
+export type BackgroundShellStateEvent =
+  | { shell: BackgroundShellState; removedShellId?: never }
+  | { shell?: never; removedShellId: string };
+
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
