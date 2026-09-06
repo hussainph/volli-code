@@ -9,9 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { toast } from "sonner";
 
 import {
+  childSessionIds,
   createProjectSessionsStore,
+  sessionTitleOf,
   subscribeProjectSessionActivity,
   useProjectSessionsStore,
+  type ProjectSessionRows,
 } from "./project-sessions";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 
@@ -410,5 +413,37 @@ describe("project-sessions store", () => {
     store.getState().setActiveHarness("p1", "unknown-session", "codex");
     expect(store.getState().byProject.p1).toBe(patched);
     expect(before).not.toBe(patched);
+  });
+});
+
+/**
+ * A chat's Browser Tab inventory counts its children's tabs too (VC-238), and
+ * a child is a Session whose provenance names this one as parent — the same
+ * fact the sidebar's mark draws from, read here rather than re-derived.
+ */
+describe("childSessionIds", () => {
+  it("names the Sessions whose provenance points at this one, and their titles", () => {
+    const rows: ProjectSessionRows = {
+      terminal: [],
+      chat: [
+        chatRecord({ sessionId: "parent", title: "Parent" }),
+        chatRecord({ sessionId: "child-a", title: "Explore the seam" }),
+        chatRecord({ sessionId: "child-b", title: "Write the tests" }),
+        chatRecord({ sessionId: "cousin", title: "Cousin" }),
+      ],
+      provenance: {
+        "child-a": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
+        "child-b": { kind: "session", parentSessionId: "parent", parentTitle: "Parent" },
+        cousin: { kind: "session", parentSessionId: "other", parentTitle: null },
+        parent: { kind: "automation", automationName: "Nightly" },
+      },
+    };
+
+    expect([...childSessionIds(rows, "parent")]).toEqual(["child-a", "child-b"]);
+    expect(childSessionIds(rows, "cousin").size).toBe(0);
+    expect(childSessionIds(undefined, "parent").size).toBe(0);
+    expect(sessionTitleOf(rows, "child-a")).toBe("Explore the seam");
+    expect(sessionTitleOf(rows, "nobody")).toBeNull();
+    expect(sessionTitleOf(undefined, "child-a")).toBeNull();
   });
 });

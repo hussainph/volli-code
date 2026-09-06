@@ -775,6 +775,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             // Sessions, which is what makes their venue the main checkout.
             ticketId={null}
             onOpenFile={openProjectFile}
+            visible={visible}
           />
         ) : null}
         {paneBrowserTab !== undefined ? (

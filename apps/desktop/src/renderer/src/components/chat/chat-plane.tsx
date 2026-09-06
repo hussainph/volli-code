@@ -139,6 +139,27 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { useShallow } from "zustand/react/shallow";
+
+import type { BrowserTabState } from "../../../../ipc/contract";
+import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { BrowserPreview } from "@renderer/components/browser/browser-preview";
+import {
+  BrowserCardHostContext,
+  type BrowserCardHost,
+} from "@renderer/components/browser/browser-tab-card";
+import { BrowserTabsChip } from "@renderer/components/browser/browser-tabs-chip";
+import {
+  browserTabOwnerLabel,
+  previewedBrowserTab,
+  sessionBrowserTabs,
+  useBrowserTabsStore,
+} from "@renderer/stores/browser-tabs";
+import {
+  childSessionIds,
+  sessionTitleOf,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -211,6 +232,12 @@ export interface ChatPlaneProps {
   /** Project scope for Model Access and file navigation. */
   projectId: string;
   /**
+   * Whether the surface around this chat is on screen. Only the pinned
+   * Browser preview reads it (VC-238): a native view ignores the CSS that
+   * stands the rest of the plane down, so it has to be told. Default true.
+   */
+  visible?: boolean;
+  /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
    * The Session's SCOPE, handed down rather than looked up: both hosts already
@@ -224,8 +251,16 @@ export interface ChatPlaneProps {
   store?: ChatSessionsStore;
 }
 
-export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }: ChatPlaneProps) {
+export function ChatPlane({
+  sessionId,
+  projectId,
+  ticketId,
+  onOpenFile,
+  store,
+  visible = true,
+}: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
+  const browser = useChatBrowserTabs(sessionId, projectId);
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
@@ -1011,6 +1046,21 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" style={planeStyle}>
+      {/* The chat has no header, so the inventory of the tabs its Sessions
+          hold sits at the plane's top-right corner (VC-238 §8); absent while
+          there is nothing to count. */}
+      {browser !== null && browser.tabs.length > 0 ? (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end px-3 pt-2">
+          <BrowserTabsChip
+            className="pointer-events-auto bg-background/70 shadow-raised backdrop-blur-md"
+            tabs={browser.tabs}
+            api={browser.api}
+            sessionId={sessionId}
+            sessionTitle={browser.sessionTitle}
+          />
+        </div>
+      ) : null}
+      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
       <FileMentionProvider onOpenFile={onOpenFile}>
         <Conversation className="min-h-0 bg-background">
           {/* The bottom padding clears the composer plus the h-16 gradient over
@@ -1070,6 +1120,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
           ) : null}
         </Conversation>
       </FileMentionProvider>
+      </BrowserCardHostContext.Provider>
 
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the
@@ -1079,6 +1130,17 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
         className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
       >
         <ContentColumn>
+          {/* The tab a person asked to see, pinned here because this block is
+              the one part of the chat that does not scroll (VC-238). Measured
+              with the composer, so the transcript's bottom padding clears it. */}
+          {browser !== null && browser.preview !== null ? (
+            <BrowserPreview
+              tab={browser.preview}
+              api={browser.api}
+              ownerLabel={browser.ownerLabel(browser.preview)}
+              visible={visible}
+            />
+          ) : null}
           {/* Above whatever the slot holds, card included. A card answers the
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
@@ -1143,6 +1205,55 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
       </div>
     </div>
   );
+}
+
+/* ------------------------------------------------------------ browser tabs */
+
+/**
+ * What this chat knows about the Browser Tabs its Sessions hold (VC-238): the
+ * inventory the chip counts, the one tab pinned as its preview, and the host
+ * a row's card needs to act. Null where there is no bridge — the UI lab — so
+ * every browser surface in the chat simply does not exist there.
+ *
+ * Children are read off the project listing's provenance, the same fact the
+ * sidebar's mark draws; a child's tabs count here because a parent that
+ * started a Session is answerable for the tabs it opened.
+ */
+function useChatBrowserTabs(
+  sessionId: string,
+  projectId: string,
+): {
+  api: BrowserApi;
+  tabs: BrowserTabState[];
+  preview: BrowserTabState | null;
+  sessionTitle(sessionId: string): string | null;
+  ownerLabel(tab: BrowserTabState): string;
+  cardHost: BrowserCardHost;
+} | null {
+  const api = typeof window === "undefined" ? undefined : window.api?.browser;
+  const rows = useProjectSessionsStore((state) => state.byProject[projectId]);
+  const children = React.useMemo(() => childSessionIds(rows, sessionId), [rows, sessionId]);
+  const tabs = useBrowserTabsStore(
+    useShallow((state) => sessionBrowserTabs(state.byId, sessionId, children)),
+  );
+  const preview = useBrowserTabsStore((state) => previewedBrowserTab(state.byId, sessionId));
+  const sessionTitle = React.useCallback(
+    (id: string) => sessionTitleOf(rows, id),
+    [rows],
+  );
+  const cardHost = React.useMemo(
+    () => (api === undefined ? null : { sessionId, api, sessionTitle }),
+    [api, sessionId, sessionTitle],
+  );
+  if (api === undefined || cardHost === null) return null;
+  return {
+    api,
+    tabs,
+    preview,
+    sessionTitle,
+    ownerLabel: (tab) => browserTabOwnerLabel(tab, sessionId, sessionTitle),
+    cardHost,
+  };
 }
 
 /* ------------------------------------------------------------ model access */
