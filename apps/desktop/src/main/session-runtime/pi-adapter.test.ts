@@ -858,6 +858,120 @@ describe("Pi native adapter attach", () => {
     await expect(attempt).rejects.toThrow(/Browser/);
   });
 
+  it("offers no shell tool to a Session whose host wired none", async () => {
+    const { runtime } = await attached();
+    expect("shell" in runtime.spec).toBe(false);
+  });
+
+  it("binds no shell port to a Session frozen before background shells existed", async () => {
+    // The other half of the guard above. The host carries a port and would
+    // happily answer, but this Session's frozen surface does not name the
+    // shell tools — so it must not gain them. The tool array is what the
+    // provider Cache Prefix is computed over, and a Session that silently
+    // grew three names would lose its prefix on the next turn.
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
+      // The default surface: read, edit, write, execute, ask_user.
+      resolveShellPort: () => ({
+        start: unusedPortMethod,
+        output: unusedPortMethod,
+        kill: unusedPortMethod,
+        dispose,
+      }),
+    });
+
+    expect("shell" in runtime.spec).toBe(false);
+    expect(runtime.spec.tools.tools).not.toContain("shell_start");
+
+    // And the port it never bound is still released with the attachment, so
+    // a port resolved per attachment cannot outlive one.
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("hands the desktop's shell port to a recorded surface, scoped to the Session, and disposes it on release (VC-270)", async () => {
+    const scopes: unknown[] = [];
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "shell_start",
+          "shell_output",
+          "shell_kill",
+        ],
+      }),
+      resolveShellPort: (scope) => {
+        scopes.push(scope);
+        return {
+          start: unusedPortMethod,
+          output: async () => ({
+            shell: {
+              shellId: "sh-1",
+              command: "pnpm dev",
+              title: null,
+              state: "running",
+              code: null,
+              signal: null,
+              startedAt: 1,
+              exitedAt: null,
+            },
+            output: "",
+            truncated: false,
+            shells: [],
+          }),
+          kill: unusedPortMethod,
+          dispose,
+        };
+      },
+    });
+
+    // The scope is the adapter's word: project, Ticket, Session, attachment
+    // and the directory the Engine prepared — never a value the model names.
+    expect(scopes).toEqual([
+      {
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        sessionId: SESSION_ID,
+        attachmentId: ATTACHMENT_ID,
+        workspacePath: "/work/volli/.worktrees/VC-12",
+      },
+    ]);
+    const read = await runtime.spec.shell?.output({
+      shellId: "sh-1",
+      signal: new AbortController().signal,
+    });
+    expect(read?.shell.shellId).toBe("sh-1");
+    expect(dispose).not.toHaveBeenCalled();
+
+    // Every shell the Session started dies with the attachment — the same
+    // release path the Browser port's dispose rides.
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("refuses attachment rather than binding a frozen shell surface the host cannot answer", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "shell_start",
+          "shell_output",
+          "shell_kill",
+        ],
+      }),
+    });
+    await expect(attempt).rejects.toThrow(/shell/);
+  });
+
   it("resolves the ports once per attachment rather than per turn", async () => {
     let resolutions = 0;
     const { runtime } = await attached({

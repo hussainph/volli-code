@@ -123,6 +123,17 @@ export const NON_CODING_TOOL_IDS = [
    * shorter list and every position in it.
    */
   "todo_write",
+  // The three names below are one capability — the background shell port
+  // (VC-270) — split per intent for the browser tools' reason. Appended after
+  // `todo_write`, which reached `main` first, and never reordered: the Cache
+  // Prefix is computed over the serialized tool array, so a Session frozen
+  // with the shorter list must keep every position in it.
+  /** Starting a command that runs beside the turn, and reading its first second of output. */
+  "shell_start",
+  /** Reading what a background shell has printed since the last read, or its tail. */
+  "shell_output",
+  /** Ending a background shell. */
+  "shell_kill",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

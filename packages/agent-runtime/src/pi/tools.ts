@@ -51,6 +51,7 @@ import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import { parseTodoList, sessionToolBindings, todoListMarkdown, verbEntry } from "@volli/shared";
 import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { createShellTool } from "./shell-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
 import type {
@@ -225,6 +226,12 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         // proven present — `sessionToolBindings` offered these names only
         // because the port carries both.
         return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
+      case "shell_start":
+      case "shell_output":
+      case "shell_kill":
+        // Three names, one port, one factory (VC-270), on the browser arms'
+        // terms. See ./shell-tools.ts for what a background shell is.
+        return createShellTool(binding.tool, binding.port, spec.signal);
       default:
         // The verb half, and the one branch that cannot be a case label: its
         // members are registry data, so there is no closed set of literals to

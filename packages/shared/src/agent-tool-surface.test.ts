@@ -79,6 +79,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_acquire",
       "browser_release",
       "todo_write",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
       "session.start",
       "ticket.await",
       "automation.run",
@@ -119,6 +122,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_acquire",
       "browser_release",
       "todo_write",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
       "ticket.await",
       "session.delegate",
     ]);
@@ -163,6 +169,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       // may also take and give back a tab's hold.
       "browser_acquire",
       "browser_release",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
     ]);
   });
 

@@ -148,8 +148,13 @@ function containsSegments(root: readonly string[], candidate: readonly string[])
  *
  * `/ws-evil` is not inside `/ws`, and on a case-sensitive volume neither is
  * `/WS/secret`.
+ *
+ * Exported for the one caller outside the pack that asks the same question
+ * — the background shell port's `cwd` rule (VC-270) — so the workspace
+ * containment rule has one spelling. Both paths must already be absolute
+ * and lexically resolved; this compares components and probes nothing.
  */
-function containsPath(root: string, candidate: string): boolean {
+export function containsPath(root: string, candidate: string): boolean {
   return containsSegments(pathSegments(root), pathSegments(candidate));
 }
 
