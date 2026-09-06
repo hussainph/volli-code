@@ -270,6 +270,15 @@ describe("plan", () => {
     expect(planStepState(PLAN, 2)).toBe("pending");
   });
 
+  it("answers for a row that is not there, rather than throwing at a client", () => {
+    // The list a client is drawing and the plan it asks about can disagree for
+    // a frame: a `todo_write` call replaces the WHOLE list, so a shorter one
+    // can land between a render and this call. `pending` is the answer that
+    // draws nothing alarming for a row on its way out.
+    expect(planStepState(PLAN, 99)).toBe("pending");
+    expect(planStepState(PLAN, -1)).toBe("pending");
+  });
+
   it("draws work finished out of order where it actually happened (VC-6)", () => {
     // The whole reason `IslandStep` carries a state. Every real todo tool lets
     // the model finish the third item first; counting completed prefixes drew

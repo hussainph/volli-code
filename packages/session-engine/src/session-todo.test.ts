@@ -114,6 +114,45 @@ describe("currentTodoList", () => {
       currentTodoList([todoCall([{ content: "Read", status: "pending" }], { kind: "read-file" })]),
     ).toBeNull();
   });
+
+  it("keeps the last real list when a plan call carries something that is not one", () => {
+    // The kind says `plan` but the arguments are not a todo payload — a second
+    // harness whose own plan tool takes a different shape, or a model that
+    // filled the call in wrong. It must not COUNT as a list: treating an
+    // unreadable call as the current plan would blank a good one.
+    const unreadable: UIMessage = {
+      id: "message-odd",
+      role: "assistant",
+      parts: [
+        {
+          type: "dynamic-tool",
+          toolName: "volli.activity",
+          toolCallId: "call-odd",
+          state: "output-available",
+          input: { steps: ["not a todo payload"] },
+          output: { ok: true },
+          toolMetadata: {
+            [ACTIVITY_METADATA_KEY]: {
+              kind: "plan",
+              nativeToolName: "update_plan",
+              subject: { label: null, path: null, lineRange: null },
+              outcome: null,
+              startedAt: null,
+              endedAt: null,
+            },
+          },
+        },
+      ],
+    } as UIMessage;
+
+    expect(
+      currentTodoList([
+        todoCall([{ content: "Read the ticket", status: "completed" }]),
+        unreadable,
+      ]),
+    ).toEqual([{ content: "Read the ticket", status: "completed" }]);
+    expect(currentTodoList([unreadable])).toBeNull();
+  });
 });
 
 const PROVENANCE = {
@@ -149,13 +188,36 @@ function transcriptEvent(sequence: number, reference: TranscriptReference): Sess
   };
 }
 
-/** A ledger holding these messages in order, and the ports that read it back. */
+/** An event that carries no transcript message, as most of a real ledger does. */
+function turnEvent(sequence: number): SessionEvent {
+  return {
+    id: `event-${sequence}`,
+    sessionId: "session-1",
+    sequence,
+    occurredAt: sequence * 10,
+    recordedAt: sequence * 10,
+    provenance: PROVENANCE,
+    payload: { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
+  } as SessionEvent;
+}
+
+/**
+ * A ledger holding these messages in order, and the ports that read it back.
+ *
+ * Every message is preceded by a `turn.started`, because a real ledger is
+ * mostly events that carry no transcript at all and the walk has to step over
+ * them rather than ask the blob store for a reference that is not there.
+ */
 async function ledgerOf(messages: readonly UIMessage[]) {
   const store = createInMemoryTranscriptArtifactStore();
   const events: SessionEvent[] = [];
-  for (const [index, message] of messages.entries()) {
+  let sequence = 0;
+  for (const message of messages) {
     const reference = await store.write(artifactOf(message));
-    events.push(transcriptEvent(index + 1, reference));
+    sequence += 1;
+    events.push(turnEvent(sequence));
+    sequence += 1;
+    events.push(transcriptEvent(sequence, reference));
   }
   return {
     listEvents: async () => events,
