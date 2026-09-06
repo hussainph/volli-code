@@ -97,11 +97,8 @@ export function useActivityIsland(
   const tabs = useIslandTabs(sessionId, projectId, push);
   const plan = useIslandPlan(sessionId, deps.store);
   const shells = useIslandShells(sessionId, { openOutput: deps.openShellOutput });
-  const agents = useIslandAgents(sessionId, projectId, push, {
-    ...(deps.store === undefined ? {} : { store: deps.store }),
-    ...(deps.peekSession === undefined ? {} : { peekSession: deps.peekSession }),
-    ...(deps.openSession === undefined ? {} : { openSession: deps.openSession }),
-  });
+  // The agents feed's deps are a subset of the mount's, under the same names.
+  const agents = useIslandAgents(sessionId, projectId, push, deps);
 
   // The shell feed's latest transition, relayed into the shared channel.
   const shellFlash = shells.flash;

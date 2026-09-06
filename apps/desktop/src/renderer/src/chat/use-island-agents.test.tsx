@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { ChatSessionRecord } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import type { IslandFlash } from "@volli/session-presentation";
-import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { createChatSessionsStore, useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import type { ChatSessionsStore } from "./use-session-controller";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -108,14 +109,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-/** Mounts the feed and reports its latest slice and every flash it pushed. */
-async function mount(deps: IslandAgentsDeps = {}) {
-  const store = deps.store ?? chatStore();
+/**
+ * Mounts the feed and reports its latest slice and every flash it pushed.
+ * `store: null` is the app: no lab store, the feed reads the global one.
+ */
+async function mount(
+  deps: Omit<IslandAgentsDeps, "store"> & { store?: ChatSessionsStore | null } = {},
+) {
+  const { store: given, ...doors } = deps;
+  const store = given === null ? undefined : (given ?? chatStore());
   const seen: { feed: IslandAgentsFeed; flash: IslandFlash | null }[] = [];
   const flashes: IslandFlash[] = [];
   function Probe() {
     const channel = useIslandFlash();
-    const feed = useIslandAgents(SESSION, PROJECT, channel.push, { ...deps, store });
+    const feed = useIslandAgents(SESSION, PROJECT, channel.push, {
+      ...doors,
+      ...(store === undefined ? {} : { store }),
+    });
     seen.push({ feed, flash: channel.flash });
     if (channel.flash !== null && flashes.at(-1)?.id !== channel.flash.id) {
       flashes.push(channel.flash);
@@ -226,6 +236,15 @@ describe("what a row says", () => {
     await act(async () => store.setState({ openTabs: { [PROJECT]: ["a"] } }));
     expect(probe.agents().map((one) => one.promoted)).toEqual([true, false]);
   });
+
+  it("reads promotion off the app's own store when the mount supplies none", async () => {
+    listing([record({ sessionId: "a" })]);
+    useChatSessionsStore.setState({ openTabs: { [PROJECT]: ["a"] } });
+    const probe = await mount({ store: null });
+    expect(probe.agents().map((one) => one.promoted)).toEqual([true]);
+    await act(async () => useChatSessionsStore.setState({ openTabs: {} }));
+    expect(probe.agents().map((one) => one.promoted)).toEqual([false]);
+  });
 });
 
 describe("the verbs", () => {
@@ -281,6 +300,24 @@ describe("the verbs", () => {
     probe.latest().feed.actions.stopAgent("a");
     await act(async () => {});
     expect(toastError).toHaveBeenLastCalledWith("Could not stop subagent: bridge down");
+  });
+
+  it("stops nothing where there is no bridge, and names a row that already left as a subagent", async () => {
+    listing([record({ sessionId: "a" })]);
+    vi.stubGlobal("api", undefined);
+    const probe = await mount();
+    probe.latest().feed.actions.stopAgent("a");
+    await act(async () => {});
+    expect(toastError).not.toHaveBeenCalled();
+
+    const stop = vi.fn(async () => ({ ok: false, error: "Unknown session." }));
+    vi.stubGlobal("api", { sessions: { stop } });
+    probe.latest().feed.actions.stopAgent("gone");
+    await act(async () => {});
+    expect(stop).toHaveBeenCalledWith({ sessionId: "gone" });
+    expect(probe.flashes.map((flash) => [flash.event, flash.payload])).toEqual([
+      ["Stop refused", "Subagent"],
+    ]);
   });
 
   it("reports the runtime acts a durable stop could not complete", async () => {

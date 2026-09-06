@@ -98,7 +98,11 @@ ledger fact). When its first turn completes a notice from Volli — the child's
 handle, state and title, none of its words — is steered into the parent, and the
 parent reads the answer with `volli session answer <handle>`, so the child's
 prose reaches it as a tool result and never as its user; the parent is never
-parked on it, and stopping the parent stops its children. Write-capable children
+parked on it, and stopping the parent stops its children. In the parent's chat
+its children show in the Activity Island's agents cluster (VC-269): one chip per
+child, working / done / failed / stopped, where a row peeks the child's
+transcript read-only in an overlay, opens it as a full tab, or stops it as the
+person (`sessions.stop`, recorded with the `user` actor). Write-capable children
 in a shared tree are VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
