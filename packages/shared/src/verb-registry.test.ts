@@ -14,6 +14,7 @@ import {
   verbTier,
 } from "./verb-registry";
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
+import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 
 /**
  * The socket surface as VC-85, VC-163 and VC-185 leave it. VC-85 adds the typed
@@ -569,6 +570,57 @@ describe("the registry table", () => {
     for (const name of ["project", "session", "actor", "model", "reasoning"]) {
       expect(tool?.input.map((field) => field.name)).not.toContain(name);
     }
+  });
+
+  // VC-259: a delegating Session names a KIND of work, not an exact model id.
+  // The tier field is the tool's rendering of the same fixed set Settings and
+  // `volli model list` read, so the schema is pinned to that list rather than
+  // to a copy of it.
+  it("lets session_start name a model tier as the alternative to an exact model", () => {
+    const tool = verbEntry("session.start")?.tool;
+    const tier = tool?.input.find((field) => field.name === "tier");
+    expect(tier).toBeDefined();
+    expect(tier?.required).toBeUndefined();
+    expect(tier?.type === "enum" ? tier.values : []).toEqual(AGENT_MODEL_TIERS);
+    // Every tier says in one line what it is for — the same line its Settings
+    // row's (i) carries — and the field says it is an alternative to `model`,
+    // which is what the door refuses when both arrive.
+    for (const name of AGENT_MODEL_TIERS) {
+      expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
+    }
+    expect(tier?.description).toMatch(/instead of `model`/);
+    expect(tool?.input.map((field) => field.name)).toEqual([
+      "ticket",
+      "message",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
+  });
+
+  // Documentation parity only: `session.start` has had no shell door since
+  // VC-163, so the option table is what the reference prints beside the tool
+  // schema, never argv the shell would parse.
+  it("lists --tier beside --model in session.start's option table", () => {
+    const options = verbEntry("session.start")?.options ?? [];
+    const tier = options.find((option) => option.name === "--tier");
+    expect(tier).toMatchObject({ kind: "value", placeholder: "<tier>" });
+    expect(tier?.values).toBe(`valid: ${AGENT_MODEL_TIERS.join(", ")}`);
+    expect(options.map((option) => option.name)).toEqual([
+      "-m",
+      "--message",
+      "--title",
+      "--model",
+      "--tier",
+      "--reasoning",
+    ]);
+  });
+
+  it("tells model list readers the tier table is printed beside the catalog", () => {
+    const notes = verbEntry("model.list")?.notes ?? [];
+    expect(notes.some((note) => /tier/.test(note))).toBe(true);
+    expect(notes.some((note) => note.includes("session start --tier"))).toBe(true);
   });
 
   it("records that an agent's Run is written with the automation Actor", () => {

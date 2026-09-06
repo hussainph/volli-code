@@ -20,8 +20,11 @@ import {
   columnRankAfterLaneDrop,
   effectiveArmedAutomationFor,
   isAutomationRuntimePin,
+  isAutomationRuntimeTier,
   isColumnArrival,
+  isValidAutomationRuntime,
   MAX_OFFERED_DIGITS,
+  parseAutomationRuntime,
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
@@ -73,6 +76,62 @@ describe("isAutomationRuntimePin", () => {
     expect(isAutomationRuntimePin({ kind: "invalid", raw: { providerId: "anthropic" } })).toBe(
       false,
     );
+  });
+
+  it("is false for a tier — a tier names a Settings row, not a model", () => {
+    expect(isAutomationRuntimePin({ kind: "tier", tier: "fast" })).toBe(false);
+  });
+});
+
+describe("the tier Runtime (VC-259)", () => {
+  it("recognises a tier, and nothing else, as a tier", () => {
+    expect(isAutomationRuntimeTier({ kind: "tier", tier: "fast" })).toBe(true);
+    expect(isAutomationRuntimeTier(PIN)).toBe(false);
+    expect(isAutomationRuntimeTier(null)).toBe(false);
+    expect(isAutomationRuntimeTier({ kind: "invalid", raw: {} })).toBe(false);
+  });
+
+  it("counts inherit, a pin and a tier as Runtimes a Run may start under — and nothing invalid", () => {
+    expect(isValidAutomationRuntime(null)).toBe(true);
+    expect(isValidAutomationRuntime(PIN)).toBe(true);
+    expect(isValidAutomationRuntime({ kind: "tier", tier: "deep" })).toBe(true);
+    expect(isValidAutomationRuntime({ kind: "invalid", raw: {} })).toBe(false);
+  });
+
+  it("reads a stored pin, a stored tier and SQL NULL back as themselves", () => {
+    expect(parseAutomationRuntime(null)).toBeNull();
+    expect(parseAutomationRuntime({ ...PIN })).toEqual(PIN);
+    expect(parseAutomationRuntime({ kind: "tier", tier: "visual" })).toEqual({
+      kind: "tier",
+      tier: "visual",
+    });
+  });
+
+  it("reads a tier this build does not know as INVALID, never as inherit", () => {
+    // The stance the file already documents for a pin: inherit still RUNS, so
+    // an unreadable Runtime coerced to it would start a Session under a
+    // policy nobody chose. A tier from another build (`smol`) is the same
+    // case wearing a new shape.
+    expect(parseAutomationRuntime({ kind: "tier", tier: "smol" })).toEqual({
+      kind: "invalid",
+      raw: { kind: "tier", tier: "smol" },
+    });
+    expect(parseAutomationRuntime({ kind: "tier" })).toEqual({
+      kind: "invalid",
+      raw: { kind: "tier" },
+    });
+  });
+
+  it("keeps the invalid answer for everything a pin parser already refused", () => {
+    expect(parseAutomationRuntime({ providerId: "anthropic" })).toEqual({
+      kind: "invalid",
+      raw: { providerId: "anthropic" },
+    });
+    expect(parseAutomationRuntime("not json")).toEqual({ kind: "invalid", raw: "not json" });
+    expect(parseAutomationRuntime({ kind: "invalid", raw: 1 })).toEqual({
+      kind: "invalid",
+      raw: { kind: "invalid", raw: 1 },
+    });
   });
 });
 

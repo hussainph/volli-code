@@ -254,6 +254,7 @@ Example: volli model list
 Notes:
 - Copy a printed <provider/model> verbatim into session start --model.
 - Shows only models this profile can run.
+- Prints the model tier table below the catalog: each tier, what it is for, and the model and reasoning it resolves to (or which tier it falls back to when unset). Name one with session start --tier.
 
 ============================================================================
 volli help cost
@@ -495,6 +496,7 @@ Input:
   model (optional)  Run the Session on a specific model instead of the configured default.
   model.providerId  Provider id, as `model list` prints it.
   model.modelId  Model id, as `model list` prints it.
+  tier (optional)  Run the Session on one of the user's configured model tiers instead of `model`; pass one or the other, never both. The tier's stored reasoning level comes with it unless `reasoning` is given. fast: Quick, cheap, bounded side work. deep: Hard reasoning, planning, judging. visual: Reading images, screenshots, and pages. ticket: Ticket Sessions. Unset, they use the Board default. global: Board chats, and the base every other tier falls back to. (valid: fast, deep, visual, ticket, global)
   reasoning (optional)  Reasoning level override; the chosen model must support it. (valid: off, minimal, low, medium, high, xhigh, max)
 
 Effects:
@@ -507,6 +509,7 @@ Notes:
 - Runs in the app: attended-only, never headless; the board does not move.
 - Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.
 - An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.
+- A tier names a kind of work (fast, deep, visual, ticket, global) and resolves to the model configured for it in Settings; a tier and a model are alternatives.
 
 ============================================================================
 volli help session stop
