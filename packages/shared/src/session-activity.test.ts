@@ -88,6 +88,8 @@ describe("readActivityDescriptor", () => {
         label: "src/index.ts",
         path: "/workspace/src/index.ts",
         lineRange: { start: 1, end: 48 },
+        agentName: null,
+        sessionId: null,
       },
       outcome: {
         exitCode: 0,
@@ -100,6 +102,7 @@ describe("readActivityDescriptor", () => {
         // Strings are trimmed on read, so a diff loses its trailing newline.
         diff: "--- a\n+++ b",
         summary: "Edited one file",
+        childCount: null,
       },
       startedAt: 10,
       endedAt: 42,

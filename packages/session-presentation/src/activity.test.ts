@@ -1004,6 +1004,63 @@ describe("presenters", () => {
     expect(row.meta).toBe("4 tools · 1m12s");
   });
 
+  it("a Volli delegate row reads 'Delegated <helper>' and opens the child Session (VC-9)", () => {
+    const row = describeActivity(
+      tool("delegate", {
+        toolName: "session_delegate",
+        descriptor: {
+          nativeToolName: "session_delegate",
+          subject: {
+            label: "Token hunt",
+            path: null,
+            lineRange: null,
+            agentName: "Token hunt",
+            sessionId: "cccccccc-0000-0000-0000-000000000000",
+          },
+          startedAt: 0,
+          endedAt: 1_000,
+          outcome: {
+            exitCode: null,
+            matchCount: null,
+            fileCount: null,
+            lineCount: null,
+            bytes: null,
+            addedLines: null,
+            removedLines: null,
+            diff: null,
+            summary: "Delegated to subagent Session cccccccc.",
+            childCount: 1,
+          },
+        },
+      }),
+    );
+    // A person reads a verb, not the wire name of the tool.
+    expect(row.verb).toBe("Delegated");
+    expect(row.object).toBe("Token hunt");
+    // The object opens the child Session, the way a file row opens a file.
+    expect(row.openSessionId).toBe("cccccccc-0000-0000-0000-000000000000");
+    expect(row.openPath).toBeNull();
+    // Before the child exists there is nothing to open.
+    expect(
+      describeActivity(
+        tool("delegate", {
+          toolName: "session_delegate",
+          state: "input-available",
+          descriptor: {
+            nativeToolName: "session_delegate",
+            subject: {
+              label: "Token hunt",
+              path: null,
+              lineRange: null,
+              agentName: "Token hunt",
+              sessionId: null,
+            },
+          },
+        }),
+      ).openSessionId,
+    ).toBeNull();
+  });
+
   it("delegate reports nothing extra when the child leaves no summary", () => {
     const row = describeActivity(
       tool("delegate", { descriptor: { nativeToolName: "explore", startedAt: 0, endedAt: 3 } }),

@@ -2640,6 +2640,14 @@ describe("migrate — 039, the delegation-extensions reconciler (VC-204)", () =>
   });
 });
 
+/** A pre-VC-9 `session.created` payload: no `role`, the birth Ticket in the row. */
+function sessionCreatedPayload(id: string, ticketId: string | null): string {
+  return JSON.stringify({
+    kind: "session.created",
+    session: { id, projectId: "p1", ticketId, title: null, createdAt: 1 },
+  });
+}
+
 describe("migrate — 040, sessions.role as data (VC-9)", () => {
   it("backfills each Session's Role from its birth event, so an orphaned Ticket Session stays a Ticket Session", () => {
     const dbPath = tempDbPath();
@@ -2658,20 +2666,15 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
       `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
        VALUES (?, ?, 2, 1, 1, '{"source":{"kind":"user","id":"u","detail":null},"venue":{"id":"local","kind":"local"}}', NULL, NULL, ?)`,
     );
-    const created = (id: string, ticketId: string | null): string =>
-      JSON.stringify({
-        kind: "session.created",
-        session: { id, projectId: "p1", ticketId, title: null, createdAt: 1 },
-      });
     insertSession.run("s-ticket", "t1", "On the ticket");
-    insertCreated.run("e-1", "s-ticket", created("s-ticket", "t1"));
+    insertCreated.run("e-1", "s-ticket", sessionCreatedPayload("s-ticket", "t1"));
     insertSession.run("s-project", null, "Project chat");
-    insertCreated.run("e-2", "s-project", created("s-project", null));
+    insertCreated.run("e-2", "s-project", sessionCreatedPayload("s-project", null));
     // Born on the Ticket, orphaned since: the live column says null, the
     // birth event says Ticket. A backfill that read the column would turn a
     // Ticket Session into a project one.
     insertSession.run("s-orphan", null, "Orphaned");
-    insertCreated.run("e-3", "s-orphan", created("s-orphan", "t1"));
+    insertCreated.run("e-3", "s-orphan", sessionCreatedPayload("s-orphan", "t1"));
 
     migrate(db, dbPath);
 

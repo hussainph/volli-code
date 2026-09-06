@@ -403,10 +403,13 @@ function ObjectText({ value }: { value: string }) {
 export const ToolRow = React.memo(function ToolRow({
   part,
   onOpenFile,
+  onOpenSession,
   className,
 }: {
   part: DynamicToolUIPart;
   onOpenFile?(path: string): void;
+  /** Opens a `delegate` row's child Session (VC-9). */
+  onOpenSession?(sessionId: string): void;
   className?: string;
 }) {
   const row = describeActivity(part);
@@ -421,7 +424,9 @@ export const ToolRow = React.memo(function ToolRow({
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
-        {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
+        {row.object ? (
+          <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+        ) : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
         {row.meta ? (
@@ -442,13 +447,41 @@ export const ToolRow = React.memo(function ToolRow({
   );
 });
 
+const OBJECT_LINK_CLASS =
+  "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
 /**
- * The second click target. The object opens the real artifact; the row around it
- * only expands the inline detail.
+ * The second click target. The object opens the real artifact — a file, or a
+ * `delegate` row's child Session (VC-9); the row around it only expands the
+ * inline detail.
  */
-function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: string): void }) {
+function RowObject({
+  row,
+  onOpenFile,
+  onOpenSession,
+}: {
+  row: ActivityRow;
+  onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
+}) {
   const object = row.object ?? "";
   const openPath = row.openPath;
+  const openSessionId = row.openSessionId ?? null;
+  if (openSessionId !== null && onOpenSession) {
+    return (
+      <button
+        type="button"
+        title="Open the subagent Session"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenSession(openSessionId);
+        }}
+        className={OBJECT_LINK_CLASS}
+      >
+        <ObjectText value={object} />
+      </button>
+    );
+  }
   if (!openPath || !onOpenFile) {
     return (
       <code
@@ -469,7 +502,7 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
         // spaces, dot segments) — the title above keeps the raw spelling.
         onOpenFile(normalizeChatToolPath(openPath));
       }}
-      className="min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className={OBJECT_LINK_CLASS}
     >
       <ObjectText value={object} />
     </button>
@@ -700,9 +733,11 @@ export const ActivityBundle = React.memo(
   function ActivityBundle({
     rows,
     onOpenFile,
+    onOpenSession,
   }: {
     rows: readonly BundleRow[];
     onOpenFile?(path: string): void;
+    onOpenSession?(sessionId: string): void;
   }) {
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
@@ -715,7 +750,12 @@ export const ActivityBundle = React.memo(
     const list = (
       <div className="space-y-1">
         {rows.map((row) => (
-          <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
+          <BundleRowView
+            key={row.key}
+            row={row}
+            onOpenFile={onOpenFile}
+            onOpenSession={onOpenSession}
+          />
         ))}
       </div>
     );
@@ -755,7 +795,9 @@ export const ActivityBundle = React.memo(
     );
   },
   (previous, next) =>
-    previous.onOpenFile === next.onOpenFile && sameBundleRows(previous.rows, next.rows),
+    previous.onOpenFile === next.onOpenFile &&
+    previous.onOpenSession === next.onOpenSession &&
+    sameBundleRows(previous.rows, next.rows),
 );
 
 /**
@@ -786,14 +828,16 @@ function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow
 const BundleRowView = React.memo(function BundleRowView({
   row,
   onOpenFile,
+  onOpenSession,
 }: {
   row: BundleRow;
   onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
 }) {
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
-  return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
+  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
 });
 
 /**

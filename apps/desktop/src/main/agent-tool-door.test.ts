@@ -1225,6 +1225,8 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     expect(result.text).toMatch(/arrive|delivered/);
     expect(result.text).toMatch(/keep working|continue/i);
     expect(result.text).not.toContain(CHILD_SESSION);
+    // The row's structured aside: the child's id to open and its name.
+    expect(result.details).toEqual({ sessionId: CHILD_SESSION, title: "Token refresh hunt" });
   });
 
   it("a Ticket Session delegates within its own Ticket", async () => {

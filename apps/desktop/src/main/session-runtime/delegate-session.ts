@@ -189,6 +189,36 @@ interface LiveDelegation {
   settled: boolean;
 }
 
+/** The assistant's words on one stream frame, or `null` for any other frame. */
+function assistantText(emission: SessionStreamEmission): string | null {
+  if (!isSessionStreamFrame(emission) || emission.transcript === null) return null;
+  const message = emission.transcript.message;
+  if (message.role !== "assistant") return null;
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : null;
+}
+
+/** How a child event ends a watch, or `null` for one that does not. */
+function outcomeOf(payload: SessionEvent["payload"]): SubagentOutcomeState | null {
+  switch (payload.kind) {
+    case "turn.completed":
+      return "completed";
+    case "turn.interrupted":
+      return "interrupted";
+    case "session.stopped":
+      return "stopped";
+    case "attachment.failed":
+      return "failed";
+    case "attachment.closed":
+      return payload.outcome === "completed" ? null : payload.outcome;
+    default:
+      return null;
+  }
+}
+
 /**
  * The delegation host for one process: what `session_delegate` calls, and the
  * in-memory registry of live children it keeps.
@@ -209,35 +239,6 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
 
   function childrenOf(parentSessionId: string): LiveDelegation[] {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
-  }
-
-  function assistantText(emission: SessionStreamEmission): string | null {
-    if (!isSessionStreamFrame(emission) || emission.transcript === null) return null;
-    const message = emission.transcript.message;
-    if (message.role !== "assistant") return null;
-    const text = message.parts
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n")
-      .trim();
-    return text.length > 0 ? text : null;
-  }
-
-  /** How a child event ends a watch, or `null` for one that does not. */
-  function outcomeOf(payload: SessionEvent["payload"]): SubagentOutcomeState | null {
-    switch (payload.kind) {
-      case "turn.completed":
-        return "completed";
-      case "turn.interrupted":
-        return "interrupted";
-      case "session.stopped":
-        return "stopped";
-      case "attachment.failed":
-        return "failed";
-      case "attachment.closed":
-        return payload.outcome === "completed" ? null : payload.outcome;
-      default:
-        return null;
-    }
   }
 
   function reportText(entry: LiveDelegation, state: SubagentOutcomeState): string {

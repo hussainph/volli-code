@@ -45,10 +45,6 @@ import type { SessionUsage } from "./session-usage";
 export const SESSION_ROLES = ["project", "ticket", "subagent"] as const;
 export type SessionRole = (typeof SESSION_ROLES)[number];
 
-export function isSessionRole(value: unknown): value is SessionRole {
-  return typeof value === "string" && (SESSION_ROLES as readonly string[]).includes(value);
-}
-
 /** Volli's reasoning policy, independent of any provider's type names. */
 export const REASONING_LEVELS = [
   "off",
@@ -913,6 +909,16 @@ export interface RuntimeVerbCall {
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
+  /**
+   * Structured facts for the transcript row, never for the model (VC-9).
+   *
+   * Rides the tool result's `details` slot, which the activity mapper reads
+   * and the model does not see. Exists for one row today: a `delegate` row
+   * links to the child Session by id and names it by title, and parsing
+   * either out of {@link text} would tie the transcript to the door's prose.
+   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   */
+  details?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */

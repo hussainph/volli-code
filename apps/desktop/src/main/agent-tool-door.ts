@@ -760,6 +760,9 @@ async function delegateSessionTool(
       actor: callerActor(session),
     });
     return {
+      // The row's link and name, structured, so the transcript never has to
+      // parse the prose below.
+      details: { sessionId: outcome.childSessionId, title: outcome.title },
       text: [
         `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
