@@ -53,6 +53,7 @@ import type {
 import { Board } from "@renderer/components/board/board";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { Button } from "@renderer/components/ui/button";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { useBoardStore } from "@renderer/stores/board";
 import { useUiStore } from "@renderer/stores/ui";
@@ -93,7 +94,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
   {
     providerId: "anthropic",
     modelId: "sonnet-4.5",
-    label: "sonnet-4.5",
+    label: "Claude Sonnet 4.5",
     state: "available",
     acceptsImageInput: true,
     reasoningLevels: ["low", "medium", "high"],
@@ -102,7 +103,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
   {
     providerId: "anthropic",
     modelId: "haiku-4.5",
-    label: "haiku-4.5",
+    label: "Claude Haiku 4.5",
     state: "available",
     acceptsImageInput: true,
     reasoningLevels: ["off", "low", "medium", "high"],
@@ -111,7 +112,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
   {
     providerId: "openai-codex",
     modelId: "gpt-5.6-luna",
-    label: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
     state: "available",
     acceptsImageInput: true,
     // Seven stops: the widest set the effort rail has to hold, and the reason
@@ -122,7 +123,7 @@ const MODELS: ModelAccessSnapshot["models"] = [
   {
     providerId: "openai-codex",
     modelId: "gpt-5.3-codex-spark",
-    label: "gpt-5.3-codex-spark",
+    label: "GPT-5.3 Codex Spark",
     state: "available",
     acceptsImageInput: true,
     reasoningLevels: ["low", "medium", "high"],
@@ -204,23 +205,30 @@ export default function TicketKickoffScratch() {
   }, [empty]);
 
   return (
-    <ModelAccessProvider client={client}>
-      <div className="flex h-full flex-col overflow-hidden bg-background p-2">
-        <div className="flex shrink-0 items-center gap-2 px-2 pb-2">
-          <Button size="sm" onClick={() => useUiStore.getState().setNewTicketOpen(true)}>
-            Open composer
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => setEmpty((value) => !value)}>
-            {empty ? "Fill the board" : "Empty the board"}
-          </Button>
-          <span className="text-ui text-muted-foreground">⌘↵ creates · ⇧⌘↵ creates and starts</span>
+    // The app shell mounts one `TooltipProvider` at its root; a scratch that
+    // borrows the real board and dialog has to mount its own (VC-56's lesson,
+    // and what `lab-boot-check.mjs` exists to catch).
+    <TooltipProvider>
+      <ModelAccessProvider client={client}>
+        <div className="flex h-full flex-col overflow-hidden bg-background p-2">
+          <div className="flex shrink-0 items-center gap-2 px-2 pb-2">
+            <Button size="sm" onClick={() => useUiStore.getState().setNewTicketOpen(true)}>
+              Open composer
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEmpty((value) => !value)}>
+              {empty ? "Fill the board" : "Empty the board"}
+            </Button>
+            <span className="text-ui text-muted-foreground">
+              ⌘↵ creates · ⇧⌘↵ creates and starts
+            </span>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border">
+            <Board projectId={project.id} ticketPrefix={project.ticketPrefix} />
+          </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border">
-          <Board projectId={project.id} ticketPrefix={project.ticketPrefix} />
-        </div>
-      </div>
-      {/* The real dialog, mounted exactly where the app shell mounts it. */}
-      <NewTicketDialog />
-    </ModelAccessProvider>
+        {/* The real dialog, mounted exactly where the app shell mounts it. */}
+        <NewTicketDialog />
+      </ModelAccessProvider>
+    </TooltipProvider>
   );
 }
