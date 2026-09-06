@@ -7,12 +7,20 @@ import type {
   ModelAccessSnapshot,
   ModelAccessState,
   ModelCatalogRefreshReport,
+  UsageLimits,
 } from "@volli/shared";
 
 import { contextWindowOf } from "./compaction";
 import type { RefreshableCatalogs } from "./model-catalog";
 import type { PiModelAccess } from "./models";
 import { providerSignInMethods } from "./sign-in";
+import {
+  probeUsageLimits,
+  USAGE_PROBE_PROVIDER_IDS,
+  type UsageLimitsHolder,
+  type UsageProbeFetch,
+  type UsageProbeSchedule,
+} from "./usage-limits";
 
 export interface InspectPiModelAccessInput {
   refresh?: boolean;
@@ -38,6 +46,23 @@ export interface PiModelAccessSource {
   catalogReady?: PiModelAccess["catalogReady"];
   /** Public catalogs that refresh without provider credentials. */
   catalogs?: RefreshableCatalogs;
+  /**
+   * The subscription usage read (VC-263). Optional so a scripted collection
+   * inspects exactly as before; absent means no provider row carries
+   * `usageLimits`.
+   */
+  usageLimits?: UsageLimitsSource;
+}
+
+/**
+ * What the usage read needs from its host: the holder the turn stream folds
+ * into (so a probe and a header land on one entry), the per-provider schedule
+ * of holds, and a fetch — injected so a unit test never touches the network.
+ */
+export interface UsageLimitsSource {
+  holder: UsageLimitsHolder;
+  schedule: UsageProbeSchedule;
+  fetch: UsageProbeFetch;
 }
 
 /**
@@ -153,19 +178,25 @@ export async function inspectPiModelAccess(
   // once and is bounded by its own timeout, so the inspection costs the slowest
   // single probe plus overhead rather than their sum — see {@link probeProvider}.
   const probed = await Promise.all(
-    models.getProviders().map(async (provider) => ({
-      provider,
-      probe: await probeProvider(
-        models,
-        provider.id,
-        input.signal,
-        PROBE_TIMEOUT_MS,
-        resolvedAuth.get(provider.id),
-      ),
-    })),
+    models.getProviders().map(async (provider) => {
+      // The usage read runs beside the provider probe, not inside it: it has
+      // its own bound, so a slow usage endpoint cannot turn a provider that just
+      // passed auth and availability into an `unavailable` row.
+      const [probe, usageLimits] = await Promise.all([
+        probeProvider(
+          models,
+          provider.id,
+          input.signal,
+          PROBE_TIMEOUT_MS,
+          resolvedAuth.get(provider.id),
+        ),
+        probeUsage(source.usageLimits, models, provider.id, input, now, PROBE_TIMEOUT_MS),
+      ]);
+      return { provider, probe, usageLimits };
+    }),
   );
   input.signal?.throwIfAborted();
-  for (const { provider, probe } of probed) {
+  for (const { provider, probe, usageLimits } of probed) {
     const { auth, available, probeFailed } = probe;
     const refreshError = refreshErrors.get(provider.id);
     const availableKeys = new Set(available.map(modelKey));
@@ -201,6 +232,7 @@ export async function inspectPiModelAccess(
               : null,
       signIn: providerSignInMethods(provider),
       hasStoredCredential: stored.has(provider.id),
+      ...(usageLimits === undefined ? {} : { usageLimits }),
     });
     for (const model of known) {
       // Only a size a meter can divide by, and the same sanitization
@@ -369,6 +401,50 @@ function probeProvider(
     },
     () => ({ auth: undefined, available: [], probeFailed: true }),
     callerSignal,
+    timeoutMs,
+  );
+}
+
+/**
+ * One provider's subscription windows, settled into the holder.
+ *
+ * Providers with no usage endpoint never reach the probe machinery at all —
+ * there are forty of them and two with a read, and a bounded probe per
+ * provider for a question with a static answer would be forty timers for
+ * nothing. For the two, the probe runs under the same bound the provider probe
+ * gets, and a timeout is folded as a failed probe: the holder keeps the last
+ * good read, which is what a person should see when the endpoint is slow.
+ */
+function probeUsage(
+  source: UsageLimitsSource | undefined,
+  models: Models,
+  providerId: string,
+  input: InspectPiModelAccessInput,
+  now: () => number,
+  timeoutMs: number,
+): Promise<UsageLimits | undefined> {
+  if (source === undefined || !USAGE_PROBE_PROVIDER_IDS.includes(providerId)) {
+    return Promise.resolve(undefined);
+  }
+  return boundedProbe(
+    async (signal) => {
+      const outcome = await probeUsageLimits({
+        providerId,
+        models,
+        fetch: source.fetch,
+        signal,
+        now,
+        schedule: source.schedule,
+        force: input.refresh === true,
+      });
+      return source.holder.settle(providerId, outcome);
+    },
+    () =>
+      source.holder.settle(providerId, {
+        kind: "read",
+        limits: { checkedAt: now(), windows: [], unavailable: { reason: "probeFailed" } },
+      }),
+    input.signal,
     timeoutMs,
   );
 }

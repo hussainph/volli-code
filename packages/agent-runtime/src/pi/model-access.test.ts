@@ -10,8 +10,9 @@ import type {
 import type { ModelAccessProvider } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { inspectPiModelAccess, PROBE_TIMEOUT_MS } from "./model-access";
+import { inspectPiModelAccess, PROBE_TIMEOUT_MS, type UsageLimitsSource } from "./model-access";
 import type { RefreshableCatalogs } from "./model-catalog";
+import { UsageLimitsHolder, UsageProbeSchedule } from "./usage-limits";
 
 // --- fixtures --------------------------------------------------------------
 //
@@ -607,5 +608,233 @@ describe("inspectPiModelAccess stored credentials", () => {
 
     expect(byId.kept?.hasStoredCredential).toBe(true);
     expect(byId.none?.hasStoredCredential).toBe(false);
+  });
+});
+
+/** A fetch that records every URL it was asked and answers from a script. */
+function usageSource(
+  answer: (url: string) => Response | Promise<Response>,
+): UsageLimitsSource & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    holder: new UsageLimitsHolder(),
+    schedule: new UsageProbeSchedule(),
+    calls,
+    fetch: async (url) => {
+      calls.push(url);
+      return answer(url);
+    },
+  };
+}
+
+const usageJson = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status });
+
+describe("inspectPiModelAccess usage limits", () => {
+  const ANTHROPIC_BODY = {
+    five_hour: { utilization: 37, resets_at: "2026-03-01T14:00:00Z" },
+    seven_day: { utilization: 4, resets_at: "2026-03-05T09:30:00Z" },
+  };
+
+  /** The scripted collection plus `getAuth`, which only the usage probe calls. */
+  function modelsWithAuth(specs: readonly Spec[], token: string | undefined): Models {
+    const base = fakeModels(specs);
+    return Object.assign(base, {
+      getAuth: async () => (token === undefined ? undefined : { auth: { apiKey: token } }),
+    }) as Models;
+  }
+
+  it("carries a subscribed account's windows on its provider row and nothing on the rest", async () => {
+    const source = usageSource(() => usageJson(ANTHROPIC_BODY));
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => ({ type: "oauth" }),
+          getAvailable: async () => [model("anthropic", "claude")],
+        },
+        {
+          provider: provider("openai"),
+          checkAuth: async () => ({ type: "api_key" }),
+          getAvailable: async () => [model("openai", "gpt")],
+        },
+      ],
+      "sk-ant-oat",
+    );
+
+    const resolved = await inspectPiModelAccess(
+      { models, credentials: null, usageLimits: source },
+      () => 42,
+    );
+    const byId = providersById(resolved.providers);
+
+    expect(byId.anthropic?.usageLimits).toEqual({
+      checkedAt: 42,
+      windows: [
+        expect.objectContaining({ id: "five_hour", usedPercent: 37 }),
+        expect.objectContaining({ id: "seven_day", usedPercent: 4 }),
+      ],
+    });
+    expect(byId.openai).not.toHaveProperty("usageLimits");
+    expect(source.calls).toEqual(["https://api.anthropic.com/api/oauth/usage"]);
+    expect(source.holder.get("anthropic")).toBe(byId.anthropic?.usageLimits);
+  });
+
+  it("reports an API-key account unsupported without asking the endpoint", async () => {
+    const source = usageSource(() => usageJson(ANTHROPIC_BODY));
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => ({ type: "api_key" }),
+          getAvailable: async () => [model("anthropic", "claude")],
+        },
+      ],
+      "sk-ant-api",
+    );
+
+    const resolved = await inspectPiModelAccess(
+      { models, credentials: null, usageLimits: source },
+      () => 7,
+    );
+
+    expect(providersById(resolved.providers).anthropic?.usageLimits).toEqual({
+      checkedAt: 7,
+      windows: [],
+      unavailable: { reason: "unsupported" },
+    });
+    expect(source.calls).toEqual([]);
+  });
+
+  it("keeps the last good read when the endpoint fails, and shows the failure when there is none", async () => {
+    let status = 200;
+    const source = usageSource(() => usageJson(status === 200 ? ANTHROPIC_BODY : {}, status));
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => ({ type: "oauth" }),
+          getAvailable: async () => [model("anthropic", "claude")],
+        },
+      ],
+      "sk-ant-oat",
+    );
+    const inspect = (now: number, refresh = false) =>
+      inspectPiModelAccess({ models, credentials: null, usageLimits: source }, () => now, {
+        refresh,
+      });
+
+    status = 500;
+    const failed = await inspect(1);
+    expect(providersById(failed.providers).anthropic?.usageLimits).toEqual({
+      checkedAt: 1,
+      windows: [],
+      unavailable: { reason: "probeFailed" },
+    });
+
+    status = 200;
+    const good = await inspect(2);
+    const goodLimits = providersById(good.providers).anthropic?.usageLimits;
+    expect(goodLimits?.windows).toHaveLength(2);
+
+    status = 500;
+    const failedAgain = await inspect(3, true);
+    expect(providersById(failedAgain.providers).anthropic?.usageLimits).toBe(goodLimits);
+    expect(source.calls).toHaveLength(3);
+  });
+
+  it("does not ask the endpoint again within the freshness hold unless refreshing", async () => {
+    const source = usageSource(() => usageJson(ANTHROPIC_BODY));
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => ({ type: "oauth" }),
+          getAvailable: async () => [model("anthropic", "claude")],
+        },
+      ],
+      "sk-ant-oat",
+    );
+    const inspect = (now: number, refresh = false) =>
+      inspectPiModelAccess({ models, credentials: null, usageLimits: source }, () => now, {
+        refresh,
+      });
+
+    const first = await inspect(1_000);
+    const second = await inspect(2_000);
+    expect(source.calls).toHaveLength(1);
+    expect(providersById(second.providers).anthropic?.usageLimits).toBe(
+      providersById(first.providers).anthropic?.usageLimits,
+    );
+    await inspect(3_000, true);
+    expect(source.calls).toHaveLength(2);
+  });
+
+  it("folds a hung endpoint as a failed probe under the same bound, leaving the provider available", async () => {
+    vi.useFakeTimers();
+    const source = usageSource(() => new Promise<Response>(() => {}));
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => ({ type: "oauth" }),
+          getAvailable: async () => [model("anthropic", "claude")],
+        },
+      ],
+      "sk-ant-oat",
+    );
+
+    const snapshot = inspectPiModelAccess(
+      { models, credentials: null, usageLimits: source },
+      () => 9,
+    );
+    await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+    const resolved = await snapshot;
+    const anthropic = providersById(resolved.providers).anthropic;
+
+    expect(anthropic?.state).toBe("available");
+    expect(anthropic?.usageLimits).toEqual({
+      checkedAt: 9,
+      windows: [],
+      unavailable: { reason: "probeFailed" },
+    });
+  });
+
+  it("clears a provider's held windows once it is signed out", async () => {
+    const source = usageSource(() => usageJson(ANTHROPIC_BODY));
+    source.holder.apply("anthropic", {
+      observedAt: 0,
+      windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 50 }],
+    });
+    const models = modelsWithAuth(
+      [
+        {
+          provider: provider("anthropic"),
+          checkAuth: async () => undefined,
+          getAvailable: async () => [],
+        },
+      ],
+      undefined,
+    );
+
+    const resolved = await inspectPiModelAccess(
+      { models, credentials: null, usageLimits: source },
+      () => 0,
+    );
+
+    expect(providersById(resolved.providers).anthropic).not.toHaveProperty("usageLimits");
+    expect(source.holder.get("anthropic")).toBeUndefined();
+  });
+
+  it("inspects exactly as before when no usage source is given", async () => {
+    const models = fakeModels([
+      {
+        provider: provider("anthropic"),
+        checkAuth: async () => ({ type: "oauth" }),
+        getAvailable: async () => [model("anthropic", "claude")],
+      },
+    ]);
+    const resolved = await inspectPiModelAccess({ models, credentials: null }, () => 0);
+    expect(providersById(resolved.providers).anthropic).not.toHaveProperty("usageLimits");
   });
 });
