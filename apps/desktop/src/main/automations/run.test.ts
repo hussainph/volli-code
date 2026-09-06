@@ -11,6 +11,7 @@ import type {
   PromptResource,
   PromptTemplate,
   SkillReference,
+  ValidAutomationRuntime,
 } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
@@ -202,7 +203,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
 
 async function savedAutomation(
   h: Harness,
-  patch: Partial<{ name: string; instructions: string; runtime: ModelSelection | null }> = {},
+  patch: Partial<{ name: string; instructions: string; runtime: ValidAutomationRuntime }> = {},
 ) {
   const created = await h.engine.create({
     commandId: randomUUID(),
@@ -349,6 +350,25 @@ describe("createAutomationRunner", () => {
       // And recorded rather than validated: see the unavailable-pin case below.
       whenUnavailable: "record",
     });
+  });
+
+  it("stores a tier Runtime through the ledger and reads it back as a tier (VC-259)", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h, { runtime: { kind: "tier", tier: "fast" } });
+
+    expect(automation.runtime).toEqual({ kind: "tier", tier: "fast" });
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "fast" });
+
+    const updated = await h.engine.update({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      name: automation.name,
+      instructions: automation.instructions,
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: { kind: "tier", tier: "deep" },
+    });
+    expect(updated.ok).toBe(true);
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "deep" });
   });
 
   it("persists the first-message intent before success and resumes it after a ready recovery attach", async () => {

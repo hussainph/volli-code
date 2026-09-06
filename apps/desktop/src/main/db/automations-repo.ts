@@ -18,9 +18,9 @@ import {
   isTicketStatus,
   NO_AUTOMATION_TRIGGER,
   parseAutomationRunAttendance,
+  parseAutomationRuntime as readAutomationRuntime,
   parseAutomationSkipReason,
   parseAutomationTrigger,
-  parseSessionModel,
 } from "@volli/shared";
 import type {
   Automation,
@@ -31,9 +31,9 @@ import type {
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
-  ModelSelection,
   ResolvedAutomationModel,
   TicketStatus,
+  ValidAutomationRuntime,
 } from "@volli/shared";
 import { prepared } from "./prepared";
 
@@ -98,10 +98,14 @@ function parseJsonColumn(value: string): unknown {
   }
 }
 
+/**
+ * The stored column, read by the shared parser: SQL NULL is inherit, and a
+ * pin, a tier (VC-259) or the invalid row is whatever `automation.ts` says
+ * those bytes mean — one reader, so this projection and any future transport
+ * cannot disagree about which stored shapes are runnable.
+ */
 function parseAutomationRuntime(value: string | null): AutomationRuntime {
-  if (value === null) return null;
-  const raw = parseJsonColumn(value);
-  return parseSessionModel(raw) ?? { kind: "invalid", raw };
+  return value === null ? null : readAutomationRuntime(parseJsonColumn(value));
 }
 
 /**
@@ -208,7 +212,7 @@ export interface AutomationWrite {
   instructions: string;
   /** Which columns offer this Automation — the record's half of VC-128. */
   trigger: AutomationTrigger;
-  runtime: ModelSelection | null;
+  runtime: ValidAutomationRuntime;
 }
 
 export function createAutomation(
