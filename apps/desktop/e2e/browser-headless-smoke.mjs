@@ -142,15 +142,22 @@ async function main() {
   );
 
   // The person's own tab, through the real bridge, front in the first pane.
-  await page.evaluate(
-    ({ projectId, url }) => window.api.browser.open({ projectId, url }),
-    { projectId: PROJECT.id, url: personUrl },
-  );
-  await waitUntil("the person's strip tab", async () => (await browserStripTabs(page).count()) === 1);
-  await browserStripTabs(page).first().click();
-  await waitUntil("the person's plane", async () => (await attachedViews(app)).includes(personUrl), {
-    timeout: 20000,
+  await page.evaluate(({ projectId, url }) => window.api.browser.open({ projectId, url }), {
+    projectId: PROJECT.id,
+    url: personUrl,
   });
+  await waitUntil(
+    "the person's strip tab",
+    async () => (await browserStripTabs(page).count()) === 1,
+  );
+  await browserStripTabs(page).first().click();
+  await waitUntil(
+    "the person's plane",
+    async () => (await attachedViews(app)).includes(personUrl),
+    {
+      timeout: 20000,
+    },
+  );
 
   // A second pane with a chat in it: a chat Session exists before any executor
   // attaches, so this costs no model turn — and its id is what the agent tab is
@@ -171,7 +178,9 @@ async function main() {
   });
   const chatTabLabel = await waitUntil("the chat tab", async () => {
     const label = await page
-      .locator('[data-slot="split-view-pane"][data-focused="true"] [role="tab"][aria-selected="true"]')
+      .locator(
+        '[data-slot="split-view-pane"][data-focused="true"] [role="tab"][aria-selected="true"]',
+      )
       .getAttribute("aria-label")
       .catch(() => null);
     return label === null || label === "" ? null : label;
@@ -189,7 +198,13 @@ async function main() {
             host.open({ ...input, ownerSessionId: "another-session" }),
           ].map((tab) => ({ tabId: tab.tabId, presentation: tab.presentation }));
         },
-        { url: agentUrl, projectId: PROJECT.id, ticketId: null, createdBy: "session", owner: sessionId },
+        {
+          url: agentUrl,
+          projectId: PROJECT.id,
+          ticketId: null,
+          createdBy: "session",
+          owner: sessionId,
+        },
       );
       await waitUntil("the chat's tab chip", async () =>
         (await chip(page).getAttribute("data-browser-tabs-chip")) === "1" ? true : null,
@@ -258,29 +273,35 @@ async function main() {
     };
   });
 
-  await must(4, "Open as tab puts it in the strip with the Session mark, and Hide takes it out again", async () => {
-    await chipAction(page, "Show");
-    await waitUntil("the preview", async () => ((await preview(page).count()) === 1 ? true : null));
-    await preview(page).getByRole("button", { name: "Open as tab", exact: true }).click();
-    await waitUntil("two strip tabs", async () => (await browserStripTabs(page).count()) === 2);
-    const marks = await browserStripTabs(page).evaluateAll((tabs) =>
-      tabs.map((tab) =>
-        tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
-      ),
-    );
-    // The promoted tab took the chat's pane; bring the chat back to reach its chip.
-    await page.locator(`[role="tab"][aria-label="${chatTabLabel}"]`).first().click();
-    await waitUntil("the chat's chip again", async () =>
-      (await chip(page).count()) === 1 ? true : null,
-    );
-    await chipAction(page, "Hide");
-    await waitUntil("one strip tab", async () => (await browserStripTabs(page).count()) === 1);
-    const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
-    return {
-      ok: marks.toSorted().join(",") === "session,user" && mine?.presentation === "headless",
-      detail: `marks=${JSON.stringify(marks)} presentation=${mine?.presentation}`,
-    };
-  });
+  await must(
+    4,
+    "Open as tab puts it in the strip with the Session mark, and Hide takes it out again",
+    async () => {
+      await chipAction(page, "Show");
+      await waitUntil("the preview", async () =>
+        (await preview(page).count()) === 1 ? true : null,
+      );
+      await preview(page).getByRole("button", { name: "Open as tab", exact: true }).click();
+      await waitUntil("two strip tabs", async () => (await browserStripTabs(page).count()) === 2);
+      const marks = await browserStripTabs(page).evaluateAll((tabs) =>
+        tabs.map((tab) =>
+          tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
+        ),
+      );
+      // The promoted tab took the chat's pane; bring the chat back to reach its chip.
+      await page.locator(`[role="tab"][aria-label="${chatTabLabel}"]`).first().click();
+      await waitUntil("the chat's chip again", async () =>
+        (await chip(page).count()) === 1 ? true : null,
+      );
+      await chipAction(page, "Hide");
+      await waitUntil("one strip tab", async () => (await browserStripTabs(page).count()) === 1);
+      const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
+      return {
+        ok: marks.toSorted().join(",") === "session,user" && mine?.presentation === "headless",
+        detail: `marks=${JSON.stringify(marks)} presentation=${mine?.presentation}`,
+      };
+    },
+  );
 
   await must(
     5,
@@ -291,7 +312,9 @@ async function main() {
         (await chip(page).count()) === 0 ? true : null,
       );
       const tabs = await hostTabs(app);
-      const errorToasts = await page.getByText(/Could not (show|hide|open|close) Browser Tab/i).count();
+      const errorToasts = await page
+        .getByText(/Could not (show|hide|open|close) Browser Tab/i)
+        .count();
       return {
         ok:
           tabs.filter((tab) => tab.ownerSessionId === sessionId).length === 0 &&
