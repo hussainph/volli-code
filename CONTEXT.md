@@ -260,6 +260,26 @@ differ. Worn by the cursor, the chrome pill and the strip's holder dot, and
 by nothing that means a state — `ui/status-dot.tsx` owns those.
 _Avoid_: status colour, agent colour (for a state), theme accent
 
+**Background shell**:
+A command a Session runs BESIDE the turn instead of holding it (VC-270): a
+dev server, a watch build, a long test run, a log tail. `execute` blocks until
+its command exits; `shell_start` spawns one in its own process group with
+pipes and no PTY, waits about a second, and comes back with whatever it printed
+so far. `shell_output` returns only what is new since the last read of that
+shell, so a poll loop costs the same context every time; `tail` is the explicit
+override and both are bytes, bounded by policy. `shell_kill` is SIGTERM then
+SIGKILL. The three names ride one port, appended last to the vocabulary. A
+shell belongs to the Session that started it — a subagent never sees its
+parent's — is capped per Session, runs inside the workspace, is spawned
+through the same environment record and the same attachment identity the
+`execute` tool gets, and is killed when the attachment ends. Every shell
+result restates the Session's live shells, because the tool calls are the
+durable record; shells are live resources, not ledger facts, and do not
+survive a relaunch. The Activity Island's shells cluster reads them through
+one push and one store, and opens a shell's tail in a plain read-only pane.
+_Avoid_: background job, `&` (which loses the handle), terminal (a shell a
+person types into), daemon
+
 **Agent CLI**:
 The bash-composable `volli` verb surface a Session's shell (or a person's
 terminal) reaches through the local agent socket. It is the discovery surface
