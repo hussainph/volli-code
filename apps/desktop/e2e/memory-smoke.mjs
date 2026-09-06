@@ -22,23 +22,9 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { _electron } from "playwright-core";
-
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+import { launch as launchSmokeApp, launchEnvFor } from "./lib/smoke-kit.mjs";
 
 const N_SESSIONS = Number(process.argv[2] ?? 8);
 const SCRATCH =
@@ -187,28 +173,23 @@ async function main() {
     },
   ];
 
-  const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-db-"));
-  // Strip Claude Code session vars so the nested `claude` instances boot clean.
-  // Skip the busy-session quit confirm: the idle claudes count as foreground
-  // work, and teardown's app.close() can't answer a native modal.
-  const env = {
-    ...process.env,
-    VOLLI_DB_PATH: join(dbDir, "volli.db"),
-    VOLLI_SKIP_CLOSE_CONFIRM: "1",
-  };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
-  }
-
   // An isolated Chromium profile. Sharing <userData> with a Volli the owner
   // already has open loses the single-instance lock, so the launch quits at
   // exit code 0 before its first window — surfacing only as "Target page,
   // context or browser has been closed", which reads like a crash in the app.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-profile-"));
-  const app = await _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${profileDir}`],
-    env,
+  // Strip Claude Code session vars so the nested `claude` instances boot clean.
+  // launchEnvFor also skips the busy-session quit confirm: the idle claudes
+  // count as foreground work, and app.close() cannot answer a native modal.
+  const env = launchEnvFor(join(profileDir, "volli.db"));
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
+  }
+
+  const app = await launchSmokeApp({
+    dbPath: join(profileDir, "volli.db"),
+    userDataDir: profileDir,
+    extraEnv: env,
   });
   const snapshots = [];
 

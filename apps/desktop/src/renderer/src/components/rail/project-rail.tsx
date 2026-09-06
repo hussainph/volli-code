@@ -39,7 +39,8 @@ export const ProjectRail = React.memo(function ProjectRail() {
   const sortableIds = React.useMemo(() => projects.map((project) => project.id), [projects]);
 
   // distance: 4 keeps plain clicks (select) and the press-scale animation
-  // working — the drag only activates after real pointer travel.
+  // working — the drag only activates after pointer travel through the
+  // browser event pipeline.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   function handleDragStart({ active }: DragStartEvent) {

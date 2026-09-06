@@ -67,10 +67,10 @@
  *
  * These smokes are NOT wired into `vp test`; they need a display + the built app.
  */
-import { execFile } from "node:child_process";
-import { promises as fs, rmSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdirSync, promises as fs, rmSync } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -164,6 +164,92 @@ export async function evidenceDir(slug, override = process.argv[2]) {
 // ---- launch ----------------------------------------------------------------
 
 /**
+ * Plan the smoke-only LSUIElement shadow bundle used on macOS. Runtime
+ * app.dock.hide()/setActivationPolicy() execute after LaunchServices has
+ * already registered a regular app, which leaves a measurable Dock flash.
+ * The shadow keeps the exact executable/frameworks/compositor while its copied
+ * Info.plist tells LaunchServices "accessory" before the process exists.
+ */
+export function quietAppExecutablePlan(executablePath, userDataDir) {
+  const marker = ".app/Contents/MacOS/";
+  const markerIndex = executablePath.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    throw new Error(`smoke executable is not inside a macOS app bundle: ${executablePath}`);
+  }
+  const sourceBundle = executablePath.slice(0, markerIndex + ".app".length);
+  const destinationRoot = join(userDataDir, ".volli-quiet-app");
+  const destinationBundle = join(destinationRoot, basename(sourceBundle));
+  const relativeExecutable = executablePath.slice(sourceBundle.length + 1);
+  return {
+    sourceBundle,
+    destinationRoot,
+    destinationBundle,
+    destinationExecutable: join(destinationBundle, relativeExecutable),
+    destinationInfoPlist: join(destinationBundle, "Contents", "Info.plist"),
+  };
+}
+
+const preparedQuietAppBundles = new Set();
+
+/** Build one copy-on-write app clone whose Info.plist is accessory from birth. */
+function prepareQuietAppBundle(plan) {
+  if (preparedQuietAppBundles.has(plan.destinationBundle)) return plan.destinationExecutable;
+  rmSync(plan.destinationRoot, { recursive: true, force: true });
+  mkdirSync(plan.destinationRoot, { recursive: true });
+  try {
+    // macOS `cp -cR` preserves the nested signed app/framework structure while
+    // using APFS clonefiles: the 287MB Electron.app stays a ~200ms metadata
+    // operation rather than multiplying the suite's disk IO. Node's fs.cp does
+    // not preserve a launchable Electron bundle here (main spins before helpers).
+    execFileSync("/bin/cp", ["-cR", plan.sourceBundle, plan.destinationBundle], {
+      stdio: "pipe",
+    });
+    execFileSync(
+      "/usr/bin/plutil",
+      ["-replace", "LSUIElement", "-bool", "true", plan.destinationInfoPlist],
+      { stdio: "pipe" },
+    );
+    // Info.plist is sealed by a packaged app's root signature. Re-sign only the
+    // shadow root ad-hoc with the same JIT entitlements; nested helpers remain
+    // byte-identical and keep their own signatures. Without this macOS kills a
+    // packaged smoke at launch (exit 137) before Playwright can attach.
+    execFileSync(
+      "/usr/bin/codesign",
+      [
+        "--force",
+        "--sign",
+        "-",
+        "--entitlements",
+        join(APP_DIR, "build", "entitlements.mac.plist"),
+        plan.destinationBundle,
+      ],
+      { stdio: "pipe" },
+    );
+    preparedQuietAppBundles.add(plan.destinationBundle);
+    return plan.destinationExecutable;
+  } catch (error) {
+    rmSync(plan.destinationRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Select the native executable for this smoke launch. */
+export function smokeExecutableFor(
+  executablePath,
+  userDataDir,
+  {
+    environment = process.env,
+    platform = process.platform,
+    prepareQuietApp = prepareQuietAppBundle,
+  } = {},
+) {
+  if (platform !== "darwin" || environment.VOLLI_QUIET_WINDOWS !== "1") {
+    return executablePath;
+  }
+  return prepareQuietApp(quietAppExecutablePlan(executablePath, userDataDir));
+}
+
+/**
  * Launch the built app against a scratch DB + isolated profile. `extraEnv` is
  * merged over process.env (the child keeps PATH etc. unless overridden — the
  * kickoff smoke overrides PATH/ZDOTDIR here to install its fake harness).
@@ -215,7 +301,15 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
     // silent installer must never reach a developer's real dotfiles from a
     // smoke, dev or packaged.
     VOLLI_SKIP_AGENT_TOOLS: "1",
+    // Keep each real, displayed compositor alive for screenshots and WebGPU,
+    // but do not let its native window take focus, cover work, or receive the
+    // person's mouse. Main honours this env-only seam in packaged builds too.
+    // `=0` is the deliberate local-debug escape hatch for watching one probe.
     ...extraEnv,
+    // Only the documented `0` escape hatch may make a smoke noisy. Empty or
+    // malformed ambient values must not silently restore focus-stealing windows.
+    VOLLI_QUIET_WINDOWS:
+      (extraEnv.VOLLI_QUIET_WINDOWS ?? inherited.VOLLI_QUIET_WINDOWS) === "0" ? "0" : "1",
     VOLLI_WORKTREE_HOME_DIR: worktreeHomeFor(dbPath, extraEnv),
   };
   delete env.ELECTRON_RENDERER_URL;
@@ -276,12 +370,13 @@ export async function writeFakeLoginShell(binDir, loginPath) {
  */
 export function launch({ dbPath, userDataDir, extraEnv = {} }) {
   const packagedBinary = process.env.VOLLI_SMOKE_APP_BINARY;
+  const environment = launchEnvFor(dbPath, extraEnv);
   return _electron.launch({
-    executablePath: packagedBinary ?? ELECTRON,
+    executablePath: smokeExecutableFor(packagedBinary ?? ELECTRON, userDataDir, { environment }),
     args: packagedBinary
       ? [`--user-data-dir=${userDataDir}`]
       : [APP_DIR, `--user-data-dir=${userDataDir}`],
-    env: launchEnvFor(dbPath, extraEnv),
+    env: environment,
   });
 }
 
