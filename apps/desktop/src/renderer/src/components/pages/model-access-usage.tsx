@@ -64,11 +64,6 @@ export function ModelAccessUsage({
   now?: number;
   testId?: string;
 }) {
-  // One reading per snapshot, taken before anything draws. Keyed on `limits`
-  // by identity: the holder hands back the same object when nothing changed,
-  // so a confirming inspection does not move the anchor either.
-  const at = React.useMemo(() => now ?? Date.now(), [limits, now]);
-
   if (limits.unavailable !== undefined) {
     return (
       <p data-testid={testId} className="mb-3 -mt-2 text-ui text-muted-foreground last:mb-0">
@@ -79,6 +74,24 @@ export function ModelAccessUsage({
     );
   }
   if (limits.windows.length === 0) return null;
+  // One anchor per snapshot: the windows remount when a snapshot with a new
+  // `checkedAt` arrives, and only then. The holder hands back the very same
+  // object when nothing changed, so a confirming inspection keeps the key and
+  // the anchor with it.
+  return <UsageWindows key={limits.checkedAt} limits={limits} now={now} testId={testId} />;
+}
+
+function UsageWindows({
+  limits,
+  now,
+  testId,
+}: {
+  limits: UsageLimits;
+  now: number | undefined;
+  testId: string | undefined;
+}) {
+  // Taken once, before anything draws, and held for this snapshot's life.
+  const [at] = React.useState(() => now ?? Date.now());
   const checkedAgo = formatCheckedAgo(limits.checkedAt, at);
   return (
     // Tucked under its PrefRow's bottom padding, and the last account's block
