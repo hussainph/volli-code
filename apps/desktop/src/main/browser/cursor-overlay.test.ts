@@ -366,6 +366,47 @@ describe("createCursorOverlay", () => {
     expect(h.pushed.at(-1)?.labelPinned).toBe(false);
   });
 
+  it("pins the label from when the page could first draw it, not from a boot it slept through", async () => {
+    const h = harness();
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.attach("tab-a");
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    await move(h, "tab-a", { x: 10, y: 10 });
+
+    // The overlay's page is built lazily by that first draw and boots slowly —
+    // slower here than the whole pin. Every push so far went at a page that
+    // was not listening yet, so nobody has seen the label.
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 500);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+
+    // Its first word is its size. From here it can hear, so the pin it slept
+    // through runs now: without this the person is never told which Session
+    // took their tab, and the view never grows past the bare arrow.
+    h.page.resize({ width: 181, height: 40 });
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+
+    // And it still lets go a moment later, exactly as on a fast boot.
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS + 10);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+  });
+
+  it("leaves a pin that is still live alone when the page reports, rather than extending it", async () => {
+    const h = harness();
+    h.host.hold("tab-a", HOLDER_A);
+    h.host.attach("tab-a");
+    h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
+    await move(h, "tab-a", { x: 10, y: 10 });
+
+    // A page that booted inside the pin — the fast path, which already worked.
+    await vi.advanceTimersByTimeAsync(200);
+    h.page.resize({ width: 181, height: 40 });
+    expect(h.pushed.at(-1)?.labelPinned).toBe(true);
+
+    // The pin ends on its ORIGINAL schedule; being heard does not restart it.
+    await vi.advanceTimersByTimeAsync(SESSION_CURSOR_LABEL_PIN_MS - 200 + 10);
+    expect(h.pushed.at(-1)?.labelPinned).toBe(false);
+  });
+
   it("fades out when the hold ends with the turn, then forgets the tab and leaves the plane", async () => {
     const h = harness();
     h.host.hold("tab-a", HOLDER_A);

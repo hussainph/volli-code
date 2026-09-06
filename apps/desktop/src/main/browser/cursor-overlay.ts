@@ -180,6 +180,8 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
   const acks = new Map<number, () => void>();
   /** Where the view was last placed, for the distance the glide scales on. */
   let lastPlaced: { x: number; y: number } | null = null;
+  /** Whether the overlay page has spoken once; before that it can hear nothing. */
+  let ready = false;
   /** Timers that re-render after a pin expires or an exit finishes. */
   const timers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -341,12 +343,47 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     ) {
       return;
     }
+    const firstReport = !ready;
+    ready = true;
     size = { width: Math.ceil(reported.width), height: Math.ceil(reported.height) };
     // Resize in place: the tip does not move, only how much of the page the
-    // view covers.
+    // view covers. The first report skips it and lets {@link onReady}'s own
+    // render place the view, so the page is not moved twice for one message.
+    if (firstReport) {
+      onReady();
+      return;
+    }
     if (view !== null && attachedTo !== null && lastPlaced !== null) {
       view.setBounds({ ...lastPlaced, ...size });
     }
+  };
+
+  /**
+   * The page's first word, and the first moment a state push can reach it.
+   *
+   * The overlay's view is built lazily inside the first `render()`, which then
+   * sends the state straight at a page that has not loaded — and a `send`
+   * before the renderer is listening goes nowhere. The label is pinned for
+   * {@link SESSION_CURSOR_LABEL_PIN_MS} from the moment the hold was taken, so
+   * on any machine where the page takes longer than that to boot, every push
+   * it can actually hear already says `labelPinned: false`: the person is
+   * never told which Session took their tab, and the view never grows past the
+   * bare arrow. A dev Mac boots inside the pin and a CI runner does not, which
+   * is why this only ever showed up there.
+   *
+   * So the pin runs from when it could first be SEEN. A pin still live is left
+   * alone — the fast path already worked — and a hold that has since ended
+   * gets nothing but the render it was owed.
+   */
+  const onReady = (): void => {
+    const target = drawable();
+    if (target !== null && target.state.exit === null && target.state.labelPinnedUntil > 0) {
+      if (target.state.labelPinnedUntil <= Date.now()) {
+        target.state.labelPinnedUntil = Date.now() + SESSION_CURSOR_LABEL_PIN_MS;
+        later(SESSION_CURSOR_LABEL_PIN_MS, () => render());
+      }
+    }
+    render();
   };
   // Both controls act on the tab the overlay is DRAWING, which is the one the
   // person is looking at when they press them — not merely one that is up.
