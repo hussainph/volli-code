@@ -5,11 +5,17 @@
  *
  * Scope is the whole of the visibility policy this slice carries: a Session
  * sees the person's own tabs (duosync — "look at what I'm reading" needs the
- * agent to reach the tab the person named) and the agent tabs of its OWN
- * Ticket, and nothing another Ticket's Session opened. An out-of-scope tab
- * refuses as `browser.unknown-tab` — unknown rather than forbidden, because a
- * tab this Session cannot touch is a tab it was never shown, and a refusal
- * that says "exists, but not yours" is a listing of somebody else's work.
+ * agent to reach the tab the person named) and the agent tabs it OPENED
+ * itself (VC-238), and nothing another Session opened — not even a sibling on
+ * the same Ticket, which used to see and drive this Session's tabs because the
+ * scope stopped at the Ticket. An out-of-scope tab refuses as
+ * `browser.unknown-tab` — unknown rather than forbidden, because a tab this
+ * Session cannot touch is a tab it was never shown, and a refusal that says
+ * "exists, but not yours" is a listing of somebody else's work.
+ *
+ * Whether a VC-9 subagent may see its parent's tabs (or a parent its child's)
+ * is VC-9's decision. The seam for it is {@link AgentBrowserPortOptions.sharesTabsOf}:
+ * one predicate over another Session's id, defaulting to "nobody".
  *
  * Visibility of a personal tab carries ACTUATION, not only reading: a Session
  * may `navigate` and `act` on a `user` tab, not merely snapshot it. That is a
@@ -50,6 +56,7 @@ import type { WebContents } from "electron";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
+  RuntimeBrowserActResult,
   RuntimeBrowserConsole,
   RuntimeBrowserNavigation,
   RuntimeBrowserPort,
@@ -58,7 +65,11 @@ import type {
 
 import type { BrowserTabState } from "../../ipc/contract";
 import type { BrowserTabCreateOptions } from "./tab-host";
-import { BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
+import {
+  BrowserSessionTabLimitError,
+  BrowserTabLimitError,
+  isAllowedBrowserUrl,
+} from "./tab-host";
 import { BrowserTabController, type CdpTransport } from "./cdp-controller";
 
 /**
@@ -74,12 +85,28 @@ export interface AgentBrowserHost {
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
   consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
+  /** A live picture of the tab for the transcript card, or null when the host declined to look. */
+  capturePicture(tabId: string): Promise<string | null>;
+  /** Keeps a model-requested screenshot for the person; answers the picture's id. */
+  keepScreenshot(tabId: string, base64Png: string): string;
+  /** Closes the headless tabs one Session owns; a shown tab is the person's and stays. */
+  closeHeadlessOwnedBy(sessionId: string): string[];
 }
 
 export interface AgentBrowserPortOptions {
   host: AgentBrowserHost;
-  /** The Session's product scope, fixed at attachment and never the model's to name. */
-  scope: { projectId: string; ticketId: string | null };
+  /**
+   * The Session's product scope, fixed at attachment and never the model's to
+   * name. `sessionId` is the owner every tab this port opens is stamped with,
+   * and the identity its visibility is judged by.
+   */
+  scope: { projectId: string; ticketId: string | null; sessionId: string };
+  /**
+   * Whether tabs owned by ANOTHER Session are visible to this one. Absent
+   * means no: a Session sees the person's tabs and its own. This is a seam for
+   * VC-9's parent/child rule, not a rule of its own.
+   */
+  sharesTabsOf?: (ownerSessionId: string) => boolean;
   /** The CDP wire for one live tab — production binds `webContents.debugger`. */
   transportFor: (tabId: string) => CdpTransport;
   /** Resolves when the tab has settled enough to read; must honour the signal. */
@@ -204,11 +231,15 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     release?.();
   };
 
+  const ownedHere = (tab: BrowserTabState): boolean =>
+    tab.ownerSessionId === options.scope.sessionId ||
+    (tab.ownerSessionId !== null && options.sharesTabsOf?.(tab.ownerSessionId) === true);
+
   /** The Session's visible slice of the registry, by the scope rule above. */
   const visible = (): BrowserTabState[] =>
     options.host
       .list({ projectId: options.scope.projectId })
-      .filter((tab) => tab.createdBy === "user" || tab.ticketId === options.scope.ticketId);
+      .filter((tab) => tab.createdBy === "user" || ownedHere(tab));
 
   const resolve = (tabId: string): BrowserTabState => {
     const tab = visible().find((candidate) => candidate.tabId === tabId);
@@ -249,10 +280,19 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     return controller;
   };
 
+  /**
+   * The page after a change, for the person: photographed once the load the
+   * change started has settled, so the frame shows the result rather than the
+   * moment before it. A read (`snapshot`) changes nothing and takes none.
+   */
+  const pictureAfterChange = async (tabId: string, changed: boolean): Promise<string | null> =>
+    changed ? await options.host.capturePicture(tabId) : null;
+
   const snapshotOf = async (
     tabId: string,
     signal: AbortSignal,
     waitMode: BrowserLoadWaitMode = "current",
+    changed = false,
   ): Promise<RuntimeBrowserSnapshot> => {
     // Scope before waiting: an out-of-scope id must not gain a loading-timing
     // oracle, and a cancelled call must not attach Chromium's debugger.
@@ -266,6 +306,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     const tab = resolve(tabId);
     const controller = await controllerFor(tab, signal);
     const printed = await controller.snapshot(signal);
+    const picture = await pictureAfterChange(tab.tabId, changed);
     return {
       tabId: tab.tabId,
       url: tab.url,
@@ -273,6 +314,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
+      picture,
     };
   };
 
@@ -300,10 +342,16 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
             projectId: options.scope.projectId,
             ticketId: options.scope.ticketId,
             createdBy: "session",
+            ownerSessionId: options.scope.sessionId,
           }).tabId,
           waitMode: "required-navigation",
         };
       } catch (error) {
+        // Two caps, two rule names, so a person reading the transcript can
+        // tell which one fired: the project's, or this Session's own.
+        if (error instanceof BrowserSessionTabLimitError) {
+          throw new BrowserRefusal("browser.session-tab-limit", error.message);
+        }
         if (!(error instanceof BrowserTabLimitError)) throw error;
         throw new BrowserRefusal("browser.tab-limit", error.message);
       }
@@ -346,24 +394,25 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
           url: tab.url,
           title: tab.title,
           createdBy: tab.createdBy,
+          ownerSessionId: tab.ownerSessionId,
         })),
       };
     },
     navigate: async (input) => {
       input.signal.throwIfAborted();
       const steered = steer(input.tabId, input.navigation);
-      return snapshotOf(steered.tabId, input.signal, steered.waitMode);
+      return snapshotOf(steered.tabId, input.signal, steered.waitMode, true);
     },
     snapshot: async (input) => {
       resolve(input.tabId);
       return snapshotOf(input.tabId, input.signal);
     },
-    act: async (input) => {
+    act: async (input): Promise<RuntimeBrowserActResult> => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       keepAwake(tab.tabId);
       const controller = await controllerFor(tab, input.signal);
-      await controller.act(
+      const acted = await controller.act(
         {
           generation: input.generation,
           kind: input.kind,
@@ -375,7 +424,8 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
         },
         input.signal,
       );
-      return snapshotOf(input.tabId, input.signal, "possible-navigation");
+      const snap = await snapshotOf(input.tabId, input.signal, "possible-navigation", true);
+      return { ...snap, target: acted.target };
     },
     screenshot: async (input) => {
       input.signal.throwIfAborted();
@@ -384,7 +434,9 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
       const controller = await controllerFor(tab, input.signal);
       const shot = await controller.screenshot(input.signal);
       input.signal.throwIfAborted();
-      return { tabId: tab.tabId, url: tab.url, ...shot };
+      // The model's picture is the person's too: kept, not re-captured.
+      const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
+      return { tabId: tab.tabId, url: tab.url, title: tab.title, picture, ...shot };
     },
     console: async (input) => {
       input.signal.throwIfAborted();
@@ -402,6 +454,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
       controllers.clear();
       for (const release of wakes.values()) release();
       wakes.clear();
+      // The attachment is what a headless tab's life is bound to (VC-238):
+      // nobody can see it, so nothing but this Session could ever close it.
+      // Shown tabs are the person's now and outlive the Session.
+      options.host.closeHeadlessOwnedBy(options.scope.sessionId);
     },
   };
 }

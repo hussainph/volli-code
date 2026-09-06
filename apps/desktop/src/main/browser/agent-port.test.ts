@@ -9,6 +9,7 @@ import {
   type AgentBrowserHost,
 } from "./agent-port";
 import type { CdpTransport } from "./cdp-controller";
+import { BrowserSessionTabLimitError } from "./tab-host";
 
 /** The one-button page every scripted transport answers with. */
 const BUTTON_TREE = {
@@ -32,10 +33,15 @@ const BUTTON_TREE = {
 };
 
 function state(overrides: Partial<BrowserTabState> & { tabId: string }): BrowserTabState {
+  const createdBy = overrides.createdBy ?? "user";
   return {
     projectId: "p1",
     ticketId: null,
-    createdBy: "user",
+    createdBy,
+    // An agent tab defaults to THIS port's Session so existing fixtures that
+    // only said `createdBy: "session"` still describe the Session's own tab.
+    ownerSessionId: createdBy === "session" ? "s1" : null,
+    presentation: createdBy === "session" ? "headless" : "tab",
     url: "https://example.com/",
     title: "Example",
     loading: false,
@@ -52,21 +58,37 @@ function state(overrides: Partial<BrowserTabState> & { tabId: string }): Browser
  * the host is list/open/navigate/history, and this fake answers exactly that
  * — no Electron, no views. Opens are recorded so provenance can be asserted.
  */
-function fakeHost(initial: BrowserTabState[]): {
+type OpenedRecord = {
+  url: string;
+  projectId: string;
+  ticketId: string | null;
+  createdBy: string;
+  ownerSessionId?: string | null;
+};
+
+function fakeHost(
+  initial: BrowserTabState[],
+  options: { sessionCap?: number; declineCapture?: boolean } = {},
+): {
   host: AgentBrowserHost;
   tabs: Map<string, BrowserTabState>;
-  opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[];
+  opened: OpenedRecord[];
   navigated: { tabId: string; url: string }[];
+  closedHeadlessFor: string[];
+  captures: string[];
 } {
   const tabs = new Map(initial.map((one) => [one.tabId, one]));
-  const opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[] =
-    [];
+  const opened: OpenedRecord[] = [];
   const navigated: { tabId: string; url: string }[] = [];
+  const closedHeadlessFor: string[] = [];
+  const captures: string[] = [];
   let openCount = 0;
   return {
     tabs,
     opened,
     navigated,
+    closedHeadlessFor,
+    captures,
     host: {
       list: (scope) =>
         [...tabs.values()]
@@ -74,17 +96,37 @@ function fakeHost(initial: BrowserTabState[]): {
           .map((one) => structuredClone(one)),
       open: (input) => {
         opened.push(input);
+        if (options.sessionCap !== undefined && input.createdBy === "session") {
+          const owned = [...tabs.values()].filter(
+            (one) => one.ownerSessionId === input.ownerSessionId,
+          ).length;
+          if (owned >= options.sessionCap) throw new BrowserSessionTabLimitError();
+        }
         openCount += 1;
         const created = state({
           tabId: `opened-${openCount}`,
           projectId: input.projectId,
           ticketId: input.ticketId,
           createdBy: input.createdBy,
+          ownerSessionId: input.createdBy === "session" ? input.ownerSessionId : null,
           url: input.url,
           title: "",
         });
         tabs.set(created.tabId, created);
         return { ...created };
+      },
+      capturePicture: async (tabId) => {
+        captures.push(tabId);
+        return options.declineCapture === true ? null : `live:${tabId}:${captures.length}`;
+      },
+      keepScreenshot: (tabId, base64Png) => `kept:${tabId}:${base64Png}`,
+      closeHeadlessOwnedBy: (sessionId) => {
+        closedHeadlessFor.push(sessionId);
+        const closing = [...tabs.values()]
+          .filter((one) => one.ownerSessionId === sessionId && one.presentation === "headless")
+          .map((one) => one.tabId);
+        for (const tabId of closing) tabs.delete(tabId);
+        return closing;
       },
       navigate: (tabId, url) => {
         navigated.push({ tabId, url });
@@ -106,6 +148,9 @@ function transportFor(): CdpTransport {
   return {
     send: async (method) => {
       if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+      if (method === "DOM.getBoxModel") {
+        return { model: { content: [100, 200, 110, 200, 110, 210, 100, 210] } };
+      }
       if (method === "Page.captureScreenshot") return { data: "cGl4ZWxz" };
       if (method === "Page.getLayoutMetrics") {
         return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
@@ -115,29 +160,45 @@ function transportFor(): CdpTransport {
   };
 }
 
-function port(input: {
+interface PortInput {
   tabs?: BrowserTabState[];
   ticketId?: string | null;
-}): ReturnType<typeof portWithHost>["port"] {
+  sessionId?: string;
+  sessionCap?: number;
+  declineCapture?: boolean;
+}
+
+function port(input: PortInput): ReturnType<typeof portWithHost>["port"] {
   return portWithHost(input).port;
 }
 
-function portWithHost(input: { tabs?: BrowserTabState[]; ticketId?: string | null }): {
+function portWithHost(input: PortInput): {
   port: ReturnType<typeof createAgentBrowserPort>;
   opened: ReturnType<typeof fakeHost>["opened"];
   hostTabs: Map<string, BrowserTabState>;
+  closedHeadlessFor: string[];
+  captures: string[];
   /** Every hold, wait and release, in the order the port performed them. */
   wakeEvents: string[];
 } {
-  const { host, opened, tabs } = fakeHost(input.tabs ?? []);
+  const { host, opened, tabs, closedHeadlessFor, captures } = fakeHost(input.tabs ?? [], {
+    ...(input.sessionCap === undefined ? {} : { sessionCap: input.sessionCap }),
+    ...(input.declineCapture === undefined ? {} : { declineCapture: input.declineCapture }),
+  });
   const wakeEvents: string[] = [];
   return {
     opened,
     hostTabs: tabs,
+    closedHeadlessFor,
+    captures,
     wakeEvents,
     port: createAgentBrowserPort({
       host,
-      scope: { projectId: "p1", ticketId: input.ticketId === undefined ? "t1" : input.ticketId },
+      scope: {
+        projectId: "p1",
+        ticketId: input.ticketId === undefined ? "t1" : input.ticketId,
+        sessionId: input.sessionId ?? "s1",
+      },
       transportFor,
       waitForLoad: async (tabId) => {
         wakeEvents.push(`wait ${tabId}`);
@@ -153,12 +214,12 @@ function portWithHost(input: { tabs?: BrowserTabState[]; ticketId?: string | nul
 const signal = new AbortController().signal;
 
 describe("createAgentBrowserPort", () => {
-  it("lists the user's tabs and this Ticket's own agent tabs, and nothing from other Tickets", async () => {
+  it("lists the user's tabs and this Session's own agent tabs, and nothing another Session opened", async () => {
     const listing = await port({
       tabs: [
         state({ tabId: "user-1", createdBy: "user" }),
         state({ tabId: "mine", createdBy: "session", ticketId: "t1" }),
-        state({ tabId: "theirs", createdBy: "session", ticketId: "t2" }),
+        state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" }),
       ],
     }).tabs({ signal });
 
@@ -184,6 +245,7 @@ describe("createAgentBrowserPort", () => {
         projectId: "p1",
         ticketId: "t1",
         createdBy: "session",
+        ownerSessionId: "s1",
       },
     ]);
     expect(project.opened).toEqual([
@@ -192,6 +254,7 @@ describe("createAgentBrowserPort", () => {
         projectId: "p1",
         ticketId: null,
         createdBy: "session",
+        ownerSessionId: "s1",
       },
     ]);
     // The answer is already the page as structure — the settled act loop.
@@ -213,7 +276,7 @@ describe("createAgentBrowserPort", () => {
 
   it("refuses to touch a tab outside the Session's scope, as unknown rather than as forbidden", async () => {
     const scoped = port({
-      tabs: [state({ tabId: "theirs", createdBy: "session", ticketId: "t2" })],
+      tabs: [state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" })],
     });
 
     const attempt = scoped.snapshot({ tabId: "theirs", signal });
@@ -222,6 +285,130 @@ describe("createAgentBrowserPort", () => {
     await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
       "browser.unknown-tab",
     );
+  });
+
+  it("hides a sibling Session's tabs on the same Ticket: it can neither list nor drive them (VC-238)", async () => {
+    const sibling = state({
+      tabId: "sibling",
+      createdBy: "session",
+      ticketId: "t1",
+      ownerSessionId: "s2",
+    });
+    const mine = state({ tabId: "mine", createdBy: "session", ticketId: "t1" });
+    const scoped = port({ tabs: [sibling, mine, state({ tabId: "user-1" })] });
+
+    const listing = await scoped.tabs({ signal });
+    expect(listing.tabs.map((tab) => tab.tabId).toSorted()).toEqual(["mine", "user-1"]);
+    expect(listing.tabs.find((tab) => tab.tabId === "mine")?.ownerSessionId).toBe("s1");
+    expect(listing.tabs.find((tab) => tab.tabId === "user-1")?.ownerSessionId).toBeNull();
+
+    const attempt = scoped.act({ tabId: "sibling", generation: 1, kind: "click", ref: "e1", signal });
+    await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
+      "browser.unknown-tab",
+    );
+  });
+
+  it("leaves a seam for VC-9: a host-supplied predicate may widen visibility to another Session's tabs", async () => {
+    const child = state({ tabId: "child", createdBy: "session", ownerSessionId: "s-child" });
+    const stranger = state({ tabId: "stranger", createdBy: "session", ownerSessionId: "s9" });
+    const { host } = fakeHost([child, stranger]);
+    const shared = createAgentBrowserPort({
+      host,
+      scope: { projectId: "p1", ticketId: "t1", sessionId: "s1" },
+      sharesTabsOf: (owner) => owner === "s-child",
+      transportFor,
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+
+    const listing = await shared.tabs({ signal });
+
+    expect(listing.tabs.map((tab) => tab.tabId)).toEqual(["child"]);
+  });
+
+  it("refuses the per-Session cap under its own rule, naming what the model can do about it", async () => {
+    const capped = port({
+      tabs: [state({ tabId: "mine", createdBy: "session", ticketId: "t1" })],
+      sessionCap: 1,
+    });
+
+    const attempt = capped.navigate({
+      navigation: { kind: "url", url: "https://example.com/more" },
+      signal,
+    });
+
+    await expect(attempt).rejects.toThrow(BrowserRefusal);
+    await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
+      "browser.session-tab-limit",
+    );
+    await expect(attempt.catch((error: BrowserRefusal) => error.message)).resolves.toContain(
+      "reuse an open tab",
+    );
+  });
+
+  it("photographs the tab after a navigation and after an action, and names what the action touched", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "mine", createdBy: "session", ticketId: "t1", generation: 1 })],
+    });
+
+    const opened = await driven.port.navigate({
+      tabId: "mine",
+      navigation: { kind: "url", url: "https://example.com/next" },
+      signal,
+    });
+    expect(opened.picture).toBe("live:mine:1");
+
+    const acted = await driven.port.act({
+      tabId: "mine",
+      generation: opened.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(acted.target).toEqual({ ref: "e1", name: "Save" });
+    expect(acted.picture).toBe("live:mine:2");
+    // A plain read photographs nothing: the page did not change.
+    const read = await driven.port.snapshot({ tabId: "mine", signal });
+    expect(read.picture).toBeNull();
+    expect(driven.captures).toEqual(["mine", "mine"]);
+  });
+
+  it("carries no picture when the host declined to look, without failing the action", async () => {
+    const watched = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user", generation: 1 })],
+      declineCapture: true,
+    });
+    await watched.port.snapshot({ tabId: "user-1", signal });
+
+    const acted = await watched.port.act({
+      tabId: "user-1",
+      generation: 1,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+
+    expect(acted.target).toBeNull();
+    expect(acted.picture).toBeNull();
+  });
+
+  it("closes the Session's headless tabs when the attachment ends, through the host", async () => {
+    const ending = portWithHost({
+      tabs: [
+        state({ tabId: "headless", createdBy: "session", ticketId: "t1" }),
+        state({
+          tabId: "shown",
+          createdBy: "session",
+          ticketId: "t1",
+          presentation: "preview",
+        }),
+      ],
+    });
+
+    ending.port.dispose?.();
+
+    expect(ending.closedHeadlessFor).toEqual(["s1"]);
+    expect([...ending.hostTabs.keys()]).toEqual(["shown"]);
   });
 
   it("keeps acting honest across the seam: the host's generation is the one refs are judged by", async () => {
@@ -369,7 +556,11 @@ describe("createAgentBrowserPort", () => {
     expect(shot).toEqual({
       tabId: "user-1",
       url: "https://example.com/page",
+      title: "Example",
       base64Png: "cGl4ZWxz",
+      // The same bytes, kept for the person (VC-238): the tool description
+      // promises the picture to both parties, and the id is how the card gets it.
+      picture: "kept:user-1:cGl4ZWxz",
       width: 800,
       height: 600,
     });

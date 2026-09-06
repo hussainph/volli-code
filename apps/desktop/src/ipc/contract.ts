@@ -1424,6 +1424,19 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 export type BrowserTabCreatedBy = "user" | "session";
 
 /**
+ * Where a Browser Tab is drawn (VC-238). Main owns the value; the renderer asks
+ * to change it through `volli:browser-set-presentation` and never writes it.
+ *
+ * - `headless`: the tab exists with a real viewport, wake hold, console and
+ *   screenshots, but is in no strip, no tab order, and never attached to the
+ *   window. Every Session-created tab is born this way.
+ * - `preview`: pinned live above the composer of the chat that owns it.
+ * - `tab`: an ordinary item in the Home or Ticket strip. A person's own tabs
+ *   are always this and cannot be anything else.
+ */
+export type BrowserTabPresentation = "headless" | "preview" | "tab";
+
+/**
  * Renderer-safe state for one live Browser Tab. Product identity and bounded
  * browser chrome facts cross IPC; Chromium ids, Session partitions, page
  * content, cookies, and history entries never do.
@@ -1435,6 +1448,14 @@ export interface BrowserTabState {
   /** Null for a project-level tab, whether opened by a person or Project Session. */
   ticketId: string | null;
   createdBy: BrowserTabCreatedBy;
+  /**
+   * The Session that opened this tab, or null for a person's tab. Ownership is
+   * who may drive it through the Browser port — sibling Sessions on the same
+   * Ticket never see each other's — and is separate from the storage partition,
+   * which stays per Ticket.
+   */
+  ownerSessionId: string | null;
+  presentation: BrowserTabPresentation;
   url: string;
   title: string;
   loading: boolean;

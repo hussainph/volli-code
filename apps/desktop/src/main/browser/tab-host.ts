@@ -14,20 +14,28 @@ import type {
   BrowserTabBounds,
   BrowserTabCaptureFrame,
   BrowserTabCreatedBy,
+  BrowserTabPresentation,
   BrowserTabState,
 } from "../../ipc/contract";
+import type { BrowserPictureStore } from "./picture-store";
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
  * main-process input; renderer IPC omits `createdBy` and is forced to `user` so
  * a remote renderer cannot forge agent provenance.
+ *
+ * A Session-created tab names its owner (VC-238): the port states its own
+ * Session id at attach, so a tab always knows which Session may drive it and
+ * whose attachment end closes it. A person's tab has no owner.
  */
-export interface BrowserTabCreateOptions {
+export type BrowserTabCreateOptions = {
   url: string;
   projectId: string;
   ticketId: string | null;
-  createdBy: BrowserTabCreatedBy;
-}
+} & (
+  | { createdBy: "user"; ownerSessionId?: null }
+  | { createdBy: "session"; ownerSessionId: string }
+);
 
 /**
  * Electron construction surfaces injected into the host. Tests can provide
@@ -41,12 +49,21 @@ export interface BrowserTabHostDependencies {
   getWindow: () => BrowserWindow | null;
   publishState: (event: BrowserTabState) => void;
   publishClosed: (tabId: string) => void;
+  /** Where captured pixels wait for the card that shows them (VC-238). */
+  pictures: BrowserPictureStore;
 }
 
 interface BrowserTabEntry {
   state: BrowserTabState;
   view: WebContentsView;
   bounds: Rectangle;
+  /**
+   * The window this tab's view is attached to, or null while detached. Per
+   * entry rather than one host-wide slot (VC-238): a shown agent tab and the
+   * person's own browser pane are on screen together, and two panes of a
+   * split each hold a tab, so the host attaches a SET of views keyed by tab.
+   */
+  attachedTo: BrowserWindow | null;
   devToolsView: WebContentsView | null;
   devToolsOpen: boolean;
   devToolsAttached: boolean;
@@ -84,7 +101,14 @@ export function browserRemoteWebPreferences(): Pick<
 export const BROWSER_URL_MAX_CHARS = 8_192;
 export const BROWSER_TITLE_MAX_CHARS = 512;
 export const BROWSER_ERROR_MAX_CHARS = 1_024;
+/**
+ * The person's own tabs per project. Agent tabs are counted apart, under
+ * {@link BROWSER_MAX_TABS_PER_SESSION}, so a fleet of parallel Sessions at
+ * their cap can never stop a person opening one more (VC-238).
+ */
 export const BROWSER_MAX_TABS_PER_PROJECT = 32;
+/** One Session's live tabs. Small on purpose: the refusal tells the model to close or reuse one. */
+export const BROWSER_MAX_TABS_PER_SESSION = 6;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
@@ -126,6 +150,16 @@ export class BrowserTabLimitError extends Error {
   constructor() {
     super(`A project can have at most ${BROWSER_MAX_TABS_PER_PROJECT} live Browser Tabs`);
     this.name = "BrowserTabLimitError";
+  }
+}
+
+/** The per-Session cap, a separate class so the port can name a separate rule. */
+export class BrowserSessionTabLimitError extends Error {
+  constructor() {
+    super(
+      `A Session can have at most ${BROWSER_MAX_TABS_PER_SESSION} Browser Tabs open: close one with the person, or reuse an open tab by passing its tabId.`,
+    );
+    this.name = "BrowserSessionTabLimitError";
   }
 }
 
@@ -199,7 +233,6 @@ export function browserSessionPartition(input: {
 export class BrowserTabHost {
   private readonly tabs = new Map<string, BrowserTabEntry>();
   private readonly securedSessions = new WeakSet<Session>();
-  private attached: { entry: BrowserTabEntry; window: BrowserWindow } | null = null;
 
   constructor(private readonly deps: BrowserTabHostDependencies) {}
 
@@ -227,15 +260,19 @@ export class BrowserTabHost {
     entry.devToolsAttached = false;
   }
 
-  private detachEntry(entry: BrowserTabEntry, window: BrowserWindow): void {
+  /** Detaches the page and its DevTools from whichever window holds them; quiet when none does. */
+  private detachEntry(entry: BrowserTabEntry): void {
+    const window = entry.attachedTo;
+    if (window === null) return;
     this.detachDevTools(entry, window);
     if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
+    entry.attachedTo = null;
   }
 
   private destroyDevTools(entry: BrowserTabEntry): void {
     const tools = entry.devToolsView;
     if (tools === null) return;
-    if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+    if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
     const inspected = entry.view.webContents;
     if (!inspected.isDestroyed() && entry.devToolsOpen) inspected.closeDevTools();
     if (!tools.webContents.isDestroyed()) tools.webContents.close({ waitForBeforeUnload: false });
@@ -244,12 +281,32 @@ export class BrowserTabHost {
     entry.devToolsAttached = false;
   }
 
-  private hasCapacity(projectId: string): boolean {
+  /**
+   * Whether one more tab may open under `input`'s provenance. Two counters,
+   * never one: a person's tabs are bounded per project and an agent's per
+   * Session, so neither population can exhaust the other's allowance.
+   */
+  private hasCapacity(input: BrowserTabCreateOptions): boolean {
     let count = 0;
-    for (const entry of this.tabs.values()) {
-      if (entry.state.projectId === projectId) count += 1;
+    if (input.createdBy === "user") {
+      for (const entry of this.tabs.values()) {
+        if (entry.state.projectId === input.projectId && entry.state.createdBy === "user") {
+          count += 1;
+        }
+      }
+      return count < BROWSER_MAX_TABS_PER_PROJECT;
     }
-    return count < BROWSER_MAX_TABS_PER_PROJECT;
+    for (const entry of this.tabs.values()) {
+      if (entry.state.ownerSessionId === input.ownerSessionId) count += 1;
+    }
+    return count < BROWSER_MAX_TABS_PER_SESSION;
+  }
+
+  private assertCapacity(input: BrowserTabCreateOptions): void {
+    if (this.hasCapacity(input)) return;
+    throw input.createdBy === "user"
+      ? new BrowserTabLimitError()
+      : new BrowserSessionTabLimitError();
   }
 
   private recordConsole(entry: BrowserTabEntry, message: RuntimeBrowserConsoleMessage): void {
@@ -280,7 +337,10 @@ export class BrowserTabHost {
   private publish(
     entry: BrowserTabEntry,
     update: Partial<
-      Pick<BrowserTabState, "error" | "generation" | "loading" | "title" | "url">
+      Pick<
+        BrowserTabState,
+        "error" | "generation" | "loading" | "presentation" | "title" | "url"
+      >
     > = {},
   ): void {
     const contents = entry.view.webContents;
@@ -321,7 +381,7 @@ export class BrowserTabHost {
     if (!isAllowedBrowserTarget(input.url)) {
       throw new Error("Browser Tabs only support HTTP(S) URLs");
     }
-    if (!this.hasCapacity(input.projectId)) throw new BrowserTabLimitError();
+    this.assertCapacity(input);
     const tabId = this.deps.createId();
     if (this.tabs.has(tabId)) throw new Error("Duplicate Browser Tab id");
 
@@ -342,6 +402,9 @@ export class BrowserTabHost {
       projectId: input.projectId,
       ticketId: input.ticketId,
       createdBy: input.createdBy,
+      ownerSessionId: input.createdBy === "session" ? input.ownerSessionId : null,
+      // Agent tabs are born headless; only a person can reveal one (VC-238).
+      presentation: input.createdBy === "session" ? "headless" : "tab",
       url: input.url,
       title: "",
       loading: true,
@@ -354,6 +417,7 @@ export class BrowserTabHost {
       state,
       view,
       bounds: { ...BROWSER_DEFAULT_BOUNDS },
+      attachedTo: null,
       devToolsView: null,
       devToolsOpen: false,
       devToolsAttached: false,
@@ -363,9 +427,11 @@ export class BrowserTabHost {
     };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
-      // A hostile page can ask indefinitely; the same per-project cap used by
-      // every other open door turns excess popups into ordinary denials.
-      if (isAllowedBrowserUrl(url) && this.hasCapacity(input.projectId)) {
+      // A hostile page can ask indefinitely; the same cap used by every other
+      // open door turns excess popups into ordinary denials. A popup inherits
+      // its opener's provenance and owner, so an agent tab's popups are the
+      // agent's, count against its cap, and are born headless like it.
+      if (isAllowedBrowserUrl(url) && this.hasCapacity(input)) {
         this.open({ ...input, url });
       }
       return { action: "deny" };
@@ -414,12 +480,12 @@ export class BrowserTabHost {
     });
     view.webContents.on("devtools-opened", () => {
       entry.devToolsOpen = true;
-      if (this.attached?.entry === entry) this.attachDevTools(entry, this.attached.window);
+      if (entry.attachedTo !== null) this.attachDevTools(entry, entry.attachedTo);
       this.layout(entry);
     });
     view.webContents.on("devtools-closed", () => {
       entry.devToolsOpen = false;
-      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
       this.layout(entry);
     });
     view.webContents.on("render-process-gone", (_event, details) => {
@@ -434,10 +500,7 @@ export class BrowserTabHost {
     });
     view.webContents.on("destroyed", () => {
       if (this.tabs.get(tabId) !== entry) return;
-      if (this.attached?.entry === entry) {
-        this.detachEntry(entry, this.attached.window);
-        this.attached = null;
-      }
+      this.detachEntry(entry);
       this.destroyDevTools(entry);
       this.tabs.delete(tabId);
       this.deps.publishClosed(tabId);
@@ -450,7 +513,7 @@ export class BrowserTabHost {
   /** Closes and forgets one product tab without allowing page unload code to veto it. */
   close(tabId: string): void {
     const entry = this.requireTab(tabId);
-    if (this.attached?.entry === entry) this.hide(tabId);
+    this.detachEntry(entry);
     this.destroyDevTools(entry);
     this.tabs.delete(tabId);
     this.deps.publishClosed(tabId);
@@ -507,7 +570,7 @@ export class BrowserTabHost {
     if (entry.devToolsOpen) {
       entry.devToolsOpen = false;
       contents.closeDevTools();
-      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
       this.layout(entry);
       return;
     }
@@ -519,7 +582,7 @@ export class BrowserTabHost {
       contents.setDevToolsWebContents(tools.webContents);
     }
     entry.devToolsOpen = true;
-    if (this.attached?.entry === entry) this.attachDevTools(entry, this.attached.window);
+    if (entry.attachedTo !== null) this.attachDevTools(entry, entry.attachedTo);
     this.layout(entry);
     try {
       // Electron still wants a mode even with custom DevTools contents. `detach`
@@ -528,10 +591,44 @@ export class BrowserTabHost {
       contents.openDevTools({ mode: "detach", activate: true });
     } catch (error) {
       entry.devToolsOpen = false;
-      if (this.attached?.entry === entry) this.detachDevTools(entry, this.attached.window);
+      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
       this.layout(entry);
       throw error;
     }
+  }
+
+  /**
+   * Where a Session's tab is drawn (VC-238): headless, pinned as the owning
+   * chat's preview, or promoted into the strip. Main owns the value and the
+   * renderer asks; a person's tab is always in the strip and refuses here.
+   *
+   * Nothing the agent sees moves. Owner, generation, URL, cookies and the
+   * wake hold are untouched — the renderer's plane controller attaches the
+   * native view for the surface that now draws it, exactly as it does for a
+   * person's tab, so the overlay-freeze rule holds for every presentation.
+   *
+   * One preview per owning Session: a chat has one pinned pane, so previewing
+   * a second tab returns the first to headless rather than leaving two tabs
+   * both claiming a pane only one can occupy.
+   */
+  setPresentation(tabId: string, presentation: BrowserTabPresentation): BrowserTabState {
+    const entry = this.requireTab(tabId);
+    if (entry.state.createdBy === "user") {
+      throw new Error("Only a Session's Browser Tab can be hidden or previewed");
+    }
+    if (presentation === "preview") {
+      for (const other of this.tabs.values()) {
+        if (
+          other !== entry &&
+          other.state.ownerSessionId === entry.state.ownerSessionId &&
+          other.state.presentation === "preview"
+        ) {
+          this.publish(other, { presentation: "headless" });
+        }
+      }
+    }
+    if (entry.state.presentation !== presentation) this.publish(entry, { presentation });
+    return { ...entry.state };
   }
 
   /** Applies the renderer-measured host plane to the page and its docked DevTools. */
@@ -588,15 +685,68 @@ export class BrowserTabHost {
     return Promise.all(pending);
   }
 
-  /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
+  /**
+   * Photographs one tab for the transcript card after an agent navigated or
+   * acted in it (VC-238), and hands back the picture's id — or null when it
+   * declined to look.
+   *
+   * It declines while the person is interacting with a shown tab: a tab that
+   * is on screen AND holds keyboard focus is one they are typing into, and the
+   * password they type must not become a frame in the transcript. This is the
+   * takeover rule ChatGPT agent and Manus both settled on. A headless tab can
+   * never be focused, and a shown tab nobody is touching still photographs.
+   *
+   * JPEG through the same `capturePage` door the overlay freeze uses, for the
+   * same latency reason; the store bounds how many live frames are kept.
+   */
+  async capturePicture(tabId: string): Promise<string | null> {
+    const entry = this.requireTab(tabId);
+    const contents = entry.view.webContents;
+    if (entry.state.presentation !== "headless" && contents.isFocused()) return null;
+    const image = await contents.capturePage();
+    return this.deps.pictures.put({
+      tabId,
+      generation: entry.state.generation,
+      mime: "image/jpeg",
+      bytes: image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY),
+      persist: false,
+    });
+  }
+
+  /**
+   * Keeps the PNG a `browser_screenshot` call produced, so the picture the
+   * model asked for is also the person's to look at later. The engine already
+   * rendered these bytes for the model; storing them costs no second capture.
+   */
+  keepScreenshot(tabId: string, base64Png: string): string {
+    const entry = this.requireTab(tabId);
+    return this.deps.pictures.put({
+      tabId,
+      generation: entry.state.generation,
+      mime: "image/png",
+      bytes: Buffer.from(base64Png, "base64"),
+      persist: true,
+    });
+  }
+
+  /** The renderer's one read of a picture: a data URL, or null for an id this host never minted. */
+  pictureOf(pictureId: string): string | null {
+    return this.deps.pictures.dataUrl(pictureId);
+  }
+
+  /**
+   * Attaches one native page (and its DevTools) to the live app window,
+   * beside whatever else is attached. Showing a tab never evicts another: each
+   * on-screen pane drives its own tab's plane, and which tabs are on screen is
+   * the renderer's layout to decide, not a host-wide slot's.
+   */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
-    if (this.attached?.entry === entry) return;
-    if (this.attached !== null) this.detachEntry(this.attached.entry, this.attached.window);
+    if (entry.attachedTo !== null) return;
     const window = this.deps.getWindow();
     if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");
     window.contentView.addChildView(entry.view);
-    this.attached = { entry, window };
+    entry.attachedTo = window;
     if (entry.devToolsOpen) this.attachDevTools(entry, window);
     this.layout(entry);
   }
@@ -619,9 +769,7 @@ export class BrowserTabHost {
   hide(tabId: string): void {
     const entry = this.tabs.get(tabId);
     if (entry === undefined) return;
-    if (this.attached?.entry !== entry) return;
-    this.detachEntry(entry, this.attached.window);
-    this.attached = null;
+    this.detachEntry(entry);
   }
 
   /**
@@ -719,6 +867,32 @@ export class BrowserTabHost {
   /** Closes every live view when its owning app window goes away. */
   closeAll(): void {
     for (const tabId of this.tabs.keys()) this.close(tabId);
+  }
+
+  /**
+   * Closes the headless tabs one Session owns, when its attachment ends
+   * (VC-238). A tab a person has shown — previewed or promoted — is theirs to
+   * close and survives the Session, the trade Claude Code's Chrome integration
+   * makes too: pages you may still be reading stay open. Returns what closed.
+   */
+  closeHeadlessOwnedBy(sessionId: string): string[] {
+    return this.closeHeadlessWhere((state) => state.ownerSessionId === sessionId);
+  }
+
+  /** Closes every headless agent tab of one Ticket, when the Ticket is archived. */
+  closeHeadlessForTicket(ticketId: string): string[] {
+    return this.closeHeadlessWhere((state) => state.ticketId === ticketId);
+  }
+
+  private closeHeadlessWhere(matches: (state: BrowserTabState) => boolean): string[] {
+    const closing: string[] = [];
+    for (const entry of this.tabs.values()) {
+      if (entry.state.presentation === "headless" && matches(entry.state)) {
+        closing.push(entry.state.tabId);
+      }
+    }
+    for (const tabId of closing) this.close(tabId);
+    return closing;
   }
 
   /** Lists only the caller's product scope, never Chromium's positional view order. */

@@ -516,6 +516,13 @@ export interface RuntimeBrowserTab {
   title: string;
   /** Who opened it. A person's tab and an agent's tab render differently and are audited differently. */
   createdBy: "user" | "session";
+  /**
+   * Which Session opened it, or null for a person's tab (VC-238). The host
+   * shows a Session only its own tabs by default, so this usually names the
+   * caller; it is here so a parent that is shown a child's tabs can tell them
+   * apart from its own.
+   */
+  ownerSessionId: string | null;
 }
 
 /** Every Browser Tab the host let this Session see. */
@@ -547,6 +554,23 @@ export interface RuntimeBrowserSnapshot {
   generation: number;
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
+  /**
+   * An opaque id for the picture the host took of the page after this call
+   * changed it, for the person's transcript card — never the bytes, which
+   * stay with the host (VC-238). Null when nothing changed (a plain read) or
+   * when the host declined to look because the person was using the tab.
+   */
+  picture: string | null;
+}
+
+/** The answer to one action: the fresh snapshot, plus what the action touched. */
+export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
+  /**
+   * The element acted on, as the last snapshot named it (VC-238): the ref the
+   * model passed and the page's accessible name for it, or null when the name
+   * was empty. Null altogether for page-level actions (press, scroll, wait).
+   */
+  target: { ref: string; name: string | null } | null;
 }
 
 /**
@@ -587,8 +611,11 @@ export interface RuntimeBrowserActRequest {
 export interface RuntimeBrowserScreenshot {
   tabId: string;
   url: string;
+  title: string;
   /** PNG bytes, base64. The host owns scale and size bounds. */
   base64Png: string;
+  /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
+  picture: string | null;
   width: number;
   height: number;
 }
@@ -631,7 +658,7 @@ export interface RuntimeBrowserPort {
   }): Promise<RuntimeBrowserSnapshot>;
   snapshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
   /** Act, then answer with the fresh snapshot the action produced. */
-  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
+  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserActResult>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
   /** Releases host-private debugger/controller resources when an attachment ends. */

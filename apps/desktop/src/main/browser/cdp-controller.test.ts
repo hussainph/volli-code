@@ -70,8 +70,11 @@ describe("BrowserTabController", () => {
     const controller = new BrowserTabController(page.transport);
     const snapshot = await controller.snapshot();
 
-    await controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" });
+    const acted = await controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" });
 
+    // What was acted on, in the page's own words, so the transcript can say
+    // `Clicked "Save"` (VC-238). The name is page content and stays bounded.
+    expect(acted).toEqual({ target: { ref: "e1", name: "Save" } });
     // The element is brought into view and resolved by the handle the ref
     // minted — never by a selector the page could have moved.
     expect(page.sent).toContainEqual({

@@ -83,6 +83,11 @@ describe("formatAXSnapshot", () => {
     expect(snapshot.refs.get("e3")).toBe(105);
     expect(snapshot.refs.size).toBe(3);
     expect(snapshot.truncated).toBe(false);
+    // The name the page computed rides beside each ref (VC-238), so an action
+    // on `e2` can be reported as `Clicked "Toggle Todo"` rather than by its ref.
+    expect(snapshot.names.get("e1")).toBe("What needs to be done?");
+    expect(snapshot.names.get("e2")).toBe("Toggle Todo");
+    expect(snapshot.names.get("e3")).toBe("All");
   });
 
   it("splices ignored and generic structure up, and drops a text leaf that echoes its parent's name", () => {
