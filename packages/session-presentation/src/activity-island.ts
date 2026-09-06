@@ -44,6 +44,8 @@
  * it. `resolveFeel` is the one place an override meets the default.
  */
 
+import { todoListCompleted, type TodoStatus } from "@volli/shared";
+
 /* ------------------------------------------------------------- projection */
 
 /**
@@ -100,10 +102,13 @@ export interface IslandStep {
    * the model finish the third item first and abandon the second — and a count
    * of completed prefixes drew that as the wrong row ticked.
    *
-   * The vocabulary is `SessionTodoList`'s, unchanged, so the projection is a
-   * rename and not a translation.
+   * It is {@link TodoStatus} ITSELF rather than a union re-spelled to match, so
+   * the projection is a rename and not a translation — and so a status added to
+   * the vocabulary cannot leave a step unable to carry it. What this is NOT is
+   * {@link PlanStepState}, the drawing state: `current` lives there because
+   * which row is current is a fact about the whole plan, not about one step.
    */
-  state: "pending" | "in_progress" | "completed" | "cancelled";
+  state: TodoStatus;
 }
 
 /** The Session's plan: an ordered list of steps and how many are done. */
@@ -460,9 +465,10 @@ export function islandPlanFromTodos(
       title: todo.content,
       state: todo.status,
     })),
-    // Completed only. A cancelled step is not progress — counting it would let
-    // a model reach 100% by dropping the work it did not do.
-    done: list.filter((todo) => todo.status === "completed").length,
+    // Completed only, and counted by the vocabulary's own function rather than
+    // by a filter repeated here. A cancelled step is not progress — counting it
+    // would let a model reach 100% by dropping the work it did not do.
+    done: todoListCompleted(list),
   };
 }
 

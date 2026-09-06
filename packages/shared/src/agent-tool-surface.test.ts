@@ -124,7 +124,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     ]);
   });
 
-  it("puts a Subagent Session in a room with every coding tool, no verb, and no way to ask a person (VC-9)", () => {
+  it("puts a Subagent Session in a room with every coding tool, no verb, no way to ask a person, and no todo list (VC-9, VC-6)", () => {
     expect(roleVerbBundle("subagent")).toEqual([]);
     const surface = resolveAgentToolSurface(capabilities({ role: "subagent" }));
     // Powerful where the work is: a subagent edits the tree it was handed.
@@ -138,22 +138,17 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // `askUser` port from being wired at all.
     expect(verbToolsOf(surface)).toEqual([]);
     expect(surface).not.toContain("ask_user");
-    // Three names joined this list after VC-9 wrote it, and none of them is a
-    // Role decision: the fixture asks for the WHOLE interaction vocabulary, so
-    // anything appended to `NON_CODING_TOOL_IDS` lands here unless a Role
-    // withholds it. `browser_acquire`/`browser_release` are VC-239's hold pair
-    // and `todo_write` is VC-6's.
-    //
-    // `todo_write` reaching a subagent is worth a second look by whoever owns
-    // VC-9's Role policy, and is deliberately NOT decided here. The argument
-    // for withholding it is `ask_user`'s own: a todo list exists for a person
-    // watching the Session and for the ticket comment its lifecycle signal
-    // leaves, and a Subagent Session has neither — nobody is in front of it,
-    // and its parent's ticket is commented by the parent. The argument against
-    // is that it costs nothing and its durable record is per-Session, exactly
-    // like the Browser tools already in this list. Adding a name to
-    // `ROLE_CAPABILITY_POLICY.subagent.withheld` is the whole change if that
-    // call goes the other way.
+    // And no `todo_write` (VC-6), withheld on exactly `ask_user`'s ground: a
+    // todo list is read by a person watching live or by the Ticket comment the
+    // lifecycle signal leaves, and a subagent has neither reader. Withholding
+    // it is a Role decision recorded in `ROLE_CAPABILITY_POLICY`, so deleting
+    // the name there is the whole change when VC-269's peek overlay gives a
+    // child's plan someone to be read by.
+    expect(surface).not.toContain("todo_write");
+    // `browser_acquire`/`browser_release` joined this list after VC-9 wrote it
+    // and are NOT a Role decision: the fixture asks for the whole interaction
+    // vocabulary, so anything appended to `NON_CODING_TOOL_IDS` lands here
+    // unless a Role withholds it.
     expect(surface).toEqual([
       "read",
       "edit",
@@ -169,7 +164,6 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_console",
       "browser_acquire",
       "browser_release",
-      "todo_write",
     ]);
   });
 

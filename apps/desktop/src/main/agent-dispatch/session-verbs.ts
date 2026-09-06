@@ -472,6 +472,12 @@ async function postFinalTodoList(
   const { options, now, actor } = context;
   const { id: sessionId, ticketId } = session;
   if (ticketId === null) return;
+  // Both refusals BEFORE the read, because the read walks the Session's whole
+  // transcript: a Session with nowhere to post must not pay for the answer.
+  // Attribution comes from the RESOLVED actor rather than from the
+  // `VOLLI_SESSION` the request claimed — the distinction `ticket comment`
+  // draws for the same write, and for the same reason (VC-163).
+  if (actor === null || actor.kind !== "session") return;
   let list: SessionTodoList | null = null;
   try {
     list = await readSessionTodoList(
@@ -486,10 +492,6 @@ async function postFinalTodoList(
     return;
   }
   if (list === null || list.length === 0) return;
-  // Attributed to the Session, from the RESOLVED actor rather than from the
-  // `VOLLI_SESSION` the request claimed — the distinction `ticket comment`
-  // draws for the same write, and for the same reason (VC-163).
-  if (actor === null || actor.kind !== "session") return;
   const body = `Todo list at session ${signal}:\n\n${todoListMarkdown(list)}`;
   try {
     withTicketWake(options.db, ticketId, () =>

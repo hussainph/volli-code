@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseTodoList, todoListMarkdown } from "./session-todo";
+import { parseTodoList, todoListCompleted, todoListMarkdown } from "./session-todo";
 
 describe("parseTodoList", () => {
   it("reads the whole list a todo_write call carried", () => {
@@ -40,6 +40,32 @@ describe("parseTodoList", () => {
         ],
       }),
     ).toEqual([{ content: "Ship it", status: "pending" }]);
+  });
+});
+
+describe("todoListCompleted", () => {
+  it("counts the finished rows, which is what the island's n/n pill prints", () => {
+    expect(
+      todoListCompleted([
+        { content: "Read the ticket", status: "completed" },
+        { content: "Write the tool", status: "in_progress" },
+        { content: "Wire the island", status: "pending" },
+      ]),
+    ).toBe(1);
+  });
+
+  it("does not count a dropped step as progress", () => {
+    // Otherwise a model could reach 100% by cancelling the work it did not do.
+    expect(
+      todoListCompleted([
+        { content: "Read the ticket", status: "completed" },
+        { content: "Revive the dock", status: "cancelled" },
+      ]),
+    ).toBe(1);
+  });
+
+  it("is zero for a list the model cleared", () => {
+    expect(todoListCompleted([])).toBe(0);
   });
 });
 

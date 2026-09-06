@@ -49,13 +49,7 @@ import {
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
-import {
-  parseTodoList,
-  sessionToolBindings,
-  TODO_STATUSES,
-  todoListMarkdown,
-  verbEntry,
-} from "@volli/shared";
+import { parseTodoList, sessionToolBindings, todoListMarkdown, verbEntry } from "@volli/shared";
 import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
@@ -497,25 +491,6 @@ const TODO_WRITE_DESCRIPTION = [
   "Do not use it to narrate a single action, and do not use it to think out loud — the items are for a person skimming, so write them as short outcomes.",
 ].join(" ");
 
-/**
- * The compile-time tie between the schema above and the vocabulary it spells.
- *
- * The tuple in the schema has to be written out by hand, so this is what stops
- * it drifting: a status added to `TODO_STATUSES` and not to the tuple fails to
- * satisfy this line, and the model would otherwise have been offered a schema
- * that could not express the status the rest of the app understands.
- */
-const TODO_STATUS_SCHEMAS = ["pending", "in_progress", "completed", "cancelled"] as const;
-if (
-  TODO_STATUS_SCHEMAS.length !== TODO_STATUSES.length ||
-  TODO_STATUS_SCHEMAS.some((status, index) => status !== TODO_STATUSES[index])
-) {
-  // At import, because a schema that cannot spell a status the rest of the app
-  // understands is a build bug and not a smaller tool: the model would send a
-  // status the provider refused, or refuse to send one Volli can read.
-  throw new Error("todo_write's status schema no longer matches TODO_STATUSES.");
-}
-
 const todoWriteSchema = Type.Object({
   todos: Type.Array(
     Type.Object({
@@ -523,8 +498,13 @@ const todoWriteSchema = Type.Object({
       // Spelled as a literal tuple rather than mapped over `TODO_STATUSES`,
       // because TypeBox reads the static type off the TUPLE: a `.map` over the
       // vocabulary produces an array, whose union statics to `never`, and every
-      // call site then loses the four names. {@link TODO_STATUS_SCHEMAS} is
-      // what keeps this tuple and the vocabulary in step.
+      // call site then loses the four names.
+      //
+      // Which leaves the tuple free to drift from `TODO_STATUSES`, so a test
+      // reads these members back off the built schema and compares them to the
+      // vocabulary. That check belongs in the suite rather than in an import-
+      // time guard here: drift is a build bug, and a build bug should fail CI
+      // rather than the first Session that loads this module in production.
       status: Type.Union(
         [
           Type.Literal("pending"),

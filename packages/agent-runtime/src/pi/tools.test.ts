@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-age
 import sharp from "sharp";
 import {
   NON_CODING_TOOL_IDS,
+  TODO_STATUSES,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -1161,6 +1162,33 @@ describe("createTodoWriteTool", () => {
     );
 
     expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("answers a payload the schema should have stopped, instead of throwing on it", async () => {
+    // The schema is a REQUEST to a provider, not a guarantee from one, so the
+    // arguments are parsed rather than trusted. A call that arrives with no
+    // `todos` at all lands on the same empty answer a deliberate clear does —
+    // the alternative is a tool that throws inside a turn over a payload the
+    // model cannot see it sent wrong.
+    const result = await createTodoWriteTool().execute(
+      "call-3",
+      {} as Parameters<ReturnType<typeof createTodoWriteTool>["execute"]>[1],
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("offers exactly the statuses the rest of the app understands (VC-6)", () => {
+    // The schema's status tuple is written out by hand, because TypeBox reads
+    // the static type off a TUPLE and a `.map` over the vocabulary would leave
+    // every call site with `never`. This is what stops the hand-written tuple
+    // drifting: a status added to `TODO_STATUSES` and not to the schema would
+    // otherwise leave the model unable to send a state Volli can read, and one
+    // removed would have it sending a state the provider refuses.
+    const status = createTodoWriteTool().parameters.properties.todos.items.properties.status;
+
+    expect(status.anyOf.map((member) => member.const)).toEqual([...TODO_STATUSES]);
   });
 
   it("is offered exactly when the bundle names it, and reaches no environment", () => {
