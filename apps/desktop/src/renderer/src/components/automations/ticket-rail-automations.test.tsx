@@ -338,42 +338,40 @@ describe("the split button", () => {
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
-  it("stays visible with no automations at all, and says so in one line", async () => {
+  it("moves the empty state's one page door into the heading row", async () => {
     await mount({});
 
     expect(control("Run Run once on this ticket")).not.toBeNull();
     expect(text()).toContain("No automations in this project yet.");
-    // The sentence is a report, not a door: the word "Automations" appears
-    // once under the eyebrow (VC-257), as the button's own label, and never as
-    // a link under the sentence.
-    expect(document.querySelector('[data-testid="ticket-rail-automations"] a')).toBeNull();
-    const heading = document.querySelector("h2");
+
+    const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
+    const heading = panel?.querySelector("h2");
+    const door = control("Open Automations");
     expect(heading?.textContent).toBe("Automations");
+    // VC-257 is a layout change: the heading and door must be siblings in the
+    // shared heading row, not merely somewhere inside the same rail panel.
+    expect(door.parentElement).toBe(heading?.parentElement);
+    // The empty sentence is a report, never a second door under that row.
+    expect(panel?.querySelector("a")).toBeNull();
     expect(
-      [...document.querySelectorAll("button")].filter(
+      [...(panel?.querySelectorAll("button") ?? [])].filter(
         (candidate) => candidate.textContent === "Automations",
       ),
     ).toHaveLength(0);
-  });
 
-  it("keeps one door to the page in its header, whether the project lists nothing or something", async () => {
-    // The rail never authors (VC-112), so the page is where a record comes
-    // from — and a door that only existed inside the empty state vanished the
-    // moment the project had something to run.
-    await mount({ automations: [automation()], armings: [ARMING] });
-
-    const door = control("Open Automations");
-    expect(door.closest('[data-testid="ticket-rail-automations"]')).not.toBeNull();
     await act(async () => {
       door.click();
     });
-
     expect(useWorkspaceStore.getState().byProject.p1?.nav).toBe("automations");
   });
 
-  it("offers that door before its reads have landed, too", async () => {
-    // Nothing about the page depends on what this column arms, so the door is
-    // not gated on the read the run control waits for.
+  it("does not expand the empty-state page door into a populated rail", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+
+    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
+  });
+
+  it("does not claim an empty state or offer its page door before reads land", async () => {
     const list = deferred<{ ok: true; automations: Automation[] }>();
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [] });
@@ -382,7 +380,8 @@ describe("the split button", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    expect((control("Open Automations") as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
+    expect(text()).not.toContain("No automations in this project yet.");
   });
 
   it("presses nothing, and claims nothing, until its own reads have landed", async () => {

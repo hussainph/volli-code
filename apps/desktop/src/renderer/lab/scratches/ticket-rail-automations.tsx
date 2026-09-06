@@ -5,10 +5,10 @@
  * The question this scratch answers: does the block read as ONE object under
  * its eyebrow, beside the Sessions block that follows it on the Now page? The
  * shipped drawing put a text link reading "Automations" two lines under the
- * heading AUTOMATIONS whenever the project listed nothing, and no door to the
- * page at all once it listed something. The door is in the header row now, at
- * the rung the Sessions header keeps its own control, and the empty state is a
- * single quiet line.
+ * heading AUTOMATIONS whenever the project listed nothing. That empty-state
+ * door is in the header row now, at the rung the Sessions header keeps its own
+ * control, and the empty state is a single quiet line. Populated and unread
+ * states keep their prior scope: neither gains a new page door.
  *
  * Read it in this order:
  *   1. The three states — empty, armed, still reading — each with the Sessions
@@ -17,8 +17,8 @@
  *
  * Every column is the SHIPPING component over the shipping store: the fixtures
  * below are what `volli:automations` doors return, so what is on screen is
- * what the rail decides — never a mock-up of it. Press the door; the caption
- * under section 1 says where it went.
+ * what the rail decides — never a mock-up of it. Press the empty column's door;
+ * the caption under section 1 says where it went.
  */
 import * as React from "react";
 import type { Automation, ColumnArming, Project, Ticket } from "@volli/shared";
@@ -37,7 +37,7 @@ import { appApi } from "../seed";
 
 export const title = "Ticket rail · Automations block (VC-257)";
 export const note =
-  "The header's door and the one-line empty state — empty, armed, reading — at rail width";
+  "The empty-state header door and one-line report — beside populated and unread states";
 
 /** The rail's two widths, from `stores/ui.ts`. */
 const RAIL_DEFAULT = 300;
@@ -139,13 +139,12 @@ export default function TicketRailAutomationsScratch() {
             <Rail label="Still reading" owner={READING} />
           </div>
           <Caption>
-            One eyebrow, one control beside it, one line under the button. The door at the right of
-            AUTOMATIONS is the only way from here to the page, and it is there in all three columns
-            &mdash; including the one whose read has not landed, because nothing about the page
-            depends on what this column arms. Press it: the workspace store&rsquo;s nav for that
-            project flips to <code className="font-mono text-ui">automations</code>, which is what
-            the app would navigate on. Then read the Sessions header under it &mdash; the two rows
-            are the same drawing, and should look it.
+            The empty column has one eyebrow, one page door beside it, and one report under the Run
+            button. Press the door: that project&rsquo;s workspace nav flips to{" "}
+            <code className="font-mono text-ui">automations</code>. The armed and unread columns do
+            not gain a new page door; VC-257 moves the existing empty-state control rather than
+            expanding its behavior. Read the Sessions header under each block too &mdash; the
+            heading rows are the same drawing, and should look it.
           </Caption>
           <Where />
         </Group>
@@ -158,8 +157,8 @@ export default function TicketRailAutomationsScratch() {
           <Caption>
             The split button truncates its label rather than pushing the caret off the edge, and the
             sentence wraps rather than truncating &mdash; it is a report, and a report cut short
-            says less than nothing. The header row does not move: the door stays level with the
-            eyebrow at both insets.
+            says less than nothing. The empty state&rsquo;s header row does not move: its door stays
+            level with the eyebrow at both insets.
           </Caption>
         </Group>
       </div>
@@ -173,12 +172,12 @@ function Intro() {
       <SectionHeading as="h2">What this is for</SectionHeading>
       <p className="max-w-content text-ui leading-prose text-muted-foreground">
         The Now page&rsquo;s Automations block, between what a ticket cost and who is working on it.
-        The rail runs and never authors (VC-112), so it needs exactly one door to the page that does
-        &mdash; and that door used to be a text link under the empty state, reading
-        &ldquo;Automations&rdquo; two lines beneath the heading AUTOMATIONS, and gone the moment the
-        project had a record. Every column is{" "}
-        <code className="font-mono text-ui">TicketAutomationsPanel</code> over the real store, so
-        what each button offers is the rail&rsquo;s decision, not this scratch&rsquo;s.
+        The rail runs and never authors (VC-112). Its empty-state door used to be a text link under
+        the report, reading &ldquo;Automations&rdquo; two lines beneath the heading AUTOMATIONS.
+        That same door now sits in the empty state&rsquo;s heading row; no other state gains one.
+        Every column is <code className="font-mono text-ui">TicketAutomationsPanel</code> over the
+        real store, so what each button offers is the rail&rsquo;s decision, not this
+        scratch&rsquo;s.
       </p>
     </div>
   );

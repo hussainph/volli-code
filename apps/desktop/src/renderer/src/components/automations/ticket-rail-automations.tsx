@@ -8,12 +8,12 @@
  * Automation, and that is a ruling rather than an omission (VC-112): an
  * authoring form in a 300px rail would be a worse copy of the Automations page,
  * and the page is the one surface that owns the record's lifecycle. What the
- * rail offers instead is ONE door to that page, in the header row beside the
- * eyebrow — where the Sessions block below keeps its own control — and it is
- * there whether the project lists nothing or ten. It used to be a text link
- * under the empty state's sentence, which put the word "Automations" two lines
- * under the heading AUTOMATIONS (VC-257): the same noun twice in one glance,
- * and a door that vanished the moment the project had something to run.
+ * empty rail offers instead is ONE door to that page, in the header row beside
+ * the eyebrow — where the Sessions block below keeps its own control. It used
+ * to be a text link under the empty state's sentence, which put the word
+ * "Automations" two lines under the heading AUTOMATIONS (VC-257): the same noun
+ * twice in one glance. Moving that existing door fixes the layout without
+ * expanding navigation into populated or unread states.
  *
  * Four rules the drawing carries:
  *
@@ -30,8 +30,8 @@
  *    reason: the cache cannot tell "nothing armed" from "not asked yet", nor a
  *    value that was just confirmed from one that merely survived.
  *  - **Never hidden when empty.** A project with no Automations still draws the
- *    button, says so in one line, and links to the page. Hidden-when-empty is
- *    how a feature never gets discovered.
+ *    Run button, says so in one line, and puts its existing page door in the
+ *    header. Hidden-when-empty is how a feature never gets discovered.
  *  - **By hand is universal.** Running from here is unaffected by the
  *    machine-local switch (VC-112) — the switch governs what starts an
  *    Automation BESIDES a person. A switched-off Automation is offered with the
@@ -160,6 +160,7 @@ export function TicketAutomationsPanel({
   // (`automation-run-menu.tsx` states the rule once, for this rail and for the
   // board card's own menu).
   const rail = useAutomationRunOffer(projectId, ticket.status);
+  const empty = rail.ready && !rail.listsAny;
 
   // The Runs, on the same clock — a Run started from the board's armed window,
   // the palette or another window lands here without this rail having asked.
@@ -188,7 +189,7 @@ export function TicketAutomationsPanel({
   return (
     <section className={SECTION} aria-label="Automations" data-testid="ticket-rail-automations">
       <RailSectionHeadingRow label="Automations">
-        <AutomationsPageDoor projectId={projectId} />
+        {empty ? <AutomationsPageDoor projectId={projectId} /> : null}
       </RailSectionHeadingRow>
       <AutomationRunControl
         rail={rail}
@@ -197,16 +198,16 @@ export function TicketAutomationsPanel({
         onRun={run}
         onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
-      {!rail.ready || rail.listsAny ? null : (
+      {empty ? (
         // Visible and plain: one line, a report and never an action — the
         // header's own door is 20px above it, and a second copy of the same
         // door inside the empty state would be the same offer twice in one
         // glance. The button above still presses — Run once names no record,
-        // so an empty project is not an empty control. The sentence waits for
-        // the read, though: "no automations here" is a claim about the
-        // project, and an unread cache cannot make it.
+        // so an empty project is not an empty control. Both the sentence and
+        // its page door wait for the read: "no automations here" is a claim
+        // about the project, and an unread cache cannot make it.
         <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
-      )}
+      ) : null}
       <TicketRuns projectId={projectId} runs={runs} />
       <RunOnceDialog
         request={runOnce}
@@ -222,7 +223,7 @@ export function TicketAutomationsPanel({
 }
 
 /**
- * The one door from the rail to the Automations page, in the header row.
+ * The empty rail's one door to the Automations page, in the header row.
  *
  * An icon at `icon-xs` ghost — the rung the Sessions header's own control sits
  * at, level with a text-label eyebrow — and not a word, because the word is
@@ -246,7 +247,7 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
           data-testid="ticket-rail-automations-page"
           onClick={() => useWorkspaceStore.getState().setNav(projectId, "automations")}
         >
-          <ArrowSquareOutIcon />
+          <ArrowSquareOutIcon weight="bold" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Open Automations</TooltipContent>

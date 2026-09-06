@@ -11,8 +11,8 @@
  *      state itself carries no link (VC-257: the word "Automations" once sat
  *      two lines under the eyebrow AUTOMATIONS).
  *   2. With a column armed, the split button's default half names that
- *      Automation, because the Ticket sits in that column — and the header's
- *      door is still there, which the old empty-state link never was.
+ *      Automation, because the Ticket sits in that column — without expanding
+ *      the old empty-state page door into a new populated-state control.
  *   3. The caret menu is that column's Offered list plus "Run once…" — a
  *      switched-off Automation among them, offered with its own note rather
  *      than withheld (running by hand is universal, VC-112).
@@ -154,7 +154,7 @@ try {
 
   const rail = () => page.locator('[data-testid="ticket-rail-automations"]');
 
-  /** The header's door to the page — the rail's one, in every state (VC-257). */
+  /** The empty rail's page door, moved into its header row (VC-257). */
   const pageDoor = () => rail().getByRole("button", { name: "Open Automations", exact: true });
 
   await must(
@@ -165,20 +165,39 @@ try {
       const control = page.getByLabel("Run Run once on this ticket");
       await control.waitFor({ timeout: 15000 });
       const said = await rail().innerText();
-      // The empty state is one line and never a door: the word "Automations"
-      // must not appear under the sentence as a control of its own (VC-257).
+      const heading = rail().getByRole("heading", { name: "Automations", exact: true });
+      const emptyReport = rail().getByText("No automations in this project yet.", { exact: true });
+      const door = pageDoor();
+      const [headingBox, doorBox] = await Promise.all([heading.boundingBox(), door.boundingBox()]);
+      const reportMetrics = await emptyReport.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          height: box.height,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        };
+      });
+      const doorSharesHeadingRow =
+        headingBox !== null &&
+        doorBox !== null &&
+        Math.abs(headingBox.y + headingBox.height / 2 - (doorBox.y + doorBox.height / 2)) <= 1;
+      const reportIsOneLine = reportMetrics.height <= reportMetrics.lineHeight + 1;
+      // The report is never a second door under the heading (VC-257).
       const strayLinks = await rail()
         .getByRole("button", { name: "Automations", exact: true })
         .count();
-      // The door is the header's, because the rail never authors (VC-112).
-      await pageDoor().click();
+      // The moved door still reaches the page the rail does not author (VC-112).
+      await door.click();
       await page
         .getByRole("heading", { name: "Automations", exact: true })
         .waitFor({ timeout: 15000 });
       await backToBoard();
       return {
-        ok: said.includes("No automations in this project yet.") && strayLinks === 0,
-        detail: `${said.replaceAll("\n", " ").slice(0, 200)} · stray "Automations" links: ${strayLinks}`,
+        ok:
+          said.includes("No automations in this project yet.") &&
+          strayLinks === 0 &&
+          doorSharesHeadingRow &&
+          reportIsOneLine,
+        detail: `${said.replaceAll("\n", " ").slice(0, 160)} · heading row: ${doorSharesHeadingRow} · one-line report: ${reportIsOneLine} · stray "Automations" links: ${strayLinks}`,
       };
     },
   );
@@ -233,14 +252,12 @@ try {
       await openTicket();
       const armed = page.getByLabel("Run Review sweep on this ticket");
       await armed.waitFor({ timeout: 15000 });
-      // The door survives the project having records — the old empty-state
-      // link did not, which left a rail with something to run and no way to
-      // the page that authors it (VC-257).
-      await pageDoor().waitFor({ timeout: 5000 });
+      // VC-257 moves the existing empty-state door; it does not add a new door
+      // to states where the rail already has an Automation to offer.
+      const pageDoors = await pageDoor().count();
       return {
-        ok: true,
-        detail:
-          "Doing is armed with Review sweep, the button says so, and the header's door is there",
+        ok: pageDoors === 0,
+        detail: `Doing is armed with Review sweep, the button says so, and populated-state page doors: ${pageDoors}`,
       };
     },
   );
