@@ -11,9 +11,8 @@
  * Every effectful dependency arrives through {@link ChatSessionClientDeps}: the
  * RPC edge, the flush pacing, the store written back to, and the two surface
  * effects a client triggers but does not own — a failure notice and the
- * auto-title rename. That is what lets this file be tested without a window,
- * and what will let the lab shell hand it an HTTP client instead of the IPC
- * one.
+ * auto-title rename. That is what lets this file be tested without a window
+ * and keeps a future transport from changing the resident client core.
  *
  * The seams this declares — {@link ChatSessionRpc} and {@link ChatSessionStore} —
  * are stated here rather than imported from either side. The core is the thing

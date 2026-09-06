@@ -618,8 +618,8 @@ function scrubbedNativeReference(): RendererSessionNativeReference {
  *
  * The two failure arms are deliberately distinct, mirroring the ledger's read
  * rule: an `unknown-kind` is an expected consequence of a writer newer than
- * this build (live on the lab HTTP transport, and on any replay) and the
- * caller keeps the envelope while folding nothing; `malformed` is corruption
+ * this build (from a future host, or on any replay) and the caller keeps the
+ * envelope while folding nothing; `malformed` is corruption
  * of a known kind and the caller surfaces it.
  */
 export type RendererSessionEventParse =
