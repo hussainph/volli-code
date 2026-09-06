@@ -41,7 +41,15 @@ import {
 } from "./activity-island";
 
 function tab(over: Partial<IslandTab> = {}): IslandTab {
-  return { id: "t1", host: "github.com", state: "ready", promoted: false, ...over };
+  return {
+    id: "t1",
+    host: "github.com",
+    state: "ready",
+    promoted: false,
+    surface: null,
+    owner: null,
+    ...over,
+  };
 }
 
 function agent(over: Partial<IslandAgent> = {}): IslandAgent {
@@ -161,11 +169,19 @@ describe("tabs", () => {
   });
 
   it("says loading over promoted, and nothing when there is nothing to say", () => {
-    expect(tabStateWord(tab({ state: "loading", promoted: true }))).toBe("loading");
-    expect(tabStateWord(tab({ promoted: true }))).toBe("in pane");
+    expect(tabStateWord(tab({ state: "loading", promoted: true, surface: "preview" }))).toBe(
+      "loading",
+    );
     expect(tabStateWord(tab())).toBeNull();
     expect(tabsLoading([tab(), tab({ id: "t2", state: "loading" })])).toBe(true);
     expect(tabsLoading([tab()])).toBe(false);
+  });
+
+  it("tells the two visible places apart — pinned in this chat, or out in the strip (VC-268)", () => {
+    // `promoted` is one boolean for the pill; the card's caption answers
+    // "where", and a preview above this composer is not a tab in the strip.
+    expect(tabStateWord(tab({ promoted: true, surface: "preview" }))).toBe("pinned here");
+    expect(tabStateWord(tab({ promoted: true, surface: "tab" }))).toBe("as a tab");
   });
 });
 
