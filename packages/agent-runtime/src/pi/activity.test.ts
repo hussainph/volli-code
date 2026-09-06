@@ -20,6 +20,31 @@ function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivity
 }
 
 describe("mapPiActivity", () => {
+  it("files a todo_write call as the plan kind, so the plan surfaces can find it (VC-6)", () => {
+    // Without this mapping the call lands as `other`: the durable record would
+    // still hold the list, and nothing drawing a plan would ever look at it.
+    const call = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-9",
+        toolName: "todo_write",
+        result: { content: [{ type: "text", text: "The todo list is now:" }] },
+        isError: false,
+      },
+      activityContext({
+        input: { todos: [{ content: "Write the tool", status: "in_progress" }] },
+        startedAt: 10,
+        observedAt: 12,
+      }),
+    );
+
+    expect(call).toMatchObject({
+      state: "completed",
+      input: { todos: [{ content: "Write the tool", status: "in_progress" }] },
+      descriptor: { kind: "plan", nativeToolName: "todo_write" },
+    });
+  });
+
   it("maps exact Pi read lifecycle shapes and retains settled input context", () => {
     const startedEvent = {
       type: "tool_execution_start",

@@ -108,6 +108,21 @@ export const NON_CODING_TOOL_IDS = [
   "browser_acquire",
   /** Giving a hold back before the turn ends. */
   "browser_release",
+  /**
+   * Rewriting this Session's todo list, whole, so a person can see progress
+   * at a glance and the ticket keeps the last version (VC-6).
+   *
+   * The one name here with no port behind it, and the exception is deliberate
+   * rather than an oversight: a checklist needs no environment, no file and no
+   * host to answer, so there is nothing whose presence could decide membership.
+   * {@link RuntimeToolBundle.todoWrite} says it instead — the same place a
+   * verb's membership is said, for the same reason.
+   *
+   * Appended, like the hold pair before it: the Cache Prefix is computed over
+   * the serialized tool array, and a Session frozen without this name keeps its
+   * shorter list and every position in it.
+   */
+  "todo_write",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

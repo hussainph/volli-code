@@ -254,7 +254,7 @@ describe("sessionToolIds", () => {
     // a Snapshot built from this call cannot under-report the surface, whatever
     // the surface holds.
     const everything = sessionToolIds({
-      tools: { tools: ["read", "edit", "write", "execute"] },
+      tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
       askUser: port,
       webFetch: port,
       webSearch: port,
@@ -262,7 +262,37 @@ describe("sessionToolIds", () => {
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
-    expect(everything).toHaveLength(15);
+    expect(everything).toHaveLength(16);
+  });
+
+  it("takes todo_write from the bundle rather than a port, and puts it last in the vocabulary (VC-6)", () => {
+    // The one interaction tool with nothing behind it: a todo list needs no
+    // environment, no file and no host to answer, so there is no port whose
+    // presence could decide membership. The bundle says it instead, exactly as
+    // it does for a verb.
+    expect(sessionToolIds({ tools: { tools: [], todoWrite: true } })).toEqual(["todo_write"]);
+    expect(sessionToolIds({ tools: { tools: [] } })).toEqual([]);
+    expect(sessionToolIds({ tools: { tools: ["read"], todoWrite: true }, askUser: port })).toEqual([
+      "read",
+      "ask_user",
+      "todo_write",
+    ]);
+  });
+
+  it("binds todo_write with no port, so the runtime has nothing to null-check (VC-6)", () => {
+    expect(sessionToolBindings({ tools: { tools: [], todoWrite: true } })).toEqual([
+      { tool: "todo_write" },
+    ]);
+  });
+
+  it("leaves a surface frozen before todo_write existed exactly as it was (VC-6)", () => {
+    // The reason membership is a bundle flag and not an unconditional arm: the
+    // Pi adapter refuses an attachment whose derived tool array disagrees with
+    // the durable record, so a name that appeared on its own would refuse every
+    // Session that predates it.
+    expect(
+      sessionToolIds({ tools: { tools: ["read", "edit"] }, askUser: port, webFetch: port }),
+    ).toEqual(["read", "edit", "ask_user", "web_fetch"]);
   });
 
   it("puts the Role's verbs last, after every capability tool (VC-162)", () => {

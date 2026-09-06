@@ -103,6 +103,34 @@ const ACTING_ENV: AgentRequest["ctx"]["env"] = {
  * twice would otherwise disarm its own earlier requests.
  */
 const mintedFor = new Map<string, string>();
+/** One durable `todo_write` call, exactly as `observation-translation` writes it (VC-6). */
+function todoMessage(id: string, todos: readonly { content: string; status: string }[]): UIMessage {
+  return {
+    id,
+    role: "assistant",
+    parts: [
+      {
+        type: "dynamic-tool",
+        toolName: "volli.activity",
+        toolCallId: `call-${id}`,
+        state: "output-available",
+        input: { todos },
+        output: {},
+        toolMetadata: {
+          [ACTIVITY_METADATA_KEY]: {
+            kind: "plan",
+            nativeToolName: "todo_write",
+            subject: { label: null, path: null, lineRange: null },
+            outcome: null,
+            startedAt: null,
+            endedAt: null,
+          },
+        },
+      },
+    ],
+  };
+}
+
 function asSession(
   sessionId: string,
   extra: { ticket?: string; socket?: string } = {},
@@ -2887,6 +2915,181 @@ describe("agent command service", () => {
       data: { session: "abcdef12", signal: "done", reason: null, recorded: true },
     });
     expect(missing).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+  });
+
+  /**
+   * VC-6: a Session that kept a todo list leaves it on the ticket when it ends.
+   *
+   * The list is not stored anywhere as "current state" — it is folded back out
+   * of the same durable transcript the Session recorded, which is exactly what
+   * makes it survive a relaunch. So the fixture writes the calls the way the
+   * runtime does and then asks the verb, rather than seeding a value.
+   */
+  describe("the final todo list on a lifecycle signal (VC-6)", () => {
+    const PROVENANCE = {
+      source: { kind: "adapter" as const, id: "pi", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+
+    async function ticketSession(messages: readonly UIMessage[]) {
+      ctx = openTestDb();
+      insertProject(
+        ctx.db,
+        testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+      );
+      insertTicket(ctx.db, testTicket("project-one", { id: "ticket-one", ticketNumber: 6 }));
+      const sessionEngine = createDesktopSessionEngine(ctx.db);
+      const created = await sessionEngine.createSession({
+        commandId: "create-structured",
+        projectId: "project-one",
+        ticketId: "ticket-one",
+        // A Ticket Session, which is the Role that has a ticket to comment on.
+        role: "ticket",
+        parentSessionId: null,
+        provenance: PROVENANCE,
+        title: null,
+      });
+      for (const [index, message] of messages.entries()) {
+        await sessionEngine.observe({
+          id: `transcript-${index}`,
+          kind: "transcript.referenced",
+          sessionId: created.session.id,
+          attachmentId: null,
+          occurredAt: 1_000 + index,
+          provenance: PROVENANCE,
+          turnId: null,
+          reference: await artifacts.write({
+            version: 1,
+            threadId: "thread-1",
+            branchId: "branch-1",
+            attemptId: "attempt-1",
+            turnId: null,
+            message,
+          }),
+        });
+      }
+      return {
+        sessionId: created.session.id,
+        service: createAgentCommandService({
+          db: ctx.db,
+          sessionEngine,
+          appVersion: "1.2.3",
+          readTranscriptArtifact: (reference) => artifacts.read(reference),
+        }),
+      };
+    }
+
+    it("posts the last version of the list as a ticket comment on session done", async () => {
+      const { service, sessionId } = await ticketSession([
+        todoMessage("m1", [
+          { content: "Read the ticket", status: "in_progress" },
+          { content: "Write the tool", status: "pending" },
+        ]),
+        todoMessage("m2", [
+          { content: "Read the ticket", status: "completed" },
+          { content: "Write the tool", status: "completed" },
+          { content: "Revive the dock", status: "cancelled" },
+        ]),
+      ]);
+
+      const done = await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: { reason: "Tests pass" },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(done).toMatchObject({ ok: true, data: { signal: "done", recorded: true } });
+      const comments = listComments(ctx.db, "ticket-one");
+      expect(comments).toHaveLength(1);
+      // The LAST list, not the first: each call replaced the whole thing.
+      expect(comments[0]?.body).toBe(
+        [
+          "Todo list at session done:",
+          "",
+          "- [x] Read the ticket",
+          "- [x] Write the tool",
+          "- [~] Revive the dock (cancelled)",
+        ].join("\n"),
+      );
+      // Attributed to the Session that wrote it, exactly as `ticket comment` is.
+      expect(comments[0]).toMatchObject({ actor: "session", sessionId });
+    });
+
+    it("posts it on session blocked too, where an unfinished list is the point", async () => {
+      const { service, sessionId } = await ticketSession([
+        todoMessage("m1", [
+          { content: "Read the ticket", status: "completed" },
+          { content: "Get the credentials", status: "in_progress" },
+        ]),
+      ]);
+
+      await service.execute({
+        v: 1,
+        cmd: "session.blocked",
+        args: { reason: "Needs credentials" },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(listComments(ctx.db, "ticket-one")[0]?.body).toBe(
+        [
+          "Todo list at session blocked:",
+          "",
+          "- [x] Read the ticket",
+          "- [ ] Get the credentials (in progress)",
+        ].join("\n"),
+      );
+    });
+
+    it("leaves no comment for a Session that never kept a list", async () => {
+      // Silence is the right answer: a comment saying "no todo list" is noise
+      // on every ticket whose Session did not use the tool.
+      const { service, sessionId } = await ticketSession([
+        { id: "m1", role: "assistant", parts: [{ type: "text", text: "done" }] },
+      ]);
+
+      await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(listComments(ctx.db, "ticket-one")).toHaveLength(0);
+    });
+
+    it("writes no comment for a dry run, which promises to write nothing at all", async () => {
+      const { service, sessionId } = await ticketSession([
+        todoMessage("m1", [{ content: "Read the ticket", status: "completed" }]),
+      ]);
+
+      await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: { dryRun: true },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(listComments(ctx.db, "ticket-one")).toHaveLength(0);
+    });
+
+    it("still records the signal when the ticket comment cannot be written", async () => {
+      // The signal is the verb's job and it already committed. A comment that
+      // failed afterwards must not turn a recorded `done` into a refusal.
+      const { service, sessionId } = await ticketSession([
+        todoMessage("m1", [{ content: "Read the ticket", status: "completed" }]),
+      ]);
+      ctx.db.exec("DROP TABLE ticket_comments");
+
+      const done = await service.execute({
+        v: 1,
+        cmd: "session.done",
+        args: {},
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+
+      expect(done).toMatchObject({ ok: true, data: { signal: "done", recorded: true } });
+    });
   });
 
   it("accepts a lifecycle signal from a structured session with no terminal attachment (VC-51)", async () => {

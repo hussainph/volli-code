@@ -49,7 +49,7 @@ import {
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
-import { sessionToolBindings, verbEntry } from "@volli/shared";
+import { parseTodoList, sessionToolBindings, todoListMarkdown, verbEntry } from "@volli/shared";
 import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
@@ -204,6 +204,11 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         return createWebFetchTool(binding.port, spec.signal);
       case "web_search":
         return createWebSearchTool(binding.port, spec.signal);
+      case "todo_write":
+        // The one arm that takes neither the environment nor a port: the
+        // binding carries a name because there is nothing behind the name to
+        // carry (VC-6).
+        return createTodoWriteTool();
       case "browser_tabs":
       case "browser_navigate":
       case "browser_snapshot":
@@ -458,6 +463,102 @@ export function createAskUserTool(
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }
+    },
+  };
+}
+
+/** The name the model calls to rewrite its checklist (VC-6). */
+export const TODO_WRITE_TOOL_NAME = "todo_write" satisfies NonCodingToolId;
+
+/**
+ * What the todo list is FOR, in the only place the model will read it.
+ *
+ * Written to keep the list honest rather than to make the model plan better.
+ * Newer models already track multi-step work on their own — which is why Claude
+ * Code leaves its task tools out by default on its newest models — so the value
+ * here is entirely in what a WATCHING PERSON sees and what the ticket keeps.
+ * A list that is written once and never updated is worse than no list: it says
+ * the Session is on step two long after it finished.
+ *
+ * The replace-the-whole-list rule is stated twice, in the description and in
+ * the schema, because it is the one thing a model used to an append-only tool
+ * will get wrong — and getting it wrong silently truncates the plan.
+ */
+const TODO_WRITE_DESCRIPTION = [
+  "Rewrite this session's todo list, so the person watching can see progress at a glance and the ticket keeps the final version.",
+  "Each call REPLACES the whole list: send every item every time, including the ones already finished.",
+  "Use it for work worth several steps. Keep exactly one item in_progress, mark an item completed as soon as it is done rather than in a batch at the end, and use cancelled for a step you decided against instead of deleting it.",
+  "Do not use it to narrate a single action, and do not use it to think out loud — the items are for a person skimming, so write them as short outcomes.",
+].join(" ");
+
+const todoWriteSchema = Type.Object({
+  todos: Type.Array(
+    Type.Object({
+      content: Type.String({ description: "The step, as one short outcome." }),
+      // Spelled as a literal tuple rather than mapped over `TODO_STATUSES`,
+      // because TypeBox reads the static type off the TUPLE: a `.map` over the
+      // vocabulary produces an array, whose union statics to `never`, and every
+      // call site then loses the four names.
+      //
+      // Which leaves the tuple free to drift from `TODO_STATUSES`, so a test
+      // reads these members back off the built schema and compares them to the
+      // vocabulary. That check belongs in the suite rather than in an import-
+      // time guard here: drift is a build bug, and a build bug should fail CI
+      // rather than the first Session that loads this module in production.
+      status: Type.Union(
+        [
+          Type.Literal("pending"),
+          Type.Literal("in_progress"),
+          Type.Literal("completed"),
+          Type.Literal("cancelled"),
+        ],
+        { description: "Where this step stands. Keep at most one in_progress." },
+      ),
+    }),
+    {
+      description:
+        "The whole list, in order. This replaces any previous list; an empty array clears it.",
+    },
+  ),
+});
+
+/**
+ * Let the model keep a todo list, and hand it straight back.
+ *
+ * The shortest tool in this file, and deliberately so: it has no environment,
+ * no port and no host to ask. A call's whole durable effect is the call itself
+ * — the runtime observes it, the Session Engine writes it as a durable message,
+ * and every reader of "the list as it stands now" folds the newest one out of
+ * that history. So there is nothing here to store and nothing to fail.
+ *
+ * Returning the FULL LIST rather than an acknowledgement is the one decision
+ * worth its own sentence. Compaction drops older tool calls out of what the
+ * provider sees, so a model that had written six versions of its list could
+ * lose all of them and carry on against a plan it can no longer read. The
+ * newest RESULT survives where the newest CALL may not, so the result is where
+ * the list belongs. Codex has an open issue about exactly this; it costs a few
+ * dozen tokens to avoid.
+ *
+ * No signal is watched, unlike every other tool here: there is nothing in
+ * flight to withdraw. An aborted turn simply never reaches this function.
+ */
+export function createTodoWriteTool(): AgentTool<typeof todoWriteSchema, undefined> {
+  return {
+    name: TODO_WRITE_TOOL_NAME,
+    label: "todo",
+    description: TODO_WRITE_DESCRIPTION,
+    parameters: todoWriteSchema,
+    async execute(_toolCallId, params): Promise<AgentToolResult<undefined>> {
+      // Parsed rather than trusted, for the reason every boundary in this file
+      // parses: the schema is a request to a provider, not a guarantee from
+      // one. A payload that survives the schema and still says nothing lands on
+      // the same empty answer a deliberate clear does.
+      const list = parseTodoList(params) ?? [];
+      const text =
+        list.length === 0
+          ? "The todo list is now empty."
+          : `The todo list is now:\n${todoListMarkdown(list)}`;
+      return { content: [{ type: "text", text }], details: undefined };
     },
   };
 }

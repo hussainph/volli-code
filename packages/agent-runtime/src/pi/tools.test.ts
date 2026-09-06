@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-age
 import sharp from "sharp";
 import {
   NON_CODING_TOOL_IDS,
+  TODO_STATUSES,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -18,6 +19,7 @@ import {
   ASK_USER_TOOL_NAME,
   createAskUserTool,
   createSessionTools,
+  createTodoWriteTool,
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
@@ -1121,5 +1123,85 @@ describe("createVerbTool", () => {
     );
     await aborted.execute("tc-2", { ticket: "VC-1" });
     expect(signals[1]?.aborted).toBe(true);
+  });
+});
+
+describe("createTodoWriteTool", () => {
+  it("answers a call with the whole list, so a compacted context still holds the plan", async () => {
+    // The reason the result is not "ok": every earlier todo_write call drops
+    // out of what the provider sees when the context is compacted, so the
+    // newest call's RESULT is the only copy of the list left in view.
+    const tool = createTodoWriteTool();
+    const result = await tool.execute(
+      "call-1",
+      {
+        todos: [
+          { content: "Read the ticket", status: "completed" },
+          { content: "Write the tool", status: "in_progress" },
+          { content: "Wire the island", status: "pending" },
+        ],
+      },
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe(
+      [
+        "The todo list is now:",
+        "- [x] Read the ticket",
+        "- [ ] Write the tool (in progress)",
+        "- [ ] Wire the island",
+      ].join("\n"),
+    );
+  });
+
+  it("says so when the model clears the list, rather than answering with nothing", async () => {
+    const result = await createTodoWriteTool().execute(
+      "call-2",
+      { todos: [] },
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("answers a payload the schema should have stopped, instead of throwing on it", async () => {
+    // The schema is a REQUEST to a provider, not a guarantee from one, so the
+    // arguments are parsed rather than trusted. A call that arrives with no
+    // `todos` at all lands on the same empty answer a deliberate clear does —
+    // the alternative is a tool that throws inside a turn over a payload the
+    // model cannot see it sent wrong.
+    const result = await createTodoWriteTool().execute(
+      "call-3",
+      {} as Parameters<ReturnType<typeof createTodoWriteTool>["execute"]>[1],
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("offers exactly the statuses the rest of the app understands (VC-6)", () => {
+    // The schema's status tuple is written out by hand, because TypeBox reads
+    // the static type off a TUPLE and a `.map` over the vocabulary would leave
+    // every call site with `never`. This is what stops the hand-written tuple
+    // drifting: a status added to `TODO_STATUSES` and not to the schema would
+    // otherwise leave the model unable to send a state Volli can read, and one
+    // removed would have it sending a state the provider refuses.
+    const status = createTodoWriteTool().parameters.properties.todos.items.properties.status;
+
+    expect(status.anyOf.map((member) => member.const)).toEqual([...TODO_STATUSES]);
+  });
+
+  it("is offered exactly when the bundle names it, and reaches no environment", () => {
+    // No `env` argument at all: the tool has no file, no command and no port,
+    // which is why it can be built from a bundle flag alone.
+    const names = createSessionTools(
+      { tools: { tools: ["read"], todoWrite: true } },
+      null as never,
+    ).map((tool) => tool.name);
+
+    expect(names).toEqual(["read", "todo_write"]);
+    expect(
+      createSessionTools({ tools: { tools: ["read"] } }, null as never).map((tool) => tool.name),
+    ).toEqual(["read"]);
   });
 });

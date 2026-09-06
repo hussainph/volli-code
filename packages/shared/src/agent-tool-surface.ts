@@ -145,7 +145,7 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
  * port the host wired. A Subagent Session is bounded twice more: by this
  * policy, and by its parent's own frozen surface (`within`, below).
  *
- * The one capability a subagent is never offered is `ask_user`. The person
+ * The first capability a subagent is never offered is `ask_user`. The person
  * driving did not start that Session and is not in front of it; a question
  * from it would arrive inside work they had handed to someone else, and its
  * answer would be read by a model they never spoke to. Withholding the NAME
@@ -155,6 +155,15 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
  * can read but not edit the tree it was asked to fix is a helper that reports
  * a diff nobody applies.
  *
+ * The second is `todo_write` (VC-6), withheld on `ask_user`'s own ground. A
+ * todo list has exactly two readers: a person watching the Session live, and
+ * the Ticket comment its lifecycle signal leaves behind. A Subagent Session
+ * has neither — nobody is in front of it, and its parent's Ticket is commented
+ * by the parent — so a list a child kept would be written for no one, while
+ * still costing every child's Cache Prefix the tool's schema and description.
+ * Reopen this the moment a child's plan gains a reader: the peek overlay
+ * (VC-269) is that reader, and deleting the name below is the whole change.
+ *
  * Total over {@link SessionRole} for the reason the bundle map is.
  */
 const ROLE_CAPABILITY_POLICY: Readonly<
@@ -162,7 +171,9 @@ const ROLE_CAPABILITY_POLICY: Readonly<
 > = Object.freeze({
   project: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
   ticket: Object.freeze({ withheld: Object.freeze([]) as readonly NonCodingToolId[] }),
-  subagent: Object.freeze({ withheld: Object.freeze(["ask_user"]) as readonly NonCodingToolId[] }),
+  subagent: Object.freeze({
+    withheld: Object.freeze(["ask_user", "todo_write"]) as readonly NonCodingToolId[],
+  }),
 });
 
 /** The verbs one Role holds before any grant. Registry data, never a live read. */

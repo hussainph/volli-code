@@ -55,9 +55,9 @@ function shell(over: Partial<IslandShell> = {}): IslandShell {
 const PLAN: IslandPlan = {
   id: "p1",
   steps: [
-    { id: "step-1", title: "Read" },
-    { id: "step-2", title: "Sketch" },
-    { id: "step-3", title: "Wire" },
+    { id: "step-1", title: "Read", state: "completed" },
+    { id: "step-2", title: "Sketch", state: "in_progress" },
+    { id: "step-3", title: "Wire", state: "pending" },
   ],
   done: 1,
 };
@@ -476,8 +476,8 @@ describe("row verbs", () => {
     const repeated: IslandPlan = {
       id: "p2",
       steps: [
-        { id: "step-a", title: "Review" },
-        { id: "step-b", title: "Review" },
+        { id: "step-a", title: "Review", state: "pending" },
+        { id: "step-b", title: "Review", state: "pending" },
       ],
       done: 0,
     };
@@ -487,6 +487,29 @@ describe("row verbs", () => {
     expect(card("plan")?.querySelectorAll("[data-island-row]")).toHaveLength(2);
     click(rowIn("plan", "step-b"));
     expect(actions.jumpStep).toHaveBeenCalledWith("step-b");
+  });
+
+  it("draws a dropped step dimmed and says so, rather than as one still waiting (VC-6)", async () => {
+    // `cancelled` has no glyph of its own on purpose — a cancelled row that
+    // drew like a pending one would read as work still to come, and one that
+    // drew like a done one would read as work that happened.
+    const dropped: IslandPlan = {
+      id: "p3",
+      steps: [
+        { id: "step-a", title: "Read", state: "completed" },
+        { id: "step-b", title: "Revive the dock", state: "cancelled" },
+      ],
+      done: 1,
+    };
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan: dropped }, actionsSpy());
+    click(cluster("plan"));
+    await settle();
+
+    const row = card("plan")?.querySelector("[data-island-row='step-b']");
+    expect(row?.textContent).toContain("Revive the dock");
+    expect(row?.textContent).toContain("dropped");
+    // Not the "now" a current step takes, and not the tick a done step takes.
+    expect(row?.textContent).not.toContain("now");
   });
 });
 

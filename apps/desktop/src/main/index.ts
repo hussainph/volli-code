@@ -994,6 +994,11 @@ app.whenReady().then(async () => {
                   "browser_console",
                   "browser_acquire",
                   "browser_release",
+                  // Standing, like `ask_user`, and for a stronger reason: the
+                  // todo tool needs nothing wired at all (VC-6). Every new
+                  // Session records it; a Session frozen before it existed
+                  // keeps its shorter list and is simply offered no todo tool.
+                  "todo_write",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable

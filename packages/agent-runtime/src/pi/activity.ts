@@ -55,6 +55,12 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   // its own, because it is the only one whose row opens something — the child
   // Session — rather than reporting a fact.
   session_delegate: "delegate",
+  // The tool is `todo_write` and the kind is `plan`, and the mismatch is
+  // deliberate on both sides (VC-6). The TOOL is not called `plan` because
+  // `agent-plan.ts` already means the dry-run preview of a write. The KIND is,
+  // because it was spelled that way before anything produced it and shipped
+  // history is not worth churning for a rename.
+  todo_write: "plan",
 };
 
 /**
