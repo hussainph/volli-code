@@ -635,6 +635,12 @@ describe("one Run request's identity", () => {
     ).toBe(true);
     expect(
       sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { kind: "tier", tier: "fast" } },
+        { instructions: null, modelOverride: { kind: "tier", tier: "fast" } },
+      ),
+    ).toBe(true);
+    expect(
+      sameAutomationRunRequestIdentity(
         { instructions: null, modelOverride: null },
         { instructions: null, modelOverride: null },
       ),
@@ -687,6 +693,24 @@ describe("one Run request's identity", () => {
         { instructions: null, modelOverride: OPUS },
       ),
     ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { kind: "tier", tier: "fast" } },
+        { instructions: null, modelOverride: { kind: "tier", tier: "deep" } },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: { kind: "tier", tier: "fast" } },
+        { instructions: null, modelOverride: OPUS },
+      ),
+    ).toBe(false);
+    expect(
+      sameAutomationRunRequestIdentity(
+        { instructions: null, modelOverride: OPUS },
+        { instructions: null, modelOverride: { kind: "tier", tier: "fast" } },
+      ),
+    ).toBe(false);
   });
 
   it("files a retry under the whole intent, never under the Ticket alone", () => {
@@ -700,6 +724,23 @@ describe("one Run request's identity", () => {
     );
     expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS })).not.toBe(
       automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: GPT }),
+    );
+    // A named tier is neither inherit nor a pin, and two tier names are two
+    // intents. Prefixing every arm also keeps a provider/model pair from ever
+    // spelling the same key as a tier by coincidence.
+    const fast = { kind: "tier", tier: "fast" } as const;
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: fast })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: null }),
+    );
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: fast })).not.toBe(
+      automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: OPUS }),
+    );
+    expect(automationRunRetryKey({ target: bound, ticketId: "t1", modelOverride: fast })).not.toBe(
+      automationRunRetryKey({
+        target: bound,
+        ticketId: "t1",
+        modelOverride: { kind: "tier", tier: "deep" },
+      }),
     );
     // Edited Instructions are a second Run for the same reason.
     expect(

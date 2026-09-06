@@ -498,13 +498,14 @@ export function unboundRunProblem(instructions: string): string | null {
  */
 export interface AutomationRunRequestIdentity {
   instructions: string | null;
-  modelOverride: ModelSelection | null;
+  /** Inherit, an exact pin, or a tier to resolve when this Run starts. */
+  modelOverride: ValidAutomationRuntime;
 }
 
 /** One Run request's identity, read off the target and the invocation's override. */
 export function automationRunRequestIdentity(input: {
   target: AutomationRunTarget;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
 }): AutomationRunRequestIdentity {
   return {
     instructions: input.target.kind === "unbound" ? input.target.instructions : null,
@@ -521,6 +522,13 @@ export function sameAutomationRunRequestIdentity(
   if (left.modelOverride === null || right.modelOverride === null) {
     return left.modelOverride === right.modelOverride;
   }
+  if (isAutomationRuntimeTier(left.modelOverride)) {
+    return (
+      isAutomationRuntimeTier(right.modelOverride) &&
+      left.modelOverride.tier === right.modelOverride.tier
+    );
+  }
+  if (isAutomationRuntimeTier(right.modelOverride)) return false;
   return (
     left.modelOverride.providerId === right.modelOverride.providerId &&
     left.modelOverride.modelId === right.modelOverride.modelId &&
@@ -542,13 +550,15 @@ export function sameAutomationRunRequestIdentity(
 export function automationRunRetryKey(input: {
   target: AutomationRunTarget;
   ticketId: string;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
 }): string {
   const identity = automationRunRequestIdentity(input);
   const override =
     identity.modelOverride === null
       ? "inherit"
-      : `${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
+      : isAutomationRuntimeTier(identity.modelOverride)
+        ? `tier:${identity.modelOverride.tier}`
+        : `pin:${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
   return [
     automationRunTargetId(input.target) ?? "unbound",
     identity.instructions ?? "",
