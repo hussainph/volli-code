@@ -632,21 +632,87 @@ function renderConflicts(data: Record<string, unknown>): string {
 }
 
 /**
- * The model.list catalog: the app default first, then one header line per
- * provider with its copyable `provider/model` rows and reasoning levels
- * beneath it, and honest rollups for unavailable providers and models inside
- * a shown provider. The command never offers that signed-out catalog to an
- * agent, so the rollups explain the smaller answer without advertising it.
+ * One tier row of the model.list table, in the cells the printer aligns.
+ *
+ * `model` is null for two different reasons and the row must say which: a
+ * tier NO rung configures (`resolvedFrom` null too) is `unset`, the state a
+ * Session start would be refused in; a tier that resolved to a model the
+ * profile can no longer run (`resolvedFrom` kept, model withheld) is
+ * `not available`, a sign-in away from working. Collapsing them into one
+ * word would send someone to Settings to configure a row they already had.
+ */
+interface ModelTierCells {
+  tier: string;
+  model: string;
+  reasoning: string;
+  via: string;
+}
+
+function modelTierCells(row: Record<string, unknown>): ModelTierCells {
+  const tier = terminalSafeInline(row["tier"]);
+  const resolvedFrom = typeof row["resolvedFrom"] === "string" ? row["resolvedFrom"] : null;
+  if (typeof row["model"] !== "string") {
+    return {
+      tier,
+      model: resolvedFrom === null ? "unset" : "not available",
+      reasoning: "",
+      via: "",
+    };
+  }
+  return {
+    tier,
+    model: terminalSafeInline(row["model"]),
+    reasoning: typeof row["reasoning"] === "string" ? terminalSafeInline(row["reasoning"]) : "",
+    // Inherited rows name the rung that supplied the model — the same fact
+    // the Settings row states when it is unset. An explicit row says nothing.
+    via:
+      resolvedFrom !== null && resolvedFrom !== row["tier"]
+        ? `via ${terminalSafeInline(resolvedFrom)}`
+        : "",
+  };
+}
+
+/**
+ * The model.list catalog: the app default first, then the tier table — one
+ * aligned line per tier saying which model it resolves to and through which
+ * rung — then one header line per provider with its copyable
+ * `provider/model` rows and reasoning levels beneath it, and honest rollups
+ * for unavailable providers and models inside a shown provider. The command
+ * never offers that signed-out catalog to an agent, so the rollups explain the
+ * smaller answer without advertising it.
+ *
+ * The `default` line is the tier table's `ticket` row under the name older
+ * callers copy from; both print, and the table's widths include it so the two
+ * read as one block.
  */
 function renderModelList(data: Record<string, unknown>): string | null {
   const providers = recordsAt(data, "providers");
   if (providers === null) return null;
   const def = data["default"];
-  const lines = [
+  const defaultCells: ModelTierCells =
     isRecord(def) && typeof def["model"] === "string"
-      ? `default  ${terminalSafeInline(def["model"])}  ${terminalSafeInline(def["reasoning"])}`
-      : "default  -",
-  ];
+      ? {
+          tier: "default",
+          model: terminalSafeInline(def["model"]),
+          reasoning: terminalSafeInline(def["reasoning"]),
+          via: "",
+        }
+      : { tier: "default", model: "-", reasoning: "", via: "" };
+  // A response from an app that predates the table simply has no tier rows.
+  const tierRows = [defaultCells, ...(recordsAt(data, "tiers") ?? []).map(modelTierCells)];
+  const tierWidth = Math.max(...tierRows.map((row) => row.tier.length));
+  const modelWidth = Math.max(...tierRows.map((row) => row.model.length));
+  const reasoningWidth = Math.max(...tierRows.map((row) => row.reasoning.length));
+  const lines = tierRows.map((row) =>
+    [
+      row.tier.padEnd(tierWidth),
+      row.model.padEnd(modelWidth),
+      row.reasoning.padEnd(reasoningWidth),
+      row.via,
+    ]
+      .join("  ")
+      .trimEnd(),
+  );
   for (const provider of providers) {
     lines.push(
       `${terminalSafeInline(provider["id"])}  ${terminalSafeInline(provider["label"])}  ${terminalSafeInline(provider["state"])}`,

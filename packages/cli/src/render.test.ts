@@ -774,6 +774,120 @@ describe("renderCliSuccess", () => {
     ).toBe("default  -\n");
   });
 
+  it("prints the model.list tier table under the default: explicit, inherited, and unset rows", () => {
+    const options = { json: false };
+    // One line per tier, aligned so the eye can run down the tier column and
+    // the model column. An inherited row says which rung supplied it — the
+    // same fact the Settings row states — and an unset row says `unset`
+    // rather than pretending, because a Session asking for it would be refused.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: { model: "anthropic/claude-opus-5", reasoning: "low" },
+          tiers: [
+            {
+              tier: "global",
+              label: "Board chats",
+              hint: "Board chats, and the base every other tier falls back to.",
+              resolvedFrom: "global",
+              model: "anthropic/claude-opus-5",
+              reasoning: "low",
+            },
+            {
+              tier: "ticket",
+              label: "Ticket Sessions",
+              hint: "Ticket Sessions. Unset, they use the Board default.",
+              resolvedFrom: "global",
+              model: "anthropic/claude-opus-5",
+              reasoning: "low",
+            },
+            {
+              tier: "utility",
+              label: "Utility",
+              hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
+              resolvedFrom: null,
+              model: null,
+              reasoning: null,
+            },
+            {
+              tier: "fast",
+              label: "Fast",
+              hint: "Quick, cheap, bounded side work.",
+              resolvedFrom: "ticket",
+              model: "openai/gpt-mini",
+              reasoning: "low",
+            },
+            {
+              tier: "deep",
+              label: "Deep",
+              hint: "Hard reasoning, planning, judging.",
+              resolvedFrom: "deep",
+              model: "anthropic/claude-opus-5",
+              reasoning: "high",
+            },
+            {
+              tier: "visual",
+              label: "Visual",
+              hint: "Reading images, screenshots, and pages.",
+              resolvedFrom: null,
+              model: null,
+              reasoning: null,
+            },
+          ],
+          providers: [],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  anthropic/claude-opus-5  low\n" +
+        "global   anthropic/claude-opus-5  low\n" +
+        "ticket   anthropic/claude-opus-5  low   via global\n" +
+        "utility  unset\n" +
+        "fast     openai/gpt-mini          low   via ticket\n" +
+        "deep     anthropic/claude-opus-5  high\n" +
+        "visual   unset\n",
+    );
+    // A configured tier whose model the profile can no longer run: the rung
+    // survives and the model does not, so the row says which rung is signed out
+    // rather than collapsing into the same word as "never configured".
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: null,
+          tiers: [
+            {
+              tier: "fast",
+              label: "Fast",
+              hint: "Quick, cheap, bounded side work.",
+              resolvedFrom: "fast",
+              model: null,
+              reasoning: null,
+            },
+            // A malformed row is still one line, never a throw.
+            { tier: "deep", resolvedFrom: 7, model: 3, reasoning: [] },
+            null,
+          ],
+          providers: [],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe("default  -\nfast     not available\ndeep     unset\n");
+    // A response from an app that predates the table prints as before.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        { observedAt: 1_000, default: null, tiers: "not-an-array", providers: [] },
+        options,
+      ),
+    ).toBe("default  -\n");
+  });
+
   it("keeps malformed model.list provider rows legible instead of crashing", () => {
     const options = { json: false };
     // Providers survive `recordsAt`, but a row's `models`, a model's
