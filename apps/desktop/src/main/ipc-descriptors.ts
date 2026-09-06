@@ -36,6 +36,7 @@ import type {
   HarnessIpcChannel,
   IpcArgs,
   ModelAccessIpcChannel,
+  ShellIpcChannel,
   ThemeIpcChannel,
   WebAccessIpcChannel,
   UpdateIpcChannel,
@@ -306,6 +307,29 @@ export const BROWSER_IPC: {
 
 /** Every Browser Tab command, derived so handler registration cannot omit one. */
 export const BROWSER_CHANNELS = Object.keys(BROWSER_IPC) as readonly BrowserIpcChannel[];
+
+// ---- background shell descriptor table (VC-270) --------------------------
+
+const isShellIdArgs = (args: unknown[]): args is [{ shellId: string }] =>
+  args.length === 1 && isRecord(args[0]) && typeof args[0]["shellId"] === "string";
+
+export const SHELL_IPC: { readonly [C in ShellIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:shell-list": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid background shell request",
+  },
+  "volli:shell-tail": {
+    guard: isShellIdArgs,
+    invalidError: "Invalid background shell request",
+  },
+  "volli:shell-kill": {
+    guard: isShellIdArgs,
+    invalidError: "Invalid background shell request",
+  },
+};
+
+/** Every background shell command, derived so handler registration cannot omit one. */
+export const SHELL_CHANNELS = Object.keys(SHELL_IPC) as readonly ShellIpcChannel[];
 
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
