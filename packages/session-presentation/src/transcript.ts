@@ -17,6 +17,7 @@ import {
 } from "@volli/session-engine";
 import type {
   CompactionReason,
+  ReasoningDropCause,
   RendererSessionEvent,
   RendererSessionEventPayload,
   RendererSessionInteraction,
@@ -77,6 +78,15 @@ export type TranscriptCompaction = {
 export interface LiveTranscriptCompaction {
   throughSequence: number;
   reason: CompactionReason;
+}
+
+/** One durable provider-recovery notice, pinned to where it happened. */
+export interface TranscriptReasoningDrop {
+  sequence: number;
+  turnId: string;
+  afterMessageId: string | null;
+  count: number;
+  causes: readonly ReasoningDropCause[];
 }
 
 /**
@@ -170,6 +180,8 @@ export interface ChatTranscriptState {
    * that moves once or twice in a long conversation.
    */
   compactions: readonly TranscriptCompaction[];
+  /** Provider reasoning drops, oldest first, anchored in the transcript. */
+  reasoningDrops: readonly TranscriptReasoningDrop[];
 }
 
 const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
@@ -177,6 +189,7 @@ const EMPTY_OVERLAY: TranscriptOverlay = new Map();
 const EMPTY_DURABLE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 const EMPTY_PROMPT_RESOURCES: readonly string[] = [];
 const EMPTY_COMPACTIONS: readonly TranscriptCompaction[] = [];
+const EMPTY_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
 export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   frames: [],
   throughSequence: 0,
@@ -191,6 +204,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   openedInteractions: EMPTY_INTERACTION_INDEX,
   promptResources: EMPTY_PROMPT_RESOURCES,
   compactions: EMPTY_COMPACTIONS,
+  reasoningDrops: EMPTY_REASONING_DROPS,
 };
 
 /**
@@ -232,7 +246,8 @@ export function appendFrames(
   // array it was given, or the surface above re-weaves every turn on screen for
   // a fact that did not move.
   let landed: TranscriptCompaction[] | null = null;
-  // What the transcript had said when the next compaction lands. The batch
+  let landedReasoningDrops: TranscriptReasoningDrop[] | null = null;
+  // What the transcript had said when the next context notice lands. The batch
   // starts wherever the last one left off — the durable list only ever grows at
   // its end, so its last entry IS the newest thing on screen — and moves inside
   // the loop, because a batch can carry a reply and the compaction that
@@ -264,6 +279,15 @@ export function appendFrames(
       if (liveCompaction !== null && liveCompaction.throughSequence <= lastCompactionSequence) {
         liveCompaction = null;
       }
+    }
+    if (payload?.kind === "context.reasoning_dropped") {
+      (landedReasoningDrops ??= []).push({
+        sequence: frame.sequence,
+        turnId: payload.turnId,
+        afterMessageId: anchorId,
+        count: payload.count,
+        causes: payload.causes,
+      });
     }
     if (payload?.kind === "attachment.closed") liveCompaction = null;
     const settledMessage = frame.transcript?.message;
@@ -346,6 +370,10 @@ export function appendFrames(
         : new Map([...state.openedInteractions, ...opened]),
     promptResources,
     compactions: landed === null ? state.compactions : [...state.compactions, ...landed],
+    reasoningDrops:
+      landedReasoningDrops === null
+        ? state.reasoningDrops
+        : [...state.reasoningDrops, ...landedReasoningDrops],
   };
 }
 

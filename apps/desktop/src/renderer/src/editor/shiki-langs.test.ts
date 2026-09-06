@@ -51,6 +51,32 @@ const DOCUMENT_LANGUAGE_FIXTURES: ReadonlyArray<{ relPath: string; language: str
   { relPath: "Makefile", language: "makefile" },
   { relPath: "Dockerfile", language: "dockerfile" },
   { relPath: "CMakeLists.txt", language: "cmake" },
+  // VC-125 gap fill. Every one of these loads and colours under the JavaScript
+  // regex engine the editor runs on.
+  { relPath: "src/App.vue", language: "vue" },
+  { relPath: "src/App.svelte", language: "svelte" },
+  { relPath: "src/pages/index.astro", language: "astro" },
+  { relPath: "Sources/AppDelegate.m", language: "objective-c" },
+  { relPath: "Sources/Bridge.mm", language: "objective-cpp" },
+  { relPath: "fix.patch", language: "diff" },
+  { relPath: "config.hcl", language: "hcl" },
+  { relPath: "main.tf", language: "terraform" },
+  { relPath: "api/service.proto", language: "proto" },
+  { relPath: "init.lua", language: "lua" },
+  { relPath: "Main.scala", language: "scala" },
+  { relPath: "lib/main.dart", language: "dart" },
+  { relPath: "lib/app.ex", language: "elixir" },
+  { relPath: "src/Main.hs", language: "haskell" },
+  { relPath: "lib/parser.ml", language: "ocaml" },
+  { relPath: "src/main.zig", language: "zig" },
+  { relPath: "scripts/build.ps1", language: "powershell" },
+  { relPath: "analysis/model.R", language: "r" },
+  { relPath: "src/core.clj", language: "clojure" },
+  { relPath: ".env.local", language: "dotenv" },
+  { relPath: "build.gradle", language: "groovy" },
+  { relPath: "scripts/deploy.pl", language: "perl" },
+  { relPath: "scripts/build.cmd", language: "bat" },
+  { relPath: "flake.nix", language: "nix" },
 ];
 
 describe("shikiLangImportFor", () => {

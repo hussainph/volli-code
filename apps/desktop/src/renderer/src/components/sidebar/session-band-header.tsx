@@ -154,14 +154,14 @@ export function SessionBandFilterMenu({
           Terminals
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
-        {/* The globe is the mark Project Sessions use in the row identity lane. */}
+        {/* The globe is the mark Board Sessions use in the row identity lane. */}
         <DropdownMenuCheckboxItem
           checked={filter.scopes.project}
           onSelect={(event) => event.preventDefault()}
           onCheckedChange={() => toggleScope("project")}
         >
           <GlobeIcon />
-          Project sessions
+          Board sessions
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={filter.scopes.ticket}

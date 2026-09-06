@@ -94,9 +94,7 @@ describe("runCli", () => {
     );
     expect(carried).toMatchObject({
       code: "WRONG_DOOR",
-      reason: expect.stringContaining(
-        "project Session's frozen tool surface carries session.start",
-      ),
+      reason: expect.stringContaining("Board Session's frozen tool surface carries session.start"),
       next: expect.stringContaining("named session.start tool"),
     });
 
@@ -112,7 +110,7 @@ describe("runCli", () => {
     expect(absent).toMatchObject({
       code: "WRONG_DOOR",
       reason: expect.stringContaining(
-        "ticket Session's frozen tool surface does not carry session.start",
+        "Ticket Session's frozen tool surface does not carry session.start",
       ),
       next: expect.stringContaining("do not bypass the refusal"),
     });

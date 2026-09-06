@@ -58,7 +58,7 @@ const REFUSED = {
 
 /**
  * The durable policy every structured Session records before anything attaches
- * — a project chat's from the app default, a Ticket Session's the same. A
+ * — a Board chat's from the app default, a Ticket Session's the same. A
  * projection without one is a Session whose model has not been written down,
  * which is what the deliverability tests below vary.
  */
@@ -544,7 +544,7 @@ describe("session derivations", () => {
     expect(isWorking(sliceOf({ transcript: turning }))).toBe(false);
   });
 
-  it("asks the same durable model policy of a project chat and a Ticket Session", () => {
+  it("asks the same durable model policy of a Board chat and a Ticket Session", () => {
     // The carve-out that used to live here read birth as a licence to deliver
     // without one. Both Roles record the app default before anything attaches
     // now, so an absent selection means the same thing on either.
@@ -1621,6 +1621,46 @@ describe("auto-title on delivery", () => {
         refineFrom: "Fix the parser",
       },
     ]);
+  });
+
+  it("refines a composed start's seeded fallback from its opening message", async () => {
+    const { client, sessionId, renames } = await readyWithTitle("Work on VC-42");
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+          autoTitleBaseline: "Work on VC-42",
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    expect(renames).toEqual([
+      {
+        sessionId,
+        title: "Work on VC-42",
+        refineFrom: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+      },
+    ]);
+  });
+
+  it("protects a human rename made after a composed start was seeded", async () => {
+    const { client, renames } = await readyWithTitle("My release review");
+
+    await expect(
+      client.submit(
+        {
+          id: "m1",
+          text: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+          autoTitleBaseline: "Work on VC-42",
+        },
+        "queue",
+      ),
+    ).resolves.toBe("delivered");
+
+    expect(renames).toEqual([]);
   });
 
   it("leaves every user title alone, including one that resembles the old default", async () => {

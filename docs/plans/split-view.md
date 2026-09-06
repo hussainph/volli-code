@@ -287,7 +287,7 @@ Surface integration:
     `{ relPath }`.
   - The zones listen natively too (`onDragOver`/`onDrop` + a window-level
     `dragenter`/`dragleave` counter to show the overlay), validate the payload **scope against
-    the surface** (a ticket-A session cannot land on ticket B or Home; a project session lands
+    the surface** (a ticket-A session cannot land on ticket B or Home; a Board Session lands
     only on Home; files resolve against the surface's own checkout), and route: chat → adopt +
     open tab in target pane; terminal → move its existing tab's pane assignment; file → preview
     + assign. Foreign payloads render no zones at all.

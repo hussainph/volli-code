@@ -528,8 +528,8 @@ export const Board = React.memo(function Board({
   }, [selectedIds.length, projectId, selectTicket, dragging]);
 
   // distance: 4 keeps plain clicks (selection, context menu) working — the
-  // drag only activates after real pointer travel. Keyboard drags come free
-  // with the sortable coordinate getter.
+  // drag only activates after pointer travel through the browser event
+  // pipeline. Keyboard drags come free with the sortable coordinate getter.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),

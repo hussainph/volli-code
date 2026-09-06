@@ -347,7 +347,7 @@ describe("RpcDiagnosticLog", () => {
     const sensitive = log.record({
       procedure: "session.command",
       phase: "error",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: "INTERNAL_SERVER_ERROR",
       message:
         'token=super-secret prompt="do not leak" provider={"raw":"body"} /Users/alice/private.txt',
@@ -355,7 +355,7 @@ describe("RpcDiagnosticLog", () => {
     log.record({
       procedure: "session.snapshot",
       phase: "success",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: null,
       message: null,
     });
@@ -364,7 +364,7 @@ describe("RpcDiagnosticLog", () => {
     log.record({
       procedure: "session.reconcile",
       phase: "start",
-      transport: "lab-http",
+      transport: "electron-ipc",
       code: null,
       message: null,
     });
@@ -1014,7 +1014,7 @@ describe("Session tRPC router", () => {
     );
   });
 
-  it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
+  it("mints Ticket and Board Sessions through one create door — ticketId is the Role", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
@@ -1036,7 +1036,7 @@ describe("Session tRPC router", () => {
       operationId: "operation-2",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
     });
 
     expect(ticket).toEqual({ sessionId: "session-1" });
@@ -1052,7 +1052,7 @@ describe("Session tRPC router", () => {
           operationId: "operation-2",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       ],
     ]);
@@ -1499,7 +1499,7 @@ describe("Session tRPC router", () => {
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
       diagnostics,
-      transport: "lab-http",
+      transport: "electron-ipc",
     });
 
     await caller.session.snapshot({ sessionId: "session-1" });

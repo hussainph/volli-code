@@ -1701,7 +1701,7 @@ describe("chat tab re-homing", () => {
     expect(useChatSessionsStore.getState().rehomedTicketBySession).toEqual({ c2: "b" });
   });
 
-  it("keeps project-hosted chats but clears only the deleted ticket's restoration provenance", async () => {
+  it("keeps Board chats but clears only the deleted ticket's restoration provenance", async () => {
     resetChatTabs();
     const store = createBoardStore(fakeGateway());
     store.setState({ archivedByProject: { p1: [archivedTicket({ id: "a", status: "done" })] } });

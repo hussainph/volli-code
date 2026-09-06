@@ -16,7 +16,7 @@
  * Three properties, in the order they can fail:
  *
  *   1. **The tool is in the room, and only for the Role that earns it.** The
- *      caller is a PROJECT Session, so `roleVerbBundle("project")` puts
+ *      caller is a Board Session, so `roleVerbBundle("project")` puts
  *      `session.start` in its frozen `tool-surface` record — check 3 reads that
  *      record back off the durable ledger rather than trusting the array. A
  *      Ticket Session's record would not contain it, which is the availability-
@@ -215,7 +215,7 @@ async function main() {
 
     await attempt(
       1,
-      "seed the app default model and the ticket the Project Session will delegate",
+      "seed the app default model and the ticket the Board Session will delegate",
       async () => {
         defaultModel = await seedDefaultModel(page);
         target = await seedTicket(page, projectId, PROJECT.prefix);
@@ -229,7 +229,7 @@ async function main() {
       },
     );
 
-    await attempt(2, "Home's Chat control creates the calling Project Session", async () => {
+    await attempt(2, "Home's Chat control creates the calling Board Session", async () => {
       await goToHome(page);
       const label = await openNewChatTab(page, HOME_TAB_STRIP);
       const caller = await waitUntil(

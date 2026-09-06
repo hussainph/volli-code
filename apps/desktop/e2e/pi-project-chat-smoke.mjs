@@ -1,7 +1,7 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKETLESS
- * (Project Session) chat, against the BUILT app — the ticketless twin of
- * `pi-ticket-chat-smoke.mjs`. Project Sessions attached OpenCode until commit
+ * (Board Session) chat, against the BUILT app — the ticketless twin of
+ * `pi-ticket-chat-smoke.mjs`. Board Sessions attached OpenCode until commit
  * 49a62640 moved them onto the same Pi runtime a ticket chat uses
  * (`apps/desktop/src/main/session-runtime/project-sessions.ts`), and commit
  * 0f0e7007 gave them the ticket composer's model semantics
@@ -34,12 +34,12 @@
  * ticket chat's does (check 3) — the "born ticketless" carve-outs that used
  * to hide it are gone.
  *
- * A Project Session chat's open TAB is not itself durable — its Session is — so
- * "the session resumes" after a relaunch is a sidebar-row click, not an
- * auto-reopened tab (same finding the retired smoke made). Check 6 proves
- * that adopts the SAME conversation from durable data, with no live executor
- * attached. Check 7 proves the other end of a chat tab's life: closing it
- * retires the tab, and nothing puts it back — `client.dispose()`'s own
+ * A Board Session is durable independently of whether its tab is restored.
+ * Check 6 uses its one sidebar row after relaunch and proves that selecting it
+ * adopts the SAME conversation from durable data, with no live executor
+ * attached. It addresses the row by cardinality because auto-title can rename
+ * it after the turn. Check 7 proves the other end of a chat tab's life: closing
+ * it retires the tab, and nothing puts it back — `client.dispose()`'s own
  * comment is "Releases nothing on the harness — the Session outlives it", so
  * this is checking the TAB's retirement, not the Session's.
  *
@@ -76,12 +76,14 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const PROJECT = { id: "pi-project-chat-project", name: "Pi Project Chat", prefix: "SC" };
-// Kept at or under 48 characters, on purpose: `autoTitleFromMessage`
-// (chat/rename.ts) keeps a first line of 48 characters or fewer verbatim as
-// the Session's title, so this prompt IS the title once delivered — no
-// transformation to restate here, and a change to either end surfaces as
-// this smoke failing to find its own tab after the first message lands.
+const PROJECT = { id: "pi-project-chat-project", name: "Pi Board Chat", prefix: "SC" };
+const MODEL_PIN = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.6-luna",
+  reasoningLevel: "low",
+};
+// Short on purpose so this smoke buys one bounded turn. Auto-title can rename
+// it later, so no post-turn locator depends on these words.
 const PROMPT_TEXT = "Reply with one short sentence, please.";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-project-chat-smoke-");
@@ -146,16 +148,6 @@ async function userMessageTexts(page) {
   );
 }
 
-/**
- * A project sidebar row (either band) whose visible text includes `text` — a
- * Project Session chat's open tab does not survive a relaunch on its own (unlike a
- * ticket's, which the adopt path restores from the recorded active tab);
- * reopening one is a sidebar-row click, the same path a person uses.
- */
-function sidebarRow(page, text) {
-  return page.locator("[data-session-band] button", { hasText: text });
-}
-
 async function main() {
   await ensurePiAuthInto(fakeHome);
   await fs.mkdir(fakeHome, { recursive: true });
@@ -185,14 +177,14 @@ async function main() {
       1,
       "seed the app default model — a ticketless Session requires one before it can start",
       async () => {
-        defaultModel = await seedDefaultModel(page);
+        defaultModel = await seedDefaultModel(page, MODEL_PIN);
         return { ok: defaultModel !== null, detail: JSON.stringify(defaultModel) };
       },
     );
 
     await attempt(
       2,
-      "Home's own Chat control creates a ticketless (Project Session) chat tab",
+      "Home's own Chat control creates a ticketless (Board Session) chat tab",
       async () => {
         await goToHome(page);
         chatTabLabel = await openNewChatTab(page, HOME_TAB_STRIP);
@@ -291,12 +283,16 @@ async function main() {
 
       await attempt(
         6,
-        "after relaunch, the sidebar reopens the Project Session chat and resumes BOTH messages from durable data, no live attach",
+        "after relaunch, the sidebar selects the Board Session and resumes BOTH messages from durable data, no live attach",
         async () => {
-          const row = sidebarRow(page2, chatTabLabel);
+          // This isolated profile owns one Session. Address that durable row by
+          // identity-by-cardinality rather than by its title: auto-title can
+          // settle after the first turn and legitimately rename both the row
+          // and tab between the pre-relaunch read and this screen.
+          const row = page2.locator('[data-session-band="active"] button');
           await waitUntil(
             "the chat's sidebar row to reappear after relaunch",
-            async () => (await row.count()) >= 1,
+            async () => (await row.count()) === 1,
             { timeout: 15000 },
           ).catch(async (error) => {
             await captureFailureEvidence(
@@ -308,10 +304,12 @@ async function main() {
             throw error;
           });
           await row.first().click();
-          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
-          await waitUntil(
+          chatTabLabel = await waitUntil(
             "the chat tab to open from the sidebar row",
-            async () => (await chatTab.count()) > 0,
+            async () => {
+              const label = await activeTabLabel(page2, HOME_TAB_STRIP);
+              return label !== null && label !== "Board" ? label : false;
+            },
             { timeout: 10000 },
           ).catch(async (error) => {
             await captureFailureEvidence(
@@ -322,6 +320,7 @@ async function main() {
             );
             throw error;
           });
+          const chatTab = page2.getByRole("tab", { name: chatTabLabel, exact: true });
           await chatTab.click();
           const rendered = await waitUntil(
             "both durable messages to render without a live adapter",

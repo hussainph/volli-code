@@ -62,7 +62,7 @@ import type { VerbToolKey } from "./verb-registry";
  * The verbs each Role holds with no grant (VC-162).
  *
  * `project` carries the agent-control family — start, stop, send (VC-86) —
- * because orchestrating work is what a Project Session is for. `ticket`
+ * because orchestrating work is what a Board Session is for. `ticket`
  * carries execution verbs and none of that family: merge submission is
  * VC-89's, credential-adjacent git is VC-45's, and a ticket executor that
  * needs stop over its own children is a VC-44 grant, never a bundle edit.

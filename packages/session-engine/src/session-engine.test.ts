@@ -831,7 +831,7 @@ describe("SessionEngine creation and explicit commands", () => {
     const projectSession = await plane.createSession({
       ...createRequest("command-list-project"),
       ticketId: null,
-      title: "Project Session",
+      title: "Board Session",
     });
     const ticketLater = await plane.createSession({
       ...createRequest("command-list-ticket-later"),
@@ -2874,7 +2874,7 @@ describe("InMemorySessionLedger", () => {
     };
     const projectSession = {
       ...sessionRecord("session-project"),
-      title: "Project chat",
+      title: "Board chat",
       createdAt: 2,
     };
     const ticketLaterId = {

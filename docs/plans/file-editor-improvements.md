@@ -575,7 +575,7 @@ sanctioned door):
 - **Change review at project scope** — observed while cutting priorities: the
   diff stack is ticket-scoped (`diff-view.tsx:150` and
   `ticket-changes-panel.tsx:419` both key off `ticket.id`; Home's rail pages
-  are now/sessions/files, `home-rail-model.ts:21`), so a Project Session
+  are now/sessions/files, `home-rail-model.ts:21`), so a Board Session
   working the Main checkout has no diff surface at all. **Not a slice of this
   plan** — the ticket workspace is the product's review home, and a
   lightweight ticket already buys the whole review stack (worktree, Changes

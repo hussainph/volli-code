@@ -17,9 +17,11 @@ import { createAutomationEngine } from "./engine";
 import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
 import type { AutomationRunnerDeps } from "./run";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
   getAutomation,
+  getAutomationRun,
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForTicket,
@@ -76,6 +78,7 @@ interface Harness {
     text: string;
     resources: readonly PromptResource[];
   }>;
+  refinements: AutoTitleRequest[];
   logs: string[];
   deliveryFailures: Array<{ sessionId: string; commandId: string; detail: string }>;
   projectId: string;
@@ -104,6 +107,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const creates: SessionStartInput[] = [];
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
+  const refinements: Harness["refinements"] = [];
   const logs: string[] = [];
   const deliveryFailures: Harness["deliveryFailures"] = [];
   const sessionsByOperation = new Map<string, string>();
@@ -114,6 +118,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const runner = createAutomationRunner({
     engine,
     findAutomation: (automationId) => getAutomation(ctx.db, automationId),
+    findRun: (runId) => getAutomationRun(ctx.db, runId),
     findTicket: (ticketId) => {
       const found = ticketId === ticket.id ? ticket : undefined;
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
@@ -171,6 +176,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
       deliveryFailures.push(input);
     },
     readSessionActivity: async () => "idle",
+    refineAutoTitle: (input) => refinements.push(input),
     log: (message) => logs.push(message),
     ...overrides,
   });
@@ -181,6 +187,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     creates,
     attaches,
     delivered,
+    refinements,
     logs,
     deliveryFailures,
     projectId: project.id,
@@ -252,6 +259,14 @@ describe("createAutomationRunner", () => {
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([outcome.run]);
 
     const composer = expandCommandInvocation(automation.instructions, [TEMPLATE], [SKILL]);
+    expect(h.refinements).toEqual([
+      {
+        sessionId: "session-1",
+        firstMessage: composer.text,
+        heuristicTitle: "Two-opinion review",
+        automation: { name: "Two-opinion review" },
+      },
+    ]);
     expect(h.attaches).toEqual(["session-1"]);
     expect(h.delivered).toEqual([
       expect.objectContaining({
@@ -367,6 +382,7 @@ describe("createAutomationRunner", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error("refused");
     expect(h.delivered).toEqual([]);
+    expect(h.refinements).toEqual([]);
     expect(
       ctx.db
         .prepare("SELECT delivered_at FROM automation_run_deliveries WHERE run_id = ?")
@@ -379,6 +395,13 @@ describe("createAutomationRunner", () => {
     h.attachState = "ready";
     await h.runner.recover();
     expect(h.delivered).toHaveLength(1);
+    expect(h.refinements).toEqual([
+      expect.objectContaining({
+        sessionId: outcome.run.sessionId,
+        heuristicTitle: "Two-opinion review",
+        automation: { name: "Two-opinion review" },
+      }),
+    ]);
     expect(
       ctx.db
         .prepare("SELECT delivered_at FROM automation_run_deliveries WHERE run_id = ?")
@@ -482,6 +505,7 @@ describe("createAutomationRunner", () => {
     expect(first).toMatchObject({ ok: true });
     expect(replay).toMatchObject({ ok: true });
     expect(h.creates).toHaveLength(1);
+    expect(h.refinements).toHaveLength(1);
     expect(h.delivered).toHaveLength(1);
     expect(listRunsForTicket(ctx.db, h.ticketId)).toHaveLength(1);
   });
@@ -665,8 +689,17 @@ describe("createAutomationRunner", () => {
     // untouched, and the Run is the whole of what was saved.
     expect(listAutomationsForProject(ctx.db, h.projectId)).toEqual([]);
     expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([outcome.run]);
-    // Its Instructions still go through the composer's own grammar.
+    // Its Instructions still go through the composer's own grammar. They may
+    // refine the generic fallback, but are not marked as standing Automation
+    // Instructions because this one-off text is already unique to this Run.
     const composer = expandCommandInvocation("/review src/a.ts once", [TEMPLATE], [SKILL]);
+    expect(h.refinements).toEqual([
+      {
+        sessionId: "session-1",
+        firstMessage: composer.text,
+        heuristicTitle: "Run once",
+      },
+    ]);
     expect(h.delivered).toEqual([
       expect.objectContaining({ text: composer.text, resources: composer.resources }),
     ]);
@@ -970,7 +1003,7 @@ describe("createAutomationRunner", () => {
 
   /* ------------------------- the Project as the Target (VC-130) --------- */
 
-  it("opens a PROJECT Session for a Run that names no Ticket", async () => {
+  it("opens a Board Session for a Run that names no Ticket", async () => {
     const h = harness();
     const automation = await savedAutomation(h);
 
@@ -983,8 +1016,8 @@ describe("createAutomationRunner", () => {
     await h.runner.settled();
 
     if (!outcome.ok) throw new Error("refused");
-    // `ticketId: null` IS the Project Role in the Session layer, so a schedule
-    // Run is a Project Session by construction rather than by a second flag.
+    // `ticketId: null` IS the `project` Role in the Session layer, so a schedule
+    // Run is a Board Session by construction rather than by a second flag.
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({
       projectId: h.projectId,
@@ -1334,6 +1367,7 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
         detail: "The Automation Run's first message was rejected: Pi refused the kickoff turn",
       },
     ]);
+    expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
       `[volli] automation Run ${outcome.run.id} first-message receipt is rejected; retaining its delivery intent`,
     ]);
@@ -1368,8 +1402,56 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
           "The Automation Run's first message could not be delivered: Pi delivery socket closed",
       },
     ]);
+    expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
       `[volli] automation Run ${outcome.run.id} could not deliver its Instructions: Pi delivery socket closed`,
+    ]);
+  });
+
+  it("keeps delivery healthy when the Run projection needed for titling is missing", async () => {
+    const h = harness({ findRun: () => undefined });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.delivered).toHaveLength(1);
+    expect(h.refinements).toEqual([]);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not refine its Session title: the Run was not found`,
+    ]);
+  });
+
+  it("keeps delivery healthy when the detached title refinement throws", async () => {
+    const h = harness({
+      refineAutoTitle: () => {
+        throw new Error("titler unavailable");
+      },
+    });
+    const automation = await savedAutomation(h);
+
+    const outcome = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("refused");
+    expect(h.delivered).toHaveLength(1);
+    expect(h.logs).toEqual([
+      `[volli] automation Run ${outcome.run.id} could not refine its Session title: titler unavailable`,
     ]);
   });
 
@@ -1410,6 +1492,7 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error("refused");
     expect(h.delivered).toEqual([]);
+    expect(h.refinements).toEqual([]);
     expect(h.logs).toEqual([
       `[volli] automation Run ${outcome.run.id} could not attach its Session: Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links`,
     ]);
@@ -1497,7 +1580,7 @@ describe("Run attendance (VC-133)", () => {
   });
 
   it("keeps the Project door's two callers apart", async () => {
-    // Same Automation, same schedule, same Project Session — and a person at
+    // Same Automation, same schedule, same Board Session — and a person at
     // one of the two doors. This is why attendance cannot be derived from the
     // Automation's Trigger.
     const h = harness();

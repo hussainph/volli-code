@@ -90,7 +90,7 @@ baseline for the rewrite, not final marketing copy.
 - Volli Code is a local-first macOS workspace for code projects. Projects,
   tickets, session history, and worktree state remain on the user's machine.
 - **Home** is a tabbed project workspace: its permanent Board sits beside
-  project chats and project-file tabs. It replaced the old standalone Sessions
+  Board chats and project-file tabs. It replaced the old standalone Sessions
   page (`components/home/home-surface.tsx` and `sidebar/nav-list.tsx`).
 - A ticket has a Ticket Body and a scoped workspace. Ticket chats receive that
   context; a ticket worktree is a separate, isolated checkout when the work
@@ -153,8 +153,8 @@ the current user path through Home, chats, files, and review.
 | Priority | Missing or incomplete area | Current-product evidence | Needed documentation |
 | --- | --- | --- | --- |
 | P0 | **Current installation and first-run path** | `apps/docs/src/content/docs/start/install.mdx` is newer than the live page; `model-access-first-run.tsx`, `new-session-control.tsx`, and `nav-list.tsx` define the current product. | A short alpha install page: exact supported macOS/architecture, download/open/update path, Gatekeeper behavior if applicable, first project, Model Access/sign-in, first chat, and terminal/CLI distinction. Include clean uninstall/data-location guidance and a feedback route. |
-| P0 | **Current quickstart** | The product begins in Home and defaults to Chat; the live guide describes agent handoff by moving to Doing. | One tested, screenshot-backed tutorial from download to a project chat, ticket creation, ticket chat/worktree, a reviewed change, and where to find the result. Keep it prescriptive and separate optional terminal use. |
-| P1 | **Home and project chats** | `home-surface.tsx`, `home-rail.tsx`, and `sidebar/nav-list.tsx` show Home, its permanent Board tab, project-chat tabs, Project Files, and the right rail. | A dedicated “Home and project chats” guide. Explain when to use a project chat instead of a ticket chat, how to reopen durable chats, read the venue/rail, and return to the Board. |
+| P0 | **Current quickstart** | The product begins in Home and defaults to Chat; the live guide describes agent handoff by moving to Doing. | One tested, screenshot-backed tutorial from download to a Board chat, ticket creation, ticket chat/worktree, a reviewed change, and where to find the result. Keep it prescriptive and separate optional terminal use. |
+| P1 | **Home and Board chats** | `home-surface.tsx`, `home-rail.tsx`, and `sidebar/nav-list.tsx` show Home, its permanent Board tab, Board chat tabs, Project Files, and the right rail. | A dedicated “Home and Board chats” guide. Explain when to use a Board chat instead of a ticket chat, how to reopen durable chats, read the venue/rail, and return to the Board. |
 | P1 | **Chat workflow and controls** | `chat-plane.tsx`, `new-session-control.tsx`, model settings, interaction UI, title logic, and command registry are current public UI. | A guide/reference for chat creation, model/effort selection, chat titles/history, model questions and recovery, interruption/retry behavior, slash commands, skills, and the explicit Terminal option. |
 | P1 | **Files, attachments, and worktree-aware editing** | `ticket-detail.tsx`, `home-files-panel.tsx`, attachment components, and `external-app-menu.tsx`. | Explain Project Files vs Ticket Files, main checkout vs worktree resolution, preview/pinned tabs, saving/conflict behavior, file attachments and `@` references, diffs, and opening a file in an external editor. |
 | P1 | **Review and delivery workflow** | `ticket-repository-summary.tsx`, change/diff components, worktree-done-flow models. | Explain Change Sets, branch/base, commit/push/create or view PR actions, review state, archive/cleanup, and what Volli does not verify automatically. Do not use static “tests passed” language as a product guarantee. |
@@ -166,13 +166,13 @@ the current user path through Home, chats, files, and review.
 
 | Source page | Finding | Required update |
 | --- | --- | --- |
-| `index.mdx` | It opens with the old board/Sessions framing and has no Home/project-chat entry point. | Reframe around the current journey and add cards for Home/project chats, chat workflow, files, Model Access, and alpha support. |
+| `index.mdx` | It opens with the old board/Sessions framing and has no Board chat entry point from Home. | Reframe around the current journey and add cards for Board chats, chat workflow, files, Model Access, and alpha support. |
 | `start/install.mdx` | The source is much closer to current behavior than production, but its signed/notarized and update claims must be verified against the actual alpha artifact. It lacks alpha status, architecture clarity, first-run screenshots, and recovery/uninstall. | Make it the authoritative install contract and keep it synchronized with the download page, README, release notes, and Security policy. |
-| `start/quickstart.mdx` | It names `New chat`, but does not orient the reader to Home, project chat vs ticket chat, or the real initial UI. | Rewrite as the tested end-to-end tutorial above and capture the current product rather than describing the former Sessions page. |
-| `start/concepts.mdx` | It omits Home, chat-first behavior, skills, attachments, Web Access, current file surfaces, and the relationship between the Board and project chats. | Expand the glossary only with terms a user needs; link detailed procedures instead of making Concepts a second reference manual. |
+| `start/quickstart.mdx` | It names `New chat`, but does not orient the reader to Home, Board chat vs ticket chat, or the real initial UI. | Rewrite as the tested end-to-end tutorial above and capture the current product rather than describing the former Sessions page. |
+| `start/concepts.mdx` | It omits Home, chat-first behavior, skills, attachments, Web Access, current file surfaces, and the relationship between the Board and Board chats. | Expand the glossary only with terms a user needs; link detailed procedures instead of making Concepts a second reference manual. |
 | `guides/board.mdx` | Its broad board rules align better with current source than the live page, but the screenshot is from the former navigation and it overburdens a first read with retention/PR internals. | Recapture the board; separate everyday board use from archive/retention/reference behavior; verify every context-menu label against the release build. |
 | `guides/ticket-workspace.mdx` | It is text-only and does not cover current chat-first tabs, attachments, file save/external-edit behavior, or a complete review flow. | Split/expand into Ticket Body, ticket chats, files/diffs, and review/branch workflow pages with current screenshots. |
-| `guides/agents-and-worktrees.mdx` | It explains the conceptual split well but lacks task-oriented project-chat, terminal-companion, and worktree lifecycle guidance. | Rename and restructure around Sessions and worktrees; link to separate chat and terminal guides. |
+| `guides/agents-and-worktrees.mdx` | It explains the conceptual split well but lacks task-oriented Board chat, terminal-companion, and worktree lifecycle guidance. | Rename and restructure around Sessions and worktrees; link to separate chat and terminal guides. |
 | `guides/settings.mdx` | It tries to be an exhaustive reference for seven Settings categories and Configure in one page. It will drift quickly and is hard to use during setup. | Break it into focused pages, with the navigation updated in `apps/docs/astro.config.mjs`. |
 | `guides/theming.mdx` | It contains an explicit TODO for the missing canvas-editor screenshot and makes detailed UI claims that need release-build verification. | Capture the current light/dark/system and project-override UI; remove any behavior that cannot be verified. |
 | `reference/cli.mdx` | Its checked-out source is close to current `volli help`, while the deployed page is old. Manual command tables will drift again. | Deploy it now; add a repeatable generation/contract check against `volli help`, especially for new session and environment commands. |
@@ -269,7 +269,7 @@ safe action without reading internal architecture vocabulary.
 **Deliverable:** a task-based docs IA with a verified quickstart and all
 alpha-critical reference material.
 
-1. Publish the Home/project-chat, chat controls, files/attachments, review,
+1. Publish the Board chat, chat controls, files/attachments, review,
    Model Access/Web, environment recovery, and alpha support pages.
 2. Split the overgrown Settings reference into task-focused guides and keep
    Concepts/glossary terminology consistent with `CONTEXT.md`.

@@ -13,7 +13,12 @@ import {
   type ModelSelection,
 } from "@volli/shared";
 
-import { createAutoTitler, type AutoTitleSession, type AutoTitlerOptions } from "./auto-title";
+import {
+  createAutoTitler,
+  type AutoTitleRequest,
+  type AutoTitleSession,
+  type AutoTitlerOptions,
+} from "./auto-title";
 
 const SESSION_ID = "session-1";
 
@@ -70,7 +75,7 @@ interface Harness {
   retitle: ReturnType<typeof vi.fn<AutoTitlerOptions["retitle"]>>;
   recordUsage: ReturnType<typeof vi.fn<AutoTitlerOptions["recordUsage"]>>;
   inspectModelAccess: ReturnType<typeof vi.fn<AutoTitlerOptions["inspectModelAccess"]>>;
-  refine(input: { firstMessage?: string; heuristicTitle?: string }): Promise<void>;
+  refine(input: Partial<Omit<AutoTitleRequest, "sessionId">>): Promise<void>;
 }
 
 function harness(
@@ -188,7 +193,21 @@ describe("createAutoTitler().refine", () => {
     expect(sent).toContain("Rate limit the public search endpoint");
   });
 
-  it("reads no ticket for a project chat", async () => {
+  it("marks a Run's reusable Instructions as Automation context", async () => {
+    const h = harness({}, session({ title: "Two-opinion review" }));
+    await h.refine({
+      firstMessage: "Review this change from two perspectives",
+      heuristicTitle: "Two-opinion review",
+      automation: { name: "Two-opinion review" },
+    });
+    expect(h.completeUtility.mock.calls[0]?.[0].user).toBe(
+      autoTitlePrompt("Review this change from two perspectives", TICKET, {
+        name: "Two-opinion review",
+      }),
+    );
+  });
+
+  it("reads no ticket for a Board chat", async () => {
     const readTicket = vi.fn(() => TICKET);
     const h = harness({ readTicket, readSession: async () => session({ ticketId: null }) });
     await h.refine({});
@@ -543,6 +562,34 @@ describe("createAutoTitler().refine", () => {
     });
     await h.refine({});
     expect(h.retitle).not.toHaveBeenCalled();
+  });
+
+  it("runs one refinement per Session at a time, so a duplicate request bills no second call", async () => {
+    let answer!: (result: { text: string; usage: null }) => void;
+    const held = new Promise<{ text: string; usage: null }>((resolve) => {
+      answer = resolve;
+    });
+    let calls = 0;
+    const h = harness({
+      // The first call is held open until the test releases it; later calls
+      // answer immediately, so the post-release refinement below completes.
+      completeUtility: () =>
+        calls++ === 0 ? held : Promise.resolve({ text: "Second title", usage: null }),
+    });
+    const first = h.refine({});
+    // Let the first request reach the model before the duplicate arrives:
+    // the reads ahead of the call are the window a Retry attach lands in.
+    await vi.waitFor(() => expect(h.completeUtility).toHaveBeenCalledOnce());
+    await h.refine({});
+    expect(h.completeUtility).toHaveBeenCalledOnce();
+
+    answer({ text: "Login button dead on Safari", usage: null });
+    await first;
+    expect(h.retitle.mock.calls).toEqual([[SESSION_ID, "Login button dead on Safari"]]);
+
+    // The latch is released with the call, whichever way it ended.
+    await h.refine({ heuristicTitle: "Login button dead on Safari" });
+    expect(h.completeUtility).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing when the session no longer exists", async () => {

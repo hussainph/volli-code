@@ -2,10 +2,20 @@
  * The execution environment a Session's tools run in when the host injects
  * none, and both of the environments a child process can be handed: this
  * path's, and `ScopedExecutionEnv`'s.
+ *
+ * Pi 0.85 replaced every method's trailing `abortSignal?: AbortSignal` with a
+ * required trailing chord `Context`, and cancellation now rides
+ * `context.abortSignal`. The overrides below take it exactly as Pi declares it
+ * — required, and forwarded to `super` untouched. Nothing outside this module
+ * holds the class: {@link piExecutionEnv} hands back the `ExecutionEnv`
+ * interface, so every caller already has to supply a context to satisfy the
+ * interface, and a defaulted parameter here would buy nothing while making it
+ * possible to drop a caller's cancellation by omission.
  */
 
 import {
   NodeExecutionEnv,
+  type Context,
   type ExecutionEnv,
   type ShellExecOptions,
 } from "@earendil-works/pi-agent-core/node";
@@ -21,7 +31,7 @@ import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@v
  */
 export interface PiSessionEnvIdentity {
   sessionId: string;
-  /** e.g. `VC-51`; `null` for a ticketless project Session. */
+  /** e.g. `VC-51`; `null` for a ticketless Board Session. */
   ticketDisplayId: string | null;
   /**
    * This attachment's `VOLLI_SESSION_TOKEN` — what turns the id beside it from
@@ -194,28 +204,41 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
     this.#onCleanup = options.onCleanup;
   }
 
-  /** Pi's bash tool asks for the host environment; here is the only place that can decline. */
-  override async exec(command: string, options?: ShellExecOptions) {
+  /**
+   * Pi's bash tool asks for the host environment; here is the only place that
+   * can decline.
+   *
+   * Only the environment is this override's business. Output capture,
+   * truncation and spilling are 0.85's `capture`/`onUpdate` contract and are
+   * left entirely to {@link NodeExecutionEnv} — `options` is forwarded whole,
+   * so a caller's limits, retention and update callback reach Pi's own
+   * implementation untouched.
+   */
+  override async exec(command: string, options: ShellExecOptions | undefined, context: Context) {
     const sanitized = unsandboxedEnvironment(process.env);
     // Identity sits between the sanitized set and the caller's own `env`: a
     // tool call that names VOLLI_SESSION explicitly is believed, exactly as it
     // is for every other variable.
     const merged = { ...sanitized, ...this.#identityVariables, ...options?.env };
-    return super.exec(command, {
-      ...options,
-      env: {
-        ...merged,
-        PATH: prefixedPath(merged.PATH ?? "", this.#pathPrefixes),
+    return super.exec(
+      command,
+      {
+        ...options,
+        env: {
+          ...merged,
+          PATH: prefixedPath(merged.PATH ?? "", this.#pathPrefixes),
+        },
+        inheritEnv: false,
       },
-      inheritEnv: false,
-    });
+      context,
+    );
   }
 
-  override async cleanup(): Promise<void> {
+  override async cleanup(context: Context): Promise<void> {
     if (this.#cleaned) return;
     this.#cleaned = true;
     try {
-      await super.cleanup();
+      await super.cleanup(context);
     } finally {
       await this.#onCleanup?.();
     }

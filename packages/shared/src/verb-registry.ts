@@ -1083,7 +1083,7 @@ export const VERB_REGISTRY = [
     // what shuts the socket door, and only now is the control claim true.
     //
     // Why it had to leave the socket rather than be gated on it: a socket call
-    // can be attributed but never authenticated, so "only a Project Session may
+    // can be attributed but never authenticated, so "only a Board Session may
     // start Sessions" would have rested on an environment variable any process
     // running as the user can set. VC-163's per-attachment token narrows that
     // to injected strings and cross-session confusion; it does not close it
@@ -1140,7 +1140,7 @@ export const VERB_REGISTRY = [
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
-        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
+        "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1475,7 +1475,7 @@ export const VERB_REGISTRY = [
         name: "--ticket",
         kind: "value",
         placeholder: "<id>",
-        help: "Price a Ticket Session for this ticket instead of a project chat.",
+        help: "Price a Ticket Session for this ticket instead of a Board chat.",
       },
       {
         name: "--project",
@@ -1712,7 +1712,7 @@ export const VERB_REGISTRY = [
     summary: "Stop another agent session's work, recording who stopped it.",
     example: "volli session stop a1b2c3d4",
     notes: [
-      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
       "Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.",
       "The Session identity survives: its history stays openable, and a person can reattach it.",
     ],
@@ -1778,7 +1778,7 @@ export const VERB_REGISTRY = [
     summary: "Steer a message into another running agent session.",
     example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
     notes: [
-      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
       "Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.",
       "The message arrives marked as supervisor steering from this Session, never as the target's own user.",
     ],

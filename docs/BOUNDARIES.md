@@ -47,10 +47,10 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
-   all three. The trap is documented at
-   `apps/desktop/src/renderer/src/lib/session-rpc-ipc-link.ts`; when the
-   session-rpc contract is next touched, enforce JSON-serializable payloads
-   at the type level rather than by convention.
+   all three. `SessionRouterJsonSafety` in
+   `packages/session-rpc/src/index.ts` applies `IsJsonSafe` to every raw
+   procedure input and output at the router seam, so an unsafe payload fails
+   type-checking before any transport can expose it.
 
 4. **A receipt is local acceptance, not eternal finality.** UI code may
    render "accepted" from a receipt; it may not be written so that a remote

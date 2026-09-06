@@ -38,7 +38,7 @@ describe("browserChatTransport", () => {
       operationId: "project-create",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
     });
     await transport.createSession({
       operationId: "ticket-create",
@@ -54,7 +54,7 @@ describe("browserChatTransport", () => {
       operationId: "project-skill-create",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
       skills: ["svg-logo-designer"],
     });
     await transport.createSession({

@@ -89,7 +89,7 @@ describe("reportSessionUsage", () => {
     expect(report.groups.map((group) => group.key)).toEqual(["dear", "middling", "cheap"]);
   });
 
-  // A Project Session has no ticket. It is still spend, and dropping it would
+  // A Board Session has no ticket. It is still spend, and dropping it would
   // make the sum of the groups quietly smaller than the total above them.
   it("keeps unticketed spend as its own group rather than discarding it", () => {
     const report = reportSessionUsage(

@@ -177,9 +177,9 @@ describe("readSessionProvenance", () => {
     ).toEqual({ kind: "user" });
   });
 
-  it("reads a Project Session a person started as person-started", () => {
+  it("reads a Board Session a person started as person-started", () => {
     const f = fixture();
-    f.session("session-project", "Project chat", null);
+    f.session("session-project", "Board chat", null);
     f.db
       .prepare(
         `INSERT INTO session_commands (id, session_id, created_at, intent, route)
@@ -190,7 +190,7 @@ describe("readSessionProvenance", () => {
           kind: "session.create",
           projectId: f.projectId,
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         }),
       );
 
@@ -231,7 +231,7 @@ describe("readSessionProvenance", () => {
     );
   });
 
-  // Project Sessions have no Ticket timeline. The accepted Run therefore
+  // Board Sessions have no Ticket timeline. The accepted Run therefore
   // records its Session-create command id before mint; after a process death,
   // that marker and the minted command are the two durable halves that meet.
   it("marks a scheduled Project Run between Session mint and Run insert", () => {

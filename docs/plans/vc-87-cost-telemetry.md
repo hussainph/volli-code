@@ -361,7 +361,7 @@ The existing composer footer already has a Context Usage pill sourced from the l
 
 Keep the existing context-window meter separate: occupancy answers “will this Session fit?”, cumulative usage answers “what has this Session consumed?”
 
-### 3. Home right rail — active Project Session
+### 3. Home right rail — active Board Session
 
 `HomeRail` → `Now` already has Venue and Session blocks. Add a Usage block under Session for the active chat:
 
@@ -476,7 +476,7 @@ Create separate connector tickets by provider/gateway. Start with read-only, opt
 - Recovery marker replay and Session reattach do not duplicate usage.
 - Projection rebuild matches the live projection.
 - Legacy transcript backfill is idempotent and marks partial historical coverage.
-- Ticket deletion does not silently turn old Ticket usage into Project Session usage.
+- Ticket deletion does not silently turn old Ticket usage into Board Session usage.
 - Chrome/rail subscriptions stop cleanly and never poll.
 
 ## Open choices that can wait until their slice

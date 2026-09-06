@@ -636,8 +636,8 @@ afterEach(async () => {
 const FEW = 4;
 const MANY = 12;
 /**
- * Each case mounts two whole boards and drives thirty-odd real pointer events
- * through React's act queue, and runs slower again under coverage
+ * Each case mounts two whole boards and drives thirty-odd browser-pipeline
+ * pointer events through React's act queue, and runs slower again under coverage
  * instrumentation. Well clear of the default 5s, which it does exceed there.
  */
 const BUDGET = 60_000;

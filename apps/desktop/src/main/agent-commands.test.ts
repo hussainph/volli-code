@@ -2299,10 +2299,7 @@ describe("agent command service", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
-    insertSession(
-      ctx.db,
-      testSession("project-one", null, { id: sessionId, title: "Project chat" }),
-    );
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId, title: "Board chat" }));
     const observed: Array<{ sessionId: string; lines: number }> = [];
     const notifications: Array<{ title: string; message: string }> = [];
     const service = createAgentCommandService({
@@ -2743,7 +2740,7 @@ describe("agent command service", () => {
     expect(mutations).toEqual([]);
   });
 
-  it("does not list every project session for a hook addressed by VOLLI_SESSION", async () => {
+  it("does not list every Board Session for a hook addressed by VOLLI_SESSION", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -2766,7 +2763,7 @@ describe("agent command service", () => {
     expect(listed).not.toHaveBeenCalled();
   });
 
-  it("records Project-Session signals in the ledger and requires session context", async () => {
+  it("records Board Session signals in the ledger and requires session context", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -5387,7 +5384,7 @@ describe("prompt.baseline", () => {
     expect(response).toMatchObject({ ok: false, error: { code: "APP_UNREACHABLE" } });
   });
 
-  it("prices a fresh project chat: every composed layer, the index, the Brief, and an honest total", async () => {
+  it("prices a fresh Board chat: every composed layer, the index, the Brief, and an honest total", async () => {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -5545,7 +5542,7 @@ describe("prompt.baseline", () => {
 describe("composeProjectBrief", () => {
   it("names the ticketless Session, its project root, and the one CLI instruction", () => {
     expect(composeProjectBrief({ project: { path: "/code/volli" } })).toMatchInlineSnapshot(`
-        "This is a project-scoped chat Session with no Ticket. Your working directory is the project root at /code/volli.
+        "This is a Board Session with no Ticket. Your working directory is the project root at /code/volli.
 
         Board coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms)."
       `);
@@ -5698,9 +5695,9 @@ describe("model.list", () => {
   });
 
   it("reports the configured app default alongside the catalog", async () => {
-    // Only the project default is configured, and `session start` starts a
+    // Only the Board default is configured, and `session start` starts a
     // Ticket Session — so what it reports is the ticket purpose resolving to
-    // the project default it inherits (VC-53), not a second stored value.
+    // the Board default it inherits (VC-53), not a second stored value.
     const harness = modelListHarness();
     writeModelAccessDefault(
       ctx.db,
@@ -5717,7 +5714,7 @@ describe("model.list", () => {
     });
   });
 
-  it("reports the available Ticket default once one is chosen, not the project default", async () => {
+  it("reports the available Ticket default once one is chosen, not the Board default", async () => {
     // `volli session start` is a Ticket Session, so the model it will run is
     // the execution default — reporting the orchestration one would name a
     // model this command is never going to use.

@@ -1763,6 +1763,25 @@ describe("volli:session-rename auto-title rider", () => {
     ]);
   });
 
+  it("refines a seeded fallback that already matches the requested title", async () => {
+    const requests = renameHarness();
+
+    const result = await invoke<Promise<SessionRenameResult>>("volli:session-rename", {
+      sessionId: "s1",
+      title: "Session 1",
+      refineFrom: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(requests).toEqual([
+      {
+        sessionId: "s1",
+        firstMessage: "Begin work on this ticket. Your assignment is the Ticket Brief above.",
+        heuristicTitle: "Session 1",
+      },
+    ]);
+  });
+
   it("refines nothing for a rename with no rider — a person naming their own chat", async () => {
     const requests = renameHarness();
 
