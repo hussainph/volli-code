@@ -103,7 +103,7 @@ export function previewedBrowserTab(
  * by its title, or `another Session` for an owner this chat cannot name.
  */
 export function browserTabOwnerLabel(
-  tab: BrowserTabState,
+  tab: Pick<BrowserTabState, "ownerSessionId">,
   sessionId: string,
   titleOf: (sessionId: string) => string | null,
 ): string {

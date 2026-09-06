@@ -39,6 +39,7 @@ describe("HomeTabStrip Browser Tabs", () => {
       tabId: "tab-7",
       title: "Volli docs",
       loading: true,
+      driven: false,
     };
 
     const html = draw([HOME_BOARD_TAB, browser], browser.id);
