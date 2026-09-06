@@ -16,6 +16,8 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     projectId: "project-1",
     ticketId: null,
     createdBy: "user",
+    ownerSessionId: null,
+    presentation: "tab",
     url: "https://volli.dev/docs",
     title: "Volli docs",
     loading: false,

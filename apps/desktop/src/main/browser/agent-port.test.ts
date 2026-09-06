@@ -609,7 +609,7 @@ describe("createAgentBrowserPort", () => {
     let disposed = 0;
     const failing = createAgentBrowserPort({
       host: fakeHost([state({ tabId: "user-1", createdBy: "user" })]).host,
-      scope: { projectId: "p1", ticketId: "t1" },
+      scope: { projectId: "p1", ticketId: "t1", sessionId: "s1" },
       transportFor: () => ({
         send: async () => ({}),
         ensureReady: async () => {

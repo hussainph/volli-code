@@ -362,6 +362,8 @@ export interface PiAdapterOptions {
   resolveBrowserPort?: (scope: {
     projectId: string;
     ticketId: string | null;
+    /** The Session whose tabs the port opens and owns (VC-238). */
+    sessionId: string;
   }) => RuntimeBrowserPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
@@ -596,6 +598,7 @@ function piNativeAdapter(
         browser: options.resolveBrowserPort?.({
           projectId: context.projectId,
           ticketId: context.ticketId,
+          sessionId: spec.sessionId,
         }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,

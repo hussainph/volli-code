@@ -18,6 +18,8 @@ const tab: BrowserTabState = {
   projectId: "project-1",
   ticketId: null,
   createdBy: "user",
+  ownerSessionId: null,
+  presentation: "tab",
   url: "https://example.com",
   title: "Example",
   loading: false,

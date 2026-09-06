@@ -1,5 +1,6 @@
 import {
   NON_CODING_TOOL_IDS,
+  type RuntimeBrowserActResult,
   type RuntimeBrowserPort,
   type RuntimeBrowserSnapshot,
 } from "@volli/shared";
@@ -33,8 +34,15 @@ function snapshot(overrides: Partial<RuntimeBrowserSnapshot> = {}): RuntimeBrows
     snapshotText: '- button "Save" [ref=e2]',
     generation: 4,
     truncated: false,
+    picture: null,
     ...overrides,
   };
+}
+
+function acted(
+  overrides: Partial<RuntimeBrowserActResult> = {},
+): RuntimeBrowserActResult {
+  return { ...snapshot(), target: null, ...overrides };
 }
 
 /** The text half of a tool result, joined the way the model reads it. */
@@ -143,12 +151,14 @@ describe("browser tools", () => {
     expect(text).toContain("take a fresh snapshot");
   });
 
-  it("returns a screenshot as an image the model can see, beside Volli's provenance", async () => {
+  it("returns a screenshot as an image the model can see, beside Volli's provenance, and names the kept picture", async () => {
     const port = unusedPort();
     port.screenshot = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
       base64Png: "aGVsbG8=",
+      picture: "picture-3",
       width: 800,
       height: 600,
     });
@@ -159,28 +169,57 @@ describe("browser tools", () => {
     const image = result.content.find((entry) => entry.type === "image");
     expect(image).toMatchObject({ type: "image", data: "aGVsbG8=", mimeType: "image/png" });
     expect(resultText(result)).toContain("http://localhost:5173/");
+    // The card's half of the same picture: the host's id, never the bytes twice.
+    expect(result.details).toEqual({
+      action: "screenshot",
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      target: null,
+      picture: "picture-3",
+      errorCount: null,
+      ownerSessionId: null,
+    });
+    // The description stays honest with what ships: the person sees the
+    // picture in the transcript card, not in the tool row's raw payload.
+    expect(tool.description).toContain("in the chat");
   });
 
-  it("lists tabs with their titles enveloped, and says plainly when none are open", async () => {
+  it("lists tabs with their titles enveloped, naming each owner, and says plainly when none are open", async () => {
     const port = unusedPort();
     port.tabs = async () => ({
       tabs: [
-        { tabId: "tab-1", url: "https://example.com/", title: "Docs", createdBy: "user" },
-        { tabId: "tab-2", url: "http://localhost:5173/", title: "App", createdBy: "session" },
+        {
+          tabId: "tab-1",
+          url: "https://example.com/",
+          title: "Docs",
+          createdBy: "user",
+          ownerSessionId: null,
+        },
+        {
+          tabId: "tab-2",
+          url: "http://localhost:5173/",
+          title: "App",
+          createdBy: "session",
+          ownerSessionId: "s1",
+        },
       ],
     });
     const tool = createBrowserTool("browser_tabs", port);
 
-    const listing = resultText(await tool.execute("call-5", {}));
+    const result = await tool.execute("call-5", {});
+    const listing = resultText(result);
 
     // Ids and URLs are Volli's records; the titles are the pages talking, so
-    // every listing line sits inside the markers.
+    // every listing line sits inside the markers. The owner is named so a
+    // parent shown a child's tabs can tell them from its own (VC-238).
     expect(enveloped(listing)).toBe(
       [
         "tab-1 (opened by user) — https://example.com/ — title: Docs",
-        "tab-2 (opened by session) — http://localhost:5173/ — title: App",
+        "tab-2 (opened by Session s1) — http://localhost:5173/ — title: App",
       ].join("\n"),
     );
+    expect(result.details).toMatchObject({ action: "tabs", tabId: null, url: null });
 
     port.tabs = async () => ({ tabs: [] });
     const empty = resultText(await tool.execute("call-6", {}));
@@ -198,8 +237,12 @@ describe("browser tools", () => {
     };
     const tool = createBrowserTool("browser_navigate", port);
 
-    await tool.execute("call-7", { url: "http://localhost:5173/" });
-    await tool.execute("call-8", { tabId: "tab-1", action: "back" });
+    const opened = await tool.execute("call-7", { url: "http://localhost:5173/" });
+    const back = await tool.execute("call-8", { tabId: "tab-1", action: "back" });
+    // The row reads the action from the details, not from the model's call:
+    // an open and a history move on the same tab are different rows.
+    expect(opened.details).toMatchObject({ action: "open", tabId: "tab-1" });
+    expect(back.details).toMatchObject({ action: "back", tabId: "tab-1" });
     const mixed = resultText(
       await tool.execute("call-9", { url: "http://localhost:5173/", action: "reload" }),
     );
@@ -228,9 +271,12 @@ describe("browser tools", () => {
     });
     const tool = createBrowserTool("browser_console", port);
 
-    const record = resultText(await tool.execute("call-11", { tabId: "tab-1" }));
+    const read = await tool.execute("call-11", { tabId: "tab-1" });
+    const record = resultText(read);
 
     expect(enveloped(record)).toBe("[warn] deprecated call\n[error] Uncaught Error: boom");
+    // Errors counted for the row's meta (`Read console · 1 error`).
+    expect(read.details).toMatchObject({ action: "console", tabId: "tab-1", errorCount: 1 });
     // The bound is stated in Volli's half, outside the markers a page's own
     // output could bury it inside.
     expect(record).toContain("most recent messages");
@@ -260,10 +306,12 @@ describe("browser tools", () => {
     port.snapshot = async () => snapshot({ truncated: true });
     const tool = createBrowserTool("browser_snapshot", port);
 
-    const cut = resultText(await tool.execute("call-13", { tabId: "tab-1" }));
+    const read = await tool.execute("call-13", { tabId: "tab-1" });
+    const cut = resultText(read);
 
     expect(cut).toContain("stopped printing the tree");
     expect(enveloped(cut)).not.toContain("stopped printing");
+    expect(read.details).toMatchObject({ action: "read", tabId: "tab-1", picture: null });
   });
 
   it("passes every optional action field through whole, and nothing invented", async () => {
@@ -272,7 +320,7 @@ describe("browser tools", () => {
     port.act = async (input) => {
       const { signal: _signal, ...rest } = input;
       acts.push(rest);
-      return snapshot();
+      return acted();
     };
     const tool = createBrowserTool("browser_act", port);
 
@@ -291,6 +339,15 @@ describe("browser tools", () => {
       direction: "down",
     });
     await tool.execute("call-16", { tabId: "tab-1", generation: 4, kind: "wait", waitMs: 250 });
+    // An element the page gave no name falls back to the ref the model used.
+    port.act = async () => acted({ target: { ref: "e7", name: null } });
+    const nameless = await tool.execute("call-16b", {
+      tabId: "tab-1",
+      generation: 4,
+      kind: "hover",
+      ref: "e7",
+    });
+    expect(nameless.details).toMatchObject({ action: "hover", target: "e7" });
 
     expect(acts).toEqual([
       { tabId: "tab-1", generation: 4, kind: "type", ref: "e2", text: "hello" },
@@ -347,18 +404,27 @@ describe("browser tools", () => {
     await expect(tool.execute("call-19", {})).rejects.toThrow("not meant to be called");
   });
 
-  it("acts and answers with the fresh snapshot the action produced", async () => {
+  it("acts and answers with the fresh snapshot the action produced, reporting what it touched", async () => {
     const acts: unknown[] = [];
     const port = unusedPort();
     port.act = async (input) => {
       acts.push(input);
-      return snapshot({ generation: 5, snapshotText: '- button "Saved" [ref=e2]' });
+      return acted({
+        generation: 5,
+        snapshotText: '- button "Saved" [ref=e2]',
+        target: { ref: "e2", name: "Save" },
+        picture: "picture-9",
+      });
     };
     const tool = createBrowserTool("browser_act", port);
 
-    const text = resultText(
-      await tool.execute("call-4", { tabId: "tab-1", generation: 4, kind: "click", ref: "e2" }),
-    );
+    const result = await tool.execute("call-4", {
+      tabId: "tab-1",
+      generation: 4,
+      kind: "click",
+      ref: "e2",
+    });
+    const text = resultText(result);
 
     // What the model said travels through whole, plus the signal and nothing else.
     expect(acts).toHaveLength(1);
@@ -366,5 +432,17 @@ describe("browser tools", () => {
     // The answer is the page as it now stands, refs re-minted.
     expect(text).toContain("generation 5");
     expect(enveloped(text)).toBe('- button "Saved" [ref=e2]');
+    // The row's facts, beside the model's text: the page's name for the
+    // element, and the picture the host took afterwards (VC-238).
+    expect(result.details).toEqual({
+      action: "click",
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      target: "Save",
+      picture: "picture-9",
+      errorCount: null,
+      ownerSessionId: null,
+    });
   });
 });

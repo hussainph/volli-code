@@ -280,6 +280,8 @@ import { getBlob } from "./db/blobs-repo";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
+import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
+import { BrowserPictureStore } from "./browser/picture-store";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -2357,9 +2359,30 @@ app.whenReady().then(async () => {
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // The pictures a transcript card shows (VC-238): live captures bounded in
+    // memory, model-requested screenshots also on disk under userData — never
+    // the Blob store, whose Session links become the next turn's input.
+    pictures: new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    }),
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
+  // An archived Ticket's headless agent tabs have no one left to drive them
+  // and nobody who can see them (VC-238 §6). Shown tabs are the person's.
+  subscribeTicketWake((wake) => {
+    if (wake.event.payload.kind === "archived") {
+      browserTabs.closeHeadlessForTicket(wake.event.ticketId);
+    }
+  });
+  // A smoke cannot take a model turn for $0, so the headless-tab lane opens a
+  // Session tab through this door instead (`e2e/browser-headless-smoke.mjs`).
+  // Off unless the smoke sets the flag; it exposes nothing a renderer reaches.
+  if (process.env["VOLLI_SMOKE_BROWSER_HOST"] === "1") {
+    (globalThis as { volliBrowserHost?: BrowserTabHost }).volliBrowserHost = browserTabs;
+  }
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
     // Browser Tabs are live machine resources, not durable documents. Once the

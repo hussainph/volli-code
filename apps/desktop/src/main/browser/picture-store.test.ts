@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { BROWSER_PICTURE_LIVE_LIMIT, BrowserPictureStore } from "./picture-store";
+import {
+  BROWSER_PICTURE_LIVE_LIMIT,
+  BrowserPictureStore,
+  type BrowserPictureMime,
+} from "./picture-store";
 
 function store(options: { persist?: boolean } = {}) {
   let nextId = 0;
-  const disk = new Map<string, { bytes: Uint8Array; mime: string }>();
+  const disk = new Map<string, { bytes: Uint8Array; mime: BrowserPictureMime }>();
   const persist = {
-    write: vi.fn((id: string, bytes: Uint8Array, mime: string) => {
+    write: vi.fn((id: string, bytes: Uint8Array, mime: BrowserPictureMime) => {
       disk.set(id, { bytes, mime });
     }),
     read: vi.fn((id: string) => disk.get(id) ?? null),

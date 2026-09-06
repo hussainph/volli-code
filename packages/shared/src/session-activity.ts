@@ -24,10 +24,55 @@ export const ACTIVITY_KINDS = [
   "fetch-url",
   "plan",
   "delegate",
+  "browse",
   "other",
 ] as const;
 
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+
+/**
+ * What one browser action was (VC-238), in Volli's words. Kept apart from the
+ * harness's tool names: `open` is what `browser_navigate` with a URL means,
+ * whatever the tool is called, and the renderer switches on this alone.
+ */
+export const ACTIVITY_BROWSE_ACTIONS = [
+  "open",
+  "back",
+  "forward",
+  "reload",
+  "click",
+  "type",
+  "press",
+  "select",
+  "hover",
+  "scroll",
+  "wait",
+  "read",
+  "screenshot",
+  "console",
+  "tabs",
+] as const;
+
+export type ActivityBrowseAction = (typeof ACTIVITY_BROWSE_ACTIONS)[number];
+
+/**
+ * The browse facet of a descriptor: what a `browse` row says beyond its label.
+ *
+ * Every field but `action` is nullable, in the descriptor's own spirit: the
+ * tab may be gone, the page may have no title, a page-level action has no
+ * target, a read takes no picture. `picture` is an opaque host id, never
+ * bytes; `target` is the element's accessible name or, failing that, its ref.
+ */
+export type ActivityBrowse = {
+  action: ActivityBrowseAction;
+  tabId: string | null;
+  url: string | null;
+  title: string | null;
+  target: string | null;
+  picture: string | null;
+  errorCount: number | null;
+  ownerSessionId: string | null;
+};
 
 /** Reserved namespace on `toolMetadata`. Adapters keep their own payload beside it. */
 export const ACTIVITY_METADATA_KEY = "volli.activity";
@@ -72,6 +117,8 @@ export type ActivityDescriptor = {
   outcome: ActivityOutcome | null;
   startedAt: number | null;
   endedAt: number | null;
+  /** Present on `browse` rows only; absent everywhere else, and tolerated absent on read. */
+  browse?: ActivityBrowse;
 };
 
 export const EMPTY_ACTIVITY_SUBJECT: ActivitySubject = {
@@ -82,6 +129,12 @@ export const EMPTY_ACTIVITY_SUBJECT: ActivitySubject = {
 
 export function isActivityKind(value: unknown): value is ActivityKind {
   return typeof value === "string" && (ACTIVITY_KINDS as readonly string[]).includes(value);
+}
+
+export function isActivityBrowseAction(value: unknown): value is ActivityBrowseAction {
+  return (
+    typeof value === "string" && (ACTIVITY_BROWSE_ACTIONS as readonly string[]).includes(value)
+  );
 }
 
 /**
@@ -96,6 +149,7 @@ export function readActivityDescriptor(metadata: unknown): ActivityDescriptor | 
   if (!isActivityKind(raw.kind)) return null;
   const nativeToolName = optionalString(raw.nativeToolName);
   if (nativeToolName === null) return null;
+  const browse = readBrowse(raw.browse);
   return {
     kind: raw.kind,
     nativeToolName,
@@ -103,6 +157,7 @@ export function readActivityDescriptor(metadata: unknown): ActivityDescriptor | 
     outcome: readOutcome(raw.outcome),
     startedAt: optionalNumber(raw.startedAt),
     endedAt: optionalNumber(raw.endedAt),
+    ...(browse === null ? {} : { browse }),
   };
 }
 
@@ -154,6 +209,29 @@ function readLineRange(value: unknown): { start: number; end: number } | null {
   const end = optionalNumber(value.end);
   if (start === null || end === null) return null;
   return end >= start ? { start, end } : null;
+}
+
+/**
+ * A facet with no readable action is no facet: the row falls back to its label
+ * alone. Exported because the adapter reads the same shape out of a browser
+ * tool's `details` before stamping it, so one validator serves both ends.
+ */
+export function readActivityBrowse(value: unknown): ActivityBrowse | null {
+  return readBrowse(value);
+}
+
+function readBrowse(value: unknown): ActivityBrowse | null {
+  if (!isRecord(value) || !isActivityBrowseAction(value.action)) return null;
+  return {
+    action: value.action,
+    tabId: optionalString(value.tabId),
+    url: optionalString(value.url),
+    title: optionalString(value.title),
+    target: optionalString(value.target),
+    picture: optionalString(value.picture),
+    errorCount: optionalNumber(value.errorCount),
+    ownerSessionId: optionalString(value.ownerSessionId),
+  };
 }
 
 function readOutcome(value: unknown): ActivityOutcome | null {

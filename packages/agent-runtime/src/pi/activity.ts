@@ -7,12 +7,15 @@
  */
 
 import type {
+  ActivityBrowse,
+  ActivityBrowseAction,
   ActivityDescriptor,
   ActivityKind,
   ActivityOutcome,
   RuntimeActivityObservation,
   RuntimeActivityValue,
 } from "@volli/shared";
+import { isActivityBrowseAction, readActivityBrowse } from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
@@ -50,6 +53,25 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   bash: "run-command",
 };
 
+/**
+ * The browser tools, and what each one's call MEANS before the host has
+ * answered (VC-238). Membership here is what makes a tool a `browse` row;
+ * `browser_navigate` and `browser_act` refine the action from their arguments,
+ * the rest are one action each. Once the tool ends, the host's own `details`
+ * report replaces the guess entirely.
+ */
+const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
+  browser_tabs: "tabs",
+  browser_navigate: "open",
+  browser_snapshot: "read",
+  browser_act: "click",
+  browser_screenshot: "screenshot",
+  browser_console: "console",
+};
+
+/** Image bytes never enter an activity payload; the picture travels as the host's id. */
+const IMAGE_OMITTED = "[image]";
+
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;]+/gi;
@@ -85,7 +107,7 @@ export function mapPiActivity(
           ? readField(rawEvent, "result")
           : null;
     const input = normalizeInput(sourceInput);
-    const output = normalizeActivityValue(sourceOutput);
+    const output = normalizeActivityValue(withoutImageBytes(sourceOutput));
     const startedAt =
       type === "tool_execution_start"
         ? timestampOf(readField(rawContext, "observedAt"))
@@ -188,14 +210,111 @@ function descriptorFor(
   startedAt: number | null,
   endedAt: number | null,
 ): ActivityDescriptor {
-  const kind = TOOL_KIND[toolName] ?? "other";
+  const browse = browseFacet(toolName, input, rawOutput);
+  const kind: ActivityKind = browse !== null ? "browse" : (TOOL_KIND[toolName] ?? "other");
   return {
     kind,
     nativeToolName: toolName,
-    subject: subjectFor(kind, input, toolName),
+    subject:
+      browse === null
+        ? subjectFor(kind, input, toolName)
+        : { label: displayUrl(browse.url), path: null, lineRange: null },
     outcome: endedAt === null ? null : outcomeFor(output, rawOutput),
     startedAt,
     endedAt,
+    ...(browse === null ? {} : { browse }),
+  };
+}
+
+/**
+ * The facet a `browse` row is drawn from: the host's `details` once the call
+ * has ended, otherwise what the call itself says. The host report wins because
+ * it knows what the model could not — the page's name for a ref, the URL a
+ * navigation actually landed on, the picture it took afterwards.
+ */
+function browseFacet(
+  toolName: string,
+  input: RuntimeActivityValue,
+  rawOutput: unknown,
+): ActivityBrowse | null {
+  const base = BROWSER_TOOL_ACTION[toolName];
+  if (base === undefined) return null;
+  const reported = readActivityBrowse(readField(recordOf(rawOutput), "details"));
+  if (reported !== null) return reported;
+  const source = recordOf(input);
+  return {
+    action: browseActionOf(toolName, base, source),
+    tabId: cleanPayloadText(readField(source, "tabId")),
+    url: toolName === "browser_navigate" ? cleanPayloadText(readField(source, "url")) : null,
+    title: null,
+    target: toolName === "browser_act" ? actTargetOf(source) : null,
+    picture: null,
+    errorCount: null,
+    ownerSessionId: null,
+  };
+}
+
+function browseActionOf(
+  toolName: string,
+  fallback: ActivityBrowseAction,
+  input: Record<string, RuntimeActivityValue> | null,
+): ActivityBrowseAction {
+  if (toolName === "browser_navigate") {
+    const history = readField(input, "action");
+    return history === "back" || history === "forward" || history === "reload"
+      ? history
+      : fallback;
+  }
+  if (toolName === "browser_act") {
+    const kind = readField(input, "kind");
+    return isActivityBrowseAction(kind) ? kind : fallback;
+  }
+  return fallback;
+}
+
+/** What an action names before the host does: its ref, its key, or its direction. */
+function actTargetOf(input: Record<string, RuntimeActivityValue> | null): string | null {
+  return (
+    cleanPayloadText(readField(input, "ref")) ??
+    cleanPayloadText(readField(input, "key")) ??
+    cleanPayloadText(readField(input, "direction"))
+  );
+}
+
+/**
+ * `example.com/docs/intro` for a row's object: host and path, no scheme, no
+ * query, no trailing slash. A URL that does not parse is shown as typed — the
+ * row still owes the reader an object.
+ */
+export function displayUrl(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.host}${path}`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * A tool result with its image blocks' bytes removed, before the value bound
+ * ever sees them. A screenshot is ~100 KB of base64 against a 32 KB string
+ * bound: kept, it would be cut mid-string and shown to nobody; the host holds
+ * the real picture and the facet names it.
+ */
+function withoutImageBytes(rawOutput: unknown): unknown {
+  const result = recordOf(rawOutput);
+  const content = readField(result, "content");
+  if (result === null || !Array.isArray(content)) return rawOutput;
+  return {
+    ...result,
+    content: content.map((block) => {
+      const item = recordOf(block);
+      return item !== null && readField(item, "type") === "image" && "data" in item
+        ? { ...item, data: IMAGE_OMITTED }
+        : block;
+    }),
   };
 }
 
