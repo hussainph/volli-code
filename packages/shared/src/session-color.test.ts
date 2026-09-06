@@ -4,6 +4,7 @@ import {
   SESSION_COLOR_COUNT,
   SESSION_COLORS,
   assignSessionColors,
+  pickSessionColor,
   sessionColor,
   sessionColorInk,
   sessionColorSlot,
@@ -76,6 +77,32 @@ function collidingPair(): [string, string] {
     seen.set(slot, id);
   }
 }
+
+describe("pickSessionColor", () => {
+  it("is the hashed colour when nothing is taken", () => {
+    expect(pickSessionColor("ses-alpha", [])).toBe(sessionColor("ses-alpha"));
+  });
+
+  it("steps to the next free slot when its own is taken, and agrees with the batch resolver", () => {
+    const [first, second] = collidingPair();
+    const batch = assignSessionColors([first, second]);
+    expect(pickSessionColor(second, [batch.get(first)!])).toBe(batch.get(second));
+  });
+
+  it("falls back to its own colour once every slot is taken", () => {
+    expect(pickSessionColor("ses-alpha", SESSION_COLORS)).toBe(sessionColor("ses-alpha"));
+  });
+
+  it("never moves a colour already handed out: the incremental answer is stable as earlier Sessions leave", () => {
+    const [first, second] = collidingPair();
+    const firstColor = pickSessionColor(first, []);
+    const secondColor = pickSessionColor(second, [firstColor]);
+    // `first` leaves; `second` is not re-asked and keeps what it has, while a
+    // newcomer sees only the colours still live.
+    expect(pickSessionColor(second, [secondColor])).not.toBe(secondColor);
+    expect(secondColor).not.toBe(firstColor);
+  });
+});
 
 describe("assignSessionColors", () => {
   it("gives an uncontended Session its own hashed colour", () => {

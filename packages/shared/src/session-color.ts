@@ -104,6 +104,24 @@ export function sessionColorInk(colorHex: string): "#000000" | "#ffffff" {
  * honest limit, not something this function papers over. A repeated id takes
  * the colour it already has.
  */
+/**
+ * One more Session's colour, given the colours already in use: its own slot
+ * if free, else the next free slot round the wheel, else its own slot again
+ * once the wheel is full. The incremental form of {@link assignSessionColors}
+ * for a host that assigns colours as Sessions ARRIVE and must never revisit
+ * one it already handed out — a batch re-resolution could move a live
+ * Session's colour when an earlier one leaves.
+ */
+export function pickSessionColor(sessionId: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  const preferred = sessionColorSlot(sessionId);
+  for (let step = 0; step < SESSION_COLOR_COUNT; step += 1) {
+    const candidate = SESSION_COLORS[(preferred + step) % SESSION_COLOR_COUNT]!;
+    if (!used.has(candidate)) return candidate;
+  }
+  return SESSION_COLORS[preferred]!;
+}
+
 export function assignSessionColors(sessionIds: readonly string[]): Map<string, string> {
   const assigned = new Map<string, string>();
   const taken = new Set<number>();

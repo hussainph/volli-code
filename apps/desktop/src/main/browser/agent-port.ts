@@ -25,15 +25,28 @@
  *
  * This is explicitly PROVISIONAL. The preferred end state is an approval step:
  * the person confirms before a Session acts on a tab that is theirs, the way a
- * destructive command asks first. It is deferred rather than rejected — the
- * open question is how often the prompt would fire in real use, and whether it
- * lands as a safeguard or as friction, which only running the feature answers.
- * Should it prove noisy enough to click through blindly, it would buy nothing.
+ * destructive command asks first. It is deferred rather than rejected, and
+ * VC-239 answered the question that deferred it — how often the prompt would
+ * fire. It fires where the HOLD is taken (`takeHold` below): once per hold,
+ * which spans a turn's run of actions on one tab, not once per click. That is
+ * seldom enough to be a safeguard rather than friction.
  *
- * When that lands, it belongs HERE, in `steer` and `act`, keyed on
- * `tab.createdBy === "user"` — not in the visibility filter below, because
- * listing a tab and driving it are separate questions and only the second one
- * needs an answer from the person.
+ * When that lands, it belongs in `takeHold`, keyed on `tab.createdBy ===
+ * "user"` — not in the visibility filter below, because listing a tab and
+ * driving it are separate questions and only the second one needs an answer
+ * from the person.
+ *
+ * THE HOLD (VC-239). A hold is one party's turn to drive a tab: one Session or
+ * the person, never both. Reads never need one. Every write — `act`, and
+ * `navigate` on an existing tab — takes the hold on a free tab, keeps its own,
+ * and is refused on anybody else's with the holder named and the way out
+ * stated: open your own tab, or wait. A tab this Session opens is held from
+ * birth. A hold ends when the Session releases it, when its turn ends
+ * (`turnEnded`, driven by the adapter off the turn observation), when the
+ * attachment ends (`dispose`), when the tab closes, or when the person takes
+ * over — and by nothing else, so a stale hold is impossible by construction.
+ * The host judges every one of those against the attachment id, so a port
+ * from an earlier attachment cannot keep or release a newer one's hold.
  *
  * Generations bridge the two owners: the host counts navigations off the
  * webContents' own events (a person navigating a shared tab included), and
@@ -51,15 +64,22 @@ import type { WebContents } from "electron";
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
   RuntimeBrowserConsole,
+  RuntimeBrowserHoldOutcome,
+  RuntimeBrowserHolder,
   RuntimeBrowserNavigation,
   RuntimeBrowserPort,
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
-import type { BrowserTabState } from "../../ipc/contract";
-import type { BrowserTabCreateOptions } from "./tab-host";
+import type { BrowserTabHolder, BrowserTabState } from "../../ipc/contract";
+import type {
+  BrowserHoldEnd,
+  BrowserHoldOutcome,
+  BrowserSessionHolder,
+  BrowserTabCreateOptions,
+} from "./tab-host";
 import { BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
-import { BrowserTabController, type CdpTransport } from "./cdp-controller";
+import { BrowserTabController, type CdpTransport, type TabCursorDriver } from "./cdp-controller";
 
 /**
  * What the port asks of the host — the registry and navigation surface, as a
@@ -74,12 +94,42 @@ export interface AgentBrowserHost {
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
   consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
+  /** The hold doors (VC-239); see {@link BrowserTabHost.hold} and its siblings. */
+  hold(tabId: string, holder: BrowserSessionHolder): BrowserHoldOutcome;
+  releaseHold(tabId: string, holder: BrowserSessionHolder, why?: BrowserHoldEnd): void;
+  releaseAllHeldBy(holder: BrowserSessionHolder, why: BrowserHoldEnd): string[];
+  forgetSession(holder: BrowserSessionHolder): void;
+}
+
+/**
+ * The port as the desktop builds it: the runtime's port with the hold pair
+ * always present, plus the one lifecycle door the adapter drives that the
+ * runtime never sees — a turn ending.
+ */
+export interface AgentBrowserPort extends RuntimeBrowserPort {
+  acquire(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
+  release(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
+  /** The Session's turn completed or was interrupted: every hold it has ends now. */
+  turnEnded(): void;
+  dispose(): void;
 }
 
 export interface AgentBrowserPortOptions {
   host: AgentBrowserHost;
   /** The Session's product scope, fixed at attachment and never the model's to name. */
   scope: { projectId: string; ticketId: string | null };
+  /**
+   * Who this port serves (VC-239): the Session and the attachment it runs
+   * under. A hold is taken in this name and judged against it; the port never
+   * learns it from the model.
+   */
+  session: BrowserSessionHolder;
+  /**
+   * The Session cursor for one tab, or nothing (VC-239). Production binds the
+   * overlay, which draws only over the on-screen tab and answers at once for
+   * any other; tests and a build with no overlay pass nothing and pay nothing.
+   */
+  cursorFor?: (tabId: string) => TabCursorDriver | undefined;
   /** The CDP wire for one live tab — production binds `webContents.debugger`. */
   transportFor: (tabId: string) => CdpTransport;
   /** Resolves when the tab has settled enough to read; must honour the signal. */
@@ -189,10 +239,39 @@ export function loadWaiter(
   };
 }
 
-export function createAgentBrowserPort(options: AgentBrowserPortOptions): RuntimeBrowserPort {
+/** The runtime's view of a holder, from the host's: the same record, with "is it me" answered. */
+function runtimeHolder(
+  holder: BrowserTabHolder | null,
+  self: BrowserSessionHolder,
+): RuntimeBrowserHolder {
+  if (holder === null) return null;
+  if (holder.kind === "person") return { kind: "person" };
+  return {
+    kind: "session",
+    sessionId: holder.sessionId,
+    self: holder.sessionId === self.sessionId,
+  };
+}
+
+/** The refusal a write on somebody else's tab gets: the holder, and the way out. */
+function heldRefusal(tabId: string, holder: BrowserTabHolder): BrowserRefusal {
+  if (holder.kind === "person") {
+    return new BrowserRefusal(
+      "browser.person-has-tab",
+      `The person has taken Browser Tab ${JSON.stringify(tabId)}: wait for them to hand it back, or open your own tab with browser_navigate and no tabId.`,
+    );
+  }
+  return new BrowserRefusal(
+    "browser.tab-held",
+    `Browser Tab ${JSON.stringify(tabId)} is held by ${holder.name} (Session ${holder.sessionId}): open your own tab with browser_navigate and no tabId, or wait and try again.`,
+  );
+}
+
+export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentBrowserPort {
   const controllers = new Map<string, BrowserTabController>();
   /** One live hold per driven tab; released with the tab's scope or the attachment. */
   const wakes = new Map<string, () => void>();
+  const session = options.session;
 
   const keepAwake = (tabId: string): void => {
     if (!wakes.has(tabId)) wakes.set(tabId, options.holdAwake(tabId));
@@ -224,6 +303,16 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     return tab;
   };
 
+  /**
+   * Rule 2: a write takes the hold or is refused. The host decides; this
+   * only words the refusal. Called before every write and by `acquire`.
+   */
+  const takeHold = (tab: BrowserTabState): BrowserTabState => {
+    const outcome = options.host.hold(tab.tabId, session);
+    if (outcome.kind === "refused") throw heldRefusal(tab.tabId, outcome.holder);
+    return outcome.tab;
+  };
+
   /** The tab's controller, attached and generation-synced to the host's count. */
   const controllerFor = async (
     tab: BrowserTabState,
@@ -231,7 +320,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
   ): Promise<BrowserTabController> => {
     let controller = controllers.get(tab.tabId);
     if (controller === undefined) {
-      const pending = new BrowserTabController(options.transportFor(tab.tabId));
+      const pending = new BrowserTabController(
+        options.transportFor(tab.tabId),
+        {},
+        options.cursorFor?.(tab.tabId),
+      );
       try {
         await pending.enable(signal);
       } catch (error) {
@@ -294,21 +387,23 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
         );
       }
       try {
-        return {
-          tabId: options.host.open({
-            url: navigation.url,
-            projectId: options.scope.projectId,
-            ticketId: options.scope.ticketId,
-            createdBy: "session",
-          }).tabId,
-          waitMode: "required-navigation",
-        };
+        const born = options.host.open({
+          url: navigation.url,
+          projectId: options.scope.projectId,
+          ticketId: options.scope.ticketId,
+          createdBy: "session",
+        });
+        // Rule 3: a tab this Session opens is its own from birth. Nobody else
+        // can have reached it between the open and this line.
+        takeHold(born);
+        return { tabId: born.tabId, waitMode: "required-navigation" };
       } catch (error) {
         if (!(error instanceof BrowserTabLimitError)) throw error;
         throw new BrowserRefusal("browser.tab-limit", error.message);
       }
     }
-    const tab = resolve(tabId);
+    // Every history move and every address-bar-style navigation is a write.
+    const tab = takeHold(resolve(tabId));
     switch (navigation.kind) {
       case "url":
         return {
@@ -346,6 +441,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
           url: tab.url,
           title: tab.title,
           createdBy: tab.createdBy,
+          heldBy: runtimeHolder(tab.heldBy, session),
         })),
       };
     },
@@ -360,7 +456,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     },
     act: async (input) => {
       input.signal.throwIfAborted();
-      const tab = resolve(input.tabId);
+      const tab = takeHold(resolve(input.tabId));
       keepAwake(tab.tabId);
       const controller = await controllerFor(tab, input.signal);
       await controller.act(
@@ -397,11 +493,32 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
         truncated: record.truncated,
       };
     },
+    acquire: async (input) => {
+      input.signal.throwIfAborted();
+      const tab = resolve(input.tabId);
+      const outcome = options.host.hold(tab.tabId, session);
+      if (outcome.kind === "held") return { kind: "held", tabId: tab.tabId };
+      // Never null here: a refusal always names who has it.
+      const holder = runtimeHolder(outcome.holder, session) as NonNullable<RuntimeBrowserHolder>;
+      return { kind: "refused", tabId: tab.tabId, holder };
+    },
+    release: async (input) => {
+      input.signal.throwIfAborted();
+      const tab = resolve(input.tabId);
+      options.host.releaseHold(tab.tabId, session, "release");
+      return { tabId: tab.tabId };
+    },
+    turnEnded: () => {
+      options.host.releaseAllHeldBy(session, "turn-end");
+    },
     dispose: () => {
       for (const controller of controllers.values()) controller.dispose();
       controllers.clear();
       for (const release of wakes.values()) release();
       wakes.clear();
+      // Holds go with the attachment, and the Session leaves the colour
+      // wheel; the host does both in one door.
+      options.host.forgetSession(session);
     },
   };
 }

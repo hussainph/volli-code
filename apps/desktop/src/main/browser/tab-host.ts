@@ -7,15 +7,48 @@ import type {
   WebContentsViewConstructorOptions,
   WebPreferences,
 } from "electron";
-import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
+import { pickSessionColor, shortSessionId, type RuntimeBrowserConsoleMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type {
   BrowserTabBounds,
   BrowserTabCaptureFrame,
   BrowserTabCreatedBy,
+  BrowserTabHolder,
   BrowserTabState,
 } from "../../ipc/contract";
+
+/**
+ * One Session's claim on a tab (VC-239), keyed by attachment as well as
+ * Session: a hold belongs to the attachment that took it, so a stale port from
+ * an earlier attachment can neither keep nor release the hold a newer one
+ * holds. The two ids together are what the port hands the host on every
+ * write; the host never learns a Session any other way.
+ */
+export interface BrowserSessionHolder {
+  sessionId: string;
+  attachmentId: string;
+}
+
+/** What taking a hold came to, from the host's side. */
+export type BrowserHoldOutcome =
+  | { kind: "held"; tab: BrowserTabState }
+  | { kind: "refused"; holder: BrowserTabHolder };
+
+/** Why a Session's hold ended. Every path the ticket names; no timer among them. */
+export type BrowserHoldEnd = "release" | "turn-end" | "attachment-end" | "closed" | "takeover";
+
+/**
+ * A change of hands, for the parties that watch holds rather than tabs: the
+ * cursor overlay (a Session took or lost a tab) and the steer notices a
+ * takeover or an ask-to-leave owes the holding Session.
+ */
+export type BrowserHoldEvent =
+  | { kind: "taken"; tabId: string; holder: BrowserSessionHolder }
+  | { kind: "released"; tabId: string; holder: BrowserSessionHolder; why: BrowserHoldEnd }
+  | { kind: "person-took"; tabId: string; displaced: BrowserSessionHolder | null }
+  | { kind: "person-handed-back"; tabId: string }
+  | { kind: "ask-to-leave"; tabId: string; holder: BrowserSessionHolder };
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
@@ -41,6 +74,14 @@ export interface BrowserTabHostDependencies {
   getWindow: () => BrowserWindow | null;
   publishState: (event: BrowserTabState) => void;
   publishClosed: (tabId: string) => void;
+  /**
+   * A Session's display name for the holder record (VC-239). Asynchronous
+   * because the title lives in the Session Engine's projection; the hold is
+   * published at once under a placeholder and again when the name lands.
+   * Absent, or `null` from it, leaves the placeholder — a hold never waits on
+   * a name.
+   */
+  sessionName?: (sessionId: string) => Promise<string | null>;
 }
 
 interface BrowserTabEntry {
@@ -54,6 +95,12 @@ interface BrowserTabEntry {
   consoleTruncated: boolean;
   /** Live agent holds against background throttling; see {@link BrowserTabHost.holdAwake}. */
   wakeLeases: number;
+  /**
+   * Whose turn it is to drive this tab (VC-239): the Session's claim with its
+   * attachment, the person, or nobody. The renderer-facing projection of it
+   * is `state.heldBy`, kept in step by {@link BrowserTabHost.publishHold}.
+   */
+  hold: { kind: "session"; holder: BrowserSessionHolder } | { kind: "person" } | null;
 }
 
 /**
@@ -200,6 +247,17 @@ export class BrowserTabHost {
   private readonly tabs = new Map<string, BrowserTabEntry>();
   private readonly securedSessions = new WeakSet<Session>();
   private attached: { entry: BrowserTabEntry; window: BrowserWindow } | null = null;
+  private readonly holdListeners = new Set<(event: BrowserHoldEvent) => void>();
+  /**
+   * The colour each live holding Session was handed, assigned on its first
+   * hold against the colours then in use and never revisited — so a Session
+   * keeps its colour for as long as it lives whoever comes or goes after it.
+   * Pruned when the Session's attachment ends ({@link forgetSession}), so the
+   * wheel is not blocked by Sessions nobody will see again.
+   */
+  private readonly sessionColors = new Map<string, string>();
+  /** Names learned from {@link BrowserTabHostDependencies.sessionName}, so a second hold does not ask twice. */
+  private readonly sessionNames = new Map<string, string>();
 
   constructor(private readonly deps: BrowserTabHostDependencies) {}
 
@@ -277,6 +335,186 @@ export class BrowserTabHost {
     });
   }
 
+  // ---- holds (VC-239) -----------------------------------------------------
+
+  /** The renderer-facing holder for one entry's hold, with the Session's name and colour resolved. */
+  private holderOf(entry: BrowserTabEntry): BrowserTabHolder | null {
+    const hold = entry.hold;
+    if (hold === null) return null;
+    if (hold.kind === "person") return { kind: "person" };
+    const { sessionId } = hold.holder;
+    return {
+      kind: "session",
+      sessionId,
+      name: this.sessionNames.get(sessionId) ?? `Session ${shortSessionId(sessionId)}`,
+      color: this.sessionColors.get(sessionId) ?? pickSessionColor(sessionId, []),
+    };
+  }
+
+  /** A Session's colour, assigned on its first hold and sticky from then on. */
+  private colorFor(sessionId: string): string {
+    let color = this.sessionColors.get(sessionId);
+    if (color === undefined) {
+      color = pickSessionColor(sessionId, this.sessionColors.values());
+      this.sessionColors.set(sessionId, color);
+    }
+    return color;
+  }
+
+  /** Re-derives `state.heldBy` from the entry's hold and pushes the tab. */
+  private publishHold(entry: BrowserTabEntry): void {
+    entry.state = { ...entry.state, heldBy: this.holderOf(entry) };
+    this.deps.publishState({ ...entry.state });
+  }
+
+  private emitHold(event: BrowserHoldEvent): void {
+    for (const listener of this.holdListeners) listener(event);
+  }
+
+  /** Learns a Session's name once, then republishes every tab it holds under it. */
+  private learnSessionName(sessionId: string): void {
+    if (this.sessionNames.has(sessionId) || this.deps.sessionName === undefined) return;
+    void this.deps.sessionName(sessionId).then(
+      (name) => {
+        if (name === null || name.trim() === "") return;
+        this.sessionNames.set(sessionId, name.trim());
+        for (const entry of this.tabs.values()) {
+          if (entry.hold?.kind === "session" && entry.hold.holder.sessionId === sessionId) {
+            this.publishHold(entry);
+          }
+        }
+      },
+      () => {
+        // The placeholder stands. Nobody asked for the name and nothing waits
+        // on it; a hold is not a user operation that can fail on a lookup.
+      },
+    );
+  }
+
+  private static sameHolder(a: BrowserSessionHolder, b: BrowserSessionHolder): boolean {
+    return a.sessionId === b.sessionId && a.attachmentId === b.attachmentId;
+  }
+
+  /**
+   * Rule 2 and rule 3 in one door: a write on a free tab takes the hold, a
+   * write on one's own hold keeps it, and a write on anybody else's is
+   * refused with the holder named. The port calls this before every write;
+   * `browser_acquire` calls it on its own. Never throws for a judged
+   * outcome — the refusal is an answer, and the port words it.
+   */
+  hold(tabId: string, holder: BrowserSessionHolder): BrowserHoldOutcome {
+    const entry = this.requireTab(tabId);
+    const current = entry.hold;
+    if (current !== null) {
+      if (current.kind === "session" && BrowserTabHost.sameHolder(current.holder, holder)) {
+        return { kind: "held", tab: { ...entry.state } };
+      }
+      return { kind: "refused", holder: this.holderOf(entry)! };
+    }
+    entry.hold = { kind: "session", holder };
+    this.colorFor(holder.sessionId);
+    this.learnSessionName(holder.sessionId);
+    this.publishHold(entry);
+    this.emitHold({ kind: "taken", tabId, holder });
+    return { kind: "held", tab: { ...entry.state } };
+  }
+
+  /**
+   * Ends one Session's hold on one tab. Only the holder can: a release from
+   * anyone else is a no-op rather than a refusal, because "you do not hold
+   * this" is already the end state the caller asked for. An unknown tab is
+   * the same no-op — a closed tab's hold went with it.
+   */
+  releaseHold(tabId: string, holder: BrowserSessionHolder, why: BrowserHoldEnd = "release"): void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined || entry.hold === null || entry.hold.kind !== "session") return;
+    if (!BrowserTabHost.sameHolder(entry.hold.holder, holder)) return;
+    entry.hold = null;
+    this.publishHold(entry);
+    this.emitHold({ kind: "released", tabId, holder, why });
+  }
+
+  /** Every hold one attachment has, ended at once: a turn end or the attachment's end. */
+  releaseAllHeldBy(holder: BrowserSessionHolder, why: BrowserHoldEnd): string[] {
+    const released: string[] = [];
+    for (const [tabId, entry] of this.tabs) {
+      if (entry.hold?.kind !== "session") continue;
+      if (!BrowserTabHost.sameHolder(entry.hold.holder, holder)) continue;
+      this.releaseHold(tabId, holder, why);
+      released.push(tabId);
+    }
+    return released;
+  }
+
+  /**
+   * An attachment is over: its holds go, and its Session leaves the colour
+   * order so the wheel is not blocked by a Session nobody will see again. A
+   * later attachment of the same Session arrives as new and may take another
+   * slot — the colour is stable for an attachment's life, which is the life
+   * the cursor is drawn for.
+   */
+  forgetSession(holder: BrowserSessionHolder): void {
+    this.releaseAllHeldBy(holder, "attachment-end");
+    this.sessionColors.delete(holder.sessionId);
+    this.sessionNames.delete(holder.sessionId);
+  }
+
+  /**
+   * Rule 7: the person takes the tab now. Whoever held it is displaced and
+   * named back, so the caller can tell that Session in-band rather than let
+   * it learn by failing. Taking over a free tab or one the person already
+   * holds is the same end state and reports nobody displaced.
+   */
+  takeOver(tabId: string): { tab: BrowserTabState; displaced: BrowserSessionHolder | null } {
+    const entry = this.requireTab(tabId);
+    const displaced = entry.hold?.kind === "session" ? entry.hold.holder : null;
+    entry.hold = { kind: "person" };
+    this.publishHold(entry);
+    if (displaced !== null) {
+      this.emitHold({ kind: "released", tabId, holder: displaced, why: "takeover" });
+    }
+    this.emitHold({ kind: "person-took", tabId, displaced });
+    return { tab: { ...entry.state }, displaced };
+  }
+
+  /** The person gives the tab back: free, and a Session may hold it on its next write. */
+  handBack(tabId: string): BrowserTabState {
+    const entry = this.requireTab(tabId);
+    if (entry.hold?.kind === "person") {
+      entry.hold = null;
+      this.publishHold(entry);
+      this.emitHold({ kind: "person-handed-back", tabId });
+    }
+    return { ...entry.state };
+  }
+
+  /**
+   * The person asks the holding Session to release when it is safe. The hold
+   * stays; the request is an event for whoever relays it in-band. Nothing to
+   * ask on a tab no Session holds.
+   */
+  askToLeave(tabId: string): BrowserSessionHolder | null {
+    const entry = this.requireTab(tabId);
+    if (entry.hold?.kind !== "session") return null;
+    const holder = entry.hold.holder;
+    this.emitHold({ kind: "ask-to-leave", tabId, holder });
+    return holder;
+  }
+
+  /** Whether one attachment holds a tab — the port's own bookkeeping check. */
+  isHeldBy(tabId: string, holder: BrowserSessionHolder): boolean {
+    const hold = this.tabs.get(tabId)?.hold;
+    return hold?.kind === "session" && BrowserTabHost.sameHolder(hold.holder, holder);
+  }
+
+  /** Hold changes, for the cursor overlay and the steer notices. Returns the unsubscribe. */
+  onHoldChange(listener: (event: BrowserHoldEvent) => void): () => void {
+    this.holdListeners.add(listener);
+    return () => {
+      this.holdListeners.delete(listener);
+    };
+  }
+
   private publish(
     entry: BrowserTabEntry,
     update: Partial<
@@ -349,6 +587,7 @@ export class BrowserTabHost {
       canGoBack: false,
       canGoForward: false,
       generation: 0,
+      heldBy: null,
     };
     const entry: BrowserTabEntry = {
       state,
@@ -360,6 +599,7 @@ export class BrowserTabHost {
       console: [],
       consoleTruncated: false,
       wakeLeases: 0,
+      hold: null,
     };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
@@ -440,11 +680,21 @@ export class BrowserTabHost {
       }
       this.destroyDevTools(entry);
       this.tabs.delete(tabId);
+      this.endHoldOnClose(tabId, entry);
       this.deps.publishClosed(tabId);
     });
     this.deps.publishState({ ...state });
     void view.webContents.loadURL(input.url).catch(() => undefined);
     return { ...state };
+  }
+
+  /** A closed tab's hold goes with it; the holder hears so its own bookkeeping can drop the tab. */
+  private endHoldOnClose(tabId: string, entry: BrowserTabEntry): void {
+    const hold = entry.hold;
+    entry.hold = null;
+    if (hold?.kind === "session") {
+      this.emitHold({ kind: "released", tabId, holder: hold.holder, why: "closed" });
+    }
   }
 
   /** Closes and forgets one product tab without allowing page unload code to veto it. */
@@ -453,6 +703,7 @@ export class BrowserTabHost {
     if (this.attached?.entry === entry) this.hide(tabId);
     this.destroyDevTools(entry);
     this.tabs.delete(tabId);
+    this.endHoldOnClose(tabId, entry);
     this.deps.publishClosed(tabId);
     entry.view.webContents.close({ waitForBeforeUnload: false });
   }

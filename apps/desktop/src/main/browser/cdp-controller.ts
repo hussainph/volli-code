@@ -37,6 +37,27 @@ export interface CdpTransport {
   dispose?: () => void;
 }
 
+/** What the cursor is told a Session is doing at a point, in page CSS pixels. */
+export type TabCursorGesture = "click" | "hover" | "type" | "scroll";
+
+/**
+ * The Session cursor's view of one tab's actions (VC-239): told WHERE before
+ * the input goes there, so the drawing never claims a spot the click did not
+ * land on. `moveTo` resolves when the glide has landed — or at once when the
+ * tab is not on screen, or at the host's bound if the overlay does not
+ * answer — and only then is the input dispatched. Optional on the
+ * controller: a tab with no cursor (a test, a headless drive) pays nothing.
+ */
+export interface TabCursorDriver {
+  moveTo(
+    point: { x: number; y: number },
+    gesture: TabCursorGesture,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  /** A gesture at the point the cursor is already at, or its end (`null`). */
+  gesture(kind: TabCursorGesture | null): void;
+}
+
 /** What one act call may say — the tool schema's shape, minus the tab id the host resolved. */
 export interface TabActRequest {
   generation: number;
@@ -136,15 +157,17 @@ export class BrowserTabController {
   readonly #ensureReady: CdpTransport["ensureReady"];
   readonly #disposeTransport: CdpTransport["dispose"];
   readonly #limits: Required<ControllerLimits>;
+  readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
   #refs: ReadonlyMap<string, number> = new Map();
   #snapshotGeneration = -1;
   #nextRef = 1;
 
-  constructor(transport: CdpTransport, limits: ControllerLimits = {}) {
+  constructor(transport: CdpTransport, limits: ControllerLimits = {}, cursor?: TabCursorDriver) {
     this.#send = transport.send;
     this.#ensureReady = transport.ensureReady;
     this.#disposeTransport = transport.dispose;
+    this.#cursor = cursor;
     this.#limits = {
       maxSnapshotChars: Math.floor(narrowedLimit(limits.maxSnapshotChars, SNAPSHOT_MAX_CHARS)),
       maxWaitMs: narrowedLimit(limits.maxWaitMs, MAX_WAIT_MS),
@@ -302,8 +325,19 @@ export class BrowserTabController {
             "type needs text to insert into the element.",
           );
         }
-        await this.#command("DOM.focus", { backendNodeId }, signal);
-        await this.#command("Input.insertText", { text: request.text }, signal);
+        // The cursor parks at the field before the text goes in. Its box is
+        // read only when there is a cursor to park: a tab nobody is watching
+        // pays no extra round trip.
+        if (this.#cursor !== undefined) {
+          const point = await this.#centreOf(backendNodeId, signal);
+          if (point !== null) await this.#cursor.moveTo(point, "type", signal);
+        }
+        try {
+          await this.#command("DOM.focus", { backendNodeId }, signal);
+          await this.#command("Input.insertText", { text: request.text }, signal);
+        } finally {
+          this.#cursor?.gesture(null);
+        }
         return;
       }
       case "press":
@@ -349,6 +383,7 @@ export class BrowserTabController {
           throw new BrowserRefusal("browser.unactionable", "scroll needs a direction: up or down.");
         }
         const { x, y } = await this.#viewportCenter(signal);
+        await this.#cursor?.moveTo({ x, y }, "scroll", signal);
         await this.#command(
           "Input.dispatchMouseEvent",
           {
@@ -401,24 +436,43 @@ export class BrowserTabController {
     return backendNodeId;
   }
 
+  /**
+   * The centre of an element's content box in page CSS pixels, or null when
+   * it has no visible box. The one place the click coordinates and the
+   * cursor's target are computed, so they cannot disagree.
+   */
+  async #centreOf(
+    backendNodeId: number,
+    signal?: AbortSignal,
+  ): Promise<{ x: number; y: number } | null> {
+    const box = (await this.#command("DOM.getBoxModel", { backendNodeId }, signal)) as {
+      model?: { content?: number[] };
+    };
+    const quad = box.model?.content;
+    if (quad === undefined || quad.length < 8) return null;
+    return {
+      x: (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4,
+      y: (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4,
+    };
+  }
+
   async #pointer(
     backendNodeId: number,
     kind: "click" | "hover",
     signal?: AbortSignal,
   ): Promise<void> {
     await this.#command("DOM.scrollIntoViewIfNeeded", { backendNodeId }, signal);
-    const box = (await this.#command("DOM.getBoxModel", { backendNodeId }, signal)) as {
-      model?: { content?: number[] };
-    };
-    const quad = box.model?.content;
-    if (quad === undefined || quad.length < 8) {
+    const point = await this.#centreOf(backendNodeId, signal);
+    if (point === null) {
       throw new BrowserRefusal(
         "browser.unactionable",
         "The element behind that ref has no visible box to act on: take a fresh snapshot.",
       );
     }
-    const x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
-    const y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+    const { x, y } = point;
+    // The glide lands before the input goes: the cursor is never drawn at a
+    // spot the click did not go to (VC-239).
+    await this.#cursor?.moveTo(point, kind, signal);
     if (kind === "hover") {
       await this.#command("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, signal);
       return;

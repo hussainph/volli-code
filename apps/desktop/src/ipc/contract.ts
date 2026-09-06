@@ -1424,6 +1424,20 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 export type BrowserTabCreatedBy = "user" | "session";
 
 /**
+ * Who holds a Browser Tab — whose turn it is to drive it (VC-239). At most one
+ * party at a time: one Session, or the person; `null` is a free tab.
+ *
+ * A Session's `name` and `color` travel with the hold rather than being looked
+ * up by each surface, so the chrome pill, the strip dot and the cursor main
+ * paints over the page agree on both with nothing but this record in common.
+ * The colour is identity, never state (`@volli/shared`'s `sessionColor`),
+ * resolved by main across every live holder so concurrent Sessions differ.
+ */
+export type BrowserTabHolder =
+  | { kind: "session"; sessionId: string; name: string; color: string }
+  | { kind: "person" };
+
+/**
  * Renderer-safe state for one live Browser Tab. Product identity and bounded
  * browser chrome facts cross IPC; Chromium ids, Session partitions, page
  * content, cookies, and history entries never do.
@@ -1444,6 +1458,8 @@ export interface BrowserTabState {
   canGoForward: boolean;
   /** Monotonic within this tab; a main-frame navigation advances it. */
   generation: number;
+  /** Who holds the tab right now, or `null` for a free tab (VC-239). */
+  heldBy: BrowserTabHolder | null;
 }
 
 /**
@@ -1539,6 +1555,14 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  /**
+   * The person's three hold controls (VC-239). Explicit, never inferred from
+   * input: main cannot tell a person's click in the native view from a
+   * Session's synthetic one, so only these channels move the hold.
+   */
+  "volli:browser-take-over": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-hand-back": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-ask-to-leave": { args: [input: BrowserTabIdInput]; result: Result };
 }
 
 /** Every Browser workspace invoke channel, derived from its one contract. */

@@ -408,6 +408,12 @@ const api = {
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
       invoke("volli:browser-toggle-devtools", input),
+    takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-take-over", input),
+    handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-hand-back", input),
+    askToLeave: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-ask-to-leave", input),
     /** Subscribes to full chrome snapshots; returns the unsubscribe. */
     onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>

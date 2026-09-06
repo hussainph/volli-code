@@ -30,5 +30,9 @@ export interface BrowserApi {
   show(input: BrowserTabIdInput): Promise<Result>;
   hide(input: BrowserTabIdInput): Promise<Result>;
   toggleDevTools(input: BrowserTabIdInput): Promise<Result>;
+  /** The person's hold controls (VC-239): take the tab, give it back, ask the holder to leave. */
+  takeOver(input: BrowserTabIdInput): Promise<BrowserTabResult>;
+  handBack(input: BrowserTabIdInput): Promise<BrowserTabResult>;
+  askToLeave(input: BrowserTabIdInput): Promise<Result>;
   onTabState(callback: (event: BrowserTabStateEvent) => void): () => void;
 }

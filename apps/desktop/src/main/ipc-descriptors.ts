@@ -277,6 +277,18 @@ export const BROWSER_IPC: {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-take-over": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-hand-back": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-ask-to-leave": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
 };
 
 /** Every Browser Tab command, derived so handler registration cannot omit one. */
