@@ -356,6 +356,53 @@ describe("the ask-user card", () => {
   });
 });
 
+describe("the ask's own text", () => {
+  // Shaped like the asks a test or dev agent actually sends when it stops to
+  // check direction: several paragraphs, each with line breaks of its own.
+  const paragraphs = [
+    "Direction check before I write the tests.",
+    "The runner needs a real window, and CI has none, so I plan to gate the suite behind the flag and leave the driver to opt in.",
+    "The part I have not decided is where the gate lives.",
+    "Should it sit with the test, or with the runner?",
+  ].join("\n\n");
+
+  it("keeps the line breaks the model wrote, as the paragraphs they are", () => {
+    // The ask is plain text off the wire and the breaks a model composed with
+    // are its paragraphs. A bare `<p>` folded each one into a space, so a
+    // five-paragraph question read as one unbroken run.
+    const html = drawn(ask([askPrompt({ label: paragraphs })]));
+    expect(html).toContain("whitespace-pre-line");
+    expect(html).toContain("Direction check before I write the tests.\n\nThe runner");
+  });
+
+  it("caps the ask at the pane's share and scrolls past it", () => {
+    // The card grows upward from the bottom of the plane, so an ask that
+    // ignored `ask_user`'s one-or-two-sentence guidance used to push the card
+    // past the top of the transcript. A fraction of the viewport, not a fixed
+    // rem, is what makes the ceiling shrink with the window it has to leave
+    // room in.
+    const html = drawn(ask([askPrompt({ label: paragraphs })]));
+    expect(html).toContain("max-h-[min(40vh,16rem)]");
+    expect(html).toContain("overflow-y-auto");
+  });
+
+  it("sets a paragraph's rag on the ask, not a heading's", () => {
+    // Balance evens a title's lines and stops meaning anything past a few;
+    // the ask is a sentence that grew.
+    expect(drawn(ask([askPrompt({ label: paragraphs })]))).toContain("text-pretty");
+  });
+
+  it("reads the verdict card's ask the same way", () => {
+    // One family, one paragraph: a permission's title collapses its breaks
+    // just as thoroughly, and takes the same height off the same pane.
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={permission()} onResolve={() => undefined} />,
+    );
+    expect(html).toContain("whitespace-pre-line");
+    expect(html).toContain("max-h-[min(40vh,16rem)]");
+  });
+});
+
 /**
  * A permission whose options declare no refusal of their own, which is what
  * makes the words a redirection and stands the box open on the verdict card —
