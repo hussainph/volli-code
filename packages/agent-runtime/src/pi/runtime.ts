@@ -1494,6 +1494,18 @@ async function attachSession(
         sink: host.observability,
         runId,
         now: host.now,
+        ...(host.usageLimits === undefined
+          ? {}
+          : {
+              // The passive half of the usage read: whatever windows this
+              // response's headers stated fold straight into the holder the
+              // next inspection reads. A sink that throws costs the capture.
+              usageLimits: {
+                record: (providerId, update) => {
+                  host.usageLimits?.holder.apply(providerId, update);
+                },
+              },
+            }),
       }),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",

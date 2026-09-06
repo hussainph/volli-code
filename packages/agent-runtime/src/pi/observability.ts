@@ -21,8 +21,12 @@
 
 import type { AgentOptions } from "@earendil-works/pi-agent-core";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageEventStream,
+  Model,
+  ProviderResponse,
+  SimpleStreamOptions,
   StopReason,
 } from "@earendil-works/pi-ai";
 import {
@@ -34,7 +38,10 @@ import {
   type ProviderErrorClass,
   type RuntimeObservation,
   type SessionRuntimeSpec,
+  type UsageLimitsUpdate,
 } from "@volli/shared";
+
+import { headerUsageUpdate } from "./usage-limits/passive";
 
 type PiStreamFn = AgentOptions["streamFn"];
 
@@ -44,6 +51,21 @@ export interface StreamObservability {
   /** Opaque per-attachment correlation id; never derived from Session identity. */
   runId: string;
   now: () => number;
+  /**
+   * Where the passive usage capture hands what one response's headers stated
+   * (VC-263). Optional: absent means no capture — the stream options reach the
+   * provider exactly as the caller wrote them.
+   */
+  usageLimits?: UsageLimitsSink;
+}
+
+/**
+ * The passive half of the usage read: already-mapped windows, one response's
+ * worth at a time. Never awaited, never allowed to disturb the request — a
+ * sink that throws costs the capture, not the turn.
+ */
+export interface UsageLimitsSink {
+  record(providerId: string, update: UsageLimitsUpdate): void;
 }
 
 /**
@@ -164,13 +186,23 @@ export function teeObservationsToSink(
  * inner function produced is what the Agent iterates. Enrichment (time to
  * first event, event count) rides on the producer's own `push`, and a stream
  * that refuses the patch still yields an envelope from `result()`.
+ *
+ * With a {@link UsageLimitsSink} on the observability host, each request's
+ * options also grow an `onResponse` that maps whatever usage headers the
+ * response carries and hands them to the sink — composed with any
+ * `onResponse` the caller already set, so a caller that inspects responses
+ * keeps seeing every one of them.
  */
 export function instrumentStreamFn(
   inner: PiStreamFn,
   observability: StreamObservability,
 ): PiStreamFn {
   return (model, context, options) => {
-    const produced = inner(model, context, options);
+    const request =
+      observability.usageLimits === undefined
+        ? options
+        : withUsageCapture(options, model.provider, observability);
+    const produced = inner(model, context, request);
     // Read off the request before the stream settles, and once: the identity is
     // the same whichever way the inner function chose to hand the stream back.
     const identity: AttemptIdentity = {
@@ -195,6 +227,31 @@ interface AttemptIdentity {
   modelId: string;
   api: string;
   reasoningLevel: ProviderAttemptEvent["reasoningLevel"] | undefined;
+}
+
+/**
+ * Adds the usage capture to one request's options, keeping any `onResponse`
+ * the caller set. The capture runs first and synchronously, and a throwing
+ * mapper or sink loses only the capture: the caller's own callback still runs,
+ * and the provider still gets exactly the answer it would have.
+ */
+function withUsageCapture(
+  options: SimpleStreamOptions | undefined,
+  providerId: string,
+  observability: StreamObservability,
+): SimpleStreamOptions | undefined {
+  const sink = observability.usageLimits;
+  const caller = options?.onResponse;
+  const capture = (response: ProviderResponse, model: Model<Api>): void | Promise<void> => {
+    try {
+      const update = headerUsageUpdate(providerId, response?.headers ?? {}, observability.now());
+      if (update !== null) sink?.record(providerId, update);
+    } catch {
+      // A lost capture, never a lost response.
+    }
+    return caller?.(response, model);
+  };
+  return options === undefined ? { onResponse: capture } : { ...options, onResponse: capture };
 }
 
 function observeAttempt(
