@@ -84,12 +84,14 @@ export const NON_CODING_TOOL_IDS = [
   "web_fetch",
   /** Asking the configured search provider for references, through Volli's own search boundary. */
   "web_search",
-  // The six names below are one capability — the Browser port — split only for
-  // the model's sake: a tool per intent keeps each schema small and each call
-  // legible in the ledger, while membership stays all-or-nothing because one
-  // port answers them all. Appended after the names that shipped before them
-  // and never reordered: the Cache Prefix is computed over the serialized tool
-  // array, and a durable Snapshot that recorded the old order must stay valid.
+  // The eight names below are one capability — the Browser port — split only
+  // for the model's sake: a tool per intent keeps each schema small and each
+  // call legible in the ledger, while membership stays all-or-nothing because
+  // one port answers them all. Appended after the names that shipped before
+  // them and never reordered: the Cache Prefix is computed over the serialized
+  // tool array, and a durable Snapshot that recorded the old order must stay
+  // valid. The last two (VC-239) came after the first six for that reason, and
+  // a Session frozen with six keeps six — its port is offered without them.
   /** Listing the Browser Tabs this Session may see. */
   "browser_tabs",
   /** Opening or steering a Browser Tab: a URL, back, forward, or reload. */
@@ -102,6 +104,10 @@ export const NON_CODING_TOOL_IDS = [
   "browser_screenshot",
   /** Reading a Browser Tab's console messages and page errors, bounded. */
   "browser_console",
+  /** Taking a Browser Tab's hold — one party's turn to drive it — or learning who has it (VC-239). */
+  "browser_acquire",
+  /** Giving a hold back before the turn ends. */
+  "browser_release",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
