@@ -16,10 +16,13 @@
  * would draw a stub at the left and a tick at the far right, the picture of
  * being maximally ahead, beside an `=` glyph saying the opposite.
  *
- * Time is anchored once per mount and never ticks: these numbers are a
+ * Time is anchored once per snapshot and never ticks: these numbers are a
  * snapshot the account stated, `resets in 2h 13m` is that snapshot read once,
  * and a countdown that moved would promise a liveness the source does not have.
- * A newer reading arrives with the next snapshot.
+ * A newer reading arrives with the next snapshot, and the anchor travels with
+ * it — per snapshot, not per mount, because the account row stays mounted
+ * across a Refresh, and a fresh `resetsAt` read against the clock as it stood
+ * when the page opened would be wrong by however long the page had been open.
  *
  * No prose. The label is the window's own name, `N% left` is the number, and
  * the only sentence on the surface is the reset — the same rule the rest of
@@ -52,8 +55,10 @@ export function ModelAccessUsage({
   now?: number;
   testId?: string;
 }) {
-  // One reading per mount, taken before anything draws.
-  const [at] = React.useState(() => now ?? Date.now());
+  // One reading per snapshot, taken before anything draws. Keyed on `limits`
+  // by identity: the holder hands back the same object when nothing changed,
+  // so a confirming inspection does not move the anchor either.
+  const at = React.useMemo(() => now ?? Date.now(), [limits, now]);
 
   if (limits.unavailable !== undefined) {
     return (
