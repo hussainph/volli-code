@@ -142,16 +142,17 @@ export function automationMarkLabel(provenance: SessionProvenance): string | nul
  * The Automation name a row must PRINT beside its bolt, or `null` when the row
  * already says it.
  *
- * A Run titles its Session after its Automation — `run.ts` hands the Session
- * start `title: plan.automationName` — so in the ordinary case the name is
- * already the largest text on the row, and printing it again beside the glyph
- * would be two copies of one word in a rail VC-112 explicitly asks not to
- * clutter. The bolt always draws; this decides only whether the word repeats.
+ * A Run is born titled after its Automation — `run.ts` hands the Session start
+ * `title: plan.automationName` — so the name is initially the largest text on
+ * the row, and printing it again beside the glyph would be two copies of one
+ * word in a rail VC-112 explicitly asks not to clutter. The bolt always draws;
+ * this decides only whether the word repeats.
  *
- * It comes apart exactly where it should. A Session that was auto-titled from
- * its first turn, renamed by hand, or born of an Unbound Run no longer carries
- * its origin in its title — and those are precisely the rows where the reader
- * cannot otherwise tell which Automation is responsible, so the name appears.
+ * It comes apart exactly where it should. Once the first turn auto-titles the
+ * Session — or a person renames it, or an Unbound Run supplied no Automation
+ * name — the title no longer carries its origin. Those are precisely the rows
+ * where the reader cannot otherwise tell which Automation is responsible, so
+ * the name appears.
  *
  * Compared after trimming and case-insensitively, because a title that differs
  * from its Automation only by whitespace or capitalisation is the same answer

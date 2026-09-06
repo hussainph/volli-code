@@ -869,6 +869,34 @@ describe("SessionRuntime native adapter contract", () => {
     expect(snapshot.projection.authorityDenials).toBe(1);
   });
 
+  it("records a provider reasoning drop as a durable Session Event", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+
+    await adapter.emit({
+      kind: "provider-reasoning-dropped",
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+      recoveryCursor: "marker-7",
+    });
+
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(
+      snapshot.frames.find(({ event }) => event.payload.kind === "context.reasoning_dropped")?.event
+        .payload,
+    ).toEqual({
+      kind: "context.reasoning_dropped",
+      attachmentId,
+      turnId: "turn-1",
+      count: 2,
+      causes: ["prefix-mismatch", "model-mismatch"],
+      paths: ["messages.1.content.0", "messages.3.content.0"],
+    });
+  });
+
   it("records what an operation consumed, and folds it into the Session's own total", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

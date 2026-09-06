@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { branchTip, insertEntry, setValue, type StreamFn } from "@earendil-works/pi-agent-core";
 import {
   JsonlSessionRepo,
   NodeExecutionEnv,
@@ -22,6 +22,7 @@ import {
   fauxProvider,
   InMemoryCredentialStore,
   ModelsError,
+  type AnthropicMessagesCompat,
   type AssistantMessage,
   type Context,
   type CredentialStore,
@@ -30,6 +31,7 @@ import {
   type Models,
   type ToolCall,
 } from "@earendil-works/pi-ai";
+import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import {
   BUILTIN_RULE_PACK_HASH,
@@ -53,14 +55,33 @@ import {
   modelsDevCatalogSource,
   PiFileModelsStore,
 } from "./model-catalog";
+import { piContext } from "./pi-context";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
+import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { withoutReasoning } from "./reasoning";
 import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
 /** A second catalog entry, so a chat-model change has a visible summary answer. */
 const CHAT_MODEL_ID = "claude-chat-model";
+/**
+ * A managed-effort model, spelled as pi 0.85.0 spells the real one.
+ *
+ * Only `claude-fable-5-1` and `claude-opus-5` carry `supportsMidConvoEffort` in
+ * pi's static Anthropic catalog, and `claude-fable-5` — one character away —
+ * does not (VC-254).
+ */
+const FABLE_MODEL_ID = "claude-fable-5-1";
+/**
+ * Its sibling one character away, which carries no managed effort.
+ *
+ * The pairing is the point: in pi 0.85.0 `claude-fable-5` has
+ * `forceAdaptiveThinking` but NOT `supportsMidConvoEffort`, so it gets no
+ * `drop_block` and a broken prefix still comes back as a 400 (VC-254).
+ */
+const UNFLAGGED_FABLE_ID = "claude-fable-5";
 const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 
 // --- scripted model stream -------------------------------------------------
@@ -74,6 +95,7 @@ type ScriptStep = (
   context: Context,
   signal: AbortSignal | undefined,
   model: Model<string>,
+  reasoning: string | undefined,
 ) => Promise<void> | void;
 
 interface EmitApi {
@@ -86,6 +108,15 @@ interface EmitApi {
   thinking(delta: string, signature?: string): void;
   text(delta: string): void;
   toolCall(name: string, args: Record<string, unknown>): void;
+  /**
+   * A provider diagnostic on the reply, as pi-ai appends them.
+   *
+   * The Anthropic adapter uses this to record what the API silently changed
+   * about the request it accepted — `anthropic_input_transformations` is the
+   * dropped-block report, and it is appended after a SUCCESSFUL stream, just
+   * before `done` (VC-254).
+   */
+  diagnostic(type: string, details: Record<string, unknown>): void;
   finish(): void;
   fail(message: string): void;
   cancel(): void;
@@ -93,13 +124,50 @@ interface EmitApi {
   occupies(tokens: number): void;
 }
 
-function baseMessage(model: Model<string>): AssistantMessage {
+/**
+ * The effort a managed-effort model would have run this turn at.
+ *
+ * pi-ai's own `mapThinkingLevelToEffort`, mirrored: the model's
+ * `thinkingLevelMap` when it names one, else the level itself, else `high`.
+ * Mirrored rather than imported because pi-ai does not export it — and the
+ * mirror is only ever used to say what the REAL adapter would have persisted,
+ * never to decide anything.
+ */
+function effortFor(model: Model<string>, level: string | undefined): string {
+  const mapped = level === undefined ? undefined : model.thinkingLevelMap?.[level as "high"];
+  if (typeof mapped === "string") return mapped;
+  switch (level) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    default:
+      return "high";
+  }
+}
+
+function baseMessage(model: Model<string>, reasoning?: string): AssistantMessage {
+  // What pi-ai's Anthropic adapter stamps on every reply from a model whose
+  // compat carries `supportsMidConvoEffort` (`anthropic-messages.js` ~333):
+  // the turn's own effort, persisted on the message so a later request can
+  // replay it as that turn's effort marker. A faux provider that omitted it
+  // would be testing a message shape the real one never produces — and would
+  // silently pass the very prefix test this field exists to make possible.
+  // `Model<string>["compat"]` collapses to `never` — the field is typed per
+  // API family and a generic api string matches none of them — so the read is
+  // narrowed to the family this whole faux provider declares.
+  const compat = model.compat as AnthropicMessagesCompat | undefined;
+  const providerThinkingLevel = compat?.supportsMidConvoEffort
+    ? effortFor(model, reasoning)
+    : undefined;
   return {
     role: "assistant",
     content: [],
     api: model.api,
     provider: model.provider,
     model: model.id,
+    ...(providerThinkingLevel === undefined ? {} : { providerThinkingLevel }),
     usage: {
       input: 100,
       output: 20,
@@ -118,7 +186,10 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
   return (model, context, options) => {
     const step = steps[call++];
     const stream = createAssistantMessageEventStream();
-    const message = baseMessage(model as Model<string>);
+    const message = baseMessage(
+      model as Model<string>,
+      (options as { reasoning?: string } | undefined)?.reasoning,
+    );
     let index = 0;
 
     const emit: EmitApi = {
@@ -158,6 +229,9 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
         });
         index += 1;
       },
+      diagnostic(type, details) {
+        message.diagnostics = [...(message.diagnostics ?? []), { type, timestamp: 1, details }];
+      },
       finish() {
         const reason = message.stopReason === "toolUse" ? "toolUse" : "stop";
         stream.push({ type: "done", reason, message });
@@ -192,7 +266,13 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
       if (step === undefined) {
         throw new Error(`scriptedStream: no step for provider call ${call}`);
       }
-      await step(emit, context, options?.signal, model as Model<string>);
+      await step(
+        emit,
+        context,
+        options?.signal,
+        model as Model<string>,
+        (options as { reasoning?: string } | undefined)?.reasoning,
+      );
     })().catch((error: unknown) => {
       emit.fail(error instanceof Error ? error.message : String(error));
     });
@@ -200,20 +280,62 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
   };
 }
 
+/**
+ * A catalog entry for the faux provider, plus the two fields the faux provider
+ * has no way to express.
+ *
+ * `FauxModelDefinition` covers ids, costs and windows and stops there — it
+ * cannot say a model is a managed-effort one, because `compat` and
+ * `thinkingLevelMap` are protocol rather than description. Both are what a real
+ * catalog entry carries (pi 0.85.0 gives `claude-fable-5-1` exactly
+ * `{ supportsMidConvoEffort: true, forceAdaptiveThinking: true }` and a
+ * `thinkingLevelMap` of `{off: null, xhigh, max}`), so a test about managed
+ * effort has to put them back.
+ */
+interface TestModelDefinition {
+  id: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  compat?: Model<"anthropic-messages">["compat"];
+  thinkingLevelMap?: Model<string>["thinkingLevelMap"];
+}
+
 function modelsWithStream(
   stream: StreamFn,
-  catalog: readonly { id: string; reasoning?: boolean; contextWindow?: number }[] = [
-    { id: MODEL_ID, reasoning: true },
-  ],
+  catalog: readonly TestModelDefinition[] = [{ id: MODEL_ID, reasoning: true }],
 ): Models {
   const faux = fauxProvider({
     api: "anthropic-messages",
     provider: PROVIDER_ID,
-    models: [...catalog],
+    models: catalog.map(({ id, reasoning, contextWindow }) => ({
+      id,
+      ...(reasoning === undefined ? {} : { reasoning }),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+    })),
   });
+  // Merged onto the built models rather than passed in, because this is the
+  // one seam `fauxProvider` does not offer. `getModels` is what `Models`
+  // reads, so the runtime and pi-ai's own adapter both see the merged entry.
+  const overrides = new Map(catalog.map((entry) => [entry.id, entry]));
+  const withProtocol: Model<string>[] = [];
+  for (const model of faux.provider.getModels()) {
+    const override = overrides.get(model.id);
+    // `Model<string>["compat"]` is `never` — the field is typed per API family
+    // and a generic api string matches none of them — so the write goes through
+    // the mutable shape the faux provider actually built.
+    const merged = { ...model } as Omit<Model<string>, "compat"> & { compat?: unknown };
+    if (override?.compat !== undefined) {
+      merged.compat = override.compat;
+    }
+    if (override?.thinkingLevelMap !== undefined) {
+      merged.thinkingLevelMap = override.thinkingLevelMap;
+    }
+    withProtocol.push(merged as Model<string>);
+  }
   const models = createModels();
   models.setProvider({
     ...faux.provider,
+    getModels: () => withProtocol,
     streamSimple: stream as typeof faux.provider.streamSimple,
   });
   return models;
@@ -268,6 +390,8 @@ interface ProviderCall {
    */
   context: readonly Message[];
   piModel: Model<string>;
+  /** The reasoning level the runtime asked this provider call to use. */
+  reasoning: string | undefined;
   /**
    * The two halves of the Cache Prefix, as bytes rather than as objects
    * (VC-164): the provider reuses a byte-identical leading part of the
@@ -284,17 +408,18 @@ interface ProviderCall {
 
 /** Retain what each provider call was made with, in call order. */
 function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
-  return (emit, context, signal, model) => {
+  return (emit, context, signal, model, reasoning) => {
     calls.push({
       model: `${model.provider}/${model.id}`,
       messages: JSON.stringify(context.messages),
       context: context.messages,
       piModel: model,
+      reasoning,
       systemPrompt: context.systemPrompt,
       tools: JSON.stringify(context.tools ?? []),
       toolNames: (context.tools ?? []).map((tool) => tool.name),
     });
-    return step(emit, context, signal, model);
+    return step(emit, context, signal, model, reasoning);
   };
 }
 
@@ -326,6 +451,127 @@ function expectAppendOnly(earlier: ProviderCall, later: ProviderCall): void {
   const after = wireOf(later);
   expect(after.length).toBeGreaterThanOrEqual(before.length);
   expect(after.slice(0, before.length)).toEqual(before);
+}
+
+/**
+ * The actual Anthropic request body a recorded call would have produced.
+ *
+ * {@link wireOf} projects through `transformMessages`, which is only the first
+ * of the two things pi-ai's Anthropic adapter does to a message array. The
+ * second — `convertMessages` followed by `insertThinkingLevelMessages` — is
+ * where a managed-effort model's history grows its per-turn `output_config`
+ * markers, and it lives inside `buildParams`, which pi-ai does not export.
+ *
+ * So this runs the real exported `stream` against a client that captures the
+ * params and refuses to send them. Nothing is reimplemented: the betas, the
+ * `thinking` block, the `output_config` and every effort marker are the bytes
+ * pi-ai would have put on the wire, produced by pi-ai. The refusal is what
+ * keeps it offline — `asResponse` throws, the adapter turns that into an
+ * errored stream, and the drain below swallows it.
+ *
+ * `effort` is the level the runtime would have asked for on this turn; it
+ * decides the trailing marker, exactly as a live request's would.
+ */
+async function anthropicRequestBody(
+  call: ProviderCall,
+  effort?: string,
+): Promise<{
+  messages: Record<string, unknown>[];
+  betas?: string[];
+  thinking?: Record<string, unknown>;
+  output_config?: Record<string, unknown>;
+}> {
+  let captured: Record<string, unknown> | undefined;
+  const client = {
+    beta: {
+      messages: {
+        create: (params: Record<string, unknown>) => ({
+          asResponse: async () => {
+            captured = params;
+            throw new Error("captured before sending");
+          },
+        }),
+      },
+    },
+  };
+  const stream = anthropicStream(
+    call.piModel as Model<"anthropic-messages">,
+    { systemPrompt: call.systemPrompt, messages: [...call.context], tools: [] },
+    {
+      client: client as never,
+      thinkingEnabled: true,
+      ...(effort === undefined ? {} : { effort: effort as "high" }),
+    },
+  );
+  try {
+    for await (const event of stream) {
+      // Drained rather than read: the capture happened before this stream had
+      // anything to say, and the refusal below is what ends it.
+      void event;
+    }
+  } catch {
+    /* the refusal above, which is how the body was captured */
+  }
+  if (captured === undefined) throw new Error("the Anthropic adapter sent no request body");
+  return captured as ReturnType<typeof JSON.parse>;
+}
+
+/**
+ * One request body's messages as bytes, one string per message, without the
+ * cache breakpoint.
+ *
+ * The breakpoint moves on purpose and is the one thing in a request body that
+ * is expected to differ from turn to turn: pi-ai marks the LAST user message
+ * with `cache_control: {type: "ephemeral"}`, so the message that carried it on
+ * turn N carries nothing on turn N+1. Every Anthropic client does this, Claude
+ * Code included, and a prefix check that counted it would make prompt caching
+ * and preserved thinking mutually exclusive.
+ *
+ * Marking it also RESHAPES the message it lands on: a user message whose
+ * `content` was the bare string `"hello"` is rewritten to
+ * `[{type: "text", text: "hello"}]` so the annotation has a block to sit on.
+ * So the previous turn's last user message differs from this turn's copy of it
+ * in two ways, both of them pi-ai's own cache bookkeeping and neither of them
+ * anything Volli did. Both are normalized away here, and where the breakpoint
+ * lands is asserted separately, so "the breakpoint moved" can never be how a
+ * real history edit slips through.
+ *
+ * All of this is invisible to {@link wireOf}, which projects through
+ * `transformMessages` — that runs before any of it — which is why VC-242's
+ * version of this comparison never had to account for it.
+ *
+ * What this cannot answer is whether Anthropic's binding check tolerates the
+ * reshaping. If it hashed the serialized content of every earlier message, no
+ * cached conversation could survive its own second turn, so it presumably
+ * normalizes first; but that is inference about a service, not a measurement,
+ * and it belongs to the live verification rather than to this file.
+ */
+function bodyMessages(body: { messages: Record<string, unknown>[] }): string[] {
+  return body.messages.map((message) => {
+    const content =
+      typeof message["content"] === "string"
+        ? [{ type: "text", text: message["content"] }]
+        : message["content"];
+    return JSON.stringify({ ...message, content }, (key, field: unknown) =>
+      key === "cache_control" ? undefined : field,
+    );
+  });
+}
+
+/** Which message indexes carry the moving cache breakpoint. */
+function cacheBreakpoints(body: { messages: Record<string, unknown>[] }): number[] {
+  return body.messages.flatMap((message, index) =>
+    JSON.stringify(message).includes('"cache_control"') ? [index] : [],
+  );
+}
+
+/** Every effort marker in a request body, in order, as its effort. */
+function effortMarkers(body: { messages: Record<string, unknown>[] }): string[] {
+  return body.messages.flatMap((message) =>
+    message["role"] === "system" && message["output_config"] !== undefined
+      ? [String((message["output_config"] as { effort: string }).effort)]
+      : [],
+  );
 }
 
 /** Every reasoning block a projected wire array still carries, by signature. */
@@ -475,24 +721,84 @@ function jsonlFiles(root: string): string[] {
     .filter((path) => path.endsWith(".jsonl"));
 }
 
+/**
+ * A sidecar file as a flat list of records: the header, then every record in
+ * the order it was committed.
+ *
+ * Pi 0.85.0 writes TRANSACTIONS rather than one record per line. A commit of a
+ * single write is still a bare object, but a commit of several — an entry plus
+ * the value that advances the branch tip, which is now what every append is —
+ * is a JSON array on one line. Flattening here keeps every caller reading
+ * records, which is what they were all written against.
+ */
 function readJsonl(path: string): Record<string, unknown>[] {
   return readFileSync(path, "utf8")
     .trimEnd()
     .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .flatMap((line) => {
+      const parsed = JSON.parse(line) as Record<string, unknown> | Record<string, unknown>[];
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
+}
+
+/** Just the entry records: the history, without the value writes beside it. */
+function entryRecords(path: string): Record<string, unknown>[] {
+  return readJsonl(path).filter((record) => record["kind"] === "entry");
 }
 
 function compactionEntries(sessionFilePath: string): Record<string, unknown>[] {
-  return readJsonl(sessionFilePath).filter((entry) => entry["type"] === "compaction");
+  return entryRecords(sessionFilePath).filter((entry) => entry["type"] === "compaction");
 }
 
-function writeLinearJsonl(path: string, entries: Record<string, unknown>[]): void {
-  entries.forEach((entry, index) => {
-    if (index === 0) return;
-    entry["seq"] = index;
-    entry["parentId"] = index === 1 ? null : entries[index - 1]?.["id"];
+/** Write a coherent current-format sidecar while a test replaces its history. */
+function writeCurrentSidecar(
+  path: string,
+  header: Record<string, unknown> | undefined,
+  entries: readonly Record<string, unknown>[],
+  values: readonly Record<string, unknown>[],
+  rechain: boolean,
+): void {
+  let parentId: unknown = null;
+  let seq = 0;
+  const numberedEntries = entries.map((entry) => {
+    const next = {
+      ...entry,
+      seq: ++seq,
+      ...(rechain ? { parentId } : {}),
+    };
+    parentId = entry["id"];
+    return next;
   });
-  writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  const numberedValues = values.map((value) => ({ ...value, seq: ++seq }));
+  const tip = {
+    kind: "value",
+    op: "set",
+    seq: ++seq,
+    namespace: MAIN_BRANCH_TIP.namespace,
+    key: MAIN_BRANCH_TIP.key,
+    value: entries.at(-1)?.["id"] ?? null,
+  };
+  const lines = [header, ...numberedEntries, ...numberedValues, tip].map((record) =>
+    JSON.stringify(record),
+  );
+  writeFileSync(path, `${lines.join("\n")}\n`);
+}
+
+function writeSidecarEntries(path: string, entries: Record<string, unknown>[]): void {
+  const [header, ...rest] = readJsonl(path);
+  const values = rest.filter(
+    (record) => record["kind"] === "value" && record["namespace"] !== MAIN_BRANCH_TIP.namespace,
+  );
+  writeCurrentSidecar(path, header, entries, values, false);
+}
+
+function writeLinearJsonl(path: string, records: Record<string, unknown>[]): void {
+  const [header, ...rest] = records;
+  const entries = rest.filter((record) => record["kind"] === "entry");
+  const values = rest.filter(
+    (record) => record["kind"] === "value" && record["namespace"] !== MAIN_BRANCH_TIP.namespace,
+  );
+  writeCurrentSidecar(path, header, entries, values, true);
 }
 
 // --- tests -----------------------------------------------------------------
@@ -1898,13 +2204,32 @@ describe("startSession", () => {
   it("runs Pi bash through the resolved execution environment and maps its lifecycle", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const cleanup = vi.fn(async () => undefined);
+    // The 0.85.0 shell contract: output no longer comes back on the result, it
+    // is published through `onUpdate` while the command runs, and the result
+    // carries the exit code and what was truncated. A stub that still returned
+    // `{stdout, stderr}` would be describing an environment Pi can no longer
+    // drive (VC-254).
     const exec = vi.fn(
-      async (_command: string, options: { onStdout?: (chunk: string) => void }) => {
-        options.onStdout?.("execution-marker");
-        return {
-          ok: true as const,
-          value: { stdout: "execution-marker", stderr: "", exitCode: 0 },
+      async (
+        _command: string,
+        options: {
+          onUpdate?: (update: Record<string, unknown>, context: Context) => void;
+        },
+        context: Context,
+      ) => {
+        const truncation = {
+          truncated: false,
+          truncatedBy: null,
+          totalLines: 1,
+          outputLines: 1,
+          outputBytes: 16,
+          lastLinePartial: false,
         };
+        options.onUpdate?.(
+          { kind: "replace", output: { text: "execution-marker", truncation } },
+          context,
+        );
+        return { ok: true as const, value: { exitCode: 0, truncation } };
       },
     );
     const containedEnv = {
@@ -1940,6 +2265,7 @@ describe("startSession", () => {
     expect(exec).toHaveBeenCalledWith(
       "printf execution-marker",
       expect.objectContaining({ cwd: attachment.worktreePath, inheritEnv: true }),
+      expect.anything(),
     );
     expect(JSON.stringify(secondCallContext?.messages)).toContain("execution-marker");
     expect(
@@ -3021,18 +3347,12 @@ describe("startSession", () => {
       expect.objectContaining({ commandId: "command-prompt", acceptedAt: expect.any(Number) }),
       expect.objectContaining({ commandId: "command-retry", acceptedAt: expect.any(Number) }),
     ]);
-    const markerKinds = readFileSync(firstHandle.recovery!.sessionFilePath, "utf8")
-      .trimEnd()
-      .split("\n")
-      .flatMap((line) => {
-        const entry = JSON.parse(line) as {
-          customType?: string;
-          data?: { kind?: string; state?: string };
-        };
-        return entry.customType === "volli.observation.v1"
-          ? [`${entry.data?.kind}:${entry.data?.state ?? ""}`]
-          : [];
-      });
+    const markerKinds = entryRecords(firstHandle.recovery!.sessionFilePath).flatMap((entry) => {
+      const data = entry["data"] as { kind?: string; state?: string } | undefined;
+      return entry["customType"] === "volli.observation.v1"
+        ? [`${data?.kind}:${data?.state ?? ""}`]
+        : [];
+    });
     expect(markerKinds.indexOf("turn:started")).toBeLessThan(
       markerKinds.indexOf("command-accepted:"),
     );
@@ -3135,24 +3455,17 @@ describe("startSession", () => {
     await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
-    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
-    writeFileSync(
+    writeSidecarEntries(
       recovery.sessionFilePath,
-      `${lines
-        .filter((line) => {
-          const entry = JSON.parse(line) as {
-            type?: string;
-            customType?: string;
-            data?: { kind?: string; state?: string };
-          };
-          return !(
-            entry.type === "custom" &&
-            entry.customType === "volli.observation.v1" &&
-            entry.data?.kind === "turn" &&
-            entry.data.state === "completed"
-          );
-        })
-        .join("\n")}\n`,
+      entryRecords(recovery.sessionFilePath).filter((entry) => {
+        const data = entry["data"] as { kind?: string; state?: string } | undefined;
+        return !(
+          entry["type"] === "custom" &&
+          entry["customType"] === "volli.observation.v1" &&
+          data?.kind === "turn" &&
+          data.state === "completed"
+        );
+      }),
     );
 
     const secondRuntime = createPiAgentRuntime({
@@ -3197,25 +3510,16 @@ describe("startSession", () => {
     await firstHandle.submitUserMessage("start");
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
-    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
-    const retained = lines
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((entry) => {
-        const data = entry["data"] as { kind?: string } | undefined;
+    writeLinearJsonl(
+      recovery.sessionFilePath,
+      readJsonl(recovery.sessionFilePath).filter((record) => {
+        const data = record["data"] as { kind?: string } | undefined;
         return !(
-          entry["type"] === "custom" &&
-          entry["customType"] === "volli.observation.v1" &&
+          record["type"] === "custom" &&
+          record["customType"] === "volli.observation.v1" &&
           data?.kind === "message-settled"
         );
-      });
-    retained.forEach((entry, index, entries) => {
-      if (index === 0) return;
-      entry["seq"] = index;
-      entry["parentId"] = index === 1 ? null : entries[index - 1]?.["id"];
-    });
-    writeFileSync(
-      recovery.sessionFilePath,
-      `${retained.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      }),
     );
 
     let recoveredContext: Context | undefined;
@@ -3341,8 +3645,6 @@ describe("startSession", () => {
     const firstHandle = await firstRuntime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
-    const lines = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
-    const header = lines[0]!;
     const settled = {
       entryId: "entry-1",
       role: "assistant",
@@ -3615,7 +3917,7 @@ describe("startSession", () => {
         customType: "volli.observation.v1",
         data,
       };
-      writeFileSync(recovery.sessionFilePath, `${header}\n${JSON.stringify(malformed)}\n`);
+      writeSidecarEntries(recovery.sessionFilePath, [malformed]);
       if (refusesToOpen(data)) {
         try {
           const unexpected = await secondRuntime.startSession({
@@ -3658,7 +3960,6 @@ describe("startSession", () => {
     const firstHandle = await runtime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
-    const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
     const entries = [
       {
         kind: "entry",
@@ -3731,10 +4032,7 @@ describe("startSession", () => {
         },
       },
     ];
-    writeFileSync(
-      recovery.sessionFilePath,
-      `${header}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    );
+    writeSidecarEntries(recovery.sessionFilePath, entries);
 
     const reopened = await runtime.startSession({ ...attachment.spec, recovery });
     expect((await reopened.reconcile(null)).observations).toHaveLength(3);
@@ -3754,7 +4052,6 @@ describe("startSession", () => {
       const firstHandle = await runtime.startSession(attachment.spec);
       const recovery = firstHandle.recovery!;
       await firstHandle.close();
-      const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
       const markers = [{ commandId: "command-1", turnId: "turn-1" }, second].map((data, index) => ({
         kind: "entry",
         lane: "main",
@@ -3772,10 +4069,7 @@ describe("startSession", () => {
           ...data,
         },
       }));
-      writeFileSync(
-        recovery.sessionFilePath,
-        `${header}\n${markers.map((marker) => JSON.stringify(marker)).join("\n")}\n`,
-      );
+      writeSidecarEntries(recovery.sessionFilePath, markers);
 
       await expect(runtime.startSession({ ...attachment.spec, recovery })).rejects.toThrow(
         "Pi recovery delivery markers conflict.",
@@ -5108,7 +5402,6 @@ describe("compacting a context that reached its reserve", () => {
     const firstHandle = await firstRuntime.startSession(attachment.spec);
     const recovery = firstHandle.recovery!;
     await firstHandle.close();
-    const [header] = readFileSync(recovery.sessionFilePath, "utf8").trimEnd().split("\n");
 
     const poisoned = [
       {
@@ -5143,24 +5436,18 @@ describe("compacting a context that reached its reserve", () => {
         output: null,
       },
     ];
-    writeFileSync(
+    writeSidecarEntries(
       recovery.sessionFilePath,
-      `${[
-        header,
-        ...poisoned.map((data, index) =>
-          JSON.stringify({
-            kind: "entry",
-            lane: "main",
-            type: "custom",
-            id: `poisoned-marker-${index}`,
-            parentId: index === 0 ? null : `poisoned-marker-${index - 1}`,
-            seq: index + 1,
-            timestamp: Date.now(),
-            customType: "volli.observation.v1",
-            data,
-          }),
-        ),
-      ].join("\n")}\n`,
+      poisoned.map((data, index) => ({
+        kind: "entry",
+        type: "custom",
+        id: `poisoned-marker-${index}`,
+        parentId: index === 0 ? null : `poisoned-marker-${index - 1}`,
+        seq: index + 1,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data,
+      })),
     );
 
     const calls: ProviderCall[] = [];
@@ -5290,23 +5577,31 @@ describe("compacting a context that reached its reserve", () => {
     // A second lane, holding a later compaction that this Session's branch
     // never went through. A file-order read would elide against THIS one.
     const sidecars = new JsonlSessionRepo({
-      fs: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      fileSystem: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
       sessionsRoot: attachment.sessionDataDir,
     });
-    const found = (await sidecars.list({ cwd: attachment.worktreePath })).find(
+    const found = (await sidecars.list({ cwd: attachment.worktreePath }, piContext())).find(
       (candidate) => candidate.id === recovery!.sessionId,
     );
-    const sidecar = await sidecars.open(found!);
-    await sidecar.createLane("sibling", null);
-    await sidecar.appendEntry(
-      {
-        type: "compaction",
-        id: sidecar.idGenerator.next(),
-        summary: "SIBLING-BRANCH-SUMMARY",
-        retainedTail: [],
-        tokensBefore: 1,
-      },
-      "sibling",
+    const sidecar = await sidecars.open(found!, piContext());
+    await sidecar.createBranch("sibling", null, piContext());
+    // Pi 0.85.0 replaced `appendEntry(entry, lane)` with a commit: the entry
+    // itself plus the write that advances the branch tip, together, which is
+    // what `Branch.appendMessage` does for the two entry types it covers.
+    // Spelled out here because a compaction entry is not one of them.
+    const parked = {
+      type: "compaction" as const,
+      id: sidecar.idGenerator.next(),
+      parentId: null,
+      summary: "SIBLING-BRANCH-SUMMARY",
+      retainedTail: [],
+      tokensBefore: 1,
+      fromHook: false,
+    };
+    await sidecar.mutate(
+      async (mutator, context) =>
+        mutator.commit([insertEntry(parked), setValue(branchTip("sibling"), parked.id)], context),
+      piContext(),
     );
 
     const calls: ProviderCall[] = [];
@@ -7054,6 +7349,233 @@ describe("the Cache Prefix a Session sends", () => {
     expect(replayed.filter((message) => message.includes("latest-skill-marker"))).toHaveLength(1);
   });
 
+  it("keeps effort markers append-only inside each cache base on a managed-effort model (VC-254)", async () => {
+    // Pi 0.85.0's half of preserved thinking, and the shape VC-242 could not
+    // test because no model carried it yet. A model whose compat says
+    // `supportsMidConvoEffort` gets three things VC-242's models did not: the
+    // two betas, `thinking.block_binding.prefix_mismatch_behavior: drop_block`,
+    // and — the part that can break — one `{role: "system", output_config:
+    // {effort}}` marker inserted before EVERY managed assistant turn in
+    // history, plus one trailing marker for the effort this turn runs at.
+    //
+    // Inserting messages into the middle of history is exactly what the
+    // preserved-thinking doc forbids, so the only thing making this legal is
+    // that the insertion is prefix-STABLE: request N+1's array must be request
+    // N's array plus appended messages, marker positions included. It is
+    // stable for one reason, and the reason is fragile: the trailing marker of
+    // request N carries the effort request N runs at, and the reply request N
+    // produces is persisted with that same effort on
+    // `AssistantMessage.providerThinkingLevel` — so on request N+1 the marker
+    // that lands at that index is that turn's historical marker, with
+    // identical bytes. Drop `providerThinkingLevel` anywhere between the
+    // provider and the replay — a round trip through a narrower type, a
+    // reasoning strip, a compaction tail, a resume — and the marker does not
+    // come back, every later message shifts by one, and every signed thinking
+    // block behind it is invalidated.
+    //
+    // So this asserts the bytes of the REAL request body, through pi-ai's own
+    // `buildParams`, across a tool round, an effort change, a compaction and a
+    // reattach.
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture({
+      model: { providerId: PROVIDER_ID, modelId: FABLE_MODEL_ID, reasoningLevel: "high" },
+    });
+    const calls: ProviderCall[] = [];
+    const catalog: TestModelDefinition[] = [
+      {
+        id: FABLE_MODEL_ID,
+        reasoning: true,
+        // Exactly pi 0.85.0's own entry for `claude-fable-5-1`.
+        compat: { supportsMidConvoEffort: true, forceAdaptiveThinking: true },
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      },
+    ];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-1");
+            emit.text("Reading the marker.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-2");
+            emit.text("The token is volli-marker-42.");
+            emit.finish();
+          }),
+          // The effort change lands here: this reply is produced at xhigh.
+          recording(calls, (emit) => {
+            emit.occupies(OVER_RESERVE);
+            emit.thinking("", "sig-3");
+            emit.text("answered harder");
+            emit.finish();
+          }),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-4");
+            emit.text("after the compaction");
+            emit.finish();
+          }),
+        ]),
+        catalog,
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("Read MARKER.txt and report the token.");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: FABLE_MODEL_ID,
+        reasoningLevel: "xhigh",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    const recovery = handle.recovery!;
+    await handle.close();
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([recording(calls, settles("after the reattach"))]),
+        catalog,
+      ),
+    });
+    const reattached = await secondRuntime.startSession({
+      ...attachment.spec,
+      model: { providerId: PROVIDER_ID, modelId: FABLE_MODEL_ID, reasoningLevel: "xhigh" },
+      recovery,
+    });
+    await reattached.submitUserMessage("still here?");
+    await reattached.close();
+
+    // Five turns plus the summarization plus the reattached turn.
+    expect(calls).toHaveLength(6);
+    // Read the effort from what the runtime actually asked each provider call
+    // to use. The test does not supply the value it later asserts.
+    const managedCalls = [0, 1, 2, 4, 5].map((index) => calls[index]!);
+    expect(managedCalls.map((call) => call.reasoning)).toEqual([
+      "high",
+      "high",
+      "xhigh",
+      "xhigh",
+      "xhigh",
+    ]);
+    const bodies = await Promise.all(
+      // The summarization (index 3) is not this Session's prefix and is
+      // excluded here for the same reason it is excluded above.
+      managedCalls.map((call) => anthropicRequestBody(call, call.reasoning)),
+    );
+
+    // The mechanism is on, in the bytes: both betas, drop_block, and adaptive
+    // thinking on every single request.
+    for (const body of bodies) {
+      expect(body.betas).toEqual([
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01",
+      ]);
+      expect(body.thinking).toEqual({
+        type: "adaptive",
+        display: "summarized",
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      });
+    }
+
+    // The one thing that legitimately moves: exactly one cache breakpoint, on
+    // the request's last message. Asserted before the comparison that ignores
+    // it, so ignoring it stays a stated exemption rather than a blind spot.
+    for (const body of bodies) {
+      expect(cacheBreakpoints(body)).toEqual([body.messages.length - 2]);
+    }
+
+    // Append-only through the tool round (0→1), the effort change (1→2) and
+    // reattach inside the compacted base (3→4). Marker positions included: this is the whole
+    // assertion, and it is made on the real request body.
+    //
+    // 2→3 is deliberately not in this list. A compaction is not an append and
+    // was never meant to be — it replaces the history with a summary and starts
+    // a new base the provider caches from afresh (see "compacts into a new base
+    // under the same prefix" above). What has to hold across it is the pair of
+    // facts asserted separately below: the base really is new, and everything
+    // after it appends again.
+    for (const [earlier, later] of [
+      [0, 1],
+      [1, 2],
+      [3, 4],
+    ]) {
+      const before = bodyMessages(bodies[earlier!]!);
+      const after = bodyMessages(bodies[later!]!);
+      expect(after.length).toBeGreaterThanOrEqual(before.length);
+      expect(after.slice(0, before.length)).toEqual(before);
+    }
+
+    // The compaction really did cut, and what it left starts with the summary:
+    // so the shorter array at position 3 is an elision, not a lost prefix.
+    expect(bodies[3]!.messages.length).toBeLessThan(bodies[2]!.messages.length);
+    expect(bodyMessages(bodies[3]!)[0]).toContain("compacted into the following summary");
+    expect(bodyMessages(bodies[3]!).join("\n")).not.toContain("volli-marker-42");
+
+    // And the markers really did change, so the append-only assertion above is
+    // not passing on an array where every marker happens to be identical. The
+    // first two turns run at high; everything after the switch runs at xhigh,
+    // and the turns produced before it keep their own effort in history.
+    expect(effortMarkers(bodies[0]!)).toEqual(["high"]);
+    expect(effortMarkers(bodies[1]!)).toEqual(["high", "high"]);
+    expect(effortMarkers(bodies[2]!)).toEqual(["high", "high", "xhigh"]);
+    // The compaction elided the early turns, so their markers go with them —
+    // and what is left is still a prefix of what follows.
+    expect(effortMarkers(bodies[3]!)).toEqual(["xhigh", "xhigh"]);
+    expect(effortMarkers(bodies[4]!)).toEqual(["xhigh", "xhigh", "xhigh"]);
+
+    // The live array and the resumed array agree: the reattached request is the
+    // compacted one plus its turns, markers and all. That is only true because
+    // `providerThinkingLevel` survived `durableMessage`, the compaction's
+    // retained tail, and the sidecar replay.
+    const resumed = bodies[4]!;
+    expect(bodyMessages(resumed).slice(0, bodyMessages(bodies[3]!).length)).toEqual(
+      bodyMessages(bodies[3]!),
+    );
+  });
+
+  it("keeps providerThinkingLevel on a reply the reasoning strip rewrote (VC-254)", async () => {
+    // The narrow fact the test above rests on, pinned on its own so a failure
+    // says which half broke. VC-242's repair rebuilds an assistant message
+    // without its `thinking` blocks; if that rebuild dropped the turn's
+    // effort, the message would replay with no marker and shift every later
+    // one. `withoutReasoning` spreads the message and replaces `content`
+    // alone, so `api`, `provider` and `providerThinkingLevel` all survive —
+    // which is what makes the drop safe under a managed-effort model.
+    const stripped = withoutReasoning({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "", thinkingSignature: "sig-1" },
+        { type: "text", text: "kept" },
+      ],
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      model: FABLE_MODEL_ID,
+      providerThinkingLevel: "xhigh",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    } as AssistantMessage) as AssistantMessage;
+
+    expect(stripped.content).toEqual([{ type: "text", text: "kept" }]);
+    expect(stripped.providerThinkingLevel).toBe("xhigh");
+    expect(stripped.api).toBe("anthropic-messages");
+    expect(stripped.provider).toBe(PROVIDER_ID);
+  });
+
   it("never compacts in the middle of a tool round", async () => {
     // "Don't compact in the middle of a tool round": an assistant turn whose
     // `tool_use` is still waiting on its `tool_result` goes back with its
@@ -7146,7 +7668,7 @@ function reasons(signature: string, text: string): ScriptStep {
 
 /** Every context marker of ours the sidecar holds. */
 function contextMarkers(sessionFilePath: string): Record<string, unknown>[] {
-  return readJsonl(sessionFilePath).filter(
+  return entryRecords(sessionFilePath).filter(
     (entry) => entry["type"] === "custom" && entry["customType"] === "volli.context.v1",
   );
 }
@@ -7393,6 +7915,271 @@ describe("recovering a turn whose reasoning the provider refused", () => {
     expect(signaturesOn(replayedAgain)).toEqual(["sig-3"]);
     // Covered by the marker already there; the third attach wrote no second one.
     expect(contextMarkers(secondRecovery.sessionFilePath)).toHaveLength(1);
+  });
+});
+
+/**
+ * A reply that carries pi-ai's dropped-input diagnostic, exactly as the
+ * Anthropic adapter appends it after a successful stream whose
+ * `input_transformations` came back non-empty.
+ */
+function dropsReasoning(text: string, paths: readonly string[]): ScriptStep {
+  return (emit) => {
+    emit.text(text);
+    emit.diagnostic("anthropic_input_transformations", {
+      transformations: paths.map((path) => ({ type: "prefix_binding_mismatch", path })),
+    });
+    emit.finish();
+  };
+}
+
+describe("a provider that drops reasoning instead of refusing it (VC-254)", () => {
+  it("says so, once for the turn, when the stream carries the diagnostic", async () => {
+    // The whole point of the mechanism 0.85.0 turns on: under `drop_block` a
+    // mismatched block is not a 400 any more. The request succeeds, the model
+    // answers with less reasoning than it was sent, and the ONLY trace is a
+    // diagnostic on the assistant message. Volli read `diagnostics` nowhere
+    // before this, so the drop was perfectly silent.
+    const events: ObservabilityEvent[] = [];
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          dropsReasoning("answered anyway", ["messages.1.content.0", "messages.3.content.0"]),
+        ]),
+      ),
+      observability: { record: (event) => void events.push(event) },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("carry on");
+    const reconciled = await handle.reconcile(null);
+    await handle.close();
+
+    expect(reconciled.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "provider-reasoning-dropped",
+        count: 2,
+        recoveryCursor: expect.any(String),
+      }),
+    );
+    // Counted and named, and the turn itself is untouched: it completed, it
+    // settled its answer, and it raised no Attention — because nothing is
+    // blocked and there is no action a person could take to clear it.
+    expect(events.filter((event) => event.kind === "provider-reasoning-dropped")).toEqual([
+      {
+        kind: "provider-reasoning-dropped",
+        cause: "prefix-mismatch",
+        count: 2,
+        runId: expect.any(String),
+      },
+    ]);
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "provider-reasoning-dropped",
+        count: 2,
+        causes: ["prefix-mismatch"],
+        paths: ["messages.1.content.0", "messages.3.content.0"],
+        recoveryCursor: expect.any(String),
+      }),
+    );
+    expect(settledTexts(attachment.observations)).toEqual(["answered anyway"]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+    ]);
+  });
+
+  it("says nothing at all when the provider dropped nothing", async () => {
+    // The other half of the Verify clause, and the one that keeps the notice
+    // worth reading.
+    const events: ObservabilityEvent[] = [];
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("a clean turn")])),
+      observability: { record: (event) => void events.push(event) },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("carry on");
+    await handle.close();
+
+    expect(events.filter((event) => event.kind === "provider-reasoning-dropped")).toEqual([]);
+  });
+
+  it("aggregates every provider call into one complete Turn fact", async () => {
+    const events: ObservabilityEvent[] = [];
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("Reading the marker.");
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.diagnostic("anthropic_input_transformations", {
+              transformations: [{ type: "prefix_binding_mismatch", path: "messages.1.content.0" }],
+            });
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("the token is volli-marker-42");
+            emit.diagnostic("anthropic_input_transformations", {
+              transformations: [{ type: "model_binding_mismatch", path: "messages.3.content.0" }],
+            });
+            emit.finish();
+          },
+        ]),
+      ),
+      observability: { record: (event) => void events.push(event) },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("read the marker");
+    await handle.close();
+
+    expect(events.filter((event) => event.kind === "provider-reasoning-dropped")).toEqual([
+      {
+        kind: "provider-reasoning-dropped",
+        cause: "prefix-mismatch",
+        count: 2,
+        runId: expect.any(String),
+      },
+    ]);
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "provider-reasoning-dropped",
+        count: 2,
+        causes: ["prefix-mismatch", "model-mismatch"],
+        paths: ["messages.1.content.0", "messages.3.content.0"],
+      }),
+    );
+  });
+
+  it("reports a new provider recovery in each Turn", async () => {
+    const events: ObservabilityEvent[] = [];
+    const attachment = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          dropsReasoning("first answer", ["messages.1.content.0"]),
+          dropsReasoning("second answer", ["messages.3.content.0"]),
+        ]),
+      ),
+      observability: { record: (event) => void events.push(event) },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("first");
+    await handle.submitUserMessage("second");
+    await handle.close();
+
+    expect(events.filter((event) => event.kind === "provider-reasoning-dropped")).toHaveLength(2);
+    const turnIds = attachment.observations
+      .filter((observation) => observation.kind === "provider-reasoning-dropped")
+      .map((observation) => observation.turnId);
+    expect(turnIds).toHaveLength(2);
+    expect(new Set(turnIds)).toHaveProperty("size", 2);
+  });
+
+  it("is a different thing from the refusal recovery, and does not trigger it", async () => {
+    // The boundary VC-254 asks to pin. VC-242's auto-recovery answers a 400
+    // that names a bad signature by stripping every reasoning block and
+    // resending, once. Under a managed-effort model that 400 never arrives, so
+    // the recovery must stay dormant: a drop is reported and NOTHING is
+    // resent. The evidence is the provider call count — one turn, one call.
+    const events: ObservabilityEvent[] = [];
+    const attachment = fixture({
+      model: { providerId: PROVIDER_ID, modelId: FABLE_MODEL_ID, reasoningLevel: "high" },
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, reasons("sig-1", "first answer")),
+          recording(calls, (emit) => {
+            emit.thinking("", "sig-2");
+            emit.text("answered anyway");
+            emit.diagnostic("anthropic_input_transformations", {
+              transformations: [{ type: "prefix_binding_mismatch", path: "messages.1.content.0" }],
+            });
+            emit.finish();
+          }),
+        ]),
+        [
+          {
+            id: FABLE_MODEL_ID,
+            reasoning: true,
+            compat: { supportsMidConvoEffort: true, forceAdaptiveThinking: true },
+            thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+          },
+        ],
+      ),
+      observability: { record: (event) => void events.push(event) },
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage("carry on");
+
+    // Two Turns, two calls: the diagnostic never caused a recovery resend.
+    expect(calls).toHaveLength(2);
+    // The second request still carries the first reply's reasoning. Recovery
+    // would strip it before resending, so this assertion can fail.
+    expect(signaturesOn(wireOf(calls[1]!))).toEqual(["sig-1"]);
+    expect(events.filter((event) => event.kind === "provider-reasoning-dropped")).toHaveLength(1);
+    // And no context marker: nothing durable was rewritten.
+    expect(contextMarkers(handle.recovery!.sessionFilePath)).toEqual([]);
+    await handle.close();
+  });
+
+  it("still recovers a model that refuses with a 400 rather than dropping", async () => {
+    // The floor VC-242 built, still load-bearing. `claude-fable-5` does NOT
+    // carry `supportsMidConvoEffort` in pi 0.85.0's catalog — measured — so it
+    // gets no `drop_block`, and the same broken prefix arrives as the refusal
+    // sentence instead. That path must behave exactly as it did before: strip
+    // the reasoning, resend once, and say nothing to the person.
+    const attachment = fixture({
+      model: { providerId: PROVIDER_ID, modelId: UNFLAGGED_FABLE_ID, reasoningLevel: "high" },
+    });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, reasons("sig-1", "first answer")),
+          recording(calls, (emit) => emit.fail(SIGNATURE_REFUSED)),
+          recording(calls, reasons("sig-2", "second answer")),
+        ]),
+        [
+          {
+            id: UNFLAGGED_FABLE_ID,
+            reasoning: true,
+            // Exactly pi 0.85.0's `claude-fable-5`: adaptive thinking, and no
+            // managed effort.
+            compat: { forceAdaptiveThinking: true },
+            thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+          },
+        ],
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage("second");
+
+    // Three calls: the refusal was answered by resending without reasoning.
+    expect(calls).toHaveLength(3);
+    expect(signaturesOn(wireOf(calls[1]!))).toEqual(["sig-1"]);
+    expect(signaturesOn(wireOf(calls[2]!))).toEqual([]);
+    expect(settledTexts(attachment.observations)).toEqual(["first answer", "second answer"]);
+    expect(attentions(attachment.observations)).toEqual([]);
+    await handle.close();
   });
 });
 

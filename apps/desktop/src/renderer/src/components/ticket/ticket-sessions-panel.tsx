@@ -30,10 +30,12 @@ import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow } from "@renderer/components/ui/list-row";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import {
+  RAIL_PANEL_INSET,
+  RailSectionHeadingRow,
+} from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
   buildTicketSessionRows,
@@ -90,20 +92,6 @@ const SESSION_SECTION_EMPTY = cn(
   "rounded-lg border border-dashed border-sidebar-border",
   EMPTY_INLINE,
 );
-
-/**
- * A section's title line: the uppercase label at the left, whatever the block
- * offers at the right. Inset by the rows' own `px-2` rather than the section's
- * edge, so the label sits over its list instead of hanging left of it.
- */
-function SectionHeadingRow({ label, children }: { label: string; children?: React.ReactNode }) {
-  return (
-    <div className="mb-1 flex items-center justify-between gap-2 px-2">
-      <SectionHeading>{label}</SectionHeading>
-      {children}
-    </div>
-  );
-}
 
 /**
  * Every row's right edge: one tone dot, one short phrase, at label size. A live
@@ -633,7 +621,7 @@ export function TicketSessionsPanel({
             "+" at its right (the scratch's `SessionRows` header) — the height
             comes from the control, so there is no reserved dead space when the
             roster is full. */}
-        <SectionHeadingRow label="Sessions">
+        <RailSectionHeadingRow label="Sessions">
           <NewSessionControl
             disabled={effectiveCreating}
             placement="rail"
@@ -643,7 +631,7 @@ export function TicketSessionsPanel({
             onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
-        </SectionHeadingRow>
+        </RailSectionHeadingRow>
         {current.length === 0 ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
@@ -655,9 +643,9 @@ export function TicketSessionsPanel({
       </section>
       {history.length > 0 ? (
         <section className={SECTION} data-testid="session-history">
-          <SectionHeadingRow label="History">
+          <RailSectionHeadingRow label="History">
             <Badge variant="count-pill">{history.length}</Badge>
-          </SectionHeadingRow>
+          </RailSectionHeadingRow>
           {/* Past four rows the column stops being scannable, so the filter
               appears — in flow, like everything else in the stack. */}
           {history.length > 4 ? (

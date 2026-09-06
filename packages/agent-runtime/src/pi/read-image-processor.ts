@@ -53,6 +53,14 @@ const OMITTED_IMAGE = "[Image omitted: could not make a provider-safe copy.]";
  * install a processor and still opt out of resizing, and this one is installed
  * for exactly the opposite reason. `tools.ts` never sets it, so it is always
  * Pi's `true` default — honouring it would be a branch nothing can reach.
+ *
+ * The chord `Context` Pi added to this callback in 0.85 is unread for a
+ * narrower reason: the only cancellable thing here is a `sharp` pipeline, and
+ * libvips owns that work in a thread pool with no abort to hand it. Reading
+ * `context.abortSignal` could only decide whether to throw away a result the
+ * process has already paid for, which is not a saving worth a branch — so the
+ * parameter is named and ignored rather than quietly absent, so that a reader
+ * can see the decision was taken.
  */
 export function createReadImageProcessor(
   options: ReadImageProcessorOptions = {},
@@ -60,7 +68,7 @@ export function createReadImageProcessor(
   const maxBase64Bytes = options.maxBase64Bytes ?? MAX_READ_IMAGE_BASE64_BYTES;
   const maxEdgePx = options.maxEdgePx ?? MAX_READ_IMAGE_EDGE_PX;
 
-  return async (bytes, mimeType, _readOptions) => {
+  return async (bytes, mimeType, _readOptions, _context) => {
     try {
       // Dynamic loading keeps a missing native image codec a failed image read,
       // rather than a failure to attach the whole runtime.

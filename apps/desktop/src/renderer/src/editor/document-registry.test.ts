@@ -122,6 +122,27 @@ describe("DocumentRegistry", () => {
     expect(models).toHaveLength(2);
   });
 
+  it("creates an extensionless script's model in the language its #! line names", () => {
+    // `acquire` is the one place that has both the path and the file's text at
+    // open, so it is where the first-line sniff gets its input (VC-125).
+    const { registry } = makeRegistry();
+    const script = registry.acquire({
+      identity: { ...mainIdentity, relPath: "bin/release" },
+      viewId: "file",
+      seed: { value: "#!/usr/bin/env node\nconsole.log('hi');\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+    const plain = registry.acquire({
+      identity: { ...mainIdentity, relPath: "LICENSE" },
+      viewId: "file",
+      seed: { value: "MIT License\n", revision: 1 },
+      savePolicy: "explicit",
+    });
+
+    expect(script.model.language).toBe("javascript");
+    expect(plain.model.language).toBe("plaintext");
+  });
+
   it("parks a clean model on its final view release instead of disposing it", () => {
     const { registry } = makeRegistry();
     const first = registry.acquire({

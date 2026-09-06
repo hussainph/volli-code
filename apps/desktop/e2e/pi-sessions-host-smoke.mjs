@@ -79,9 +79,13 @@ import {
 } from "./lib/smoke-kit.mjs";
 
 const PROJECT = { id: "pi-sessions-host-project", name: "Pi Sessions Host", prefix: "SH" };
-// Kept at or under 48 characters — see pi-project-chat-smoke.mjs for why:
-// `autoTitleFromMessage` keeps a first line that short verbatim as the
-// Session's title, so this prompt IS the title the sidebar row is found by.
+const MODEL_PIN = {
+  providerId: "openai-codex",
+  modelId: "gpt-5.6-luna",
+  reasoningLevel: "low",
+};
+// Short on purpose so the one billed setup turn remains bounded. The Session
+// is addressed by its durable identity after this point, not by auto-title.
 const ORPHAN_PROMPT = "Say hi before this ticket is deleted.";
 // The concluded-business chat never sends a message (its attach fails before
 // the composer could deliver one, which is the whole point — see the module
@@ -248,7 +252,7 @@ async function main() {
       1,
       "seed the app default model — every Ticket Session requires one before it can start",
       async () => {
-        defaultModel = await seedDefaultModel(page);
+        defaultModel = await seedDefaultModel(page, MODEL_PIN);
         return { ok: defaultModel !== null, detail: JSON.stringify(defaultModel) };
       },
     );

@@ -1,0 +1,23 @@
+{
+  "measuredAt": "2026-09-05T23:07:37.167Z",
+  "platform": "darwin-arm64",
+  "node": "v24.18.0",
+  "notes": {
+    "localFile": "measured: fs.readFile of a ~13KB source file",
+    "subprocess": "measured: execFile /bin/echo",
+    "network": "measured: HTTPS GET + full body read, rotating five public pages",
+    "browser": "ASSUMED: needs the app's live browser; swept in the sensitivity table",
+    "sessionStart": "measured: open + write 2KB + fsync + close",
+    "ticketAwait": "measured by the transcript audit: 130,600ms mean over 241 real calls",
+    "provider": "ASSUMED: one paid round trip; swept in the sensitivity table"
+  },
+  "profile": {
+    "localFile": 0.4,
+    "subprocess": 5.1,
+    "network": 554.5,
+    "browser": 900,
+    "sessionStart": 8,
+    "ticketAwait": 130600,
+    "provider": 1400
+  }
+}

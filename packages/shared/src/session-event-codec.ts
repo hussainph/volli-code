@@ -35,7 +35,7 @@
  * this table exists to make impossible.
  */
 
-import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
+import { COMPACTION_REASONS, REASONING_DROP_CAUSES, REASONING_LEVELS } from "./agent-runtime";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
@@ -324,6 +324,21 @@ const codecs = {
     // diagnostic that reaches a person.
     scrub: (payload) => payload,
   },
+  "context.reasoning_dropped": {
+    decode: (record, context) => ({
+      kind: "context.reasoning_dropped",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      turnId: readString(record.turnId, `${context}.turnId`),
+      count: readPositiveInteger(record.count, `${context}.count`),
+      causes: readArray(record.causes, `${context}.causes`, (cause, itemContext) =>
+        enumValue(cause, REASONING_DROP_CAUSES, itemContext),
+      ),
+      paths: readArray(record.paths, `${context}.paths`, readString),
+    }),
+    // Structural paths stay host-side for diagnostics. A client needs the fact
+    // and cause to draw the notice, not provider request coordinates.
+    scrub: ({ paths: _paths, ...payload }) => payload,
+  },
   "transcript.referenced": {
     decode: (record, context) => ({
       kind: "transcript.referenced",
@@ -603,8 +618,8 @@ function scrubbedNativeReference(): RendererSessionNativeReference {
  *
  * The two failure arms are deliberately distinct, mirroring the ledger's read
  * rule: an `unknown-kind` is an expected consequence of a writer newer than
- * this build (live on the lab HTTP transport, and on any replay) and the
- * caller keeps the envelope while folding nothing; `malformed` is corruption
+ * this build (from a future host, or on any replay) and the caller keeps the
+ * envelope while folding nothing; `malformed` is corruption
  * of a known kind and the caller surfaces it.
  */
 export type RendererSessionEventParse =
@@ -1423,6 +1438,21 @@ function readInteger(value: unknown, context: string): number {
     throw new Error(`${context} must be an integer`);
   }
   return value;
+}
+
+function readPositiveInteger(value: unknown, context: string): number {
+  const integer = readInteger(value, context);
+  if (integer <= 0) throw new Error(`${context} must be positive`);
+  return integer;
+}
+
+function readArray<T>(
+  value: unknown,
+  context: string,
+  readItem: (item: unknown, context: string) => T,
+): T[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => readItem(item, `${context}[${index}]`));
 }
 
 function readNullableInteger(value: unknown, context: string): number | null {
