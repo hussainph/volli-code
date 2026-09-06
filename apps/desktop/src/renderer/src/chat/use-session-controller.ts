@@ -126,11 +126,10 @@ export interface SessionController {
 }
 
 /**
- * The store this binding writes to. The app has exactly one; the parameter is
- * for a surface that owns its own instance because it owns its own transport —
- * the UI lab, which drives these components over HTTP instead of Session IPC.
- * The registry underneath is shared either way: a client is found by Session id,
- * whichever store it writes back to.
+ * The store this binding writes to. The app has exactly one; the parameter
+ * lets tests own an isolated instance without changing the resident client
+ * registry underneath. A client is found by Session id, whichever store it
+ * writes back to.
  */
 export type ChatSessionsStore = StoreApi<ChatSessionsState>;
 

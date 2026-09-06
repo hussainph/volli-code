@@ -31,9 +31,9 @@ export function chatSessionFrame(value: unknown): ChatSessionFrame | null {
   // React state updaters, where a throw takes the chat surface down instead of
   // losing one frame. The two failure arms answer differently on purpose:
   //
-  //  - `unknown-kind` means the writer was newer than this build (live on the
-  //    lab HTTP transport, and on any replay). The envelope is kept so its
-  //    sequence still advances the fold's cursor — the mirror of the ledger's
+  //  - `unknown-kind` means the writer was newer than this build (from a
+  //    future host, or on any replay). The envelope is kept so its sequence
+  //    still advances the fold's cursor — the mirror of the ledger's
   //    paging rule, where an empty answer would read as the end of the Session
   //    — while a null event contributes nothing to what is drawn.
   //  - `malformed` is corruption of a known kind, surfaced loudly and dropped:

@@ -38,7 +38,7 @@ describe("Session RPC wire protocol", () => {
     ]);
   });
 
-  // Lab diagnostics are the development-only HTTP surface's business: a
+  // Lab diagnostics are development-only and have no transport today: a
   // production client has no debug pane to feed and no business reading a
   // diagnostic log over the channel it runs Sessions on.
   it("withholds the lab diagnostics namespace", () => {
