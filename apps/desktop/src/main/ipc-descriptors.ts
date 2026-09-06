@@ -746,6 +746,18 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session title",
   },
+  "volli:session-stop": {
+    guard: (args): args is IpcArgs<"volli:session-stop"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
+      // The reason is the durable why: absent, or a non-blank sentence.
+      const reason = input["reason"];
+      return reason === undefined || (typeof reason === "string" && reason.trim().length > 0);
+    },
+    invalidError: "Invalid session stop",
+  },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {
       if (args.length !== 1) return false;

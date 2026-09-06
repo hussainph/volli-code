@@ -2144,6 +2144,9 @@ app.whenReady().then(async () => {
     blobsRoot: blobsRoot(app.getPath("userData")),
     // The renderer door of auto-titling (VC-81); absent with the runtime.
     autoTitle: autoTitler === null ? undefined : (input) => void autoTitler.refine(input),
+    // The person's stop (VC-269) acts through the same runtime the agent
+    // tool's stop does — no parallel door; absent with the runtime.
+    sessionRuntime: sessionRuntime ?? undefined,
   });
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt

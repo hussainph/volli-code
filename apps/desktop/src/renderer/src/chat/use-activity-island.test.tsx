@@ -154,10 +154,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount(store = chatStore(), openShellOutput?: (shellId: string) => void) {
+async function mount(
+  store = chatStore(),
+  openShellOutput?: (shellId: string) => void,
+  doors: { peekSession?: (id: string) => void; openSession?: (id: string) => void } = {},
+) {
   const seen: ActivityIslandBinding[] = [];
   function Probe() {
-    seen.push(useActivityIsland(SESSION, PROJECT, { store, openShellOutput }));
+    seen.push(useActivityIsland(SESSION, PROJECT, { store, openShellOutput, ...doors }));
     return null;
   }
   await act(async () => {
@@ -263,16 +267,55 @@ describe("useActivityIsland", () => {
     ]);
   });
 
+  it("spreads the subagent feed's slice and verbs in, and opens where the mount says (VC-269)", async () => {
+    useProjectSessionsStore.setState({
+      byProject: {
+        [PROJECT]: {
+          ...EMPTY_PROJECT_SESSION_ROWS,
+          chat: [
+            {
+              sessionId: "child",
+              title: "Grep the tests",
+              projectId: PROJECT,
+              ticketId: null,
+              createdAt: 0,
+              adapterId: "pi",
+              live: true,
+              activity: "working",
+              waitingOn: null,
+              outcome: null,
+              lastActivityAt: 0,
+              bornTicketless: true,
+              role: "subagent",
+              parentSessionId: SESSION,
+            },
+          ],
+        },
+      },
+    });
+    const peekSession = vi.fn();
+    const openSession = vi.fn();
+    const probe = await mount(chatStore(), undefined, { peekSession, openSession });
+
+    const { model, actions } = probe.latest();
+    expect(islandEmpty(model)).toBe(false);
+    expect(model.agents).toEqual([
+      { id: "child", label: "Grep the tests", progress: 0, state: "working", promoted: false },
+    ]);
+    actions.peekAgent("child");
+    expect(peekSession).toHaveBeenCalledWith("child");
+    actions.promoteAgent("child");
+    expect(openSession).toHaveBeenCalledWith("child");
+  });
+
   it("leaves the verbs no feed owns inert, and wires the ones a feed does", async () => {
     const probe = await mount();
     const { actions } = probe.latest();
 
-    // VC-269's three, plus `jumpStep` whose rows draw inert: no feed supplies
-    // these, so each must be the seam's own no-op. Calling one changes nothing
-    // and reaches no bridge — which is what makes it safe for a row to hold.
-    for (const verb of ["peekAgent", "promoteAgent", "stopAgent", "jumpStep"] as const) {
-      expect(actions[verb]("x")).toBeUndefined();
-    }
+    // `jumpStep`, whose rows draw inert: no feed supplies it, so it must be
+    // the seam's own no-op. Calling it changes nothing and reaches no bridge
+    // — which is what makes it safe for a row to hold.
+    expect(actions.jumpStep("x")).toBeUndefined();
     expect(browser.close).not.toHaveBeenCalled();
     expect(browser.setPresentation).not.toHaveBeenCalled();
 

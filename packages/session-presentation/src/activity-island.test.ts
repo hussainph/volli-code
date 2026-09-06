@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ACTIVITY_ISLAND_FEEL,
   agentDimmed,
+  agentProgressMeasured,
   agentsDone,
   agentsHeading,
   agentsLine,
@@ -213,9 +214,18 @@ describe("subagents", () => {
   });
 
   it("rounds progress rather than truncating it, at both ends", () => {
-    expect(agentStateWord(agent({ progress: 0 }))).toBe("0%");
     expect(agentStateWord(agent({ progress: 0.005 }))).toBe("1%");
     expect(agentStateWord(agent({ progress: 1 }))).toBe("100%");
+  });
+
+  // VC-269: no feed has a measure of a turn's progress, so a working agent
+  // carries 0 — and 0 is "unmeasured", never a percentage nobody took.
+  it("says a word, not 0%, for a working agent with no measure", () => {
+    expect(agentStateWord(agent({ progress: 0 }))).toBe("working");
+    expect(agentStateWord(agent({ progress: 0, promoted: true }))).toBe("working · tab");
+    expect(agentProgressMeasured(agent({ progress: 0 }))).toBe(false);
+    expect(agentProgressMeasured(agent({ progress: 0.3 }))).toBe(true);
+    expect(agentProgressMeasured(agent({ progress: 0.3, state: "done" }))).toBe(false);
   });
 
   it("dims what ended without finishing", () => {
@@ -436,6 +446,13 @@ describe("the inline summary", () => {
     });
     expect(rested).toBe("2 tabs · agents 1/2");
     expect(summaryLine(EMPTY_ACTIVITY_ISLAND)).toBe("");
+    // Unmeasured workers are counted, not averaged to a 0% nobody measured.
+    expect(
+      summaryLine({
+        ...EMPTY_ACTIVITY_ISLAND,
+        agents: [agent({ progress: 0 }), agent({ id: "a2", progress: 0 })],
+      }),
+    ).toBe("agents 2 working");
   });
 
   it("leaves shells out — a running one announces itself through the flash", () => {

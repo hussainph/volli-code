@@ -157,6 +157,12 @@ export default defineConfig(({ mode }) => ({
         "src/chat/use-activity-island.ts",
         "src/chat/use-island-flash.ts",
         "src/chat/use-island-tabs.ts",
+        // The subagent feed (VC-269), on the same argument: which listing
+        // rows are children is a rule with a known trap (provenance reads a
+        // Board chat's children as person-started), the chip's state is a
+        // fold of two record facts, and "delegated" / "done" / "failed" are
+        // a diff over a baseline — none of it visible in a screenshot.
+        "src/chat/use-island-agents.ts",
         "src/components/attachments/attachment-model.ts",
         // What the renderer does with the Run door's answer (VC-126/VC-234):
         // which refusal opens Model Access, which toasts, and what success

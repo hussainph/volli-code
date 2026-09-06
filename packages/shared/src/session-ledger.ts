@@ -485,6 +485,21 @@ export type SessionStopActor =
   | { kind: "user" }
   | { kind: "watchdog" };
 
+/**
+ * How a Session's latest turn ended (VC-269).
+ *
+ * The ledger's own two turn-end facts plus the one the attachment adds:
+ * `completed` and `interrupted` are `turn.completed` / `turn.interrupted`
+ * verbatim, and `failed` is a turn that was still open when its attachment
+ * failed or closed as failed — the executor ended, not the turn. The
+ * vocabulary is shared with the Session Engine's answer fold
+ * (`session-answer.ts`, `SessionAnswerState`), which is these three words
+ * plus the states a projection already carries elsewhere (`turnActive`,
+ * `stopped`); a test there pins that {@link projectSession} and the fold
+ * never read the same history two ways.
+ */
+export type SessionTurnOutcome = "completed" | "interrupted" | "failed";
+
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
@@ -1189,6 +1204,16 @@ export interface SessionProjection {
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   turnActive: boolean;
   /**
+   * How the most recent turn ended, or `null` while one is open or before
+   * any has started (VC-269). The durable half of "the agent finished" vs
+   * "the agent broke": `turnActive` alone leaves a completed turn and one an
+   * executor crash cut short indistinguishable, and a listing that drew both
+   * as done would hand a parent a bad answer as a good one. Reset by
+   * `turn.started`, so it is always about the LATEST turn and never a stale
+   * verdict on an earlier one.
+   */
+  lastTurnOutcome: SessionTurnOutcome | null;
+  /**
    * How many calls this Session's authority has refused, over its whole life.
    *
    * Projected rather than counted in the runtime because the per-Session half of
@@ -1245,6 +1270,7 @@ export function projectSession(
   let stopped: SessionProjection["stopped"] = null;
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
+  let lastTurnOutcome: SessionTurnOutcome | null = null;
   let authorityDenials = 0;
   const usage: SessionUsage[] = [];
   let lastActivityAt = session.createdAt;
@@ -1346,6 +1372,10 @@ export function projectSession(
           outcome: "failed",
           failure: event.payload.failure,
         });
+        // A turn still open when its executor failed is a failed turn; one
+        // that had already ended keeps its own outcome (the process ending is
+        // not the turn losing what it said — `foldSessionAnswerState` agrees).
+        if (turnActive) lastTurnOutcome = "failed";
         turnActive = false;
         if (event.commandId) pendingExecutorStarts.delete(event.commandId);
         break;
@@ -1359,6 +1389,13 @@ export function projectSession(
             closedAt: event.occurredAt,
             outcome: event.payload.outcome,
           });
+        }
+        // A close mid-turn ended a turn that had not completed, whatever the
+        // close calls itself: the relaunch sweep and a crash both land here.
+        // Only a close that says `failed` is a failure; the rest are the turn
+        // being cut short.
+        if (turnActive) {
+          lastTurnOutcome = event.payload.outcome === "failed" ? "failed" : "interrupted";
         }
         turnActive = false;
         break;
@@ -1409,13 +1446,19 @@ export function projectSession(
       // running any more.
       case "turn.started":
         turnActive = true;
+        // The outcome is about the latest turn, and this one has none yet.
+        lastTurnOutcome = null;
         // A turn can have been admitted before a supervisor recorded its stop.
         // Only a fresh attachment is an explicit resumption, so this turn must
         // not erase the stop while the supervisor is still releasing it.
         break;
       case "turn.completed":
+        turnActive = false;
+        lastTurnOutcome = "completed";
+        break;
       case "turn.interrupted":
         turnActive = false;
+        lastTurnOutcome = "interrupted";
         break;
       // `session.created` carries the Session row as it was at birth — the
       // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
@@ -1481,6 +1524,7 @@ export function projectSession(
     stopped,
     modelSelection,
     turnActive,
+    lastTurnOutcome,
     authorityDenials,
     usage: usage.length === 0 ? EMPTY_SESSION_USAGE_SUMMARY : summarizeSessionUsage(usage),
     lastActivityAt,

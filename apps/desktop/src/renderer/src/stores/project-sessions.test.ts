@@ -52,6 +52,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     live: true,
     activity: "idle",
     waitingOn: null,
+    outcome: null,
     lastActivityAt: 1,
     bornTicketless: false,
     role: "ticket",

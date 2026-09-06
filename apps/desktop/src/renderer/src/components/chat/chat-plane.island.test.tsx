@@ -16,6 +16,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { UIMessage } from "ai";
+import type { ChatSessionRecord } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import type { BrowserTabState } from "../../../../ipc/contract";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
@@ -77,6 +79,34 @@ function tab(over: Partial<BrowserTabState> & { tabId: string }): BrowserTabStat
   };
 }
 
+const CHILD = "s-child";
+
+function child(over: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
+  return {
+    sessionId: CHILD,
+    title: "Grep the tests",
+    projectId: PROJECT,
+    ticketId: null,
+    createdAt: 0,
+    adapterId: "pi",
+    live: true,
+    activity: "working",
+    waitingOn: null,
+    outcome: null,
+    lastActivityAt: 0,
+    bornTicketless: true,
+    role: "subagent",
+    parentSessionId: SESSION,
+    ...over,
+  };
+}
+
+function listing(chat: readonly ChatSessionRecord[]): void {
+  useProjectSessionsStore.setState({
+    byProject: { [PROJECT]: { ...EMPTY_PROJECT_SESSION_ROWS, chat } },
+  });
+}
+
 function registry(tabs: readonly BrowserTabState[]): void {
   useBrowserTabsStore.setState({
     byId: Object.fromEntries(tabs.map((one) => [one.tabId, one])),
@@ -124,8 +154,13 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function chatStore() {
-  const store = createChatSessionsStore(() => ({}) as ChatSessionTransport);
+function chatStore(childMessages: readonly UIMessage[] = []) {
+  // A transport that answers nothing: adopting the child seeds its slice and
+  // asks the transport to connect, and a connect that never answers leaves
+  // the seeded transcript exactly as this test wrote it.
+  const store = createChatSessionsStore(
+    () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
+  );
   store.setState({
     sessions: {
       [SESSION]: {
@@ -135,13 +170,23 @@ function chatStore() {
         sessionError: null,
         queue: [],
       },
+      [CHILD]: {
+        projection: null,
+        transcript: {
+          ...EMPTY_TRANSCRIPT,
+          durableMessages: childMessages,
+          messages: childMessages,
+        },
+        lifecycle: "ready",
+        sessionError: null,
+        queue: [],
+      },
     },
   });
   return store;
 }
 
-async function mountPlane() {
-  const store = chatStore();
+async function mountPlane(store = chatStore(), onOpenSession?: (sessionId: string) => void) {
   await act(async () => {
     root?.render(
       <TooltipProvider delayDuration={0}>
@@ -151,9 +196,17 @@ async function mountPlane() {
           ticketId={null}
           onOpenFile={() => {}}
           store={store}
+          {...(onOpenSession === undefined ? {} : { onOpenSession })}
         />
       </TooltipProvider>,
     );
+  });
+  return store;
+}
+
+function click(target: Element): void {
+  act(() => {
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
 
@@ -197,5 +250,78 @@ describe("the Activity Island in the chat plane", () => {
     await act(async () => registry([]));
     await settle();
     expect(island()).toBeNull();
+  });
+
+  // VC-269, end to end through the plane: a child appears in the listing,
+  // works, finishes; its row peeks the child's own transcript; the peek's
+  // promotion goes through the host's door.
+  it("shows a subagent working, then done with the flash to say so, peeks it, and promotes it", async () => {
+    const onOpenSession = vi.fn();
+    const store = await mountPlane(
+      chatStore([
+        {
+          id: "m-child-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Found three matching tests." }],
+        } as UIMessage,
+      ]),
+      onOpenSession,
+    );
+    expect(island()).toBeNull();
+
+    // A child row appears → one working chip.
+    await act(async () => listing([child()]));
+    const chips = () => island()?.querySelectorAll("[data-agent-state]") ?? [];
+    expect(chips()).toHaveLength(1);
+    expect(chips()[0]?.getAttribute("data-agent-state")).toBe("working");
+
+    // The child's row goes idle, completed → the chip reads done and the
+    // channel says so, in its two registers.
+    await act(async () => listing([child({ activity: "idle", outcome: "completed" })]));
+    expect(chips()[0]?.getAttribute("data-agent-state")).toBe("done");
+    const flash = island()?.querySelector("[data-island-flash]");
+    expect(flash?.textContent).toContain("Done");
+    expect(flash?.textContent).toContain("Grep the tests");
+
+    // Clicking the row peeks the child: one dialog, holding the child's own
+    // transcript, read-only — no composer inside it.
+    const cluster = island()?.querySelector('[data-island-cluster="agents"]');
+    expect(cluster).not.toBeNull();
+    click(cluster!);
+    const row = document.body.querySelector<HTMLElement>(`[data-island-row="${CHILD}"]`);
+    expect(row).not.toBeNull();
+    act(() => row!.focus());
+    click(row!);
+    await settle();
+    const dialogs = document.body.querySelectorAll("[data-subagent-peek-dialog]");
+    expect(dialogs).toHaveLength(1);
+    const dialog = dialogs[0]!;
+    expect(dialog.textContent).toContain("Grep the tests");
+    expect(dialog.querySelector("[data-subagent-peek-state]")?.textContent).toBe("done");
+    expect(dialog.querySelector("[data-subagent-peek-transcript]")?.textContent).toContain(
+      "Found three matching tests.",
+    );
+    expect(dialog.querySelector("textarea")).toBeNull();
+
+    // The peek's promotion is the host's door, with the child id.
+    const openAsTab = [...dialog.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Open as tab"),
+    );
+    expect(openAsTab).toBeDefined();
+    click(openAsTab!);
+    expect(onOpenSession).toHaveBeenCalledWith(CHILD);
+
+    // The modal took focus, so the row's card — a popover — dismissed under
+    // it: the row is gone. Escape closes the peek, focus returns to the
+    // island's agents cluster (the anchor that reopens the card), and the
+    // child's client stays resident (closeChatSession is not ref-counted).
+    expect(row!.isConnected).toBe(false);
+    await act(async () => {
+      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await settle();
+    expect(document.body.querySelector("[data-subagent-peek-dialog]")).toBeNull();
+    expect(document.activeElement).toBe(cluster);
+    expect(store.getState().sessions[CHILD]).toBeDefined();
   });
 });

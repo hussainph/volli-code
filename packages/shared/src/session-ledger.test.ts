@@ -1155,6 +1155,115 @@ describe("projectSession turn activity", () => {
   });
 });
 
+// How the latest turn ended (VC-269) — the fact that tells a finished Session
+// from a broken one once both have gone quiet.
+describe("projectSession last turn outcome", () => {
+  const attachment = {
+    id: "attachment-outcome",
+    sessionId: session.id,
+    adapterId: "pi",
+    venue: localVenue,
+    continuity: "fresh" as const,
+    native: null,
+    authority: null,
+  };
+  const opened = event(1, { kind: "attachment.opened", attachment });
+  const started = event(2, { kind: "turn.started", attachmentId: attachment.id, turnId: "t1" });
+
+  it("is null before any turn and while one is open", () => {
+    expect(projectSession(session, [opened]).lastTurnOutcome).toBeNull();
+    expect(projectSession(session, [opened, started]).lastTurnOutcome).toBeNull();
+  });
+
+  it("reads the ledger's own two turn-end facts verbatim", () => {
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        event(3, { kind: "turn.completed", attachmentId: attachment.id, turnId: "t1" }),
+      ]).lastTurnOutcome,
+    ).toBe("completed");
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        event(3, { kind: "turn.interrupted", attachmentId: attachment.id, turnId: "t1" }),
+      ]).lastTurnOutcome,
+    ).toBe("interrupted");
+  });
+
+  it("reads an attachment ending mid-turn as that turn's end, by how it ended", () => {
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        event(3, {
+          kind: "attachment.failed",
+          attachment,
+          failure: { code: "spawn_failed", detail: null, diagnostic: null },
+        }),
+      ]).lastTurnOutcome,
+    ).toBe("failed");
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "failed" }),
+      ]).lastTurnOutcome,
+    ).toBe("failed");
+    // The relaunch sweep closes an open attachment as interrupted, and a close
+    // that calls itself completed mid-turn still ended a turn that had not.
+    for (const outcome of ["interrupted", "completed"] as const) {
+      expect(
+        projectSession(session, [
+          opened,
+          started,
+          event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome }),
+        ]).lastTurnOutcome,
+      ).toBe("interrupted");
+    }
+  });
+
+  it("keeps a completed turn's outcome when the attachment ends after it", () => {
+    const completed = event(3, {
+      kind: "turn.completed",
+      attachmentId: attachment.id,
+      turnId: "t1",
+    });
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        completed,
+        event(4, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "failed" }),
+      ]).lastTurnOutcome,
+    ).toBe("completed");
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        completed,
+        event(4, {
+          kind: "attachment.failed",
+          attachment,
+          failure: { code: "runtime_failed", detail: null, diagnostic: null },
+        }),
+      ]).lastTurnOutcome,
+    ).toBe("completed");
+  });
+
+  it("is about the latest turn: a new turn clears the last one's verdict", () => {
+    expect(
+      projectSession(session, [
+        opened,
+        started,
+        event(3, { kind: "turn.interrupted", attachmentId: attachment.id, turnId: "t1" }),
+        event(4, { kind: "turn.started", attachmentId: attachment.id, turnId: "t2" }),
+      ]).lastTurnOutcome,
+    ).toBeNull();
+  });
+});
+
 describe("projectSession recency", () => {
   const command = {
     id: "command-recency",
