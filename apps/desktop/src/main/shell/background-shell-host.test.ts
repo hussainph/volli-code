@@ -101,10 +101,12 @@ describe("BackgroundShellHost", () => {
     // decode happens once per read, so a cut that lands inside a 3-byte
     // character must still yield a readable string rather than throwing.
     const { host } = harness({ outputMaxBytes: 16 });
-    // Ten 3-byte codepoints: 30 bytes into a 16-byte ring, so the front is
-    // cut at an offset that cannot fall on a character boundary.
+    // Ten copies of U+8D77, written as raw hex so the bytes do not depend on
+    // this file's encoding or on the child's locale: 30 bytes into a 16-byte
+    // ring, so the front is cut at an offset (14) that cannot fall on a
+    // 3-byte character boundary.
     const started = await host.start(owner, {
-      command: `printf '\u8d77\u52d5\u4e2d\u8d77\u52d5\u4e2d\u8d77\u52d5\u4e2d\u8d77'`,
+      command: `printf '${"\\xe8\\xb5\\xb7".repeat(10)}'`,
       cwd: workspace(),
       title: null,
       env: ENV,
@@ -118,9 +120,11 @@ describe("BackgroundShellHost", () => {
     // would re-encode to three bytes and overshoot.
     expect(Buffer.byteLength(read.output)).toBeLessThanOrEqual(16);
     expect(read.truncated).toBe(true);
-    // Whole characters only — no replacement character we manufactured.
+    // Whole characters only — no replacement character we manufactured. The
+    // cut at byte 14 lands inside the character starting at 12, so the read
+    // begins at 15: five whole characters, fifteen bytes.
     expect(read.output).not.toContain("\ufffd");
-    expect(read.output).toMatch(/^[\u8d77\u52d5\u4e2d]+$/);
+    expect(read.output).toBe("\u8d77".repeat(5));
   });
 
   it("starts a command beside the caller, and returns what it printed in the settle window", async () => {
