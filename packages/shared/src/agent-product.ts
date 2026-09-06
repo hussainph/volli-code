@@ -122,6 +122,20 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-185",
+    build: "VC-6",
+    added: [
+      "todo_write — a named tool for keeping this Session's todo list. Each call REPLACES the whole list, so send every item every time, including the ones already finished. It takes a status per item (pending, in_progress, completed, cancelled), which means work may be finished out of order and a step may be dropped rather than deleted.",
+      "The tool answers with the whole list rather than an acknowledgement. That is deliberate: compaction drops older tool calls out of what the model sees, and the newest result is the copy of the plan that survives it.",
+      "A person watching the Session sees the list live, above the composer. It is for them and for the ticket record — not a thinking aid, so a list that is written once and never updated is worse than no list at all.",
+    ],
+    changed: [
+      "session done and session blocked now leave this Session's last todo list on its Ticket as one attributed comment, when it kept a list and belongs to a Ticket. Their registry effects and --dry-run preview say so. Neither verb moves the board; a comment is a record, not a state change.",
+    ],
+    fixed: [],
+    removed: [],
+  },
+  {
     baseline: "VC-178",
     build: "VC-185",
     added: [

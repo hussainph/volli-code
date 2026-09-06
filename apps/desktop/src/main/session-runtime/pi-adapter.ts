@@ -913,6 +913,13 @@ class PiBinding implements BindingHandle {
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
       tools: {
         tools: context.toolSurface.filter(isPiCodingTool),
+        // The todo tool's membership (VC-6), read back off the frozen record
+        // exactly as the verb half is and for the same reason: it has no port,
+        // so nothing else could decide it, and re-deriving it from today's
+        // capabilities would hand an older Session a tool array its own
+        // history does not describe. Omitted rather than `false`, so a Session
+        // frozen before the tool existed produces the bundle it always did.
+        ...(context.toolSurface.includes("todo_write") ? { todoWrite: true } : {}),
         // Omitted rather than empty for the reason `promptResources` is: a
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.

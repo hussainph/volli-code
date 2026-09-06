@@ -15,6 +15,13 @@ import { parseCliArgs } from "./parser";
  * version 0.1.0 and already predates this tree (VC-157 changed `identify` and
  * `doctor`).
  *
+ * **VC-6 moved them a second time**, and for the same kind of reason: the two
+ * lifecycle signals now leave a Session's final todo list on its Ticket, so
+ * their registry `effects` gained a durable write and both detail pages gained
+ * the lines that describe it. The bytes moved because the PROMISE moved — a
+ * `--dry-run` still naming only the ledger would have described a command that
+ * no longer exists.
+ *
  * **VC-163 is the first ticket that legitimately moved these bytes**, and the
  * diff is the ticket's own acceptance rendered as text. Nothing in `help.ts`
  * changed to produce it: two registry fields moved, and every line below

@@ -289,6 +289,10 @@ own ledger; the board does not move — an agent may not declare its own ticket
 ready for review, so the `ticket move` stays an explicit step. Acts on the
 session in `VOLLI_SESSION`.
 
+If the session kept a todo list and belongs to a ticket, its last version is
+posted to that ticket as a comment. A board session has no ticket to post to,
+and a session that never used the todo tool leaves no comment.
+
 ### volli session blocked
 
 ```sh
@@ -298,6 +302,9 @@ volli session blocked [--reason <text>]
 Signals that the session has stopped and needs a person. Volli raises
 attention on that exact session, and the `--reason` text is what the person
 sees.
+
+The session's todo list as it stood is posted to the ticket too — an unfinished
+list beside a reason is most of a handover.
 
 ### volli session link
 

@@ -582,6 +582,22 @@ describe("the registry table", () => {
     expect(effects?.nonEffects.length).toBeGreaterThan(0);
   });
 
+  it("declares the ticket comment a lifecycle signal now leaves behind (VC-6)", () => {
+    // The two verbs used to promise a session-ledger write and nothing else,
+    // and `--dry-run` prints these words verbatim. A verb that quietly grew a
+    // second durable write would make the preview describe the wrong command.
+    for (const key of ["session.done", "session.blocked"] as const) {
+      const effects = verbEntry(key)?.effects;
+      expect(
+        effects?.durableWrites.map((write) => write.resource),
+        key,
+      ).toEqual(["session-ledger", "ticket-comment"]);
+      expect(JSON.stringify(effects), key).toContain("todo list");
+      // Still no board move: the comment is a record, not a state change.
+      expect(effects?.nonEffects.join(" "), key).toContain("No Ticket moves");
+    }
+  });
+
   it("looks an entry up by key, and admits when it holds none", () => {
     expect(verbEntry("ticket.move")?.group).toBe("Write");
     expect(verbEntry("ticket.teleport")).toBeUndefined();

@@ -242,6 +242,22 @@ export interface RuntimeToolBundle {
    * for it to fail.
    */
   verbs?: readonly VerbToolKey[];
+  /**
+   * Whether this Session's surface names `todo_write` (VC-6).
+   *
+   * A boolean where its neighbours are lists, because the tool is one name and
+   * there is nothing to order. It is HERE rather than beside the ports for the
+   * reason this interface exists at all: `todo_write` is answered by neither an
+   * execution environment nor a host port — a call replaces a list the durable
+   * transcript already keeps — so the bundle is the only thing left that can
+   * say whether the Session holds it.
+   *
+   * Absent means no, and absent is what every Session frozen before VC-6 says.
+   * That is the whole point of gating it: the Pi adapter refuses an attachment
+   * whose derived tool array disagrees with the durable record, so a name added
+   * unconditionally would refuse every Session that predates it.
+   */
+  todoWrite?: boolean;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -985,6 +1001,11 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // A name and nothing else, like a coding tool — but for the opposite reason.
+  // A coding tool carries nothing because the runtime holds the environment
+  // this package cannot see; `todo_write` carries nothing because there is
+  // nothing to hold (VC-6).
+  | { tool: "todo_write" }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -1035,6 +1056,10 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
     browser_acquire: hold === undefined ? null : { tool: "browser_acquire", port: hold },
     browser_release: hold === undefined ? null : { tool: "browser_release", port: hold },
+    // The one arm that reads the bundle instead of a port, and the one binding
+    // that carries nothing: see `RuntimeToolBundle.todoWrite` for why a todo
+    // list has no port to be answered by.
+    todo_write: spec.tools.todoWrite === true ? { tool: "todo_write" } : null,
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

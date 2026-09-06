@@ -48,6 +48,12 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   edit: "edit-file",
   write: "write-file",
   bash: "run-command",
+  // The tool is `todo_write` and the kind is `plan`, and the mismatch is
+  // deliberate on both sides (VC-6). The TOOL is not called `plan` because
+  // `agent-plan.ts` already means the dry-run preview of a write. The KIND is,
+  // because it was spelled that way before anything produced it and shipped
+  // history is not worth churning for a rename.
+  todo_write: "plan",
 };
 
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;

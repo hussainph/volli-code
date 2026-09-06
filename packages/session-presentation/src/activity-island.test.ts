@@ -20,6 +20,7 @@ import {
   type IslandTab,
   islandClusters,
   islandEmpty,
+  islandPlanFromTodos,
   planCount,
   planCurrent,
   planHeading,
@@ -61,9 +62,9 @@ function shell(over: Partial<IslandShell> = {}): IslandShell {
 const PLAN: IslandPlan = {
   id: "p1",
   steps: [
-    { id: "s1", title: "Read composer stack" },
-    { id: "s2", title: "Sketch closed pill" },
-    { id: "s3", title: "Wire feel dials" },
+    { id: "s1", title: "Read composer stack", state: "completed" },
+    { id: "s2", title: "Sketch closed pill", state: "in_progress" },
+    { id: "s3", title: "Wire feel dials", state: "pending" },
   ],
   done: 1,
 };
@@ -211,7 +212,11 @@ describe("subagents", () => {
 
 describe("plan", () => {
   it("derives current, count and percent from the steps and the done mark", () => {
-    expect(planCurrent(PLAN)).toEqual({ id: "s2", title: "Sketch closed pill" });
+    expect(planCurrent(PLAN)).toEqual({
+      id: "s2",
+      title: "Sketch closed pill",
+      state: "in_progress",
+    });
     expect(planTotal(PLAN)).toBe(3);
     expect(planCount(PLAN)).toBe("1/3");
     expect(planPercent(PLAN)).toBeCloseTo(33.33, 1);
@@ -225,16 +230,20 @@ describe("plan", () => {
     const repeated: IslandPlan = {
       id: "p2",
       steps: [
-        { id: "s1", title: "Review" },
-        { id: "s2", title: "Review" },
+        { id: "s1", title: "Review", state: "completed" },
+        { id: "s2", title: "Review", state: "in_progress" },
       ],
       done: 1,
     };
-    expect(planCurrent(repeated)).toEqual({ id: "s2", title: "Review" });
+    expect(planCurrent(repeated)).toEqual({ id: "s2", title: "Review", state: "in_progress" });
   });
 
   it("has no current step once every step is done", () => {
-    const finished = { ...PLAN, done: 3 };
+    const finished: IslandPlan = {
+      ...PLAN,
+      steps: PLAN.steps.map((step) => ({ ...step, state: "completed" as const })),
+      done: 3,
+    };
     expect(planCurrent(finished)).toBeNull();
     expect(planLine(finished)).toBe("Plan 3/3 · done");
     expect(planPercent(finished)).toBe(100);
@@ -255,10 +264,108 @@ describe("plan", () => {
     expect(planCount({ ...PLAN, done: 5 })).toBe("5/3");
   });
 
-  it("states each step relative to the done mark", () => {
+  it("states each step from the step's own state, not its position", () => {
     expect(planStepState(PLAN, 0)).toBe("done");
     expect(planStepState(PLAN, 1)).toBe("current");
     expect(planStepState(PLAN, 2)).toBe("pending");
+  });
+
+  it("draws work finished out of order where it actually happened (VC-6)", () => {
+    // The whole reason `IslandStep` carries a state. Every real todo tool lets
+    // the model finish the third item first; counting completed prefixes drew
+    // that as "one done" with the wrong row ticked.
+    const scattered: IslandPlan = {
+      id: "p4",
+      steps: [
+        { id: "s1", title: "Read the ticket", state: "pending" },
+        { id: "s2", title: "Write the tool", state: "completed" },
+        { id: "s3", title: "Wire the island", state: "in_progress" },
+      ],
+      done: 1,
+    };
+
+    expect(planStepState(scattered, 0)).toBe("pending");
+    expect(planStepState(scattered, 1)).toBe("done");
+    expect(planStepState(scattered, 2)).toBe("current");
+    expect(planCurrent(scattered)).toEqual({
+      id: "s3",
+      title: "Wire the island",
+      state: "in_progress",
+    });
+    // The pill's grammar is untouched: `done` is still a COUNT, so `n/n` and
+    // the hairline read exactly as they did before the step gained a state.
+    expect(planCount(scattered)).toBe("1/3");
+    expect(planPercent(scattered)).toBeCloseTo(33.33, 1);
+  });
+
+  it("dims a step the model dropped instead of losing it", () => {
+    const dropped: IslandPlan = {
+      id: "p5",
+      steps: [
+        { id: "s1", title: "Read the ticket", state: "completed" },
+        { id: "s2", title: "Revive the dock", state: "cancelled" },
+      ],
+      done: 1,
+    };
+
+    expect(planStepState(dropped, 1)).toBe("cancelled");
+    // A cancelled step is not current, and it is not the plan waiting on
+    // something: with nothing left to do, the line says done.
+    expect(planCurrent(dropped)).toBeNull();
+    expect(planLine(dropped)).toBe("Plan 1/2 · done");
+  });
+
+  it("names the next pending step as current when nothing is marked in progress", () => {
+    // A model that ticks an item and writes the list before starting the next
+    // one leaves no in_progress row; the card still has to point somewhere.
+    const between: IslandPlan = {
+      id: "p6",
+      steps: [
+        { id: "s1", title: "Read the ticket", state: "completed" },
+        { id: "s2", title: "Write the tool", state: "pending" },
+      ],
+      done: 1,
+    };
+
+    expect(planCurrent(between)).toMatchObject({ id: "s2" });
+    expect(planStepState(between, 1)).toBe("current");
+  });
+});
+
+describe("islandPlanFromTodos", () => {
+  it("projects the Session's current todo list onto the card's model (VC-6)", () => {
+    expect(
+      islandPlanFromTodos("session-1", [
+        { content: "Read the ticket", status: "completed" },
+        { content: "Write the tool", status: "in_progress" },
+        { content: "Wire the island", status: "pending" },
+      ]),
+    ).toEqual({
+      id: "session-1",
+      steps: [
+        { id: "session-1:0", title: "Read the ticket", state: "completed" },
+        { id: "session-1:1", title: "Write the tool", state: "in_progress" },
+        { id: "session-1:2", title: "Wire the island", state: "pending" },
+      ],
+      done: 1,
+    });
+  });
+
+  it("has no plan for a Session that never wrote one, and none for one that cleared it", () => {
+    // Both draw no cluster, but they are different facts and the fold that
+    // feeds this keeps them apart — an emptied list must not revive the old one.
+    expect(islandPlanFromTodos("session-1", null)).toBeNull();
+    expect(islandPlanFromTodos("session-1", [])).toBeNull();
+  });
+
+  it("counts only completed rows as done, so a cancelled step is not progress", () => {
+    const plan = islandPlanFromTodos("session-1", [
+      { content: "Read the ticket", status: "completed" },
+      { content: "Revive the dock", status: "cancelled" },
+    ]);
+
+    expect(plan?.done).toBe(1);
+    expect(planCount(plan!)).toBe("1/2");
   });
 });
 

@@ -26,8 +26,12 @@ import type {
   SessionRecord,
   SessionUsageSummary,
 } from "@volli/shared";
-import { readSessionTranscriptTail } from "@volli/session-engine";
+import { readSessionTodoList, readSessionTranscriptTail } from "@volli/session-engine";
+import { errorMessage, todoListMarkdown } from "@volli/shared";
+import type { SessionTodoList } from "@volli/shared";
 
+import { createTicketCommentCommand } from "../ticket-commands";
+import { withTicketWake } from "../ticket-wake";
 import { getTicket } from "../db/tickets-repo";
 import { chatSessionRecord, terminalSessionRecord } from "../session-control";
 import { failure } from "./context";
@@ -380,6 +384,7 @@ async function recordSessionSignal(
     projectId: envSession.projectId,
     kind: "session",
   });
+  await postFinalTodoList(context, envSession, signal);
   return {
     v: 1,
     ok: true,
@@ -390,6 +395,69 @@ async function recordSessionSignal(
       recorded: true,
     },
   };
+}
+
+/**
+ * Leave the Session's last todo list on the ticket as it ends (VC-6).
+ *
+ * A Session runs long and mostly unattended, and the person who comes back to
+ * the ticket is the reader this exists for: the list is what the Session
+ * thought it was doing, in its own words, at the moment it stopped. On
+ * `blocked` that is the more useful of the two — an unfinished list beside a
+ * reason is most of a handover.
+ *
+ * AFTER the signal, never before, and never in the same breath. The signal is
+ * what this verb promises; the comment is a courtesy on top of it, so a comment
+ * that cannot be written must not turn a recorded `done` into a refusal. That
+ * is why the failure is logged and swallowed rather than returned — the same
+ * reasoning `ticket move` applies to a failed arrival projection after its move
+ * has already committed.
+ *
+ * Silent in three cases, each for its own reason: a Board Session has no ticket
+ * to comment on, a Session that never called `todo_write` has nothing to say,
+ * and a Session whose list is EMPTY deliberately cleared it — posting "here is
+ * an empty checklist" would be noise on all three.
+ */
+async function postFinalTodoList(
+  context: AgentCommandContext,
+  session: { id: string; projectId: string; ticketId: string | null },
+  signal: "done" | "blocked",
+): Promise<void> {
+  const { options, now, actor } = context;
+  const { id: sessionId, ticketId } = session;
+  if (ticketId === null) return;
+  let list: SessionTodoList | null = null;
+  try {
+    list = await readSessionTodoList(
+      {
+        listEvents: (query) => options.sessionEngine.listEvents(query),
+        ...(options.readTranscriptArtifact ? { readArtifact: options.readTranscriptArtifact } : {}),
+      },
+      { sessionId },
+    );
+  } catch (error) {
+    console.error(`[volli] failed to read ${sessionId}'s todo list: ${errorMessage(error)}`);
+    return;
+  }
+  if (list === null || list.length === 0) return;
+  // Attributed to the Session, from the RESOLVED actor rather than from the
+  // `VOLLI_SESSION` the request claimed — the distinction `ticket comment`
+  // draws for the same write, and for the same reason (VC-163).
+  if (actor === null || actor.kind !== "session") return;
+  const body = `Todo list at session ${signal}:\n\n${todoListMarkdown(list)}`;
+  try {
+    withTicketWake(options.db, ticketId, () =>
+      createTicketCommentCommand(
+        options.db,
+        { ticketId, body, commentActor: actor.kind, sessionId: actor.sessionId },
+        { now: now(), actor },
+      ),
+    );
+  } catch (error) {
+    console.error(`[volli] failed to comment ${sessionId}'s todo list: ${errorMessage(error)}`);
+    return;
+  }
+  options.onMutation?.({ ticketId, projectId: session.projectId, kind: "comment" });
 }
 
 /** `volli session done` — this Session's work is finished. */

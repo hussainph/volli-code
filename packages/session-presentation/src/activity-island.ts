@@ -90,13 +90,36 @@ export interface IslandAgent {
 export interface IslandStep {
   id: string;
   title: string;
+  /**
+   * Where this step stands, in the model's own words (VC-6).
+   *
+   * Per step rather than derived from {@link IslandPlan.done}, and the widening
+   * is the one edit VC-6 made to VC-246's work. The original model was a
+   * straight run down the list: `steps[done]` was current and everything before
+   * it was finished. Real todo tools do not behave that way — `todo_write` lets
+   * the model finish the third item first and abandon the second — and a count
+   * of completed prefixes drew that as the wrong row ticked.
+   *
+   * The vocabulary is `SessionTodoList`'s, unchanged, so the projection is a
+   * rename and not a translation.
+   */
+  state: "pending" | "in_progress" | "completed" | "cancelled";
 }
 
 /** The Session's plan: an ordered list of steps and how many are done. */
 export interface IslandPlan {
   id: string;
   steps: readonly IslandStep[];
-  /** Steps completed, from the top; `steps[done]` is the current one. */
+  /**
+   * How many steps are COMPLETED — a count, not a cursor.
+   *
+   * It stayed a count when the steps gained their own state (VC-6), because
+   * everything that reads it wants a count: `planCount` prints `n/n`,
+   * `planPercent` fills the hairline, and the pill's grammar is "1/3". What it
+   * is no longer is a POSITION: `steps[done]` names nothing in particular once
+   * the model may finish items out of order, which is why {@link planCurrent}
+   * and {@link planStepState} read the steps instead.
+   */
   done: number;
 }
 
@@ -340,9 +363,26 @@ export function planTotal(plan: IslandPlan): number {
   return plan.steps.length;
 }
 
-/** The step in progress; `null` once every step is done. */
+/**
+ * The step in progress; `null` once nothing is left to do.
+ *
+ * Two answers in priority order, because a model writes both shapes. The one
+ * it means is `in_progress` — the item it says it is on. But a model that ticks
+ * an item and rewrites the list before starting the next one leaves NO item in
+ * progress and several still pending, and a card that answered `null` there
+ * would say the plan was finished while two steps waited. So the first pending
+ * step is the fallback, and `null` is reserved for a list with neither.
+ *
+ * A `cancelled` step is never current: it is a step the model decided against,
+ * and pointing the card at it would be reporting abandoned work as the work in
+ * hand.
+ */
 export function planCurrent(plan: IslandPlan): IslandStep | null {
-  return plan.steps[plan.done] ?? null;
+  return (
+    plan.steps.find((step) => step.state === "in_progress") ??
+    plan.steps.find((step) => step.state === "pending") ??
+    null
+  );
 }
 
 /** `done`/`total` as the pill and the card heading both print it. */
@@ -370,11 +410,60 @@ export function planHeading(plan: IslandPlan): string {
   return `Plan${FLASH_SEPARATOR}${planCount(plan)}`;
 }
 
-export type PlanStepState = "done" | "current" | "pending";
+export type PlanStepState = "done" | "current" | "pending" | "cancelled";
 
+/**
+ * How one row draws, from the step's own state (VC-6).
+ *
+ * `current` is the one answer that is not a straight rename, and it has to be
+ * asked of the PLAN rather than the step: exactly one row may be current, and
+ * which one it is is {@link planCurrent}'s single decision. Asking the step
+ * alone would draw every pending row as current in a list with none in
+ * progress.
+ */
 export function planStepState(plan: IslandPlan, index: number): PlanStepState {
-  if (index < plan.done) return "done";
-  return index === plan.done ? "current" : "pending";
+  const step = plan.steps[index];
+  if (step === undefined) return "pending";
+  if (step.state === "completed") return "done";
+  if (step.state === "cancelled") return "cancelled";
+  return planCurrent(plan)?.id === step.id ? "current" : "pending";
+}
+
+/**
+ * The Session's current todo list as the plan card's model (VC-6).
+ *
+ * The one place the todo vocabulary becomes island vocabulary, so no client
+ * re-derives it and no second reading of "done" can appear. It is a projection
+ * and not a fold: `list` is already the answer to "what is the plan now", read
+ * from durable history by `currentTodoList`.
+ *
+ * `null` and `[]` both mean NO CARD, which is the one place this surface may
+ * collapse the distinction the fold works to keep: a Session that cleared its
+ * list has nothing to draw, exactly like one that never wrote a list. The
+ * difference matters upstream, where reviving the previous list would be wrong,
+ * and stops mattering here.
+ *
+ * Step ids are positional because a todo list has no ids of its own — the model
+ * sends words and a status. They are scoped to the Session so two open chats
+ * cannot collide as React keys, and they are stable for as long as the list is,
+ * which is all `jumpStep` needs: the next call replaces the whole list anyway.
+ */
+export function islandPlanFromTodos(
+  sessionId: string,
+  list: readonly { content: string; status: IslandStep["state"] }[] | null,
+): IslandPlan | null {
+  if (list === null || list.length === 0) return null;
+  return {
+    id: sessionId,
+    steps: list.map((todo, index) => ({
+      id: `${sessionId}:${index}`,
+      title: todo.content,
+      state: todo.status,
+    })),
+    // Completed only. A cancelled step is not progress — counting it would let
+    // a model reach 100% by dropping the work it did not do.
+    done: list.filter((todo) => todo.status === "completed").length,
+  };
 }
 
 /* ----------------------------------------------------------------- shells */
