@@ -198,6 +198,8 @@ export interface ChatSessionRecord {
    * from the chat that started it.
    */
   role: SessionRole;
+  /** The Session that delegated this one (VC-9); a listing names it beside a helper. */
+  parentSessionId: string | null;
 }
 
 /**

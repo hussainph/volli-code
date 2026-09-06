@@ -40,7 +40,15 @@ function scratch(): string {
 }
 
 function ticketSession(projectId: string, ticketId: string): Session {
-  return { id: "ticket-session", projectId, ticketId, role: "ticket", title: null, createdAt: 0 };
+  return {
+    id: "ticket-session",
+    projectId,
+    ticketId,
+    role: "ticket",
+    parentSessionId: null,
+    title: null,
+    createdAt: 0,
+  };
 }
 
 describe("desktop Session location resolver", () => {
@@ -61,6 +69,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -71,6 +80,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: ticket.id,
         role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -101,6 +111,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: ticket.id,
         role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -111,6 +122,7 @@ describe("desktop Session location resolver", () => {
         projectId: "missing",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -121,6 +133,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: "missing",
         role: "ticket",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -131,6 +144,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: foreignTicket.id,
         role: roleImpliedByTicket(foreignTicket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -153,6 +167,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -174,6 +189,7 @@ describe("desktop Session location resolver", () => {
         projectId: project.id,
         ticketId: ticket.id,
         role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -261,6 +277,7 @@ describe("desktop Session location resolver", () => {
       projectId: project.id,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: null,
       createdAt: 0,
     };

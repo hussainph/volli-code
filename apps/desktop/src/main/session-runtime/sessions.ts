@@ -498,6 +498,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         projectId: input.projectId,
         ticketId: input.ticketId,
         role,
+        parentSessionId: input.parentSessionId ?? null,
         title: input.title,
       },
     });

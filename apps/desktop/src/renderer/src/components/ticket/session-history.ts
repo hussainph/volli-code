@@ -2,6 +2,7 @@ import {
   canResumeHarness,
   effectiveHarnessId,
   harnessLabel,
+  shortSessionId,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -61,9 +62,16 @@ export interface TicketSessionRow {
 // nothing to do with what it spent, and demanding a usage summary would make
 // every caller holding a bare record invent one.
 export function sessionSourceLabel(row: SessionListingIdentity): string {
-  // A helper another Session started is named as one (VC-9); every other
-  // structured Session is a chat, whichever of the two root Roles it holds.
-  if (row.kind === "chat") return row.record.role === "subagent" ? "Subagent" : "Chat";
+  // A helper another Session started is named as one, with the parent it
+  // answers to (VC-9); every other structured Session is a chat, whichever of
+  // the two root Roles it holds.
+  if (row.kind === "chat") {
+    const record = row.record;
+    if (record.role !== "subagent") return "Chat";
+    return record.parentSessionId === null
+      ? "Subagent"
+      : `Subagent · of ${shortSessionId(record.parentSessionId)}`;
+  }
   const record = row.record;
   const source =
     record.launchKind === "agent"

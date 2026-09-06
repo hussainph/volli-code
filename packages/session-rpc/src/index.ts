@@ -479,6 +479,9 @@ const commandSchema = z.discriminatedUnion("kind", [
     // lab transport's door only; the product `sessions.create` route below
     // states the two Roles a person can choose through `roleImpliedByTicket`.
     role: z.enum(SESSION_ROLES),
+    // The lab transport can only ever mint a root Session: the field is
+    // stated, never derived, and pinned null at this door.
+    parentSessionId: z.null(),
     title: nullableString,
   }),
   z.object({

@@ -50,6 +50,7 @@ export function chatSessionRecord(
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
     role: projection.session.role,
+    parentSessionId: projection.session.parentSessionId,
   };
 }
 

@@ -2030,6 +2030,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Structured OpenCode Session",
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -2112,6 +2113,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Working",
       provenance,
     });
@@ -2145,6 +2147,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Waiting",
       provenance,
     });
@@ -2193,6 +2196,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Idle",
       provenance,
     });
@@ -2203,6 +2207,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Stopped",
       provenance,
     });
@@ -2404,6 +2409,7 @@ describe("agent command service", () => {
         projectId: "project-one",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: "Review VC-53",
         provenance: PROVENANCE,
       });
@@ -2901,6 +2907,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -2946,6 +2953,7 @@ describe("agent command service", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -5945,6 +5953,7 @@ describe("reads over a session the socket did not start", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -6064,6 +6073,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6105,6 +6115,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6138,6 +6149,7 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       projectId: "project-one",
       ticketId: "ticket-one",
       role: "ticket",
+      parentSessionId: null,
       title: null,
       provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
     });
@@ -6213,6 +6225,7 @@ describe("volli cost", () => {
       projectId: "p1",
       ticketId: options.ticketId,
       role: roleImpliedByTicket(options.ticketId),
+      parentSessionId: null,
       title: options.commandId,
       provenance,
     });

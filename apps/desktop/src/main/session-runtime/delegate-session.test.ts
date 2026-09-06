@@ -88,6 +88,7 @@ function projection(id: string, overrides: Partial<SessionProjection> = {}): Ses
       projectId: "project-1",
       ticketId: null,
       role: id === PARENT ? "project" : "subagent",
+      parentSessionId: id === PARENT ? null : PARENT,
       title: "Helper",
       createdAt: 1,
     },

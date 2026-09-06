@@ -27,6 +27,15 @@ export interface Session {
    * read-side fallback, for rows and events written before the field existed.
    */
   role: SessionRole;
+  /**
+   * The Session that delegated this one (VC-9): set exactly for a `subagent`,
+   * null for the two root Roles. On the Session and on its `session.create`
+   * intent, not in a host table, because it is the fact the `subagent` Role
+   * MEANS and a host rebuilding from events must be able to reconstruct it
+   * (docs/BOUNDARIES.md). Read-tolerant: absent on every record written
+   * before the field existed, all of which were root Sessions.
+   */
+  parentSessionId: string | null;
   title: string | null;
   /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
   createdAt: number;
@@ -922,6 +931,7 @@ export type SessionCommandIntent =
       projectId: string;
       ticketId: string | null;
       role: SessionRole;
+      parentSessionId: string | null;
       title: string | null;
     }
   | { kind: "session.archive" }

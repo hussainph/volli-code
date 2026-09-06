@@ -47,6 +47,8 @@ export interface CreateSessionRequest {
   ticketId: string | null;
   /** The Role the Session is created under; stated by the caller, never derived from `ticketId` (VC-9). */
   role: SessionRole;
+  /** The delegating Session for a `subagent`, null otherwise — ledger data, never a host table's. */
+  parentSessionId: string | null;
   title: string | null;
   /** Trusted host-supplied audit provenance; renderers never call this module directly. */
   provenance: SessionEventProvenance;
@@ -171,6 +173,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           projectId: request.projectId,
           ticketId: request.ticketId,
           role: request.role,
+          parentSessionId: request.parentSessionId,
           title: request.title,
           createdAt,
         };
@@ -183,6 +186,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             projectId: request.projectId,
             ticketId: request.ticketId,
             role: request.role,
+            parentSessionId: request.parentSessionId,
             title: request.title,
           },
           route: null,
@@ -684,6 +688,7 @@ function sameCreateSessionRequest(command: SessionCommand, request: CreateSessio
     command.intent.projectId === request.projectId &&
     command.intent.ticketId === request.ticketId &&
     command.intent.role === request.role &&
+    command.intent.parentSessionId === request.parentSessionId &&
     command.intent.title === request.title
   );
 }
@@ -694,6 +699,7 @@ function sameSession(left: Session, right: Session): boolean {
     left.projectId === right.projectId &&
     left.ticketId === right.ticketId &&
     left.role === right.role &&
+    left.parentSessionId === right.parentSessionId &&
     left.title === right.title &&
     left.createdAt === right.createdAt
   );

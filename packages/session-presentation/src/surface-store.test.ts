@@ -15,6 +15,7 @@ const projection: SessionPresentationProjection = {
     projectId: "p1",
     ticketId: null,
     role: "project",
+    parentSessionId: null,
     title: "Plan",
     createdAt: 0,
   },

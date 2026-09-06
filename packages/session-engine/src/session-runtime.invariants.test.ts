@@ -133,6 +133,7 @@ async function create(runtime: SessionRuntime) {
       projectId: "project",
       ticketId: "ticket",
       role: "ticket",
+      parentSessionId: null,
       title: null,
     },
   });

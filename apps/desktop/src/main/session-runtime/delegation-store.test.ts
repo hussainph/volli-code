@@ -498,8 +498,6 @@ describe("Subagent Session ancestry (VC-9)", () => {
     h.store.recordBirth(child.id, birth);
 
     expect(birth).toEqual({ grants: [], delegation: null, parentSessionId: h.root.id });
-    expect(h.store.parentSessionId(child.id)).toBe(h.root.id);
-    expect(h.store.parentSessionId(h.root.id)).toBeNull();
     expect(
       h.db
         .prepare("SELECT parent_session_id, depth FROM session_delegations WHERE session_id = ?")
@@ -532,7 +530,11 @@ describe("listUnansweredSubagents — what a relaunch left for recovery (VC-9)",
     h.store.recordBirth(h.root.id, parentBirth);
     const bear = (id: string, toolCallId: string) => {
       insertSession(h.db, testSession("project-1", h.ticket.id, { id, title: `Helper ${id}` }));
-      h.db.prepare("UPDATE sessions SET role = 'subagent' WHERE id = ?").run(id);
+      // The parent is the child's own ledger fact (migration 041); the
+      // delegation row beside it is the ancestry the start grant reads.
+      h.db
+        .prepare("UPDATE sessions SET role = 'subagent', parent_session_id = ? WHERE id = ?")
+        .run(h.root.id, id);
       h.store.recordBirth(
         id,
         h.store.resolveBirth({

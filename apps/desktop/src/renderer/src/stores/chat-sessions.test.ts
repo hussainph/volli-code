@@ -26,6 +26,7 @@ const SESSION = {
   projectId: "p1",
   ticketId: "t1",
   role: "ticket" as const,
+  parentSessionId: null,
   title: "VC-1",
   createdAt: 0,
 };

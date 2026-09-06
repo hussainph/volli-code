@@ -226,6 +226,7 @@ async function createAndAttach(runtime: SessionRuntime) {
       projectId: "project-1",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Native Session",
     },
   });
@@ -247,6 +248,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: "ticket-1",
         role: "ticket",
+        parentSessionId: null,
         title: "Model selection",
       },
     });
@@ -541,6 +543,7 @@ describe("SessionRuntime native adapter contract", () => {
       projectId: "project-1",
       ticketId: null,
       role: "project" as const,
+      parentSessionId: null,
       title: null,
       createdAt: 0,
     };
@@ -1254,6 +1257,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1316,6 +1320,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1336,6 +1341,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1390,6 +1396,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1427,6 +1434,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1482,6 +1490,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: "ticket-1",
         role: "ticket",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1542,6 +1551,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -1766,6 +1776,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: "Never attached",
       },
     });
@@ -1824,6 +1835,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -2744,6 +2756,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -2888,6 +2901,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -2959,6 +2973,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -3000,6 +3015,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -3225,6 +3241,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -3281,6 +3298,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -3330,6 +3348,7 @@ describe("SessionRuntime native adapter contract", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
     });
@@ -3398,6 +3417,7 @@ describe("SessionRuntime native adapter contract", () => {
           projectId: "project-1",
           ticketId: null,
           role: "project",
+          parentSessionId: null,
           title: null,
         },
       });
@@ -3544,6 +3564,7 @@ describe("SessionRuntime native adapter contract", () => {
           projectId: "project-1",
           ticketId: null,
           role: "project",
+          parentSessionId: null,
           title: null,
         },
       });
@@ -4072,6 +4093,7 @@ describe("SessionRuntime transient transcript overlay", () => {
           projectId: "project-1",
           ticketId: null,
           role: "project",
+          parentSessionId: null,
           title: null,
         },
       });

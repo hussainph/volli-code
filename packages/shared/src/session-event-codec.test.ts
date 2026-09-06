@@ -40,6 +40,7 @@ const session: Session = {
   projectId: "project-1",
   ticketId: null,
   role: "project",
+  parentSessionId: null,
   title: "One",
   createdAt: 100,
 };
@@ -411,6 +412,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         projectId: "project-1",
         ticketId: "ticket-1",
         role: "ticket",
+        parentSessionId: null,
         title: "One",
       },
       {
@@ -418,6 +420,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         projectId: "project-1",
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: null,
       },
       // A subagent that inherited its parent's Ticket: the Role is what says
@@ -427,6 +430,7 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         projectId: "project-1",
         ticketId: "ticket-1",
         role: "ticket",
+        parentSessionId: null,
         title: null,
       },
       { kind: "session.archive" },
@@ -582,6 +586,77 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         legacyCreate.command.intent.kind === "session.create" &&
         legacyCreate.command.intent.role,
     ).toBe("ticket");
+  });
+
+  it("reads the parent link as absent-means-root, present-means-stated, and wrong-means-corrupt (VC-9)", () => {
+    // Every record written before the field existed was a root Session.
+    const legacy = decodeSessionEventPayload(
+      {
+        kind: "session.created",
+        session: { id: "s-1", projectId: "p-1", ticketId: "t-1", title: null, createdAt: 1 },
+      },
+      "payload",
+    );
+    expect(legacy.kind === "session.created" ? legacy.session.parentSessionId : "wrong").toBeNull();
+    const delegated = decodeSessionEventPayload(
+      {
+        kind: "session.created",
+        session: {
+          id: "s-4",
+          projectId: "p-1",
+          ticketId: "t-1",
+          role: "subagent",
+          parentSessionId: "s-parent",
+          title: null,
+          createdAt: 1,
+        },
+      },
+      "payload",
+    );
+    expect(delegated.kind === "session.created" && delegated.session.parentSessionId).toBe(
+      "s-parent",
+    );
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.created",
+          session: {
+            id: "s-5",
+            projectId: "p-1",
+            ticketId: null,
+            role: "subagent",
+            parentSessionId: 7,
+            createdAt: 1,
+          },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.session.parentSessionId");
+    const create = decodeSessionEventPayload(
+      {
+        kind: "command.recorded",
+        command: {
+          id: "c-2",
+          sessionId: "s-4",
+          createdAt: 1,
+          route: null,
+          intent: {
+            kind: "session.create",
+            projectId: "p-1",
+            ticketId: "t-1",
+            role: "subagent",
+            parentSessionId: "s-parent",
+            title: null,
+          },
+        },
+      },
+      "payload",
+    );
+    expect(
+      create.kind === "command.recorded" &&
+        create.command.intent.kind === "session.create" &&
+        create.command.intent.parentSessionId,
+    ).toBe("s-parent");
   });
 
   it("raises the distinct unknown-kind signal for a retired kind", () => {

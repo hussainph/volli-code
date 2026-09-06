@@ -48,6 +48,7 @@ async function seedTerminal(
     projectId: input.projectId,
     ticketId: input.ticketId,
     role: roleImpliedByTicket(input.ticketId),
+    parentSessionId: null,
     title: input.title,
     provenance,
   });
@@ -105,6 +106,7 @@ describe("resolveScope", () => {
       projectId: project.id,
       ticketId: ticket.id,
       role: roleImpliedByTicket(ticket.id),
+      parentSessionId: null,
       title: "Session 1",
       provenance,
     });

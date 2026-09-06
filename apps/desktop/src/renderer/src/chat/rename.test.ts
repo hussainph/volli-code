@@ -21,6 +21,7 @@ const SESSION = {
   projectId: "p1",
   ticketId: "t1",
   role: "ticket" as const,
+  parentSessionId: null,
   title: "Plan",
   createdAt: 0,
 };
@@ -62,6 +63,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       lastActivityAt: 1,
       bornTicketless: false,
       role: "ticket",
+      parentSessionId: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,

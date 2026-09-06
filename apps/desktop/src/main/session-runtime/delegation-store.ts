@@ -363,35 +363,39 @@ export class TicketSessionDelegationStore
   }
 
   /**
-   * Every Subagent Session whose answer never reached its parent (VC-9): what
+   * Every Subagent Session whose notice never reached its parent (VC-9): what
    * boot recovery reports on.
    *
    * "Never reached" is one durable fact. The delegation's operation id is the
    * child's create command id minus its `:create` suffix — the same derivation
-   * the tool door made — and the answer is delivered under
+   * the tool door made — and the notice is delivered under
    * `<operationId>:answer` in the PARENT's ledger, so a parent without that
-   * command has not heard from this child. No other bookkeeping is needed, and
-   * none is kept: the two ledgers already say everything recovery asks.
+   * command has not heard from this child. The parent is the child's own
+   * ledger fact (`sessions.parent_session_id`, migration 041). No other
+   * bookkeeping is needed, and none is kept.
+   *
+   * DURABLE suffixes: `:create` is `sessionCreateCommandId`'s and `:answer`
+   * is `DELEGATION_ID_SUFFIXES.notice`'s; both are frozen the way any durable
+   * id derivation is, and this SQL spells them because it reads them back.
    */
   listUnansweredSubagents(): readonly DelegationRef[] {
     const rows = this.db
       .prepare(
         `SELECT s.id AS child_session_id,
-                d.parent_session_id,
+                s.parent_session_id,
                 s.project_id,
                 s.title,
                 c.id AS create_command_id
            FROM sessions s
-           JOIN session_delegations d ON d.session_id = s.id
            JOIN session_commands c
              ON c.session_id = s.id
             AND json_extract(c.intent, '$.kind') = 'session.create'
           WHERE s.role = 'subagent'
-            AND d.parent_session_id IS NOT NULL
+            AND s.parent_session_id IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
                 FROM session_commands a
-               WHERE a.session_id = d.parent_session_id
+               WHERE a.session_id = s.parent_session_id
                  AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
             )
           ORDER BY s.created_at ASC, s.id COLLATE BINARY ASC`,
@@ -418,14 +422,6 @@ export class TicketSessionDelegationStore
         },
       ];
     });
-  }
-
-  /** The Session that delegated this one, or `null` for a root Session. */
-  parentSessionId(sessionId: string): string | null {
-    const row = this.db
-      .prepare("SELECT parent_session_id FROM session_delegations WHERE session_id = ?")
-      .get(sessionId) as { parent_session_id: string | null } | undefined;
-    return row?.parent_session_id ?? null;
   }
 
   private recordDelegation(

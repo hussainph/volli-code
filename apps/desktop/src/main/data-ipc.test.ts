@@ -1453,6 +1453,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       projectId,
       ticketId: ticket.id,
       role: roleImpliedByTicket(ticket.id),
+      parentSessionId: null,
       title: "Structured OpenCode Session",
       provenance: {
         source: { kind: "user", id: "test", detail: null },
@@ -1496,6 +1497,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         lastActivityAt: 500,
         bornTicketless: false,
         role: "ticket",
+        parentSessionId: null,
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both
@@ -1524,6 +1526,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       projectId,
       ticketId: ticket.id,
       role: roleImpliedByTicket(ticket.id),
+      parentSessionId: null,
       title: "Reattachable Run",
       provenance,
     });

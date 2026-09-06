@@ -134,6 +134,7 @@ function frame(sequence: number): SessionStreamFrame {
           projectId: "project-1",
           ticketId: null,
           role: "project",
+          parentSessionId: null,
           title: null,
           createdAt: 10,
         },

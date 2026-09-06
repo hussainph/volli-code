@@ -852,6 +852,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         projectId: readString(row.projectId, `${context}.projectId`),
         ticketId,
         role: readSessionRole(row.role, ticketId, `${context}.role`),
+        parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
         title: readNullableString(row.title, `${context}.title`),
       };
     }
@@ -1019,6 +1020,7 @@ function decodeSessionValue(value: unknown, context: string): Session {
     projectId: readString(row.projectId, `${context}.projectId`),
     ticketId,
     role: readSessionRole(row.role, ticketId, `${context}.role`),
+    parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
     title: readNullableString(row.title, `${context}.title`),
     createdAt: readInteger(row.createdAt, `${context}.createdAt`),
   };
@@ -1035,6 +1037,16 @@ function decodeSessionValue(value: unknown, context: string): Session {
 function readSessionRole(value: unknown, ticketId: string | null, context: string): SessionRole {
   if (value === undefined) return roleImpliedByTicket(ticketId);
   return enumValue(value, SESSION_ROLES, context);
+}
+
+/**
+ * The parent link (VC-9), tolerant for the one shape every earlier record
+ * has — the field absent, which was always a root Session — and strict for
+ * every other: a present value that is not a string or null is corruption.
+ */
+function readParentSessionId(value: unknown, context: string): string | null {
+  if (value === undefined) return null;
+  return readNullableString(value, context);
 }
 
 function assertCommandShape(value: SessionCommand, context: string): void {

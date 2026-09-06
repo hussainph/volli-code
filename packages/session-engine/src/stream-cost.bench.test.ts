@@ -229,6 +229,7 @@ async function createAndAttach(runtime: SessionRuntime) {
       projectId: "project-1",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Probe",
     },
   });

@@ -52,6 +52,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     lastActivityAt: 1,
     bornTicketless: false,
     role: "ticket",
+    parentSessionId: null,
     ...overrides,
   };
 }

@@ -396,7 +396,13 @@ describe("Sessions", () => {
     expect(child).toEqual({ sessionId: "session-1", model: MODEL });
     expect(commands[0]).toMatchObject({
       commandId: "operation-child:create",
-      command: { kind: "session.create", ticketId: "ticket-1", role: "subagent" },
+      // The parent rides the create intent: a ledger fact, not a host table's.
+      command: {
+        kind: "session.create",
+        ticketId: "ticket-1",
+        role: "subagent",
+        parentSessionId: "parent-session",
+      },
     });
     // Cost-efficient background work: the `utility` rung, not the Ticket's.
     expect(modelRoles).toEqual(["subagent"]);

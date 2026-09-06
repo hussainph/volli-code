@@ -361,6 +361,7 @@ export class PtyManager {
           // A terminal is a person's companion on a Ticket or on the project:
           // those are the only two Roles it can be, and the Ticket says which.
           role: roleImpliedByTicket(scope.ticketId),
+          parentSessionId: null,
           title: scope.title,
           provenance: terminalSystemProvenance(),
         });

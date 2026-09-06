@@ -111,6 +111,8 @@ export type SessionClientCommand =
       ticketId: string | null;
       /** The Role the Session is created under (VC-9); the caller states it. */
       role: SessionRole;
+      /** The delegating Session, for a `subagent`; null for a root Role. */
+      parentSessionId: string | null;
       title: string | null;
     }
   | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
@@ -757,6 +759,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         projectId: request.command.projectId,
         ticketId: request.command.ticketId,
         role: request.command.role,
+        parentSessionId: request.command.parentSessionId,
         title: request.command.title,
         provenance: userProvenance(null),
       });

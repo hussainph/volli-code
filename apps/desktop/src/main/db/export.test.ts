@@ -332,6 +332,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         ticketId: liveTicket.id,
         role: "ticket",
+        parentSessionId: null,
         title: earlierSession.title,
         createdAt: 29,
       },
@@ -340,6 +341,7 @@ describe("buildExportDocument — populated db", () => {
         projectId: project.id,
         ticketId: liveTicket.id,
         role: "ticket",
+        parentSessionId: null,
         title: session.title,
         createdAt: 30,
       },
@@ -557,6 +559,7 @@ describe("buildExportDocument — populated db", () => {
       projectId: project.id,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Failed attachment",
       provenance: {
         source: { kind: "system", id: "test", detail: null },
@@ -729,6 +732,7 @@ describe("buildExportDocument — populated db", () => {
       projectId: project.id,
       ticketId: "ticket-1",
       role: "ticket",
+      parentSessionId: null,
       title: "Metered",
       provenance: {
         source: { kind: "system", id: "test", detail: null },

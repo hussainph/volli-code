@@ -1189,38 +1189,49 @@ app.whenReady().then(async () => {
             // the Ticket: a subagent may carry its parent's Ticket, and a
             // Ticket Session whose Ticket was deleted is still not a project
             // one. Each Role briefs on what its Role means.
+            //
+            // A subagent's Ticket, when it has one, is read the way any
+            // other Session's is; an orphaned one briefs on the checkout. The
+            // parent is the Session's own ledger fact, never a host table's.
+            const ticket =
+              attaching.ticketId === null
+                ? null
+                : (getTicket(dbHandle.db, attaching.ticketId) ?? null);
+            if (attaching.role === "subagent") {
+              const parentSessionId = attaching.parentSessionId;
+              if (parentSessionId === null) return null;
+              const subagentTicket = ticket && ticket.projectId === project.id ? ticket : null;
+              const parent = await sessionEngine.getSession({ sessionId: parentSessionId });
+              const brief = await sessionEngine.getOrRecordSessionInput({
+                sessionId,
+                input: {
+                  kind: "runtime-brief",
+                  text: composeSubagentBrief({
+                    project,
+                    parent: {
+                      handle: shortSessionId(parentSessionId),
+                      title: parent?.session.title ?? null,
+                    },
+                    ticket: subagentTicket,
+                  }),
+                },
+                provenance,
+              });
+              return {
+                ...shared,
+                role: "subagent",
+                ticketId: subagentTicket?.id ?? null,
+                parentSessionId,
+                brief: briefText(brief),
+                // Where the parent runs: the same predicate `location.ts`
+                // binds the directory on.
+                location: subagentTicket?.usesWorktree ? "worktree" : "main-checkout",
+              };
+            }
             if (attaching.role === "project" || attaching.ticketId === null) {
               // A ticketless Session briefs on the project root it already
               // runs in. A Ticket Session orphaned by a Ticket delete lands
               // here too, attaching as the only thing it can still be.
-              if (attaching.role === "subagent") {
-                const parentSessionId = sessionDelegation.parentSessionId(sessionId);
-                if (parentSessionId === null) return null;
-                const parent = await sessionEngine.getSession({ sessionId: parentSessionId });
-                const brief = await sessionEngine.getOrRecordSessionInput({
-                  sessionId,
-                  input: {
-                    kind: "runtime-brief",
-                    text: composeSubagentBrief({
-                      project,
-                      parent: {
-                        handle: shortSessionId(parentSessionId),
-                        title: parent?.session.title ?? null,
-                      },
-                      ticket: null,
-                    }),
-                  },
-                  provenance,
-                });
-                return {
-                  ...shared,
-                  role: "subagent",
-                  ticketId: null,
-                  parentSessionId,
-                  brief: briefText(brief),
-                  location: "main-checkout",
-                };
-              }
               const brief = await sessionEngine.getOrRecordSessionInput({
                 sessionId,
                 input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
@@ -1234,38 +1245,7 @@ app.whenReady().then(async () => {
                 location: "main-checkout",
               };
             }
-            const ticket = getTicket(dbHandle.db, attaching.ticketId);
-            if (!ticket || ticket.projectId !== project.id) return null;
-            if (attaching.role === "subagent") {
-              const parentSessionId = sessionDelegation.parentSessionId(sessionId);
-              if (parentSessionId === null) return null;
-              const parent = await sessionEngine.getSession({ sessionId: parentSessionId });
-              const brief = await sessionEngine.getOrRecordSessionInput({
-                sessionId,
-                input: {
-                  kind: "runtime-brief",
-                  text: composeSubagentBrief({
-                    project,
-                    parent: {
-                      handle: shortSessionId(parentSessionId),
-                      title: parent?.session.title ?? null,
-                    },
-                    ticket,
-                  }),
-                },
-                provenance,
-              });
-              return {
-                ...shared,
-                role: "subagent",
-                ticketId: ticket.id,
-                parentSessionId,
-                brief: briefText(brief),
-                // Where the parent runs: the same predicate `location.ts`
-                // binds the directory on.
-                location: ticket.usesWorktree ? "worktree" : "main-checkout",
-              };
-            }
+            if (ticket === null || ticket.projectId !== project.id) return null;
             const brief = await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {

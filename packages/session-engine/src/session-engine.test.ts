@@ -49,6 +49,7 @@ function createRequest(commandId = "command-create") {
     projectId: "project-1",
     ticketId: "ticket-1",
     role: "ticket" as const,
+    parentSessionId: null,
     title: "Durable Session",
     provenance: userProvenance,
   };
@@ -67,7 +68,15 @@ function attachment(sessionId: string, id = "attachment-1"): SessionAttachment {
 }
 
 function sessionRecord(id = "session-seed"): Session {
-  return { id, projectId: "project-1", ticketId: null, role: "project", title: null, createdAt: 0 };
+  return {
+    id,
+    projectId: "project-1",
+    ticketId: null,
+    role: "project",
+    parentSessionId: null,
+    title: null,
+    createdAt: 0,
+  };
 }
 
 function command(id: string, sessionId: string, intent: SessionCommand["intent"]): SessionCommand {
@@ -109,19 +118,22 @@ describe("SessionEngine creation and explicit commands", () => {
     const { session } = await plane.createSession({
       ...createRequest(),
       role: "subagent",
+      parentSessionId: "parent-session",
     });
 
     expect(session.role).toBe("subagent");
     expect(session.ticketId).toBe("ticket-1");
+    expect(session.parentSessionId).toBe("parent-session");
     const projection = await plane.getSession({ sessionId: session.id });
     expect(projection?.session.role).toBe("subagent");
-    // The birth fact travels on the immutable event, not only the live row.
+    // The birth facts travel on the immutable event, not only the live row:
+    // the Role and the parent link, so a host rebuilding from events keeps both.
     const created = (await plane.listEvents({ sessionId: session.id })).find(
       ({ payload }) => payload.kind === "session.created",
     );
-    expect(created?.payload.kind === "session.created" && created.payload.session.role).toBe(
-      "subagent",
-    );
+    expect(
+      created?.payload.kind === "session.created" ? created.payload.session : null,
+    ).toMatchObject({ role: "subagent", parentSessionId: "parent-session" });
   });
 
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
@@ -213,7 +225,8 @@ describe("SessionEngine creation and explicit commands", () => {
     for (const request of [
       { ...createRequest(), projectId: "project-2" },
       { ...createRequest(), ticketId: null },
-      { ...createRequest(), role: "subagent" as const },
+      { ...createRequest(), role: "subagent" as const, parentSessionId: "parent-session" },
+      { ...createRequest(), parentSessionId: "other-parent" },
       { ...createRequest(), title: "different" },
     ]) {
       await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
@@ -858,6 +871,7 @@ describe("SessionEngine creation and explicit commands", () => {
       ...createRequest("command-list-project"),
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Project Session",
     });
     const ticketLater = await plane.createSession({
@@ -869,6 +883,7 @@ describe("SessionEngine creation and explicit commands", () => {
       projectId: "project-2",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
     });
     await plane.submit({
       commandId: "command-list-retitle",
@@ -953,6 +968,7 @@ describe("SessionEngine creation and explicit commands", () => {
       projectId: "project-2",
       ticketId: null,
       role: "project",
+      parentSessionId: null,
     });
     now = 30;
     await plane.createSession(createRequest("command-starts-recent"));
@@ -2733,6 +2749,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
           projectId: "project-1",
           ticketId: "ticket-1",
           role: "ticket",
+          parentSessionId: null,
           title: "Durable Session",
         }),
       );
@@ -2749,6 +2766,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
           projectId: "project-1",
           ticketId: "ticket-1",
           role: "ticket",
+          parentSessionId: null,
           title: "Durable Session",
         }),
       );
@@ -2771,6 +2789,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
           projectId: "project-1",
           ticketId: "ticket-1",
           role: "ticket",
+          parentSessionId: null,
           title: "Durable Session",
         }),
       );
@@ -2792,6 +2811,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
       projectId: "project-1",
       ticketId: "ticket-1",
       role: "ticket",
+      parentSessionId: null,
       title: "Durable Session",
     });
     // Sequence 3 matches the receipt event's envelope below: the in-memory
@@ -2851,6 +2871,7 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
           projectId: "project-1",
           ticketId: "ticket-1",
           role: "ticket",
+          parentSessionId: null,
           title: "Durable Session",
         }),
       );
@@ -3077,6 +3098,7 @@ describe("reportUsage", () => {
       projectId: options.projectId,
       ticketId: options.ticketId,
       role: roleImpliedByTicket(options.ticketId),
+      parentSessionId: null,
       title: options.commandId,
       provenance: userProvenance,
     });

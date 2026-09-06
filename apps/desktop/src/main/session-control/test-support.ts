@@ -127,6 +127,7 @@ interface SessionRow {
   project_id: string;
   ticket_id: string | null;
   role: SessionRole;
+  parent_session_id: string | null;
   title: string | null;
   created_at: number;
 }
@@ -167,7 +168,9 @@ function latestNativeReference(
 /** Reads a terminal compatibility DTO by projecting the persisted ledger facts. */
 export function getSession(db: Database.Database, sessionId: string): SessionRecord | undefined {
   const session = db
-    .prepare("SELECT id, project_id, ticket_id, role, title, created_at FROM sessions WHERE id = ?")
+    .prepare(
+      "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
+    )
     .get(sessionId) as SessionRow | undefined;
   if (!session) return undefined;
   const attachment = db
@@ -199,6 +202,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
       projectId: session.project_id,
       ticketId: session.ticket_id,
       role: session.role,
+      parentSessionId: session.parent_session_id,
       title: session.title,
       createdAt: session.created_at,
     },

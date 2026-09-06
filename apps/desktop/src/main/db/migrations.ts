@@ -1752,6 +1752,35 @@ UPDATE sessions
 
 const MIGRATION_040_SESSION_ROLE = `${MIGRATION_040_SESSION_ROLE_COLUMN}${MIGRATION_040_SESSION_ROLE_BACKFILL}`;
 
+/**
+ * Migration 041: the Session's parent becomes a column (VC-9 review).
+ *
+ * The parent link is the fact the `subagent` Role MEANS, and it lives on the
+ * `session.create` intent and the Session itself, not in a host table
+ * (docs/BOUNDARIES.md: a host's SQLite is a private materialization of the
+ * ledger, so every fact a host needs must be rebuildable from events). The
+ * backfill reads the link off `session_delegations`, which is where the first
+ * VC-9 build recorded it for the subagents it minted; a root Session stays
+ * null. Probe-gated like 040, for the same ADD COLUMN reason.
+ */
+const MIGRATION_041_SESSION_PARENT_COLUMN = `
+ALTER TABLE sessions ADD COLUMN parent_session_id TEXT NULL REFERENCES sessions(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+`;
+
+const MIGRATION_041_SESSION_PARENT_BACKFILL = `
+UPDATE sessions
+   SET parent_session_id = (
+     SELECT d.parent_session_id
+       FROM session_delegations d
+      WHERE d.session_id = sessions.id
+   )
+ WHERE role = 'subagent'
+   AND parent_session_id IS NULL;
+`;
+
+const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1957,7 +1986,21 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_040_SESSION_ROLE,
     apply: applyMigration040SessionRole,
   },
+  {
+    version: 41,
+    name: "sessions.parent_session_id — the parent link as ledger data, backfilled from session_delegations",
+    sql: MIGRATION_041_SESSION_PARENT,
+    apply: applyMigration041SessionParent,
+  },
 ];
+
+/** Migration 041's reconciler, probe-gated like 040's. */
+function applyMigration041SessionParent(db: Database.Database): void {
+  const columns = db.pragma("table_info(sessions)") as { name: string }[];
+  if (columns.some((column) => column.name === "parent_session_id")) return;
+  db.exec(MIGRATION_041_SESSION_PARENT_COLUMN);
+  db.exec(MIGRATION_041_SESSION_PARENT_BACKFILL);
+}
 
 /**
  * Migration 040's reconciler, probe-gated like 031's for the same reason: an

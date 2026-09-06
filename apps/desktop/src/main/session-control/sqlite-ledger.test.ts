@@ -41,6 +41,51 @@ const provenance = {
 };
 
 describe("SqliteSessionLedger", () => {
+  it("stores and reads back the Role and the parent link as Session columns (VC-9)", async () => {
+    const { control, projectId } = setup();
+    const parent = await control.createSession({
+      commandId: "create-parent",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Parent",
+      provenance,
+    });
+    const helper = await control.createSession({
+      commandId: "create-helper",
+      projectId,
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: parent.session.id,
+      title: "Helper",
+      provenance,
+    });
+
+    const read = await control.getSession({ sessionId: helper.session.id });
+    expect(read?.session).toMatchObject({
+      role: "subagent",
+      parentSessionId: parent.session.id,
+    });
+    expect((await control.getSession({ sessionId: parent.session.id }))?.session).toMatchObject({
+      role: "project",
+      parentSessionId: null,
+    });
+    // The listing reads the same columns, so a rail never has to fold events
+    // to learn which of its rows is a helper and whose.
+    expect(
+      (await control.listSessions({ projectId, scope: "all" })).map(({ session }) => [
+        session.id,
+        session.parentSessionId,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        [parent.session.id, null],
+        [helper.session.id, parent.session.id],
+      ]),
+    );
+  });
+
   it("commits a complete create fact set once, replays it idempotently, and orders cloned reads", async () => {
     const { control, projectId } = setup();
     const first = await control.createSession({
@@ -48,6 +93,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "One",
       provenance,
     });
@@ -56,6 +102,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "One",
       provenance,
     });
@@ -64,6 +111,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Two",
       provenance,
     });
@@ -95,6 +143,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "One",
       provenance,
     });
@@ -103,6 +152,7 @@ describe("SqliteSessionLedger", () => {
       projectId: other.id,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Two",
       provenance,
     });
@@ -124,6 +174,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "One",
       provenance,
     });
@@ -165,6 +216,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Brief",
       provenance,
     });
@@ -198,6 +250,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Skills",
       provenance,
     });
@@ -224,6 +277,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Tools",
       provenance,
     });
@@ -250,6 +304,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Model selection",
       provenance,
     });
@@ -286,6 +341,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Invalid model selection",
       provenance,
     });
@@ -324,6 +380,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Retry",
       provenance,
     });
@@ -399,6 +456,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Null envelope",
       provenance,
     });
@@ -436,6 +494,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Interrupted turn",
       provenance,
     });
@@ -470,6 +529,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Authority denied",
       provenance,
     });
@@ -511,6 +571,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Authority malformed",
       provenance,
     });
@@ -549,6 +610,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Prior",
       provenance,
     });
@@ -562,6 +624,7 @@ describe("SqliteSessionLedger", () => {
         projectId,
         ticketId: null,
         role: "project",
+        parentSessionId: null,
         title: "Unrelated",
         provenance,
       }),
@@ -576,6 +639,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: "ticket-a",
       role: "ticket",
+      parentSessionId: null,
       title: "First",
       provenance,
     });
@@ -590,6 +654,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: "ticket-a",
       role: "ticket",
+      parentSessionId: null,
       title: "Second",
       provenance,
     });
@@ -622,6 +687,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: "ticket-invalid-signal",
       role: "ticket",
+      parentSessionId: null,
       title: "Invalid signal",
       provenance,
     });
@@ -647,6 +713,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "One",
       provenance,
     });
@@ -692,6 +759,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Structured",
       provenance,
     });
@@ -826,6 +894,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Prompts",
       provenance,
     });
@@ -953,6 +1022,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Invalid",
       provenance,
     });
@@ -1100,6 +1170,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Cancelled",
       provenance,
     });
@@ -1194,6 +1265,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Retired kind",
       provenance,
     });
@@ -1241,6 +1313,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Retired page",
       provenance,
     });
@@ -1292,6 +1365,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Retired kind get event",
       provenance,
     });
@@ -1320,6 +1394,7 @@ describe("SqliteSessionLedger", () => {
       projectId,
       ticketId: null,
       role: "project",
+      parentSessionId: null,
       title: "Strict write",
       provenance,
     });
@@ -1365,6 +1440,7 @@ describe("the Session usage projection", () => {
       projectId: options.projectId,
       ticketId: options.ticketId,
       role: roleImpliedByTicket(options.ticketId),
+      parentSessionId: null,
       title: options.commandId,
       provenance,
     });

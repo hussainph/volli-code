@@ -92,7 +92,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const row = this.db
       .prepare(
-        "SELECT id, project_id, ticket_id, role, title, created_at FROM sessions WHERE id = ?",
+        "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
       )
       .get(sessionId) as unknown;
     return row === undefined ? null : decodeSession(row, "sessions row");
@@ -108,7 +108,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
           : "";
     const rows = this.db
       .prepare(
-        `SELECT id, project_id, ticket_id, role, title, created_at
+        `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at
            FROM sessions
           WHERE project_id = @projectId${scope}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
@@ -340,8 +340,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertGloballyUnusedId(session.id);
     this.db
       .prepare(
-        `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
-         VALUES (@id, @projectId, @ticketId, @role, @title, @createdAt)`,
+        `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
+         VALUES (@id, @projectId, @ticketId, @role, @parentSessionId, @title, @createdAt)`,
       )
       .run(session);
   }
@@ -745,6 +745,7 @@ function decodeSession(row: unknown, context: string): Session {
     // Stored since migration 040 and pinned there by a CHECK; a value outside
     // the vocabulary is corruption and fails loudly like any other column.
     role: enumValue(value.role, SESSION_ROLES, `${context}.role`),
+    parentSessionId: readNullableString(value.parent_session_id, `${context}.parent_session_id`),
     title: readNullableString(value.title, `${context}.title`),
     createdAt: readInteger(value.created_at, `${context}.created_at`),
   };
