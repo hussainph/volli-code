@@ -683,6 +683,94 @@ describe("mapPiActivity", () => {
     ).toMatchObject({ summary: "completed normally" });
   });
 
+  it("maps the three shell tools onto run-command rows with a background marker (VC-270)", () => {
+    // shell_start is the command itself, marked as running beside the turn.
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-shell-start",
+        toolName: "shell_start",
+        args: { command: "pnpm dev\n# watch", title: "dev server" },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(started).toMatchObject({
+      descriptor: {
+        kind: "run-command",
+        nativeToolName: "shell_start",
+        subject: { label: "pnpm dev (background)", path: null },
+        outcome: null,
+      },
+    });
+    // The read and the kill name the command through the host's structured
+    // details, never by parsing the result's prose; before the details
+    // arrive the shell id is the only fact there is.
+    const readStarted = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-shell-read",
+        toolName: "shell_output",
+        args: { shellId: "sh-1" },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(readStarted.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "shell sh-1 (background · read)" },
+    });
+    const read = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-read",
+        toolName: "shell_output",
+        result: {
+          content: [{ type: "text", text: "Background shell sh-1 is running..." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "running", exitCode: null },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(read.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "pnpm dev (background · read)" },
+      outcome: { exitCode: null },
+    });
+    const killed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-kill",
+        toolName: "shell_kill",
+        result: {
+          content: [{ type: "text", text: "Killed background shell sh-1." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "exited", exitCode: 143 },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(killed.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "pnpm dev (background · killed)" },
+      outcome: { exitCode: 143 },
+    });
+    // An exited read carries the code in its outcome, like a finished command.
+    const exitedRead = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-read-2",
+        toolName: "shell_output",
+        result: {
+          content: [{ type: "text", text: "Background shell sh-1 exited with code 0." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "exited", exitCode: 0 },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(exitedRead.descriptor.outcome).toMatchObject({ exitCode: 0 });
+  });
+
   it("maps session_delegate to a delegate row naming the child Session (VC-9)", () => {
     const started = mapPiActivity(
       {

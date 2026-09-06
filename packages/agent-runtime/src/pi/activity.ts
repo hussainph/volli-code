@@ -52,6 +52,20 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   // its own, because it is the only one whose row opens something — the child
   // Session — rather than reporting a fact.
   session_delegate: "delegate",
+  // The background shell tools (VC-270) are one command's life told in
+  // three rows: the start IS a command, marked as running beside the turn;
+  // a read and a kill are about that command, so they take its kind and name
+  // it through the host's structured details.
+  shell_start: "run-command",
+  shell_output: "run-command",
+  shell_kill: "run-command",
+};
+
+/** The background marker a shell row's subject carries, by tool. */
+const SHELL_MARKERS: Record<string, string> = {
+  shell_start: "background",
+  shell_output: "background · read",
+  shell_kill: "background · killed",
 };
 
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
@@ -213,6 +227,23 @@ function subjectFor(
   output: RuntimeActivityValue,
 ) {
   const source = recordOf(input);
+  const shellMarker = SHELL_MARKERS[toolName];
+  if (shellMarker !== undefined) {
+    // The start names the command from its own input; a read or a kill
+    // learns it from the result's details once the host has answered, and
+    // names the shell id until then. Never parsed out of the result's prose.
+    const details = recordOf(readField(recordOf(output), "details"));
+    const command =
+      firstLineOf(cleanPayloadText(readField(source, "command"))) ??
+      firstLineOf(cleanPayloadText(readField(details, "command")));
+    const shellId = cleanPayloadText(readField(source, "shellId"));
+    const named = command ?? (shellId === null ? null : `shell ${shellId}`);
+    return {
+      label: named === null ? `(${shellMarker})` : `${named} (${shellMarker})`,
+      path: null,
+      lineRange: null,
+    };
+  }
   if (kind === "run-command") {
     return { label: cleanPayloadText(readField(source, "command")), path: null, lineRange: null };
   }
@@ -246,6 +277,11 @@ function subjectFor(
     path,
     lineRange: kind === "read-file" ? readRange(source) : null,
   };
+}
+
+function firstLineOf(value: string | null): string | null {
+  const line = value?.split("\n")[0]?.trim() ?? "";
+  return line.length === 0 ? null : line;
 }
 
 function readRange(input: Record<string, RuntimeActivityValue> | null) {

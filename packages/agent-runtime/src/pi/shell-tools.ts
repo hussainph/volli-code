@@ -32,6 +32,7 @@ import type {
   RuntimeShellOutputOutcome,
   RuntimeShellPort,
   RuntimeShellRecord,
+  RuntimeShellState,
 } from "@volli/shared";
 import { ShellRefusal } from "../shell/refusal";
 
@@ -43,6 +44,27 @@ export const SHELL_TOOL_NAMES = [
 ] as const satisfies readonly NonCodingToolId[];
 
 export type ShellToolId = (typeof SHELL_TOOL_NAMES)[number];
+
+/**
+ * The structured half of every shell result, beside the text the model
+ * reads: what `pi/activity.ts` names a row by and reads an exit code off,
+ * so the transcript never parses the prose. JSON-safe by construction.
+ */
+export interface ShellToolDetails {
+  shellId: string;
+  command: string;
+  state: RuntimeShellState;
+  exitCode: number | null;
+}
+
+function detailsOf(shell: RuntimeShellRecord): ShellToolDetails {
+  return {
+    shellId: shell.shellId,
+    command: shell.command,
+    state: shell.state,
+    exitCode: shell.code,
+  };
+}
 
 /**
  * The per-Session cap, restated in the live-shells footer so the model can
@@ -156,8 +178,8 @@ function refusalText(refusal: ShellRefusal): string {
  */
 async function guarded(
   signals: readonly (AbortSignal | undefined)[],
-  run: (signal: AbortSignal) => Promise<AgentToolResult<undefined>>,
-): Promise<AgentToolResult<undefined>> {
+  run: (signal: AbortSignal) => Promise<AgentToolResult<ShellToolDetails | undefined>>,
+): Promise<AgentToolResult<ShellToolDetails | undefined>> {
   const withdrawn = new AbortController();
   const abandon = (): void => withdrawn.abort();
   const live = signals.filter((one) => one !== undefined);
@@ -175,8 +197,8 @@ async function guarded(
   }
 }
 
-function text(value: string): AgentToolResult<undefined> {
-  return { content: [{ type: "text", text: value }], details: undefined };
+function text(value: string, details: ShellToolDetails): AgentToolResult<ShellToolDetails> {
+  return { content: [{ type: "text", text: value }], details };
 }
 
 // ---- schemas: what the model may say, and nothing it may not -----------------
@@ -250,7 +272,7 @@ export function createShellTool(
   const common = { name, label: LABELS[name], description: DESCRIPTIONS[name] };
   switch (name) {
     case "shell_start": {
-      const tool: AgentTool<typeof startSchema, undefined> = {
+      const tool: AgentTool<typeof startSchema, ShellToolDetails | undefined> = {
         ...common,
         parameters: startSchema,
         execute: (_id, params, callSignal) =>
@@ -271,13 +293,14 @@ export function createShellTool(
                 ...outputBlock(started.output),
                 liveShells(started.shells, at),
               ].join("\n"),
+              detailsOf(started.shell),
             );
           }),
       };
       return tool;
     }
     case "shell_output": {
-      const tool: AgentTool<typeof outputSchema, undefined> = {
+      const tool: AgentTool<typeof outputSchema, ShellToolDetails | undefined> = {
         ...common,
         parameters: outputSchema,
         execute: (_id, params, callSignal) =>
@@ -287,13 +310,13 @@ export function createShellTool(
               ...(params.tail === undefined ? {} : { tail: params.tail }),
               signal: withdrawn,
             });
-            return text(readText(read, params.tail, now()));
+            return text(readText(read, params.tail, now()), detailsOf(read.shell));
           }),
       };
       return tool;
     }
     case "shell_kill": {
-      const tool: AgentTool<typeof killSchema, undefined> = {
+      const tool: AgentTool<typeof killSchema, ShellToolDetails | undefined> = {
         ...common,
         parameters: killSchema,
         execute: (_id, params, callSignal) =>
@@ -306,6 +329,7 @@ export function createShellTool(
                 "Its output stays readable with shell_output until this attachment ends.",
                 liveShells(killed.shells, at),
               ].join("\n"),
+              detailsOf(killed.shell),
             );
           }),
       };

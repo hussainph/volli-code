@@ -75,10 +75,21 @@ describe("shell tools", () => {
     };
     const tool = createShellTool("shell_start", port, undefined, clock);
 
-    const text = resultText(
-      await tool.execute("call-1", { command: "pnpm dev", cwd: "/ws/app", title: "dev server" }),
-    );
+    const result = await tool.execute("call-1", {
+      command: "pnpm dev",
+      cwd: "/ws/app",
+      title: "dev server",
+    });
+    const text = resultText(result);
 
+    // The structured half rides beside the text: what the activity row is
+    // named by and reads its exit code off, so nothing parses the prose.
+    expect(result.details).toEqual({
+      shellId: "sh-1",
+      command: "pnpm dev",
+      state: "running",
+      exitCode: null,
+    });
     expect(calls).toEqual([{ command: "pnpm dev", cwd: "/ws/app", title: "dev server" }]);
     expect(text).toContain("sh-1");
     expect(text).toContain("pid 4242");
@@ -144,8 +155,10 @@ describe("shell tools", () => {
     });
     const tool = createShellTool("shell_output", port, undefined, clock);
 
-    const text = resultText(await tool.execute("call-1", { shellId: "sh-1" }));
+    const result = await tool.execute("call-1", { shellId: "sh-1" });
+    const text = resultText(result);
 
+    expect(result.details).toMatchObject({ state: "exited", exitCode: 1 });
     expect(text.split("\n")[0]).toMatch(/exited/);
     expect(text).toContain("code 1");
     expect(text).not.toMatch(/^.*is running/m);
