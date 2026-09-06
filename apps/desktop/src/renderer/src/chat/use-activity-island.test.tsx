@@ -245,13 +245,45 @@ describe("useActivityIsland", () => {
     expect(probe.latest().model.flash).toBe(first);
   });
 
-  it("keeps the verbs it has no feed for, and none of them throws", async () => {
+  it("supplies every verb the contract names, fed or not", async () => {
     const probe = await mount();
     const { actions } = probe.latest();
 
+    // The whole contract, so a feed that stops supplying one is caught here
+    // rather than as an undefined call from a row.
+    expect(Object.keys(actions).toSorted()).toEqual([
+      "closeTab",
+      "jumpStep",
+      "killShell",
+      "openShell",
+      "peekAgent",
+      "promoteAgent",
+      "promoteTab",
+      "stopAgent",
+    ]);
+  });
+
+  it("leaves the verbs no feed owns inert, and wires the ones a feed does", async () => {
+    const probe = await mount();
+    const { actions } = probe.latest();
+
+    // VC-269's three, plus `jumpStep` whose rows draw inert: no feed supplies
+    // these, so each must be the seam's own no-op. Calling one changes nothing
+    // and reaches no bridge — which is what makes it safe for a row to hold.
     for (const verb of ["peekAgent", "promoteAgent", "stopAgent", "jumpStep"] as const) {
-      expect(() => actions[verb]("x")).not.toThrow();
+      expect(actions[verb]("x")).toBeUndefined();
     }
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(browser.setPresentation).not.toHaveBeenCalled();
+
+    // The ones a feed does own are NOT the no-op: each reaches its bridge.
+    await act(async () => actions.closeTab("one"));
+    expect(browser.close).toHaveBeenCalledWith({ tabId: "one" });
+    await act(async () => actions.promoteTab("one"));
+    expect(browser.setPresentation).toHaveBeenCalledWith({
+      tabId: "one",
+      presentation: "preview",
+    });
   });
 
   it("holds one model object while nothing moved", async () => {

@@ -63,24 +63,27 @@ export interface ActivityIslandDeps {
 }
 
 /**
- * Every verb, unwired. A feed overrides the ones it owns; the rest stay here
- * and are UNREACHABLE by construction rather than by promise — no row on the
- * island calls a verb whose feed is not mounted, because the cluster that
- * would draw the row is not in the model either. The plan's `jumpStep` is
- * the one verb whose cluster IS live and whose rows still do not call it: the
- * plan card draws its rows inert (see `activity-island-ui.tsx`, `PlanCard`).
- * A no-op here is therefore never a silent no-op on screen.
+ * The verbs NO feed owns yet. A verb a mounted feed supplies is not here —
+ * it would be a no-op that nothing can ever reach, and the seam would then
+ * carry a default whose correctness no test could show. What is left is
+ * UNREACHABLE by construction rather than by promise: no row on the island
+ * calls a verb whose feed is not mounted, because the cluster that would draw
+ * the row is not in the model either.
+ *
+ * The three agent verbs go when VC-269 lands its feed. `jumpStep` is the one
+ * verb whose cluster IS live and whose rows still do not call it: the plan
+ * card draws its rows inert (`activity-island-ui.tsx`, `PlanCard`), so a
+ * no-op here is never a silent no-op on screen.
+ *
+ * The composed object below is annotated `ActivityIslandActions`, so the
+ * compiler — not a comment — is what proves the eight verbs are all supplied.
  */
-const UNWIRED_ACTIONS: ActivityIslandActions = {
-  closeTab() {},
-  promoteTab() {},
+const VERBS_WITHOUT_A_FEED = {
   peekAgent() {},
   promoteAgent() {},
   stopAgent() {},
-  openShell() {},
-  killShell() {},
   jumpStep() {},
-};
+} satisfies Partial<ActivityIslandActions>;
 
 export function useActivityIsland(
   sessionId: string,
@@ -113,7 +116,7 @@ export function useActivityIsland(
   const { openShell, killShell } = shells;
   const actions = React.useMemo<ActivityIslandActions>(
     () => ({
-      ...UNWIRED_ACTIONS,
+      ...VERBS_WITHOUT_A_FEED,
       ...tabs.actions,
       // VC-269: `...agents.actions,`
       openShell,

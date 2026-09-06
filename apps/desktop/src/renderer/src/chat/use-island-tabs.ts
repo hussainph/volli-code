@@ -81,12 +81,25 @@ export interface ChatBrowserTabs {
   api: BrowserApi;
   tabs: BrowserTabState[];
   preview: BrowserTabState | null;
+  /**
+   * Whether the project's Session listing has arrived. Until it has, `tabs`
+   * is answerable for this Session's own tabs ONLY: children are read off the
+   * listing, and a listing that has not landed names none of them. The store
+   * holds no entry for a project it has not fetched, so `undefined` is the
+   * un-hydrated state — and `applyActivity` drops pushes for such a project
+   * rather than seeding a partial one, so this cannot be true of half a
+   * listing. The tabs feed's now channel needs it (see `useIslandTabs`).
+   */
+  listed: boolean;
   sessionTitle(sessionId: string): string | null;
   ownerLabel(tab: BrowserTabState): string;
   cardHost: BrowserCardHost;
 }
 
 export function useChatBrowserTabs(sessionId: string, projectId: string): ChatBrowserTabs | null {
+  /* v8 ignore next -- the renderer and every test that mounts this hook run in
+     a document; the guard is for a module graph imported without one, which is
+     why `window.api` being absent (the UI lab) is the branch that IS tested. */
   const api = typeof window === "undefined" ? undefined : window.api?.browser;
   const rows = useProjectSessionsStore((state) => state.byProject[projectId]);
   const children = React.useMemo(() => childSessionIds(rows, sessionId), [rows, sessionId]);
@@ -104,6 +117,7 @@ export function useChatBrowserTabs(sessionId: string, projectId: string): ChatBr
     api,
     tabs,
     preview,
+    listed: rows !== undefined,
     sessionTitle,
     ownerLabel: (tab) => browserTabOwnerLabel(tab, sessionId, sessionTitle),
     cardHost,
@@ -243,7 +257,16 @@ export function useIslandTabs(
   // along — announcing them would be the first-render trap arriving a beat
   // late. Until the project is hydrated nothing is diffed; the first hydrated
   // reading is remembered silently and every reading after it is news.
+  //
+  // BOTH stores, because the projection is built from both and they fill from
+  // two independent fetches. The tab registry says WHICH tabs exist; the
+  // project listing says which Sessions are this one's children, and a child's
+  // tab is only in `tabs` once the listing names its owner. Baselining on the
+  // registry alone left the second fetch to land afterwards, and every tab a
+  // child already held then entered the projection looking brand new — the
+  // same trap as the first render, sprung by the slower of two fetches.
   const hydrated = useBrowserTabsStore((state) => state.hydratedProjects.has(projectId));
+  const listed = browser?.listed ?? false;
   const rawTabs = browser?.tabs;
   const titleOf = browser?.sessionTitle;
   const api = browser?.api;
@@ -258,22 +281,29 @@ export function useIslandTabs(
 
   const seen = React.useRef<Map<string, SeenTab> | null>(null);
   React.useEffect(() => {
-    if (rawTabs === undefined || !hydrated) return;
+    if (rawTabs === undefined || !hydrated || !listed) return;
     if (seen.current === null) {
       seen.current = new Map(rawTabs.map((tab) => [tab.tabId, seenOf(tab)]));
       return;
     }
     seen.current = diffTabs(seen.current, rawTabs, flash);
-  }, [flash, hydrated, rawTabs]);
+  }, [flash, hydrated, listed, rawTabs]);
 
   // A verb is a request to main. Refusals surface the way every other failed
   // mutation does — a toast — and the channel says what happened, by host,
   // so the card's own confirmation line reads the refusal too. Never a throw:
   // the row's handler is fire-and-forget.
+  // Read at PRESS time, never when the answer comes back. A close that main
+  // grants removes the row, and a close it refuses may still race a removal it
+  // made for its own reasons — so by the time a refusal lands the tab can be
+  // out of the registry, and out of the diff's ref with it. The host the
+  // person actually pressed is the honest subject of the line, and it is only
+  // reliably in hand before the await. The flash's payload is a HOST in every
+  // other line the channel carries; a raw tab id would be the odd one out.
   const hostOf = React.useCallback(
     (tabId: string): string => {
       const tab = rawTabs?.find((one) => one.tabId === tabId);
-      return tab === undefined ? tabId : islandTabHost(tab);
+      return tab === undefined ? BROWSER_NEW_TAB_TITLE : islandTabHost(tab);
     },
     [rawTabs],
   );
@@ -282,21 +312,21 @@ export function useIslandTabs(
       operation: (() => Promise<Result>) | undefined,
       verb: string,
       refusal: string,
-      tabId: string,
+      host: string,
     ) => {
       if (operation === undefined) return;
       try {
         const result = await operation();
         if (!result.ok) {
           toastError(`Could not ${verb} Browser Tab: ${result.error}`);
-          flash(refusal, hostOf(tabId));
+          flash(refusal, host);
         }
       } catch (reason) {
         toastError(`Could not ${verb} Browser Tab: ${errorMessage(reason)}`);
-        flash(refusal, hostOf(tabId));
+        flash(refusal, host);
       }
     },
-    [flash, hostOf],
+    [flash],
   );
   const actions = React.useMemo<IslandTabsFeed["actions"]>(
     () => ({
@@ -305,7 +335,7 @@ export function useIslandTabs(
           api === undefined ? undefined : () => api.close({ tabId }),
           "close",
           "Close refused",
-          tabId,
+          hostOf(tabId),
         );
       },
       // VC-238's Show: the pinned preview above this chat's composer. The
@@ -317,11 +347,11 @@ export function useIslandTabs(
             : () => api.setPresentation({ tabId, presentation: "preview" }),
           "show",
           "Show refused",
-          tabId,
+          hostOf(tabId),
         );
       },
     }),
-    [api, request],
+    [api, hostOf, request],
   );
 
   return React.useMemo(() => ({ model: { tabs }, actions }), [tabs, actions]);

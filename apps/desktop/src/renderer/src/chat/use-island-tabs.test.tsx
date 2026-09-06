@@ -16,13 +16,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { IslandFlash } from "@volli/session-presentation";
 import type { BrowserTabState } from "../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
-import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { BROWSER_NEW_TAB_TITLE, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { useIslandFlash } from "./use-island-flash";
-import { islandTabHost, useIslandTabs, type IslandTabsFeed } from "./use-island-tabs";
+import {
+  islandTabHost,
+  useChatBrowserTabs,
+  useIslandTabs,
+  type ChatBrowserTabs,
+  type IslandTabsFeed,
+} from "./use-island-tabs";
 
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 import { toastError } from "@renderer/lib/toast";
@@ -90,6 +96,11 @@ function listing(children: readonly { sessionId: string; title: string }[]): voi
       },
     },
   });
+}
+
+/** The project's Session listing not yet answered — the store holds no entry. */
+function unlisted(): void {
+  useProjectSessionsStore.setState({ byProject: {} });
 }
 
 let root: Root | null = null;
@@ -204,8 +215,33 @@ describe("projection", () => {
     const probe = await mount(null);
 
     expect(probe.latest().feed.model.tabs).toEqual([]);
+    // Both verbs reach no bridge and neither throws — the lab has rows to draw
+    // only in its own fixtures, but nothing here may crash on the way out.
     expect(() => probe.latest().feed.actions.closeTab("mine")).not.toThrow();
+    expect(() => probe.latest().feed.actions.promoteTab("mine")).not.toThrow();
     expect(probe.flashes).toEqual([]);
+    expect(probe.flashes).toEqual([]);
+  });
+});
+
+describe("the plane's own reading", () => {
+  it("names the owner of a tab the plane draws, for the preview's 'Driven by'", async () => {
+    listing([{ sessionId: CHILD, title: "Read the docs" }]);
+    registry([tab({ tabId: "mine" }), tab({ tabId: "childs", ownerSessionId: CHILD })]);
+    let seen: ChatBrowserTabs | null = null;
+    function Probe() {
+      seen = useChatBrowserTabs(SESSION, PROJECT);
+      return null;
+    }
+    vi.stubGlobal("api", { browser: api() });
+    await act(async () => {
+      root?.render(<Probe />);
+    });
+
+    const chat = seen as unknown as ChatBrowserTabs;
+    expect(chat.ownerLabel(tab({ tabId: "mine" }))).toBe("this Session");
+    expect(chat.ownerLabel(tab({ tabId: "childs", ownerSessionId: CHILD }))).toBe("Read the docs");
+    expect(chat.listed).toBe(true);
   });
 });
 
@@ -241,6 +277,31 @@ describe("verbs", () => {
     await act(async () => probe.latest().feed.actions.promoteTab("one"));
     expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "preview" });
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("names the refused tab by its host even after the tab has left the registry", async () => {
+    const close = vi.fn(async () => ({ ok: false, error: "held elsewhere" }) as const);
+    registry([tab({ tabId: "one" })]);
+    const probe = await mount(api({ close } as unknown as Partial<BrowserApi>));
+
+    // Main removes the tab while the refusal is still in flight, so the row is
+    // gone from the registry by the time the flash is written. The host was
+    // read when the press happened, so the line still names what was on screen.
+    await act(async () => {
+      probe.latest().feed.actions.closeTab("one");
+      registry([]);
+    });
+    expect(probe.lines()).toContain("Close refused · github.com");
+    expect(probe.lines().join(" ")).not.toContain("one");
+  });
+
+  it("falls back to the new-tab name for a tab it never saw", async () => {
+    const close = vi.fn(async () => ({ ok: false, error: "gone" }) as const);
+    registry([tab({ tabId: "one" })]);
+    const probe = await mount(api({ close } as unknown as Partial<BrowserApi>));
+
+    await act(async () => probe.latest().feed.actions.closeTab("never-existed"));
+    expect(probe.lines().at(-1)).toBe(`Close refused · ${BROWSER_NEW_TAB_TITLE}`);
   });
 
   it("turns a refusal into a toast and a flash, never a throw", async () => {
@@ -283,6 +344,35 @@ describe("the now channel", () => {
 
     await act(async () => registry([tab({ tabId: "one" }), tab({ tabId: "two" })]));
     expect(probe.lines()).toEqual(["Opened · github.com"]);
+  });
+
+  it("flashes nothing for a child's tabs when the listing answers after the registry", async () => {
+    // The two stores fill from two independent fetches. Here the registry wins
+    // the race, so the baseline is taken while the listing still names no
+    // children and the child's tab is not yet in the projection. When the
+    // listing lands the tab appears — but it was open all along, so it is not
+    // news. Baselining on the registry alone announced it as `Opened`.
+    unlisted();
+    registry([
+      tab({ tabId: "mine" }),
+      tab({ tabId: "childs", ownerSessionId: CHILD, url: "https://motion.dev/docs" }),
+    ]);
+    const probe = await mount();
+    expect(probe.latest().feed.model.tabs.map((one) => one.id)).toEqual(["mine"]);
+
+    await act(async () => listing([{ sessionId: CHILD, title: "Read the docs" }]));
+    expect(probe.latest().feed.model.tabs.map((one) => one.id)).toEqual(["mine", "childs"]);
+    expect(probe.flashes).toEqual([]);
+
+    // And the channel is live from there: a tab opened after the baseline is.
+    await act(async () =>
+      registry([
+        tab({ tabId: "mine" }),
+        tab({ tabId: "childs", ownerSessionId: CHILD, url: "https://motion.dev/docs" }),
+        tab({ tabId: "later", url: "https://esbuild.github.io/" }),
+      ]),
+    );
+    expect(probe.lines()).toEqual(["Opened · esbuild.github.io"]);
   });
 
   it("announces a tab opening and closing by its host", async () => {
