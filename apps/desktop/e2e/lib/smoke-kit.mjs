@@ -305,8 +305,11 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
     // but do not let its native window take focus, cover work, or receive the
     // person's mouse. Main honours this env-only seam in packaged builds too.
     // `=0` is the deliberate local-debug escape hatch for watching one probe.
-    VOLLI_QUIET_WINDOWS: inherited.VOLLI_QUIET_WINDOWS ?? "1",
     ...extraEnv,
+    // Only the documented `0` escape hatch may make a smoke noisy. Empty or
+    // malformed ambient values must not silently restore focus-stealing windows.
+    VOLLI_QUIET_WINDOWS:
+      (extraEnv.VOLLI_QUIET_WINDOWS ?? inherited.VOLLI_QUIET_WINDOWS) === "0" ? "0" : "1",
     VOLLI_WORKTREE_HOME_DIR: worktreeHomeFor(dbPath, extraEnv),
   };
   delete env.ELECTRON_RENDERER_URL;

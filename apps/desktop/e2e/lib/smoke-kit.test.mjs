@@ -53,6 +53,19 @@ test("smokeExecutableFor leaves the signed app untouched in watch mode", () => {
   );
 });
 
+test("smokeExecutableFor leaves non-macOS executables untouched in quiet mode", () => {
+  assert.equal(
+    smokeExecutableFor("/usr/bin/electron", "/tmp/volli-smoke/user-data", {
+      environment: { VOLLI_QUIET_WINDOWS: "1" },
+      platform: "linux",
+      prepareQuietApp() {
+        throw new Error("non-macOS smoke must not clone an app bundle");
+      },
+    }),
+    "/usr/bin/electron",
+  );
+});
+
 test("smokeExecutableFor prepares the LSUIElement shadow in quiet mode", () => {
   let prepared = null;
   const executable = smokeExecutableFor(
@@ -97,6 +110,21 @@ test("launchEnvFor honours an ambient request to watch the smoke window", () => 
   process.env.VOLLI_QUIET_WINDOWS = "0";
   try {
     assert.equal(launchEnvFor("/tmp/volli-test.db").VOLLI_QUIET_WINDOWS, "0");
+  } finally {
+    if (previous === undefined) delete process.env.VOLLI_QUIET_WINDOWS;
+    else process.env.VOLLI_QUIET_WINDOWS = previous;
+  }
+});
+
+test("launchEnvFor treats only zero as the noisy-window escape hatch", () => {
+  const previous = process.env.VOLLI_QUIET_WINDOWS;
+  process.env.VOLLI_QUIET_WINDOWS = "";
+  try {
+    assert.equal(launchEnvFor("/tmp/volli-test.db").VOLLI_QUIET_WINDOWS, "1");
+    assert.equal(
+      launchEnvFor("/tmp/volli-test.db", { VOLLI_QUIET_WINDOWS: "unexpected" }).VOLLI_QUIET_WINDOWS,
+      "1",
+    );
   } finally {
     if (previous === undefined) delete process.env.VOLLI_QUIET_WINDOWS;
     else process.env.VOLLI_QUIET_WINDOWS = previous;

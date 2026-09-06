@@ -25,23 +25,10 @@ import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { _electron } from "playwright-core";
-
-import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
+import { launch as launchSmokeApp } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
-
 // ---- tiny test harness -----------------------------------------------------
 
 const results = [];
@@ -285,22 +272,18 @@ async function main() {
   ];
 
   const consoleErrors = [];
-  // Isolated SQLite db: without VOLLI_DB_PATH the app opens the real
-  // <userData>/volli.db, whose non-empty state makes bootstrap's firstRun
-  // false — skipping the one-time localStorage import this smoke's project
-  // seeding relies on (and polluting the owner's real data).
-  const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-db-"));
+  // The isolated profile owns the SQLite db in both development and packaged
+  // runs. Its empty first-run state is what lets bootstrap import this smoke's
+  // localStorage project fixture without touching the owner's data.
   // An isolated Chromium profile, for the db's reason and one more: sharing
   // <userData> with a Volli the owner already has open loses the
   // single-instance lock, so this launch quits at exit code 0 before its first
   // window. That surfaces only as "Target page, context or browser has been
   // closed" from launch() — which reads like a crash in the app under test.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-profile-"));
-  const environment = launchEnvFor(join(dbDir, "volli.db"));
-  const app = await _electron.launch({
-    executablePath: smokeExecutableFor(ELECTRON, profileDir, { environment }),
-    args: [APP_DIR, `--user-data-dir=${profileDir}`],
-    env: environment,
+  const app = await launchSmokeApp({
+    dbPath: join(profileDir, "volli.db"),
+    userDataDir: profileDir,
   });
   let backendReport = { webgpu: false, webgl2: false, navigatorGpu: false };
 

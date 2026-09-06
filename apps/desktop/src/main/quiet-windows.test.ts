@@ -31,9 +31,35 @@ describe("quietWindowPolicy", () => {
       focusable: true,
     });
   });
+
+  it("does not apply macOS activation policy on another platform", () => {
+    expect(quietWindowPolicy({ VOLLI_QUIET_WINDOWS: "1" }, "linux")).toEqual({
+      enabled: true,
+      useAccessoryActivation: false,
+      backgroundThrottling: false,
+      showInactive: true,
+      ignoreMouseEvents: true,
+      belowNormalWindowLevel: false,
+      focusable: true,
+    });
+  });
 });
 
 describe("applyQuietAppPolicy", () => {
+  it("leaves an ordinary app's activation and Dock state untouched", () => {
+    const calls: string[] = [];
+    const app = {
+      setActivationPolicy(policy: "accessory") {
+        calls.push(policy);
+      },
+      dock: { hide: () => calls.push("dock.hide") },
+    };
+
+    applyQuietAppPolicy(app, quietWindowPolicy({}, "darwin"));
+
+    expect(calls).toEqual([]);
+  });
+
   it("keeps a macOS smoke app out of the Dock and application switcher", () => {
     const appState = { activationPolicy: "regular", dockVisible: true };
     const app = {
@@ -54,6 +80,19 @@ describe("applyQuietAppPolicy", () => {
 });
 
 describe("sealQuietAppActivation", () => {
+  it("does not prohibit activation for an ordinary app", () => {
+    const calls: string[] = [];
+    const app = {
+      setActivationPolicy(policy: "accessory" | "prohibited") {
+        calls.push(policy);
+      },
+    };
+
+    sealQuietAppActivation(app, quietWindowPolicy({}, "darwin"));
+
+    expect(calls).toEqual([]);
+  });
+
   it("prevents a revealed macOS smoke app from ever becoming active", () => {
     const appState = { activationPolicy: "accessory" };
     const app = {
@@ -69,6 +108,20 @@ describe("sealQuietAppActivation", () => {
 });
 
 describe("revealWindow", () => {
+  it("uses only the normal show path for an ordinary app", () => {
+    const calls: string[] = [];
+    const window = {
+      show: () => calls.push("show"),
+      showInactive: () => calls.push("showInactive"),
+      setIgnoreMouseEvents: () => calls.push("setIgnoreMouseEvents"),
+      setAlwaysOnTop: () => calls.push("setAlwaysOnTop"),
+    };
+
+    revealWindow(window, quietWindowPolicy({}, "darwin"));
+
+    expect(calls).toEqual(["show"]);
+  });
+
   it("is click-through and below normal windows before a macOS smoke window becomes visible", () => {
     const state = {
       visible: false,

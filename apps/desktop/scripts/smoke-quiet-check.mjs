@@ -10,10 +10,12 @@
  * Usage:
  *   node apps/desktop/scripts/smoke-quiet-check.mjs --tier boot --jobs 4
  *   node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor
+ *   node apps/desktop/scripts/smoke-quiet-check.mjs --require-host-input
  *
- * The cursor assertion is opt-in because the other acceptance case is a person
- * deliberately typing and clicking throughout the run. Without the flag its
- * movement is still reported; use the flag for an unattended proof.
+ * The cursor assertion is for an unattended run. The host-input assertion is
+ * the complementary attended proof: type and click in another app while the
+ * suite runs. It requires native key and click activity while a smoke app is
+ * present, and the same report proves that no smoke app became active.
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -44,19 +46,24 @@ const SAMPLE_INTERVAL_SECONDS = "0.25";
 function usage() {
   process.stdout.write(
     "Usage: node apps/desktop/scripts/smoke-quiet-check.mjs " +
-      "[--assert-stationary-cursor] [run-smokes args...]\n",
+      "[--assert-stationary-cursor | --require-host-input] [run-smokes args...]\n",
   );
 }
 
 function parseArgs(argv) {
   let assertStationaryCursor = false;
+  let requireHostInput = false;
   const runnerArgs = [];
   for (const arg of argv) {
     if (arg === "--assert-stationary-cursor") assertStationaryCursor = true;
+    else if (arg === "--require-host-input") requireHostInput = true;
     else if (arg === "--help" || arg === "-h") return { help: true };
     else runnerArgs.push(arg);
   }
-  return { help: false, assertStationaryCursor, runnerArgs };
+  if (assertStationaryCursor && requireHostInput) {
+    throw new Error("choose either --assert-stationary-cursor or --require-host-input");
+  }
+  return { help: false, assertStationaryCursor, requireHostInput, runnerArgs };
 }
 
 function candidateExecutables() {
@@ -139,16 +146,20 @@ function samplerReport(output) {
   return JSON.parse(line);
 }
 
-function printReport(report, assertStationaryCursor) {
+function printReport(report, { assertStationaryCursor, requireHostInput }) {
   const { start, end, maxDistanceFromStart } = report.cursor;
   process.stdout.write(
-    `\nNative quiet-window sample: ${report.samples} samples; ` +
-      `frontmost=${report.frontmostSamples}; ` +
+    `\nNative quiet-window sample: ${report.samples} polls; ` +
+      `smoke=${report.smokeAppSamples} polls/${report.smokeAppCount} apps; ` +
+      `frontmost=${report.frontmostSamples}; active=${report.activeSamples}; ` +
       `regular/Dock=${report.regularPolicySamples}\n` +
       `Cursor: start=${start.map((value) => value.toFixed(1)).join(",")} ` +
       `end=${end.map((value) => value.toFixed(1)).join(",")} ` +
       `max displacement=${maxDistanceFromStart.toFixed(1)}px` +
-      `${assertStationaryCursor ? " (asserted)" : " (reported, not asserted)"}\n`,
+      `${assertStationaryCursor ? " (asserted stationary)" : " (reported)"}\n` +
+      `Host input while smoke apps ran: key=${report.hostKeyInputSamples} ` +
+      `click=${report.hostClickInputSamples}` +
+      `${requireHostInput ? " (asserted)" : " (reported, not asserted)"}\n`,
   );
 }
 
@@ -192,9 +203,10 @@ try {
     if (!sampler) throw new Error("native sampler did not start");
     await sampler.closed;
     const report = samplerReport(sampler.output());
-    printReport(report, args.assertStationaryCursor);
+    printReport(report, args);
     const verdict = quietSmokeVerdict(report, {
       assertStationaryCursor: args.assertStationaryCursor,
+      requireHostInput: args.requireHostInput,
     });
     if (verdict.ok) process.stdout.write("QUIET WINDOW CHECK PASSED\n");
     else {

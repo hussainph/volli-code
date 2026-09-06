@@ -25,25 +25,9 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import zlib from "node:zlib";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { _electron } from "playwright-core";
-
-import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
-
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+import { launch as launchSmokeApp } from "./lib/smoke-kit.mjs";
 
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-ghostty-smoke-")));
@@ -234,14 +218,13 @@ async function main() {
   const userDataDir = join(home, "user-data");
   await fs.mkdir(userDataDir, { recursive: true });
 
-  const environment = launchEnvFor(join(home, "volli.db"), {
-    HOME: home,
-    XDG_CONFIG_HOME: join(home, ".config"),
-  });
-  const app = await _electron.launch({
-    executablePath: smokeExecutableFor(ELECTRON, userDataDir, { environment }),
-    args: [APP_DIR, `--user-data-dir=${userDataDir}`],
-    env: environment,
+  const app = await launchSmokeApp({
+    dbPath: join(userDataDir, "volli.db"),
+    userDataDir,
+    extraEnv: {
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+    },
   });
 
   try {

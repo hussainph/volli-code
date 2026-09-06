@@ -274,7 +274,7 @@ function runOne(name) {
     // The shared launcher also defaults this for its Electron child, but the
     // probe process must carry it too: app-launch tests can spawn a second app
     // generation through the generated CLI rather than through smoke-kit.
-    childEnv.VOLLI_QUIET_WINDOWS ??= "1";
+    childEnv.VOLLI_QUIET_WINDOWS = childEnv.VOLLI_QUIET_WINDOWS === "0" ? "0" : "1";
     const child = spawn(process.execPath, [join(E2E_DIR, name)], {
       cwd: REPO_ROOT,
       stdio: ["ignore", "pipe", "pipe"],

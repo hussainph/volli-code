@@ -99,11 +99,8 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { promisify } from "node:util";
-
-import { _electron } from "playwright-core";
 
 // This probe predates smoke-kit and keeps its own launch/harness scaffolding,
 // but the editor pieces are shared: the Monaco readers (how THIS build is
@@ -114,36 +111,22 @@ import { _electron } from "playwright-core";
 import {
   clickMonaco,
   isMonacoEditable,
-  launchEnvFor,
+  launch as launchSmokeApp,
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
-  smokeExecutableFor,
   startTerminalSession,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
 const execFileAsync = promisify(execFile);
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
-
 const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ??
   (await fs.mkdtemp(join(os.tmpdir(), "volli-ticket-detail-smoke-")));
 const USER_DATA_DIR = join(SCRATCH, "user-data");
-const DB_PATH = join(SCRATCH, "volli.db");
+const DB_PATH = join(USER_DATA_DIR, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
 // A real, writable GIT REPOSITORY (realpath'd so the seeded path matches the
@@ -274,11 +257,10 @@ async function readFileSafe(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
-  const environment = launchEnvFor(dbPath, { VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME });
-  return _electron.launch({
-    executablePath: smokeExecutableFor(ELECTRON, USER_DATA_DIR, { environment }),
-    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: environment,
+  return launchSmokeApp({
+    dbPath,
+    userDataDir: USER_DATA_DIR,
+    extraEnv: { VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME },
   });
 }
 

@@ -114,7 +114,7 @@ async function main() {
 
     await attempt(2, "generated shim relaunches the same profile", async () => {
       const result = await runVolliShim(shimPath, ["app", "launch", "--timeout", "20"], {
-        VOLLI_QUIET_WINDOWS: process.env.VOLLI_QUIET_WINDOWS ?? "1",
+        VOLLI_QUIET_WINDOWS: process.env.VOLLI_QUIET_WINDOWS === "0" ? "0" : "1",
       });
       return {
         ok: result.code === 0 && result.stdout.trim() === "Volli launched",

@@ -22,25 +22,9 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { _electron } from "playwright-core";
-
-import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
-
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+import { launch as launchSmokeApp, launchEnvFor } from "./lib/smoke-kit.mjs";
 
 // Shrunk timers: idle after 3s, sweep every 1s → auto-park lands ~5s after the
 // last activity (threshold + two quiet CPU samples). The breathe window is
@@ -152,8 +136,12 @@ async function main() {
     },
   ];
 
-  const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-db-"));
-  const env = launchEnvFor(join(dbDir, "volli.db"), {
+  // An isolated Chromium profile. Sharing <userData> with a Volli the owner
+  // already has open loses the single-instance lock, so the launch quits at
+  // exit code 0 before its first window — surfacing only as "Target page,
+  // context or browser has been closed", which reads like a crash in the app.
+  const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-profile-"));
+  const env = launchEnvFor(join(profileDir, "volli.db"), {
     VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
     VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
     VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
@@ -164,15 +152,10 @@ async function main() {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }
 
-  // An isolated Chromium profile. Sharing <userData> with a Volli the owner
-  // already has open loses the single-instance lock, so the launch quits at
-  // exit code 0 before its first window — surfacing only as "Target page,
-  // context or browser has been closed", which reads like a crash in the app.
-  const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-profile-"));
-  const app = await _electron.launch({
-    executablePath: smokeExecutableFor(ELECTRON, profileDir, { environment: env }),
-    args: [APP_DIR, `--user-data-dir=${profileDir}`],
-    env,
+  const app = await launchSmokeApp({
+    dbPath: join(profileDir, "volli.db"),
+    userDataDir: profileDir,
+    extraEnv: env,
   });
 
   try {

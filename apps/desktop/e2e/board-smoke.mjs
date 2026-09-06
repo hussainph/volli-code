@@ -53,22 +53,9 @@ import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { _electron } from "playwright-core";
-
-import { launchEnvFor, smokeExecutableFor, waitUntil } from "./lib/smoke-kit.mjs";
+import { launch as launchSmokeApp, waitUntil } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
 const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-board-smoke-")));
@@ -76,10 +63,11 @@ const SCRATCH =
 // normal smoke runs stay artifact-free.
 const FIRST_RUN_CAPTURE_PATH = process.env.VOLLI_SMOKE_CAPTURE_FIRST_RUN;
 const USER_DATA_DIR = join(SCRATCH, "user-data");
-// The scratch SQLite database, handed to main via VOLLI_DB_PATH. Lives inside
-// the profile dir so `ownsScratch` cleanup removes it too. Survives a renderer
-// reload AND a full Electron relaunch — that persistence is what phase D tests.
-const DB_PATH = join(SCRATCH, "volli.db");
+// The scratch SQLite database lives at the packaged app's fixed profile path.
+// Development also receives this path through VOLLI_DB_PATH. Keeping both modes
+// on one file makes the full-relaunch durability phase portable to the
+// VOLLI_SMOKE_APP_BINARY lane.
+const DB_PATH = join(USER_DATA_DIR, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
 // ---- the 11-ticket fixture, recovered from the retired demo-tickets.ts -----
@@ -138,12 +126,7 @@ async function attempt(n, label, fn) {
  * `firstWindow()` themselves.
  */
 function launch(dbPath) {
-  const environment = launchEnvFor(dbPath);
-  return _electron.launch({
-    executablePath: smokeExecutableFor(ELECTRON, USER_DATA_DIR, { environment }),
-    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: environment,
-  });
+  return launchSmokeApp({ dbPath, userDataDir: USER_DATA_DIR });
 }
 
 // ---- board DOM helpers ------------------------------------------------------
@@ -1429,32 +1412,36 @@ async function main() {
   // Point the DB at a path whose PARENT is a regular file: main's
   // mkdirSync(dirname) throws ENOTDIR, dbHandle is { ok:false }, bootstrap
   // fails, and main.tsx renders the BootErrorPanel instead of the app.
-  await attempt(
-    23,
-    'Boot-failure: an unwritable VOLLI_DB_PATH renders the "Volli couldn\'t load its data" panel',
-    async () => {
-      const notADir = join(SCRATCH, "not-a-dir");
-      await fs.writeFile(notADir, "x"); // a FILE, so join(notADir, "volli.db")'s dirname is unwritable
-      const badApp = await launch(join(notADir, "volli.db"));
-      try {
-        const badPage = await badApp.firstWindow();
-        await badPage.waitForLoadState("domcontentloaded");
-        await sleep(1500);
-        const panel = await badPage
-          .getByText("Volli couldn't load its data", { exact: true })
-          .count();
-        // Still the heading, not the tab: this asserts the board did NOT
-        // render, and an `sr-only` h1 is in the DOM exactly when it did.
-        const boardRendered = await badPage
-          .getByRole("heading", { name: "Board", exact: true })
-          .count();
-        const ok = panel === 1 && boardRendered === 0;
-        return { ok, detail: `panel=${panel} boardHeading=${boardRendered}` };
-      } finally {
-        await badApp.close();
-      }
-    },
-  );
+  if (process.env.VOLLI_SMOKE_APP_BINARY === undefined) {
+    await attempt(
+      23,
+      'Boot-failure: an unwritable VOLLI_DB_PATH renders the "Volli couldn\'t load its data" panel',
+      async () => {
+        const notADir = join(SCRATCH, "not-a-dir");
+        await fs.writeFile(notADir, "x"); // a FILE, so join(notADir, "volli.db")'s dirname is unwritable
+        const badApp = await launch(join(notADir, "volli.db"));
+        try {
+          const badPage = await badApp.firstWindow();
+          await badPage.waitForLoadState("domcontentloaded");
+          await sleep(1500);
+          const panel = await badPage
+            .getByText("Volli couldn't load its data", { exact: true })
+            .count();
+          // Still the heading, not the tab: this asserts the board did NOT
+          // render, and an `sr-only` h1 is in the DOM exactly when it did.
+          const boardRendered = await badPage
+            .getByRole("heading", { name: "Board", exact: true })
+            .count();
+          const ok = panel === 1 && boardRendered === 0;
+          return { ok, detail: `panel=${panel} boardHeading=${boardRendered}` };
+        } finally {
+          await badApp.close();
+        }
+      },
+    );
+  } else {
+    console.log("  [SKIP] 23. Packaged main intentionally ignores VOLLI_DB_PATH");
+  }
 
   const failures = results.filter((r) => !r.ok);
   console.log(
