@@ -1058,23 +1058,31 @@ export function ChatPlane({
   // whole window and therefore misses a short top/bottom split.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col [container-type:size]" style={planeStyle}>
-      {/* The chat has no header, so the inventory of the tabs its Sessions
-          hold sits at the plane's top-right corner (VC-238 §8); absent while
-          there is nothing to count. */}
-      {browser !== null && browser.tabs.length > 0 ? (
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end px-3 pt-2">
-          <BrowserTabsChip
-            className="pointer-events-auto bg-background/70 shadow-raised backdrop-blur-md"
-            tabs={browser.tabs}
-            api={browser.api}
-            sessionId={sessionId}
-            sessionTitle={browser.sessionTitle}
-          />
-        </div>
-      ) : null}
       <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           <Conversation className="min-h-0 bg-background">
+            {/* The chat has no header, so the inventory of the tabs its
+                Sessions hold floats at the TRANSCRIPT's top-right corner
+                (VC-238 §8); absent while there is nothing to count.
+
+                Inside the Conversation rather than over the whole plane, and
+                that is load-bearing: the pinned preview sits below the
+                transcript in flow, so a chip positioned against the plane
+                came down over the preview's own header on a short window and
+                swallowed the clicks meant for its Hide button. Bounded to
+                the scroller, the two can never overlap however short the
+                plane gets. */}
+            {browser !== null && browser.tabs.length > 0 ? (
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end px-3 pt-2">
+                <BrowserTabsChip
+                  className="pointer-events-auto bg-background/70 shadow-raised backdrop-blur-md"
+                  tabs={browser.tabs}
+                  api={browser.api}
+                  sessionId={sessionId}
+                  sessionTitle={browser.sessionTitle}
+                />
+              </div>
+            ) : null}
             {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}

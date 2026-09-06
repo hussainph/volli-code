@@ -135,6 +135,17 @@ async function main() {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
+  // A SHORT window on purpose, near the usability floor. The pinned preview
+  // sits between the transcript and the composer, and the chat's own chip
+  // floats over the transcript: on a tall developer window they cannot reach
+  // each other, and on a short one they can. A chip that came down over the
+  // preview's header swallowed the clicks meant for its Hide button, and only
+  // CI's smaller screen found it. Sizing the window here is what keeps this
+  // smoke able to find it again.
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    window?.setSize(1000, 700);
+  });
   await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
   await seedDefaultModel(page);
   await waitUntil("Home tab strip", async () =>
