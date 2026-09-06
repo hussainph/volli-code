@@ -3,7 +3,8 @@
  * VC-247).
  *
  * The island itself now lives in the app — `components/chat/activity-island-
- * ui.tsx` over the projection contract in `activity-island-model.ts` — and
+ * ui.tsx` over the projection contract in `@volli/session-presentation`'s
+ * `activity-island.ts` — and
  * this scratch is the harness around it: a simulated session, drivers to
  * mutate it, a live transcript above the pill so it is judged in context, and
  * the feel dials that let the settled verdicts be argued against in one
@@ -38,15 +39,15 @@ import {
   type ActivityIslandActions,
   type ActivityIslandFeel,
   type ActivityIslandModel,
-  flashLine,
   type IslandAgent,
   type IslandFlash,
   type IslandPlan,
   type IslandShell,
+  type IslandStep,
   type IslandTab,
   planCount,
   planCurrent,
-} from "@renderer/components/chat/activity-island-model";
+} from "@volli/session-presentation";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle } from "@renderer/components/chat/activity-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
@@ -64,9 +65,6 @@ export const note =
 export const viewport = "stage" as const;
 
 /* ---------------------------------------------------------------- fixtures */
-
-/** Project-tile-ish tones — worn by the subagent chips and tab chips. Fixture data, not tokens. */
-const SIM_TONES = ["#e8652a", "#3577f2", "#2fa36b", "#a65cd6", "#d1a03c"] as const;
 
 const TAB_HOSTS = [
   "localhost:5177",
@@ -90,15 +88,15 @@ const SHELL_COMMANDS = [
   "pnpm test",
 ] as const;
 
-const PLAN_STEPS = [
-  "Read composer stack",
-  "Sketch closed pill",
-  "Wire feel dials",
-  "Cluster drawings",
-  "Hover treatments",
-  "Reduced motion pass",
-  "Record verdicts",
-] as const;
+const PLAN_STEPS: readonly IslandStep[] = [
+  { id: "step-1", title: "Read composer stack" },
+  { id: "step-2", title: "Sketch closed pill" },
+  { id: "step-3", title: "Wire feel dials" },
+  { id: "step-4", title: "Cluster drawings" },
+  { id: "step-5", title: "Hover treatments" },
+  { id: "step-6", title: "Reduced motion pass" },
+  { id: "step-7", title: "Record verdicts" },
+];
 
 const MODELS: ComposerModel[] = [
   {
@@ -158,56 +156,48 @@ type SimAction =
   | { type: "stop-agent"; id: string }
   | { type: "open-shell"; id: string }
   | { type: "kill-shell"; id: string }
-  | { type: "jump-step"; index: number };
+  | { type: "jump-step"; id: string };
 
-/** The transition plus its announcement, atomically. */
-function flashed(sim: Sim, text: string): Sim {
-  return { ...sim, flash: { id: `flash-${sim.seq}`, text }, seq: sim.seq + 1 };
+/**
+ * The transition plus its announcement, atomically. The two registers stay
+ * apart all the way from the transition to the drawing — the island weights
+ * them, so nothing here joins them into a line first.
+ */
+function flashed(sim: Sim, event: string, payload = ""): Sim {
+  return { ...sim, flash: { id: `flash-${sim.seq}`, event, payload }, seq: sim.seq + 1 };
 }
 
 function simReducer(sim: Sim, action: SimAction): Sim {
   switch (action.type) {
     case "add-tab": {
       const host = TAB_HOSTS[sim.tabs.length % TAB_HOSTS.length] ?? "localhost";
-      const tone = SIM_TONES[sim.tabs.length % SIM_TONES.length] ?? "#3577f2";
-      const next = flashed(sim, flashLine("Opened", host));
+      const next = flashed(sim, "Opened", host);
       return {
         ...next,
-        tabs: [
-          ...sim.tabs,
-          { id: `tab-${next.seq}`, host, tone, state: "loading", promoted: false },
-        ],
+        tabs: [...sim.tabs, { id: `tab-${next.seq}`, host, state: "loading", promoted: false }],
         seq: next.seq + 1,
       };
     }
     case "settle-tabs":
       return sim.tabs.some((tab) => tab.state === "loading")
         ? {
-            ...flashed(sim, "Page loaded"),
+            ...flashed(sim, "Page loaded", "all tabs"),
             tabs: sim.tabs.map((tab) => ({ ...tab, state: "ready" as const })),
           }
         : sim;
     case "drop-tab": {
       const last = sim.tabs[sim.tabs.length - 1];
       if (!last) return sim;
-      return { ...flashed(sim, flashLine("Closed", last.host)), tabs: sim.tabs.slice(0, -1) };
+      return { ...flashed(sim, "Closed", last.host), tabs: sim.tabs.slice(0, -1) };
     }
     case "spawn-agent": {
       const label = AGENT_LABELS[sim.agents.length % AGENT_LABELS.length] ?? "Subagent";
-      const tone = SIM_TONES[sim.agents.length % SIM_TONES.length] ?? "#3577f2";
-      const next = flashed(sim, flashLine("Subagent started", label));
+      const next = flashed(sim, "Subagent started", label);
       return {
         ...next,
         agents: [
           ...sim.agents,
-          {
-            id: `agent-${next.seq}`,
-            label,
-            tone,
-            progress: 0.08,
-            state: "working",
-            promoted: false,
-          },
+          { id: `agent-${next.seq}`, label, progress: 0.08, state: "working", promoted: false },
         ],
         seq: next.seq + 1,
       };
@@ -226,7 +216,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const target = index === -1 ? undefined : sim.agents[index];
       if (!target) return sim;
       return {
-        ...flashed(sim, flashLine("Subagent finished", target.label)),
+        ...flashed(sim, "Subagent finished", target.label),
         agents: sim.agents.map((agent, at) =>
           at === index ? { ...agent, progress: 1, state: "done" as const } : agent,
         ),
@@ -237,7 +227,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const target = index === -1 ? undefined : sim.agents[index];
       if (!target) return sim;
       return {
-        ...flashed(sim, flashLine("Subagent failed", target.label)),
+        ...flashed(sim, "Subagent failed", target.label),
         agents: sim.agents.map((agent, at) =>
           at === index ? { ...agent, state: "failed" as const } : agent,
         ),
@@ -246,7 +236,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     case "clear-agents":
       return { ...sim, agents: [] };
     case "start-plan": {
-      const next = flashed(sim, flashLine("Plan drafted", `${PLAN_STEPS.length} steps`));
+      const next = flashed(sim, "Plan drafted", `${PLAN_STEPS.length} steps`);
       return {
         ...next,
         plan: { id: `plan-${next.seq}`, steps: [...PLAN_STEPS], done: 0 },
@@ -257,7 +247,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       if (!sim.plan) return sim;
       const plan = { ...sim.plan, done: Math.min(sim.plan.steps.length, sim.plan.done + 1) };
       return {
-        ...flashed(sim, flashLine(`Plan ${planCount(plan)}`, planCurrent(plan) ?? "Wrap up")),
+        ...flashed(sim, `Plan ${planCount(plan)}`, planCurrent(plan)?.title ?? "Wrap up"),
         plan,
       };
     }
@@ -265,7 +255,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       return { ...sim, plan: null };
     case "run-shell": {
       const command = SHELL_COMMANDS[sim.shells.length % SHELL_COMMANDS.length] ?? "sh";
-      const next = flashed(sim, flashLine("Shell started", command));
+      const next = flashed(sim, "Shell started", command);
       return {
         ...next,
         shells: [...sim.shells, { id: `shell-${next.seq}`, command, state: "running", code: null }],
@@ -275,7 +265,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     case "exit-shells":
       return sim.shells.some((shell) => shell.state === "running")
         ? {
-            ...flashed(sim, flashLine("Shell exited", "0")),
+            ...flashed(sim, "Shell exited", "0"),
             shells: sim.shells.map((shell) =>
               shell.state === "running" ? { ...shell, state: "exited" as const, code: 0 } : shell,
             ),
@@ -289,7 +279,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const tab = sim.tabs.find((candidate) => candidate.id === action.id);
       if (!tab) return sim;
       return {
-        ...flashed(sim, flashLine("Closed", tab.host)),
+        ...flashed(sim, "Closed", tab.host),
         tabs: sim.tabs.filter((candidate) => candidate.id !== action.id),
       };
     }
@@ -297,7 +287,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const tab = sim.tabs.find((candidate) => candidate.id === action.id);
       if (!tab) return sim;
       return {
-        ...flashed(sim, flashLine(tab.promoted ? "Focused pane" : "Opened in pane", tab.host)),
+        ...flashed(sim, tab.promoted ? "Focused pane" : "Opened in pane", tab.host),
         tabs: sim.tabs.map((candidate) =>
           candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
         ),
@@ -305,13 +295,13 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     }
     case "peek-agent": {
       const agent = sim.agents.find((candidate) => candidate.id === action.id);
-      return agent ? flashed(sim, flashLine("Overlay", agent.label)) : sim;
+      return agent ? flashed(sim, "Overlay", agent.label) : sim;
     }
     case "promote-agent": {
       const agent = sim.agents.find((candidate) => candidate.id === action.id);
       if (!agent) return sim;
       return {
-        ...flashed(sim, flashLine(agent.promoted ? "Focused tab" : "Opened as tab", agent.label)),
+        ...flashed(sim, agent.promoted ? "Focused tab" : "Opened as tab", agent.label),
         agents: sim.agents.map((candidate) =>
           candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
         ),
@@ -321,7 +311,7 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const agent = sim.agents.find((candidate) => candidate.id === action.id);
       if (!agent || agent.state !== "working") return sim;
       return {
-        ...flashed(sim, flashLine("Stopped", agent.label)),
+        ...flashed(sim, "Stopped", agent.label),
         agents: sim.agents.map((candidate) =>
           candidate.id === action.id ? { ...candidate, state: "stopped" as const } : candidate,
         ),
@@ -329,13 +319,13 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     }
     case "open-shell": {
       const shell = sim.shells.find((candidate) => candidate.id === action.id);
-      return shell ? flashed(sim, flashLine("Output", shell.command)) : sim;
+      return shell ? flashed(sim, "Output", shell.command) : sim;
     }
     case "kill-shell": {
       const shell = sim.shells.find((candidate) => candidate.id === action.id);
       if (!shell || shell.state !== "running") return sim;
       return {
-        ...flashed(sim, flashLine("Killed", shell.command)),
+        ...flashed(sim, "Killed", shell.command),
         shells: sim.shells.map((candidate) =>
           candidate.id === action.id
             ? { ...candidate, state: "exited" as const, code: 137 }
@@ -344,8 +334,8 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       };
     }
     case "jump-step": {
-      const step = sim.plan?.steps[action.index];
-      return step ? flashed(sim, flashLine("Jump", step)) : sim;
+      const step = sim.plan?.steps.find((candidate) => candidate.id === action.id);
+      return step ? flashed(sim, "Jump", step.title) : sim;
     }
   }
 }
@@ -545,7 +535,7 @@ export default function ActivityIslandHarness() {
       stopAgent: (id) => dispatch({ type: "stop-agent", id }),
       openShell: (id) => dispatch({ type: "open-shell", id }),
       killShell: (id) => dispatch({ type: "kill-shell", id }),
-      jumpStep: (index) => dispatch({ type: "jump-step", index }),
+      jumpStep: (id) => dispatch({ type: "jump-step", id }),
     }),
     [],
   );
@@ -615,7 +605,7 @@ export default function ActivityIslandHarness() {
         >
           <ContentColumn className="flex min-h-0 flex-1 flex-col">
             <Feed sim={sim} />
-            <ActivityIsland model={sim} actions={actions} feel={feel} className="pb-2" />
+            <ActivityIsland model={sim} actions={actions} feel={feel} className="mb-2" />
             <div className="pb-4">
               <SessionComposer
                 value={composerValue}

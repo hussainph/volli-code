@@ -26,35 +26,27 @@ import {
   planLine,
   planPercent,
   planStepState,
+  planTotal,
   resolveFeel,
   shellsHeading,
   shellsLine,
   shellsRunning,
   shellStateWord,
-  splitFlash,
   summaryLine,
   tabsHeading,
   tabsLine,
   tabsLoading,
   tabStateWord,
-} from "./activity-island-model";
+} from "./activity-island";
 
 function tab(over: Partial<IslandTab> = {}): IslandTab {
-  return {
-    id: "t1",
-    host: "github.com",
-    tone: "#3577f2",
-    state: "ready",
-    promoted: false,
-    ...over,
-  };
+  return { id: "t1", host: "github.com", state: "ready", promoted: false, ...over };
 }
 
 function agent(over: Partial<IslandAgent> = {}): IslandAgent {
   return {
     id: "a1",
     label: "Audit icon weights",
-    tone: "#e8652a",
     progress: 0.5,
     state: "working",
     promoted: false,
@@ -68,7 +60,11 @@ function shell(over: Partial<IslandShell> = {}): IslandShell {
 
 const PLAN: IslandPlan = {
   id: "p1",
-  steps: ["Read composer stack", "Sketch closed pill", "Wire feel dials"],
+  steps: [
+    { id: "s1", title: "Read composer stack" },
+    { id: "s2", title: "Sketch closed pill" },
+    { id: "s3", title: "Wire feel dials" },
+  ],
   done: 1,
 };
 
@@ -82,7 +78,10 @@ describe("the empty rule", () => {
     // and a 32px pill announcing it has nothing to say is the bar this rule
     // exists to refuse.
     expect(
-      islandEmpty({ ...EMPTY_ACTIVITY_ISLAND, flash: { id: "f1", text: "Closed · github.com" } }),
+      islandEmpty({
+        ...EMPTY_ACTIVITY_ISLAND,
+        flash: { id: "f1", event: "Closed", payload: "github.com" },
+      }),
     ).toBe(true);
   });
 
@@ -91,6 +90,12 @@ describe("the empty rule", () => {
     expect(islandEmpty({ ...EMPTY_ACTIVITY_ISLAND, agents: [agent()] })).toBe(false);
     expect(islandEmpty({ ...EMPTY_ACTIVITY_ISLAND, plan: PLAN })).toBe(false);
     expect(islandEmpty({ ...EMPTY_ACTIVITY_ISLAND, shells: [shell()] })).toBe(false);
+  });
+
+  it("has an island for a plan with no steps yet — a drafted plan is still a subject", () => {
+    expect(islandEmpty({ ...EMPTY_ACTIVITY_ISLAND, plan: { ...PLAN, steps: [], done: 0 } })).toBe(
+      false,
+    );
   });
 });
 
@@ -118,21 +123,25 @@ describe("cluster membership", () => {
 });
 
 describe("the now channel's grammar", () => {
-  it("writes and reads `event · payload`", () => {
-    const line = flashLine("Opened in pane", "github.com");
-    expect(line).toBe("Opened in pane · github.com");
-    expect(splitFlash(line)).toEqual({ event: "Opened in pane", payload: "github.com" });
+  it("keeps the two registers apart and joins them only on request", () => {
+    // The point of the split: a drawing weights `payload` without parsing, and
+    // a translating client gets two strings rather than one it must take apart.
+    const flash = { id: "f1", event: "Opened in pane", payload: "github.com" };
+    expect(flash.event).toBe("Opened in pane");
+    expect(flash.payload).toBe("github.com");
+    expect(flashLine(flash)).toBe("Opened in pane · github.com");
   });
 
-  it("splits on the first separator so a payload may carry its own", () => {
-    expect(splitFlash(flashLine("Plan 3/7", "a · b"))).toEqual({
-      event: "Plan 3/7",
-      payload: "a · b",
-    });
+  it("carries a payload that contains the separator without ambiguity", () => {
+    // The old pre-joined string could not survive this: splitting it back gave
+    // the wrong halves for any payload wearing its own middle dot.
+    const flash = { id: "f2", event: "Plan 3/7", payload: "a · b" };
+    expect(flash.payload).toBe("a · b");
+    expect(flashLine(flash)).toBe("Plan 3/7 · a · b");
   });
 
-  it("has no registers for a line that was not built by it", () => {
-    expect(splitFlash("Page loaded")).toBeNull();
+  it("joins an empty payload without inventing a word for it", () => {
+    expect(flashLine({ id: "f3", event: "Page loaded", payload: "" })).toBe("Page loaded · ");
   });
 });
 
@@ -142,6 +151,12 @@ describe("tabs", () => {
     expect(tabsLine([tab(), tab({ id: "t2", host: "motion.dev" })])).toBe("2 browser tabs");
     expect(tabsHeading([tab()])).toBe("Browser · 1 tab");
     expect(tabsHeading([tab(), tab({ id: "t2" })])).toBe("Browser · 2 tabs");
+  });
+
+  it("counts zero tabs in the plural — the heading outlives the last tab by a frame", () => {
+    expect(tabsLine([])).toBe("0 browser tabs");
+    expect(tabsHeading([])).toBe("Browser · 0 tabs");
+    expect(tabsLoading([])).toBe(false);
   });
 
   it("says loading over promoted, and nothing when there is nothing to say", () => {
@@ -167,10 +182,23 @@ describe("subagents", () => {
     expect(agentsHeading(group)).toBe("Subagents · 1/4 done");
   });
 
+  it("still counts when every subagent is done — never a word like `settled`", () => {
+    const finished = [agent({ state: "done" }), agent({ id: "a2", state: "done" })];
+    expect(agentsDone(finished)).toBe(2);
+    expect(agentsLine(finished)).toBe("2/2 subagents done");
+    expect(agentsHeading(finished)).toBe("Subagents · 2/2 done");
+  });
+
   it("says progress while working and the state otherwise, with `· tab` once promoted", () => {
     expect(agentStateWord(agent({ progress: 0.724 }))).toBe("72%");
     expect(agentStateWord(agent({ state: "done" }))).toBe("done");
     expect(agentStateWord(agent({ state: "stopped", promoted: true }))).toBe("stopped · tab");
+  });
+
+  it("rounds progress rather than truncating it, at both ends", () => {
+    expect(agentStateWord(agent({ progress: 0 }))).toBe("0%");
+    expect(agentStateWord(agent({ progress: 0.005 }))).toBe("1%");
+    expect(agentStateWord(agent({ progress: 1 }))).toBe("100%");
   });
 
   it("dims what ended without finishing", () => {
@@ -183,18 +211,48 @@ describe("subagents", () => {
 
 describe("plan", () => {
   it("derives current, count and percent from the steps and the done mark", () => {
-    expect(planCurrent(PLAN)).toBe("Sketch closed pill");
+    expect(planCurrent(PLAN)).toEqual({ id: "s2", title: "Sketch closed pill" });
+    expect(planTotal(PLAN)).toBe(3);
     expect(planCount(PLAN)).toBe("1/3");
     expect(planPercent(PLAN)).toBeCloseTo(33.33, 1);
     expect(planLine(PLAN)).toBe("Plan 1/3 · Sketch closed pill");
     expect(planHeading(PLAN)).toBe("Plan · 1/3");
   });
 
+  it("names the current step by id, so two steps may share a title", () => {
+    // Titles were the key until a plan repeated one; the id is what the card
+    // draws and what `jumpStep` addresses.
+    const repeated: IslandPlan = {
+      id: "p2",
+      steps: [
+        { id: "s1", title: "Review" },
+        { id: "s2", title: "Review" },
+      ],
+      done: 1,
+    };
+    expect(planCurrent(repeated)).toEqual({ id: "s2", title: "Review" });
+  });
+
   it("has no current step once every step is done", () => {
     const finished = { ...PLAN, done: 3 };
     expect(planCurrent(finished)).toBeNull();
     expect(planLine(finished)).toBe("Plan 3/3 · done");
-    expect(planPercent({ ...PLAN, steps: [], done: 0 })).toBe(0);
+    expect(planPercent(finished)).toBe(100);
+  });
+
+  it("survives an empty plan without dividing by zero", () => {
+    const empty: IslandPlan = { id: "p3", steps: [], done: 0 };
+    expect(planPercent(empty)).toBe(0);
+    expect(planCount(empty)).toBe("0/0");
+    expect(planCurrent(empty)).toBeNull();
+    expect(planLine(empty)).toBe("Plan 0/0 · done");
+  });
+
+  it("never lets a bad done mark overflow the progress track", () => {
+    // A projection that counts more done than it has steps is a bug upstream;
+    // the hairline still may not run past its own end.
+    expect(planPercent({ ...PLAN, done: 5 })).toBe(100);
+    expect(planCount({ ...PLAN, done: 5 })).toBe("5/3");
   });
 
   it("states each step relative to the done mark", () => {
@@ -221,8 +279,11 @@ describe("shells", () => {
 
   it("says the exit code and nothing while running", () => {
     expect(shellStateWord(shell({ state: "exited", code: 137 }))).toBe("exit 137");
-    expect(shellStateWord(shell({ state: "exited", code: null }))).toBe("exit 0");
     expect(shellStateWord(shell())).toBeNull();
+  });
+
+  it("reads a missing exit code as 0 rather than printing `exit null`", () => {
+    expect(shellStateWord(shell({ state: "exited", code: null }))).toBe("exit 0");
   });
 });
 
@@ -243,6 +304,10 @@ describe("the inline summary", () => {
     });
     expect(rested).toBe("2 tabs · agents 1/2");
     expect(summaryLine(EMPTY_ACTIVITY_ISLAND)).toBe("");
+  });
+
+  it("leaves shells out — a running one announces itself through the flash", () => {
+    expect(summaryLine({ ...EMPTY_ACTIVITY_ISLAND, shells: [shell()] })).toBe("");
   });
 });
 

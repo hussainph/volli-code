@@ -21,9 +21,12 @@ import {
   type ActivityIslandModel,
   EMPTY_ACTIVITY_ISLAND,
   type IslandAgent,
+  ISLAND_HOVER_LEAVE_GRACE_MS,
+  type IslandPlan,
   type IslandShell,
   type IslandTab,
-} from "./activity-island-model";
+} from "@volli/session-presentation";
+
 import { ActivityIsland } from "./activity-island-ui";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
@@ -31,21 +34,13 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 function tab(over: Partial<IslandTab> = {}): IslandTab {
-  return {
-    id: "t1",
-    host: "github.com",
-    tone: "#3577f2",
-    state: "ready",
-    promoted: false,
-    ...over,
-  };
+  return { id: "t1", host: "github.com", state: "ready", promoted: false, ...over };
 }
 
 function agent(over: Partial<IslandAgent> = {}): IslandAgent {
   return {
     id: "a1",
     label: "Audit icon weights",
-    tone: "#e8652a",
     progress: 0.5,
     state: "working",
     promoted: false,
@@ -56,6 +51,16 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
 function shell(over: Partial<IslandShell> = {}): IslandShell {
   return { id: "s1", command: "pnpm lab", state: "running", code: null, ...over };
 }
+
+const PLAN: IslandPlan = {
+  id: "p1",
+  steps: [
+    { id: "step-1", title: "Read" },
+    { id: "step-2", title: "Sketch" },
+    { id: "step-3", title: "Wire" },
+  ],
+  done: 1,
+};
 
 function actionsSpy(): ActivityIslandActions {
   return {
@@ -137,6 +142,27 @@ function press(target: Element, key: string): void {
   });
 }
 
+/**
+ * React synthesises `onMouseEnter`/`onMouseLeave` from the delegated
+ * `mouseover`/`mouseout` pair, so the hover channel can only be driven through
+ * those two — dispatching `mouseenter` directly reaches nothing.
+ */
+function hover(target: Element): void {
+  act(() => {
+    target.dispatchEvent(
+      new MouseEvent("mouseover", { bubbles: true, cancelable: true, relatedTarget: null }),
+    );
+  });
+}
+
+function unhover(target: Element, to: Element | null = null): void {
+  act(() => {
+    target.dispatchEvent(
+      new MouseEvent("mouseout", { bubbles: true, cancelable: true, relatedTarget: to }),
+    );
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom ships no `matchMedia`; the island reads it through use-reduced-motion.
@@ -171,8 +197,35 @@ describe("the empty rule", () => {
   });
 
   it("renders no island for a flash with no subject", async () => {
-    await render({ ...EMPTY_ACTIVITY_ISLAND, flash: { id: "f1", text: "Closed · github.com" } });
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      flash: { id: "f1", event: "Closed", payload: "github.com" },
+    });
     expect(island()).toBeNull();
+  });
+
+  it("holds no spacing open when it draws nothing", async () => {
+    // The mount's spacing rides the pill, not a permanent wrapper: on the
+    // wrapper it kept a band of dead air over the composer for as long as the
+    // chat had nothing to model, which is the empty rule broken in the one way
+    // that leaves the island itself looking correct.
+    await act(async () => {
+      root?.render(
+        <TooltipProvider delayDuration={0}>
+          <ActivityIsland
+            model={EMPTY_ACTIVITY_ISLAND}
+            actions={actionsSpy()}
+            feel={FEEL}
+            className="mb-2"
+          />
+        </TooltipProvider>,
+      );
+    });
+    expect(island()).toBeNull();
+    expect(container?.querySelector(".mb-2")).toBeNull();
+
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    expect(island()).not.toBeNull();
   });
 });
 
@@ -301,6 +354,76 @@ describe("the card", () => {
   });
 });
 
+describe("the hover channel", () => {
+  it("opens a card on hover and holds it across the leave grace", async () => {
+    vi.useFakeTimers();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    expect(card("tabs")).toBeNull();
+
+    hover(cluster("tabs"));
+    expect(card("tabs")).not.toBeNull();
+
+    // The grace exists so the pointer can cross the gap between a cluster and
+    // its card without the card flickering out from under it.
+    unhover(cluster("tabs"));
+    await act(async () => {
+      vi.advanceTimersByTime(ISLAND_HOVER_LEAVE_GRACE_MS - 20);
+    });
+    expect(card("tabs")).not.toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(40);
+    });
+    expect(card("tabs")).toBeNull();
+  });
+
+  it("hands the card straight over when the pointer crosses to another cluster", async () => {
+    vi.useFakeTimers();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()], shells: [shell()] });
+
+    hover(cluster("tabs"));
+    expect(card("tabs")).not.toBeNull();
+
+    // No grace on a hand-off: entering the next cluster closes the old card in
+    // the same frame, so two cards never overlap above a 32px pill.
+    unhover(cluster("tabs"), cluster("shells"));
+    hover(cluster("shells"));
+    expect(card("tabs")).toBeNull();
+    expect(card("shells")).not.toBeNull();
+  });
+
+  it("lets a pinned card outrank a glance at another cluster", async () => {
+    // The bug this pins down: `pinned || hovered === id` held one id per
+    // channel but two across them, so pinning one cluster and sweeping the
+    // pointer over another opened BOTH cards at once. A pin is the work
+    // channel; while it holds, a glance elsewhere may not open a second card.
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()], shells: [shell()] });
+
+    click(cluster("tabs"));
+    expect(card("tabs")).not.toBeNull();
+
+    hover(cluster("shells"));
+    await settle();
+    expect(card("shells")).toBeNull();
+    expect(card("tabs")).not.toBeNull();
+  });
+
+  it("keeps a pinned card open when the pointer leaves it entirely", async () => {
+    vi.useFakeTimers();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+
+    hover(cluster("tabs"));
+    click(cluster("tabs"));
+    expect(card("tabs")).not.toBeNull();
+
+    unhover(cluster("tabs"));
+    await act(async () => {
+      vi.advanceTimersByTime(ISLAND_HOVER_LEAVE_GRACE_MS + 100);
+    });
+    expect(card("tabs")).not.toBeNull();
+  });
+});
+
 describe("row verbs", () => {
   it("promote on the row and on the first action, naming the subject", async () => {
     const actions = actionsSpy();
@@ -323,7 +446,7 @@ describe("row verbs", () => {
       {
         ...EMPTY_ACTIVITY_ISLAND,
         agents: [agent()],
-        plan: { id: "p1", steps: ["Read", "Sketch", "Wire"], done: 1 },
+        plan: PLAN,
         shells: [shell()],
       },
       actions,
@@ -335,15 +458,35 @@ describe("row verbs", () => {
     click(actionIn("agents", "Open as tab"));
     expect(actions.promoteAgent).toHaveBeenCalledWith("a1");
 
+    // By step ID, not position: the row the person aimed at, even if the plan
+    // is re-projected in a different order before the click lands.
     click(cluster("plan"));
     await settle();
-    click(rowIn("plan", "step-2"));
-    expect(actions.jumpStep).toHaveBeenCalledWith(2);
+    click(rowIn("plan", "step-3"));
+    expect(actions.jumpStep).toHaveBeenCalledWith("step-3");
 
     click(cluster("shells"));
     await settle();
     click(rowIn("shells", "s1"));
     expect(actions.openShell).toHaveBeenCalledWith("s1");
+  });
+
+  it("draws a step per id, so two steps may share a title", async () => {
+    const actions = actionsSpy();
+    const repeated: IslandPlan = {
+      id: "p2",
+      steps: [
+        { id: "step-a", title: "Review" },
+        { id: "step-b", title: "Review" },
+      ],
+      done: 0,
+    };
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan: repeated }, actions);
+    click(cluster("plan"));
+
+    expect(card("plan")?.querySelectorAll("[data-island-row]")).toHaveLength(2);
+    click(rowIn("plan", "step-b"));
+    expect(actions.jumpStep).toHaveBeenCalledWith("step-b");
   });
 });
 
@@ -374,12 +517,43 @@ describe("destructive actions", () => {
     click(kill);
     expect(kill.hasAttribute("data-armed")).toBe(true);
 
+    // Still armed a breath before the window closes — without this the test
+    // passes against any window at all, including one that disarms instantly.
     await act(async () => {
-      vi.advanceTimersByTime(1800);
+      vi.advanceTimersByTime(1700);
+    });
+    expect(kill.hasAttribute("data-armed")).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(100);
     });
     expect(kill.hasAttribute("data-armed")).toBe(false);
     click(kill);
     expect(actions.killShell).not.toHaveBeenCalled();
+  });
+
+  it("fires the kill verb with its own shell id once armed", async () => {
+    const actions = actionsSpy();
+    await render(
+      {
+        ...EMPTY_ACTIVITY_ISLAND,
+        shells: [shell(), shell({ id: "s2", command: "vp check" })],
+      },
+      actions,
+    );
+    click(cluster("shells"));
+
+    const kill = card("shells")
+      ?.querySelector<HTMLElement>('[data-island-row="s2"]')
+      ?.parentElement?.querySelector<HTMLElement>('button[aria-label="Kill shell"]');
+    const target =
+      kill ??
+      card("shells")?.querySelectorAll<HTMLElement>('button[aria-label="Kill shell"]')[1] ??
+      null;
+    if (!target) throw new Error("no kill action on the second shell row");
+    click(target);
+    click(target);
+    expect(actions.killShell).toHaveBeenCalledWith("s2");
   });
 
   it("fire at once with arming off", async () => {
@@ -414,7 +588,7 @@ describe("the now channel", () => {
     await render({
       ...EMPTY_ACTIVITY_ISLAND,
       tabs: [tab()],
-      flash: { id: "f1", text: "Opened · github.com" },
+      flash: { id: "f1", event: "Opened", payload: "github.com" },
     });
     const drop = container?.querySelector("[data-island-flash]");
     expect(drop?.textContent).toBe("Opened · github.com");

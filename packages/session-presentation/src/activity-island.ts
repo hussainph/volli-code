@@ -3,22 +3,33 @@
  * the VC-248/VC-249 prototype under VC-247).
  *
  * The island is the at-a-glance surface for everything a Session manages that
- * cannot be told inside one chat stream: headless browser tabs, subagents, the
- * plan, background shells. It sits above the composer, as a sibling of the
- * interaction stack. This module is what it READS and what it can SAY; the
- * drawing is `activity-island-ui.tsx`. Nothing here touches a store, a bridge
- * or the DOM — the runtime that will feed it (browser-tab registry, subagent
- * promotion, plan state, shells) does not exist yet, and a future wiring
- * ticket projects into these types from wherever those facts end up living.
+ * cannot be told inside one chat stream: headless Browser Tabs, subagent
+ * Sessions, the plan, background shells. It sits above the composer, as a
+ * sibling of the interaction stack. This module is what it READS and what it
+ * can SAY; the drawing is the desktop renderer's `activity-island-ui.tsx`.
+ *
+ * WHY IT LIVES IN THIS PACKAGE. It is a Session Surface Model in CONTEXT.md's
+ * sense — "active ephemeral affordances… each client maps it to its own
+ * components" — so it belongs on the portable side of the Session Presentation
+ * Contract, beside `interaction.ts` and `activity.ts`, not in one client's
+ * component folder. This package strips the DOM lib and declares neither React
+ * nor Electron, so the purity this file needs is enforced by typecheck rather
+ * than by review. The runtime that will feed it (Browser Tab registry,
+ * subagent promotion, plan state, shells) does not exist yet; a future wiring
+ * ticket projects into these types from wherever those facts end up living,
+ * and a second client renders the same projection its own way.
  *
  * TWO GRAMMARS, FIXED LIVE. The pill's closed state is CLUSTERS + NOW: one
  * cluster per element kind in a fixed reading order, and a "now" channel that
- * announces the latest event. Every announcement shares one grammar —
- * `event · payload` — so the drawing can weight it (quiet event, bold payload)
- * instead of decorating it; `flashLine` builds it and `splitFlash` reads it,
- * and nothing else may invent a separator. The card ↔ pill are one model: a
- * verb from a card (close, stop, kill…) is a real transition whose flash comes
- * back through the same channel, which is why the island needs no toast.
+ * announces the latest event. Every announcement carries its two registers
+ * SEPARATELY — a quiet `event` and the `payload` that actually changed — so a
+ * client weights them instead of decorating them, and so a client that
+ * translates has two strings to translate rather than one it must parse.
+ * `flashLine` renders the one-line form where a single string is required (a
+ * caption, an announcement); nothing else may join the two registers.
+ * The card ↔ pill are one model: a verb from a card (close, stop, kill…) is a
+ * real transition whose flash comes back through the same channel, which is
+ * why the island needs no toast.
  *
  * THE EMPTY RULE. No island when nothing to model. A flash on its own is not
  * something to model — it is a change to something — so `islandEmpty` ignores
@@ -35,24 +46,28 @@
 
 /* ------------------------------------------------------------- projection */
 
-/** A headless browser tab the Session holds. */
+/**
+ * A headless Browser Tab the Session holds.
+ *
+ * `id` is the host's own opaque tab id, never a render index: it is what every
+ * verb below addresses, and what survives a re-projection that reorders the
+ * list. The chip's colour is NOT here — a tint is the drawing's business, and
+ * a host has no opinion about hex (docs/BOUNDARIES.md: shared vocabulary, not
+ * presentation).
+ */
 export interface IslandTab {
   id: string;
   /** What the pill and the card name the tab by. */
   host: string;
-  /** A CSS color the tab's chip wears — the favicon idiom, a toned square + letter. */
-  tone: string;
   state: "loading" | "ready";
   /** Promoted to a Browser pane from its card row — the card and the pane are one model. */
   promoted: boolean;
 }
 
-/** A subagent the Session delegated to. */
+/** A subagent Session the Session delegated to. */
 export interface IslandAgent {
   id: string;
   label: string;
-  /** A CSS color the agent's chip wears — the people idiom, a toned disk + initial. */
-  tone: string;
   /** 0..1, meaningful while `working`. */
   progress: number;
   /**
@@ -64,11 +79,23 @@ export interface IslandAgent {
   promoted: boolean;
 }
 
+/**
+ * One step of the plan.
+ *
+ * A step carries its own id because the card addresses it by one. Keying and
+ * jumping by TITLE made "distinct titles" a load-bearing rule that only a
+ * comment enforced: two steps named the same collided as React keys and sent
+ * the jump to the wrong row. An id also lets a rename stay the same step.
+ */
+export interface IslandStep {
+  id: string;
+  title: string;
+}
+
 /** The Session's plan: an ordered list of steps and how many are done. */
 export interface IslandPlan {
   id: string;
-  /** Distinct titles — a step is keyed by its title in the card, so a rename is a new row. */
-  steps: readonly string[];
+  steps: readonly IslandStep[];
   /** Steps completed, from the top; `steps[done]` is the current one. */
   done: number;
 }
@@ -82,11 +109,22 @@ export interface IslandShell {
   code: number | null;
 }
 
-/** The latest event for the now channel. A new `id` is a new announcement. */
+/**
+ * The latest event for the now channel. A new `id` is a new announcement.
+ *
+ * The two registers stay APART. A pre-joined string would have to be parsed
+ * back before it could be weighted, which is what the drawing did until the
+ * separator became the contract's only way to tell an event from its payload —
+ * a line that arrived by any other route silently lost its voice, and no
+ * client could translate either half. {@link flashLine} joins them where one
+ * string is genuinely needed.
+ */
 export interface IslandFlash {
   id: string;
-  /** `event · payload`, built by {@link flashLine}. */
-  text: string;
+  /** The quiet register: what happened. */
+  event: string;
+  /** The register that carries the weight: the thing it happened to. */
+  payload: string;
 }
 
 export interface ActivityIslandModel {
@@ -123,7 +161,13 @@ export interface ActivityIslandActions {
   stopAgent(id: string): void;
   openShell(id: string): void;
   killShell(id: string): void;
-  jumpStep(index: number): void;
+  /**
+   * By step id, like every other verb here. A position would be a promise the
+   * projection cannot keep: the list it was read from may already have been
+   * re-projected by the time the click lands, and index 3 would then name a
+   * different step (docs/BOUNDARIES.md rule 2 — never adjacency as position).
+   */
+  jumpStep(id: string): void;
 }
 
 /* ------------------------------------------------------------------- feel */
@@ -213,18 +257,22 @@ export function islandClusters(model: ActivityIslandModel): IslandCluster[] {
 
 /* ---------------------------------------------------------------- grammar */
 
+/**
+ * The one separator this surface joins registers with. Captions and headings
+ * below spell the same middle dot for the same reason the now channel does —
+ * one voice — but only this constant is the GRAMMAR, and only {@link flashLine}
+ * applies it to a flash.
+ */
 const FLASH_SEPARATOR = " · ";
 
-/** `event · payload` — the now channel's one grammar. */
-export function flashLine(event: string, payload: string): string {
-  return `${event}${FLASH_SEPARATOR}${payload}`;
-}
-
-/** Splits a flash back into its two registers; `null` when it was not built by {@link flashLine}. */
-export function splitFlash(text: string): { event: string; payload: string } | null {
-  const at = text.indexOf(FLASH_SEPARATOR);
-  if (at === -1) return null;
-  return { event: text.slice(0, at), payload: text.slice(at + FLASH_SEPARATOR.length) };
+/**
+ * `event · payload` — the one-line form, for the places that can hold only a
+ * string: a tooltip, an aria announcement, the inline ticker. A drawing that
+ * can weight the two registers should read {@link IslandFlash} directly and
+ * never rebuild this line to take it apart again.
+ */
+export function flashLine(flash: IslandFlash): string {
+  return `${flash.event}${FLASH_SEPARATOR}${flash.payload}`;
 }
 
 function plural(count: number, noun: string): string {
@@ -240,12 +288,14 @@ export function tabsLoading(tabs: readonly IslandTab[]): boolean {
 /** The tabs cluster's one-line caption. */
 export function tabsLine(tabs: readonly IslandTab[]): string {
   const [only] = tabs;
-  return tabs.length === 1 && only ? `1 browser tab · ${only.host}` : `${tabs.length} browser tabs`;
+  return tabs.length === 1 && only
+    ? `1 browser tab${FLASH_SEPARATOR}${only.host}`
+    : `${tabs.length} browser tabs`;
 }
 
 /** The tabs card's heading. */
 export function tabsHeading(tabs: readonly IslandTab[]): string {
-  return `Browser · ${plural(tabs.length, "tab")}`;
+  return `Browser${FLASH_SEPARATOR}${plural(tabs.length, "tab")}`;
 }
 
 /** The state word riding a tab row's name; `null` when there is nothing to say. */
@@ -270,13 +320,13 @@ export function agentsLine(agents: readonly IslandAgent[]): string {
 }
 
 export function agentsHeading(agents: readonly IslandAgent[]): string {
-  return `Subagents · ${agentsDone(agents)}/${agents.length} done`;
+  return `Subagents${FLASH_SEPARATOR}${agentsDone(agents)}/${agents.length} done`;
 }
 
 /** `72%` while working, the state otherwise; `· tab` once promoted. */
 export function agentStateWord(agent: IslandAgent): string {
   const base = agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state;
-  return agent.promoted ? `${base} · tab` : base;
+  return agent.promoted ? `${base}${FLASH_SEPARATOR}tab` : base;
 }
 
 /** Ended without finishing — dims the chip. `stopped` takes no badge; `failed` does. */
@@ -291,7 +341,7 @@ export function planTotal(plan: IslandPlan): number {
 }
 
 /** The step in progress; `null` once every step is done. */
-export function planCurrent(plan: IslandPlan): string | null {
+export function planCurrent(plan: IslandPlan): IslandStep | null {
   return plan.steps[plan.done] ?? null;
 }
 
@@ -300,19 +350,24 @@ export function planCount(plan: IslandPlan): string {
   return `${plan.done}/${planTotal(plan)}`;
 }
 
-/** 0..100 for the hairline under the card header. */
+/**
+ * 0..100 for the hairline under the card header. Clamped at both ends: a plan
+ * that counts more done than it holds is an upstream bug, but the hairline may
+ * not run past the end of its own track while that bug is on screen.
+ */
 export function planPercent(plan: IslandPlan): number {
   const total = planTotal(plan);
-  return total === 0 ? 0 : (plan.done / total) * 100;
+  if (total === 0) return 0;
+  return Math.min(100, (plan.done / total) * 100);
 }
 
 export function planLine(plan: IslandPlan): string {
   const current = planCurrent(plan);
-  return current ? `Plan ${planCount(plan)} · ${current}` : `Plan ${planCount(plan)} · done`;
+  return `Plan ${planCount(plan)}${FLASH_SEPARATOR}${current ? current.title : "done"}`;
 }
 
 export function planHeading(plan: IslandPlan): string {
-  return `Plan · ${planCount(plan)}`;
+  return `Plan${FLASH_SEPARATOR}${planCount(plan)}`;
 }
 
 export type PlanStepState = "done" | "current" | "pending";
@@ -332,12 +387,14 @@ export function shellsLine(shells: readonly IslandShell[]): string {
   const running = shellsRunning(shells);
   return running > 0
     ? `${plural(running, "shell")} running`
-    : `${plural(shells.length, "shell")} · exited`;
+    : `${plural(shells.length, "shell")}${FLASH_SEPARATOR}exited`;
 }
 
 export function shellsHeading(shells: readonly IslandShell[]): string {
   const running = shellsRunning(shells);
-  return running > 0 ? `Shells · ${running} running` : `Shells · ${shells.length} exited`;
+  return running > 0
+    ? `Shells${FLASH_SEPARATOR}${running} running`
+    : `Shells${FLASH_SEPARATOR}${shells.length} exited`;
 }
 
 /** `exit 137` once exited; `null` while running. */

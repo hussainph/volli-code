@@ -185,12 +185,6 @@ export default defineConfig(({ mode }) => ({
         // pair that deliberately does not.
         "src/components/board/board-summary.ts",
         "src/components/chat/chat-plane-model.ts",
-        // The Activity Island's projection contract and grammar (VC-256): when
-        // there is an island at all, which clusters it draws, and the one
-        // `event · payload` form every announcement takes. Pure precisely so
-        // the gate can reach the empty rule — a pill drawn over the composer
-        // with nothing to say is the failure the rule exists to refuse.
-        "src/components/chat/activity-island-model.ts",
         // Which drawing an empty chat may offer, per scope (VC-55). A pure
         // `.ts` beside the views precisely so the gate can reach it: the menu
         // a scope offers IS the identity signal, so a scope quietly gaining an

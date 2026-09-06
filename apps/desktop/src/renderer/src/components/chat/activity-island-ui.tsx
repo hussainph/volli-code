@@ -76,9 +76,6 @@ import {
   UsersIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { COMPOSER_STACK_SHELL } from "@volli/session-presentation";
-import { AnimatePresence, motion } from "motion/react";
-
 import {
   type ActivityIslandActions,
   type ActivityIslandFeel,
@@ -87,6 +84,8 @@ import {
   agentsHeading,
   agentsLine,
   agentStateWord,
+  COMPOSER_STACK_SHELL,
+  flashLine,
   type IslandAgent,
   ISLAND_AGENT_CHIP_CAP,
   ISLAND_ARM_WINDOW_MS,
@@ -109,13 +108,14 @@ import {
   shellsLine,
   shellsRunning,
   shellStateWord,
-  splitFlash,
   summaryLine,
   tabsHeading,
   tabsLine,
   tabsLoading,
   tabStateWord,
-} from "./activity-island-model";
+} from "@volli/session-presentation";
+import { AnimatePresence, motion, MotionConfig } from "motion/react";
+
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
@@ -128,6 +128,46 @@ import { cn } from "@renderer/lib/utils";
 
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 
+/**
+ * The gap the now-drop lives in, between the pill's top edge and the drop's
+ * resting place.
+ *
+ * It is ONE constant because the drop's travel is measured against it. Law 3
+ * says the travel never crosses the pill's rim, and the drop starts its rise
+ * `y` px below its rest: with the gap at 8 and the rise hard-coded at 10, the
+ * drop began 2px INSIDE the pill and only `zIndex: -1` hid the overlap — which
+ * made stacking load-bearing, the very thing the same law forbids. Tying both
+ * to this constant is what keeps the rule true when either number moves.
+ */
+const DROP_GAP_PX = 8;
+
+/* ------------------------------------------------------------------- tone */
+
+/**
+ * The tints a tab chip and a subagent chip wear.
+ *
+ * They live HERE, not in the projection: a hex value is the drawing's
+ * business, and a host that one day feeds this island has no opinion about
+ * colour (docs/BOUNDARIES.md — `@volli/shared` carries domain vocabulary, not
+ * presentation). Deliberately NOT `PROJECT_COLORS`, for the reason
+ * `lab/automation/harness-identity.tsx` already records: a swatch in this app
+ * already means "which project", so borrowing that palette would make a
+ * browser tab read as one. Each tint is chosen dark enough to carry the white
+ * initial the chips draw, which is what makes that literal safe here.
+ */
+const ISLAND_TONES = ["#3577F2", "#8B5E7A", "#4F7D6B", "#A96A4F", "#5E7A8B", "#7A6AA9"] as const;
+
+/**
+ * A stable tint for an id. Same id, same colour, every render and every
+ * client — a chip that changed colour when the list reordered would be reading
+ * as a different tab.
+ */
+function islandTone(id: string): string {
+  let hash = 0;
+  for (let at = 0; at < id.length; at += 1) hash = (hash * 31 + id.charCodeAt(at)) | 0;
+  return ISLAND_TONES[Math.abs(hash) % ISLAND_TONES.length]!;
+}
+
 /** The pill's one spring — reduced motion collapses it to a fast fade-scale. */
 function islandSpring(feel: ActivityIslandFeel, reduce: boolean) {
   return reduce
@@ -135,7 +175,18 @@ function islandSpring(feel: ActivityIslandFeel, reduce: boolean) {
     : ({ type: "spring", duration: feel.springDuration, bounce: feel.springBounce } as const);
 }
 
-/** Entry/exit for anything living inside the pill; the pill's layout spring does the width. */
+/**
+ * Entry/exit for anything living inside the pill; the pill's layout spring
+ * does the width.
+ *
+ * It names no transition ON PURPOSE: the island root wraps everything in a
+ * `MotionConfig` carrying the one spring, so every drawing in here inherits it
+ * without being handed `feel`. Motion resolves a child's presence and layout
+ * against its OWN transition, never its parent's, so before that config the
+ * clusters entered on Motion's default while the pill around them used the
+ * chosen spring — two springs in one material, which is the thing "ONE SPRING"
+ * was decided to prevent, and a half no `feel` override could reach.
+ */
 function clusterPresence(reduce: boolean) {
   return {
     initial: reduce ? { opacity: 0 } : { opacity: 0, scale: 0.6 },
@@ -157,7 +208,13 @@ function useHeldFlash(flash: IslandFlash | null, holdSeconds: number): IslandFla
   // announcement in a new object must not restart its hold.
   const flashId = flash?.id ?? null;
   React.useEffect(() => {
-    if (flashId === null) return;
+    // No flash means nothing is expired. Without this the last expired id sat
+    // in state for the life of the island, so a runtime that reused an id
+    // after a quiet gap could never announce under it again.
+    if (flashId === null) {
+      setExpiredId(null);
+      return;
+    }
     const timer = window.setTimeout(() => setExpiredId(flashId), holdSeconds * 1000);
     return () => window.clearTimeout(timer);
   }, [flashId, holdSeconds]);
@@ -323,7 +380,12 @@ function ClusterShell({
     );
   }
   if (feel.hover === "popover" && coordination) {
-    const open = pinned || coordination.hovered === id;
+    // ONE card at a time, and a pin OUTRANKS a hover. `pinned || hovered === id`
+    // read as one card only because each channel holds one id; across the two
+    // it showed two — pin the agents cluster, sweep the pointer over tabs, and
+    // both cards stood open, overlapping above a 32px pill. The pin is the work
+    // channel: while it holds a card, a glance elsewhere may not open a second.
+    const open = coordination.pinned === null ? coordination.hovered === id : pinned;
     return (
       <Popover
         open={open}
@@ -346,6 +408,7 @@ function ClusterShell({
             tabIndex={0}
             aria-label={line}
             aria-expanded={open}
+            aria-haspopup="dialog"
             data-island-cluster={cluster}
             className={cn(
               "-mx-1 flex items-center rounded-full px-1 transition-colors",
@@ -461,9 +524,21 @@ function Card({
   );
 }
 
+/**
+ * A card's scrolling row list.
+ *
+ * THE CAP IS THE DEFAULT, not each card's job to remember. Radix flips a card
+ * that is taller than the room above its anchor to BELOW the island — over the
+ * composer, which is the one place this surface must never cover. Only the
+ * plan card capped itself, because a plan was the only list anyone pictured
+ * growing; a Session holding twenty Browser Tabs or a long shell history
+ * reaches the same ceiling, and there the omission is invisible until it
+ * happens. `max-h-72` is roughly seven rows: enough that nothing common
+ * scrolls, low enough that nothing ever flips.
+ */
 function CardRows({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-col", className)}>
+    <div className={cn("flex max-h-72 flex-col overflow-y-auto", className)}>
       <AnimatePresence mode="popLayout" initial={false}>
         {children}
       </AnimatePresence>
@@ -591,7 +666,7 @@ function TabChip({ tab }: { tab: IslandTab }) {
   return (
     <span
       className="flex size-4 shrink-0 items-center justify-center rounded-sm text-label leading-none font-semibold text-white"
-      style={{ backgroundColor: tab.tone }}
+      style={{ backgroundColor: islandTone(tab.id) }}
     >
       {tab.host.charAt(0).toUpperCase()}
     </span>
@@ -699,14 +774,14 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
           to twenty entries, and a card taller than the room above the pill
           makes Radix flip it BELOW the island, over the composer. Seven steps
           fit without scrolling; twenty scroll inside the same card. */}
-      <CardRows className="max-h-72 overflow-y-auto">
+      <CardRows>
         {plan.steps.map((step, index) => {
           const state = planStepState(plan, index);
           return (
             <CardRow
-              key={step}
+              key={step.id}
               reduce={reduce}
-              data-island-row={`step-${index}`}
+              data-island-row={step.id}
               className="py-1"
               leading={
                 state === "done" ? (
@@ -729,11 +804,11 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
                     state === "current" && "font-medium",
                   )}
                 >
-                  {step}
+                  {step.title}
                 </span>
               }
               primaryTrailing={<RowState>{state === "current" ? "now" : null}</RowState>}
-              onActivate={() => actions.jumpStep(index)}
+              onActivate={() => actions.jumpStep(step.id)}
             />
           );
         })}
@@ -849,7 +924,7 @@ function AgentDot({
         agentDimmed(agent) && "opacity-60",
         className,
       )}
-      style={{ backgroundColor: agent.tone, borderRadius: 999 }}
+      style={{ backgroundColor: islandTone(agent.id), borderRadius: 999 }}
     >
       <span className="text-label leading-none font-semibold text-white">
         {agent.label.charAt(0).toUpperCase()}
@@ -951,14 +1026,14 @@ function ShellsCluster({
 /* ------------------------------------------------------------ now channel */
 
 /**
- * The now channel's voice. Every flash shares one grammar — `event · payload`
- * — so weight can articulate it instead of decorating it: the event class
- * stays quiet and the payload (the thing that actually changed) carries the
- * emphasis. `quiet` and `loud` are the flat registers on either side.
+ * The now channel's voice. A flash arrives as its two registers — so weight
+ * can articulate it instead of decorating it: the event stays quiet and the
+ * payload (the thing that actually changed) carries the emphasis. `quiet` and
+ * `loud` are the flat registers on either side, and they are the only place
+ * that needs the joined line.
  */
-function FlashText({ text, voice }: { text: string; voice: IslandNowVoice }) {
-  const split = voice === "payload" ? splitFlash(text) : null;
-  if (!split) {
+function FlashText({ flash, voice }: { flash: IslandFlash; voice: IslandNowVoice }) {
+  if (voice !== "payload") {
     return (
       <span
         className={cn(
@@ -966,15 +1041,15 @@ function FlashText({ text, voice }: { text: string; voice: IslandNowVoice }) {
           voice === "loud" ? "font-medium text-foreground" : "text-muted-foreground",
         )}
       >
-        {text}
+        {flashLine(flash)}
       </span>
     );
   }
   return (
     <span className="min-w-0 truncate text-muted-foreground">
-      {split.event}
+      {flash.event}
       {" · "}
-      <span className="font-medium text-foreground">{split.payload}</span>
+      <span className="font-medium text-foreground">{flash.payload}</span>
     </span>
   );
 }
@@ -986,7 +1061,12 @@ export interface ActivityIslandProps {
   actions: ActivityIslandActions;
   /** Overrides on the baked verdicts — for the lab harness's dials. */
   feel?: Partial<ActivityIslandFeel>;
-  /** On the centering wrapper; the mount decides the spacing to the composer. */
+  /**
+   * On the island itself, so it LEAVES with the island. The mount decides the
+   * spacing to the composer, and that spacing must not outlive the pill — on
+   * the centering wrapper it held an empty band open over a chat with nothing
+   * to model. Use margin rather than padding: it is the pill's own box.
+   */
   className?: string;
 }
 
@@ -1006,8 +1086,10 @@ export function ActivityIsland({
   const clustersVisible = feel.grammar !== "now-only";
   /** clusters-now sends the channel to the drop; now-only keeps it inline. */
   const drop = feel.grammar === "clusters-now" ? flash : null;
-  const inlineText = feel.grammar === "now-only" ? (flash?.text ?? summaryLine(model)) : null;
-  const inlineKey = flash ? `flash-${flash.id}` : `summary-${inlineText ?? ""}`;
+  const inlineSummary = feel.grammar === "now-only" ? summaryLine(model) : null;
+  const inlineFlash = feel.grammar === "now-only" ? flash : null;
+  const inlineKey = flash ? `flash-${flash.id}` : `summary-${inlineSummary ?? ""}`;
+  const inlineVisible = inlineFlash !== null || (inlineSummary ?? "") !== "";
 
   const coordination = useHoverCoordination();
 
@@ -1029,27 +1111,45 @@ export function ActivityIsland({
   return (
     <ActionsContext.Provider value={actions}>
       <HoverContext.Provider value={coordination}>
-        <div className={cn("flex justify-center", className)}>
-          <AnimatePresence initial={false}>
-            {populated ? (
-              <motion.div
-                key="island"
-                initial={
-                  reduce
-                    ? { opacity: 0 }
-                    : { opacity: 0, transform: "translateY(10px) scale(0.95)" }
-                }
-                animate={{ opacity: 1, transform: "translateY(0px) scale(1)" }}
-                exit={
-                  reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
-                }
-                transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
-                role="status"
-                aria-label="Agent activity"
-                data-activity-island=""
-                className="relative will-change-transform"
-              >
-                {/* The now channel: a drop that buds off the pill upward, hangs
+        {/* ONE SPRING, stated once. Every drawing below inherits it, because a
+            child resolves its own presence and layout against its own
+            transition — clusters entering on Motion's default while the pill
+            used the chosen spring was two materials pretending to be one. */}
+        <MotionConfig transition={spring}>
+          {/* Carries no spacing of its own. The centering wrapper outlives the
+              pill so `AnimatePresence` can play its exit, which is exactly why
+              the mount's spacing may not live here: it would hold a gap open
+              over the composer for as long as the chat had nothing to model,
+              and "no island when nothing to model" has to mean no band of
+              nothing either. The spacing rides the pill instead. */}
+          <div className="flex justify-center">
+            <AnimatePresence initial={false}>
+              {populated ? (
+                <motion.div
+                  key="island"
+                  initial={
+                    reduce
+                      ? { opacity: 0 }
+                      : { opacity: 0, transform: "translateY(10px) scale(0.95)" }
+                  }
+                  animate={{ opacity: 1, transform: "translateY(0px) scale(1)" }}
+                  exit={
+                    reduce
+                      ? { opacity: 0 }
+                      : { opacity: 0, transform: "translateY(8px) scale(0.97)" }
+                  }
+                  transition={reduce ? { duration: 0.15, ease: EASE_OUT } : spring}
+                  // A GROUP, not a live region. `role="status"` here made the
+                  // whole pill an assertive-ish announcement, so every tab
+                  // count, every percent tick and every plan step re-read the
+                  // entire island to a screen reader. Only the now channel is
+                  // an announcement, and it carries the role itself.
+                  role="group"
+                  aria-label="Agent activity"
+                  data-activity-island=""
+                  className={cn("relative will-change-transform", className)}
+                >
+                  {/* The now channel: a drop that buds off the pill upward, hangs
                     while the message reads, and merges back. `mode="wait"` IS
                     the metaphor: a new event waits for the old drop to return
                     first. TWO hard rules, learned the hard way (a drop once sat
@@ -1060,131 +1160,141 @@ export function ActivityIsland({
                       `zIndex` cannot be dropped.
                     • the travel NEVER crosses the pill's top edge — the drop
                       rises and fades entirely inside the gap, so no stacking
-                      rule in any browser decides what the reader sees. The
-                      wrapper carries no transform of its own (flex-centering,
-                      not translate), because Motion owns `transform` on the
-                      drop. */}
-                {feel.grammar === "clusters-now" ? (
-                  <span
-                    className="pointer-events-none absolute inset-x-0 flex justify-center"
-                    style={{ bottom: "100%", paddingBottom: 8, zIndex: -1 }}
-                  >
-                    <AnimatePresence initial={false} mode="wait">
-                      {drop ? (
-                        <motion.span
-                          key={drop.id}
-                          data-island-flash=""
-                          initial={
-                            reduce
-                              ? { opacity: 0 }
-                              : { opacity: 0, y: 10, scale: 0.6, filter: "blur(2px)" }
-                          }
-                          animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                          exit={
-                            reduce
-                              ? { opacity: 0, transition: { duration: 0.1 } }
-                              : {
-                                  opacity: 0,
-                                  y: 8,
-                                  scale: 0.55,
-                                  filter: "blur(2px)",
-                                  transition: { duration: 0.18, ease: EASE_OUT },
-                                }
-                          }
-                          transition={
-                            reduce
-                              ? { duration: 0.15 }
-                              : {
-                                  y: spring,
-                                  scale: spring,
-                                  opacity: { duration: 0.15, ease: EASE_OUT },
-                                  filter: { duration: 0.18, ease: EASE_OUT },
-                                }
-                          }
-                          style={{ originY: 1 }}
-                          className={cn(
-                            "flex h-7 max-w-72 items-center rounded-full px-2 text-ui",
-                            COMPOSER_STACK_SHELL,
-                          )}
-                        >
-                          <FlashText text={drop.text} voice={feel.nowVoice} />
-                        </motion.span>
-                      ) : null}
-                    </AnimatePresence>
-                  </span>
-                ) : null}
-                {/* `rounded-full` over the stack shell's container radius (the
+                      rule in any browser decides what the reader sees. That is
+                      why the rise is `DROP_GAP_PX` and not a number of its own:
+                      the two must move together or the drop re-enters the pill.
+                      The wrapper carries no transform of its own
+                      (flex-centering, not translate), because Motion owns
+                      `transform` on the drop. */}
+                  {feel.grammar === "clusters-now" ? (
+                    <span
+                      // The one announcement channel, and the only live region on
+                      // this surface.
+                      role="status"
+                      className="pointer-events-none absolute inset-x-0 flex justify-center"
+                      style={{ bottom: "100%", paddingBottom: DROP_GAP_PX, zIndex: -1 }}
+                    >
+                      <AnimatePresence initial={false} mode="wait">
+                        {drop ? (
+                          <motion.span
+                            key={drop.id}
+                            data-island-flash=""
+                            initial={
+                              reduce
+                                ? { opacity: 0 }
+                                : { opacity: 0, y: DROP_GAP_PX, scale: 0.6, filter: "blur(2px)" }
+                            }
+                            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+                            exit={
+                              reduce
+                                ? { opacity: 0, transition: { duration: 0.1 } }
+                                : {
+                                    opacity: 0,
+                                    y: DROP_GAP_PX,
+                                    scale: 0.55,
+                                    filter: "blur(2px)",
+                                    transition: { duration: 0.18, ease: EASE_OUT },
+                                  }
+                            }
+                            transition={
+                              reduce
+                                ? { duration: 0.15 }
+                                : {
+                                    y: spring,
+                                    scale: spring,
+                                    opacity: { duration: 0.15, ease: EASE_OUT },
+                                    filter: { duration: 0.18, ease: EASE_OUT },
+                                  }
+                            }
+                            style={{ originY: 1 }}
+                            className={cn(
+                              "flex h-7 max-w-72 items-center rounded-full px-2 text-ui",
+                              COMPOSER_STACK_SHELL,
+                            )}
+                          >
+                            <FlashText flash={drop} voice={feel.nowVoice} />
+                          </motion.span>
+                        ) : null}
+                      </AnimatePresence>
+                    </span>
+                  ) : null}
+                  {/* `rounded-full` over the stack shell's container radius (the
                     `rounded` group is registered with tailwind-merge, so the
                     later class wins); the inline `borderRadius` is what Motion
                     corrects during the layout spring so the corners do not
                     stretch mid-morph. */}
-                <motion.div
-                  layout
-                  transition={spring}
-                  style={{ borderRadius: 999 }}
-                  className={cn(
-                    "flex h-8 items-center gap-2 rounded-full px-2",
-                    COMPOSER_STACK_SHELL,
-                  )}
-                >
-                  {/* Dividers travel WITH their cluster — each keyed wrapper
+                  <motion.div
+                    layout
+                    transition={spring}
+                    style={{ borderRadius: 999 }}
+                    className={cn(
+                      "flex h-8 items-center gap-2 rounded-full px-2",
+                      COMPOSER_STACK_SHELL,
+                    )}
+                  >
+                    {/* Dividers travel WITH their cluster — each keyed wrapper
                       carries its own leading rule, so membership changes stay
                       one presence animation. The first cluster never has one;
                       when the first LEAVES, its successor's rule vanishes by
                       re-render rather than animation — an instant 1px change,
                       cheaper than choreographing divider presence separately. */}
-                  {clusters.length > 0 ? (
-                    <AnimatePresence mode="popLayout" initial={false}>
-                      {clusters.map((cluster, index) => (
-                        <motion.span
-                          key={cluster}
-                          layout
-                          className="flex shrink-0 items-center gap-2"
-                          {...clusterPresence(reduce)}
-                        >
-                          {index > 0 ? (
-                            <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
-                          ) : null}
-                          {clusterNode(cluster)}
-                        </motion.span>
-                      ))}
-                    </AnimatePresence>
-                  ) : null}
+                    {clusters.length > 0 ? (
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        {clusters.map((cluster, index) => (
+                          <motion.span
+                            key={cluster}
+                            layout
+                            className="flex shrink-0 items-center gap-2"
+                            {...clusterPresence(reduce)}
+                          >
+                            {index > 0 ? (
+                              <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
+                            ) : null}
+                            {clusterNode(cluster)}
+                          </motion.span>
+                        ))}
+                      </AnimatePresence>
+                    ) : null}
 
-                  {/* Inline ticker — now-only grammar only; clusters-now sends
+                    {/* Inline ticker — now-only grammar only; clusters-now sends
                       the channel to the drop above. NO `layout` prop and no
                       string transforms on these spans — `layout` owns
                       transform, so a string-transform exit never resolves and
                       AnimatePresence keeps the zombie forever (the
                       accumulating-flashes bug). */}
-                  <AnimatePresence initial={false} mode="wait">
-                    {inlineText ? (
-                      <motion.span
-                        key={inlineKey}
-                        data-island-ticker=""
-                        initial={
-                          reduce ? { opacity: 0 } : { opacity: 0, y: 7, filter: "blur(4px)" }
-                        }
-                        animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                        exit={reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }}
-                        transition={reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }}
-                        className="flex max-w-56 items-center text-ui"
-                      >
-                        {flash ? (
-                          <FlashText text={inlineText} voice={feel.nowVoice} />
-                        ) : (
-                          <span className="min-w-0 truncate text-muted-foreground">
-                            {inlineText}
-                          </span>
-                        )}
-                      </motion.span>
-                    ) : null}
-                  </AnimatePresence>
+                    <AnimatePresence initial={false} mode="wait">
+                      {inlineVisible ? (
+                        <motion.span
+                          key={inlineKey}
+                          data-island-ticker=""
+                          initial={
+                            reduce ? { opacity: 0 } : { opacity: 0, y: 7, filter: "blur(4px)" }
+                          }
+                          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                          exit={
+                            reduce ? { opacity: 0 } : { opacity: 0, y: -7, filter: "blur(4px)" }
+                          }
+                          transition={
+                            reduce ? { duration: 0.1 } : { duration: 0.18, ease: EASE_OUT }
+                          }
+                          className="flex max-w-56 items-center text-ui"
+                        >
+                          {inlineFlash ? (
+                            <FlashText flash={inlineFlash} voice={feel.nowVoice} />
+                          ) : (
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {inlineSummary}
+                            </span>
+                          )}
+                        </motion.span>
+                      ) : null}
+                    </AnimatePresence>
+                  </motion.div>
                 </motion.div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        </MotionConfig>
       </HoverContext.Provider>
     </ActionsContext.Provider>
   );

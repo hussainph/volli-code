@@ -13,6 +13,12 @@ export default defineConfig({
       // and stay outside; index.ts is re-exports only.
       include: [
         "src/activity.ts",
+        // The Activity Island's projection contract and grammar (VC-256): when
+        // there is an island at all, which clusters it draws, and the two
+        // registers every announcement keeps apart. Pure precisely so the gate
+        // can reach the empty rule — a pill drawn over the composer with
+        // nothing to say is the failure that rule exists to refuse.
+        "src/activity-island.ts",
         "src/client.ts",
         "src/compaction-boundary.ts",
         "src/composer-effort.ts",
