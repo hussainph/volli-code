@@ -228,4 +228,124 @@ describe("BrowserTabController", () => {
 
     expect(shot).toEqual({ base64Png: "aGVsbG8=", width: 800, height: 600 });
   });
+
+  it("fails a command the engine never answers instead of wedging the call", async () => {
+    // A throttled, crashed or torn-down engine can hold a debugger command
+    // open forever; the caller must get one readable failure, not a hang.
+    const controller = new BrowserTabController(
+      { send: () => new Promise<never>(() => undefined) },
+      { maxCommandMs: 20 },
+    );
+
+    await expect(controller.snapshot()).rejects.toThrow(
+      "did not answer Accessibility.getFullAXTree within 20ms",
+    );
+  });
+
+  it("withdraws an unanswered command as soon as its call is aborted", async () => {
+    const controller = new BrowserTabController({
+      send: () => new Promise<never>(() => undefined),
+    });
+    const abort = new AbortController();
+
+    const pending = controller.snapshot(abort.signal);
+    abort.abort(new Error("withdrawn"));
+
+    await expect(pending).rejects.toThrow("withdrawn");
+  });
+
+  it("releases the mouse button even when the press itself times out", async () => {
+    // The bound can fall between the two halves of one click. A page left
+    // holding a button down selects text on every move and starts drags, and
+    // the next Session to reach the tab inherits it (VC-252 review).
+    const sent: { method: string; params?: object }[] = [];
+    const controller = new BrowserTabController(
+      {
+        send: async (method, params) => {
+          sent.push({ method, ...(params === undefined ? {} : { params }) });
+          if ((params as { type?: string } | undefined)?.type === "mousePressed") {
+            return await new Promise<never>(() => undefined);
+          }
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          return {};
+        },
+      },
+      { maxCommandMs: 20 },
+    );
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+    ).rejects.toThrow("did not answer Input.dispatchMouseEvent within 20ms");
+
+    // The caller still hears the press failure, and the page still gets its up.
+    const types = sent
+      .filter((call) => call.method === "Input.dispatchMouseEvent")
+      .map((call) => (call.params as { type?: string }).type);
+    expect(types).toEqual(["mousePressed", "mouseReleased"]);
+  });
+
+  it("lifts the key even when the turn is withdrawn mid-press", async () => {
+    // A key down with no key up latches on the page: every later keystroke
+    // arrives wearing a modifier nobody asked for.
+    const sent: { method: string; params?: object }[] = [];
+    const abort = new AbortController();
+    const controller = new BrowserTabController({
+      send: async (method, params) => {
+        sent.push({ method, ...(params === undefined ? {} : { params }) });
+        if ((params as { type?: string } | undefined)?.type === "rawKeyDown") {
+          abort.abort(new Error("withdrawn"));
+          return await new Promise<never>(() => undefined);
+        }
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        return {};
+      },
+    });
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act(
+        { generation: snapshot.generation, kind: "press", key: "Shift+a" },
+        abort.signal,
+      ),
+    ).rejects.toThrow("withdrawn");
+
+    const types = sent
+      .filter((call) => call.method === "Input.dispatchKeyEvent")
+      .map((call) => (call.params as { type?: string }).type);
+    expect(types).toEqual(["rawKeyDown", "keyUp"]);
+  });
+
+  it("attaches nothing when the turn was already withdrawn before enable", async () => {
+    // `ensureReady` attaches Chromium's debugger as a side effect. A withdrawn
+    // turn that still ran it would leave the tab owned by a debugger nobody
+    // will detach, and the person could no longer open their own DevTools.
+    let readied = 0;
+    const controller = new BrowserTabController({
+      send: async () => ({}),
+      ensureReady: async () => {
+        readied += 1;
+      },
+    });
+    const abort = new AbortController();
+    abort.abort(new Error("withdrawn"));
+
+    await expect(controller.enable(abort.signal)).rejects.toThrow("withdrawn");
+    expect(readied).toBe(0);
+  });
+
+  it("sends no key up when the key spec never named a real key", async () => {
+    // The gesture never started, so there is nothing to undo: a refusal must
+    // not dispatch input of its own.
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "press", key: "Mystery+Enter" }),
+    ).rejects.toThrow(BrowserRefusal);
+
+    expect(page.sent.map((call) => call.method)).not.toContain("Input.dispatchKeyEvent");
+  });
 });

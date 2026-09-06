@@ -225,6 +225,7 @@ describe("save", () => {
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
     expect(store.getState().byProject["p1"]).toEqual([saved]);
+    expect(store.getState().editor).toEqual({ projectId: "p1", automation: saved });
   });
 
   it("refreshes the editor's own project for a GLOBAL save, which lists everywhere", async () => {
@@ -245,6 +246,7 @@ describe("save", () => {
 
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
+    expect(store.getState().editor).toEqual({ projectId: "p1", automation: saved });
   });
 
   it("skips the refresh when a global save has no editor context to name a project", async () => {
@@ -499,6 +501,7 @@ describe("update", () => {
     expect(problem).toBeNull();
     expect(list).toHaveBeenCalledWith({ projectId: "p1" });
     expect(store.getState().byProject["p1"]).toEqual([edited]);
+    expect(store.getState().editor).toEqual({ projectId: "p1", automation: edited });
   });
 
   it("mints a durable command id when the caller holds none", async () => {

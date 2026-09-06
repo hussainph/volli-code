@@ -386,15 +386,49 @@ export const AUTHORITY_RULE_IDS = [
 export type AuthorityRuleId = (typeof AUTHORITY_RULE_IDS)[number];
 
 /**
+ * The budget causes: allowances a person may extend, kept apart from the rules.
+ *
+ * A budget is not an authority rule. A rule judges what one call DOES — a path,
+ * a command — and its verdict never varies with history; a budget judges how
+ * much of something a Session has already spent, and its whole point is that a
+ * person can say "a little more" without editing policy (VC-204). Keeping the
+ * family in its own namespace is what lets the denial ledger, the interaction
+ * record and any later judgment layer count the two apart — the same reason
+ * `tool.not-bundled`'s deletion note reserved a new id for per-call refusals
+ * over tools a Session does hold.
+ *
+ * Membership grows here as more caps soften (a per-Session spend budget is the
+ * obvious next member); a budget cause is overridable by construction, because
+ * an ask nobody could grant would be a refusal wearing a question's clothes.
+ * Deliberately NOT in {@link OVERRIDABLE_AUTHORITY_RULES}: that list is rule-pack
+ * membership, typed over {@link AuthorityRuleId}, and a budget never enters the
+ * pack.
+ */
+export const BUDGET_CAUSE_IDS = [
+  /** A Ticket Session asking to start more child Sessions than its in-ticket allowance. */
+  "budget.delegation-children",
+] as const;
+
+export type BudgetCauseId = (typeof BUDGET_CAUSE_IDS)[number];
+
+/** Whether a denial cause is a budget — an allowance a person may extend. */
+export function isBudgetCause(cause: AuthorityDenialCause): cause is BudgetCauseId {
+  return (BUDGET_CAUSE_IDS as readonly string[]).includes(cause);
+}
+
+/**
  * Why a call was refused, once a refusal is a durable fact rather than a string.
  *
- * Wider than {@link AuthorityRuleId} by exactly one member, because the gate can
- * refuse before any rule runs: an operand it cannot resolve, or a tool argument
- * it cannot read, is refused on the principle that a caller which cannot say
- * what a call does must not allow it. That is a real denial and it must be
- * countable, but no rule cited it, so it cannot borrow a rule's name.
+ * Wider than {@link AuthorityRuleId} by two families, because the gate can
+ * refuse before any rule runs — an operand it cannot resolve, or a tool
+ * argument it cannot read, is refused on the principle that a caller which
+ * cannot say what a call does must not allow it; that is a real denial and it
+ * must be countable, but no rule cited it, so it cannot borrow a rule's name —
+ * and because a spent {@link BudgetCauseId budget} is a refusal too, raised by
+ * the verb's own door rather than the gate, with the same need for a countable
+ * name.
  */
-export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable";
+export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable" | BudgetCauseId;
 
 /**
  * The rules a person may overrule when Volli stops and asks.

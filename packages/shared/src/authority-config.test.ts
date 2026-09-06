@@ -31,6 +31,12 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
     expect(DEFAULT_AUTHORITY_POLICY.classifierModel).toBeNull();
   });
 
+  it("asks at a spent delegation allowance rather than refusing outright (VC-204)", () => {
+    // The allowance itself stays fixed; what softened is only what its end
+    // does. `refuse` remains available per project for unattended fleets.
+    expect(DEFAULT_AUTHORITY_POLICY.budgets.delegationExceeded).toBe("ask");
+  });
+
   it("gives an unauthenticated caller reads and nothing else (VC-92 ruling 2)", () => {
     const anonymous = DEFAULT_AUTHORITY_POLICY.actors.unauthenticated;
     expect(anonymous.coordinationVerbs).toEqual([]);
@@ -109,6 +115,14 @@ describe("resolveAuthorityPolicy", () => {
     });
     expect(resolved.judgmentMode).toBe("auto");
     expect(resolved.actors.session.peek).toBe("project");
+  });
+
+  it("takes a budget posture and inherits it when unsaid", () => {
+    expect(
+      resolveAuthorityPolicy({ budgets: { delegationExceeded: "refuse" } }).budgets
+        .delegationExceeded,
+    ).toBe("refuse");
+    expect(resolveAuthorityPolicy({ enforcement: "off" }).budgets.delegationExceeded).toBe("ask");
   });
 
   it("resolves an actor the override never mentions", () => {
@@ -225,6 +239,14 @@ describe("parseAuthorityPolicyOverride", () => {
     expect(parseAuthorityPolicyOverride({ classifierModel: 12 })).toEqual({});
   });
 
+  it("reads a budget posture and drops one outside the vocabulary", () => {
+    expect(parseAuthorityPolicyOverride({ budgets: { delegationExceeded: "refuse" } })).toEqual({
+      budgets: { delegationExceeded: "refuse" },
+    });
+    expect(parseAuthorityPolicyOverride({ budgets: { delegationExceeded: "warn" } })).toEqual({});
+    expect(parseAuthorityPolicyOverride({ budgets: "refuse" })).toEqual({});
+  });
+
   it("refuses a threshold that is not a whole number of denials", () => {
     expect(parseAuthorityPolicyOverride({ fallback: { consecutiveDenials: 0 } })).toEqual({});
     expect(parseAuthorityPolicyOverride({ fallback: { consecutiveDenials: -1 } })).toEqual({});
@@ -332,6 +354,23 @@ describe("validateAuthorityPolicyOverride", () => {
 
     const result = validateAuthorityPolicyOverride({ enforcment: "enforce" });
     expect(result).toEqual({ ok: false, errors: ["Unknown field: enforcment."] });
+  });
+
+  it("refuses a budget the read path would drop, naming the field and the vocabulary", () => {
+    expect(validateAuthorityPolicyOverride({ budgets: { delegationExceeded: "warn" } })).toEqual({
+      ok: false,
+      errors: ["budgets.delegationExceeded must be one of: ask, refuse."],
+    });
+    expect(validateAuthorityPolicyOverride({ budgets: { delegationCap: 5 } })).toEqual({
+      ok: false,
+      errors: ["Unknown field: budgets.delegationCap."],
+    });
+    expect(validateAuthorityPolicyOverride({ budgets: ["ask"] })).toEqual({
+      ok: false,
+      errors: ["budgets must be an object."],
+    });
+    const stated = validateAuthorityPolicyOverride({ budgets: { delegationExceeded: "refuse" } });
+    expect(stated).toEqual({ ok: true, override: { budgets: { delegationExceeded: "refuse" } } });
   });
 
   it("refuses an unknown key nested in fallback or in one actor, naming its path", () => {

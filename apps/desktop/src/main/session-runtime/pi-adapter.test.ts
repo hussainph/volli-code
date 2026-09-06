@@ -1615,6 +1615,76 @@ describe("Pi native adapter dispatch", () => {
 });
 
 describe("Pi native adapter escalation", () => {
+  /**
+   * The lent half of the budget seam (VC-204): a verb call rides in with the
+   * binding's own parked-question machinery, and a budget cause is asked under
+   * the frozen `budget-ask:` segment — never `ask:` — so a gate ask and a
+   * budget ask about one tool call cannot mint one interaction id. The answer
+   * travels the same durable open → resolve → settle path every escalation
+   * takes.
+   */
+  it("lends a verb call the ask machinery, under the budget-ask segment (VC-204)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "claimed at the limit" };
+      },
+    });
+
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "call-9" },
+      new AbortController().signal,
+    );
+    if (lent === undefined) throw new Error("The binding lent no budget ask");
+    // What the door sends when its claim hits the limit under an `ask` posture.
+    const choice = lent(
+      {
+        cause: "budget.delegation-children",
+        tool: "session_start",
+        toolCallId: "call-9",
+        turnId: null,
+        reason:
+          "This Ticket Session has already started the 3 Sessions its in-ticket delegation allows.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      interaction: {
+        // Durable and spelled out, like `ask:call-7` above: the Engine mints
+        // `pi:interaction:<attachment>:budget-ask:call-9:opened` from this.
+        id: "budget-ask:call-9",
+        kind: "permission",
+        title: "Allow this session_start call?",
+        options: [
+          { id: "once", label: "Allow once", description: null },
+          { id: "reject", label: "Reject", description: null },
+        ],
+      },
+    });
+
+    const receipt = await binding.dispatch(answerCommand("budget-ask:call-9", ["once"]));
+
+    expect(receipt).toMatchObject({ commandId: "command-answer", status: "accepted" });
+    expect(await choice).toBe("allow");
+    expect(sink.observations[1]).toMatchObject({
+      kind: "interaction",
+      state: "resolved",
+      interactionId: "budget-ask:call-9",
+      resolution: { optionIds: ["once"], response: null },
+    });
+  });
+
   it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {
     const { binding, runtime, sink } = await attached();
 

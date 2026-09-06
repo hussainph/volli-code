@@ -377,8 +377,16 @@ const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
+const modelCatalogRefreshReportSchema = z.object({
+  added: nonNegativeSafeInteger,
+  removed: nonNegativeSafeInteger,
+  rejected: nonNegativeSafeInteger,
+  refreshedProviderIds: z.array(nonEmptyString).max(100),
+  failedProviderIds: z.array(nonEmptyString).max(100),
+});
 const modelAccessSnapshotSchema = z.object({
   observedAt: z.number().finite(),
+  refresh: modelCatalogRefreshReportSchema.optional(),
   providers: z.array(
     z
       .object({

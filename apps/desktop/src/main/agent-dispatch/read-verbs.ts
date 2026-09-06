@@ -11,16 +11,23 @@ import {
   displayTicketId,
   isTicketStatus,
   MUTATION_PLAN_CONTRACT,
+  pathContains,
   shortSessionId,
 } from "@volli/shared";
-import type { AgentRequest, AgentResponse, SessionEvent } from "@volli/shared";
+import type { AgentRequest, AgentResponse, Project, SessionEvent } from "@volli/shared";
+import type Database from "better-sqlite3";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { listRecentComments } from "../db/comments-repo";
 import { listRecentTicketEvents } from "../db/events-repo";
 import { listAllLabels } from "../db/labels-repo";
 import { listLatestSignals } from "../db/signals-repo";
-import { getTicket, listArchivedTicketsByProject, listTicketsByProject } from "../db/tickets-repo";
+import {
+  getTicket,
+  listArchivedTicketsByProject,
+  listTicketsByProject,
+  listWorktreePathsByProject,
+} from "../db/tickets-repo";
 import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
@@ -64,6 +71,33 @@ function worktreeMisalignment(
   return `You are working in ${cwd}, which is outside ${displayId}'s worktree at ${worktreePath}. Move your work there before continuing.`;
 }
 
+/**
+ * The outer boundary for a project-scoped environment read.
+ *
+ * A caller can stand in either the main checkout or any stamped worktree. The
+ * most specific worktree containing its cwd wins — a Project Session standing
+ * in some ticket's worktree is measured against that worktree, not against the
+ * checkout it was registered from. Otherwise the main checkout is the
+ * boundary, and `fallback` covers a Session addressed from somewhere outside
+ * the project entirely, preserving its own worktree as the scope rather than
+ * measuring that unrelated directory.
+ *
+ * Called only when there is an environment to scope: it costs a query, and
+ * `identify` is the command every agent runs first.
+ */
+function environmentProjectRoot(
+  db: Database.Database,
+  project: Project,
+  cwd: string,
+  fallback: string = project.path,
+): string {
+  const worktree = listWorktreePathsByProject(db, project.id)
+    .filter((path) => pathContains(path, cwd))
+    .toSorted((a, b) => b.length - a.length)[0];
+  if (worktree !== undefined) return worktree;
+  return pathContains(project.path, cwd) ? project.path : fallback;
+}
+
 /** Reads VC-164's frozen list without backfilling or consulting current Settings. */
 function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
   for (const event of events) {
@@ -87,10 +121,6 @@ export async function identifyVerb(
 ): Promise<AgentResponse> {
   const { options, projects, sessions, envSession, sessionEngine } = context;
   const envSessionId = request.ctx.env.session;
-  // Measured at the moment the agent asks, like the worktree-
-  // misalignment warning above: main adopted the PATH once at boot, and
-  // this reports that outcome — never re-probes, never guesses.
-  const env = options.sessionEnv ? await options.sessionEnv(request.ctx.cwd) : undefined;
   if (envSessionId) {
     if (!envSession) {
       return failure("SESSION_NOT_FOUND", `No session matches ${envSessionId}.`);
@@ -100,6 +130,21 @@ export async function identifyVerb(
       return failure("PROJECT_NOT_FOUND", "The session's project no longer exists.");
     }
     const ticket = envSession.ticketId ? getTicket(options.db, envSession.ticketId) : undefined;
+    // Measured at the moment the agent asks, like the worktree-misalignment
+    // warning below: main adopted the PATH once at boot, and this reports that
+    // outcome — never re-probes, never guesses. The second path is the outer
+    // boundary; a package cwd may still walk up to its monorepo root.
+    const env = options.sessionEnv
+      ? await options.sessionEnv(
+          request.ctx.cwd,
+          environmentProjectRoot(
+            options.db,
+            project,
+            request.ctx.cwd,
+            ticket?.worktreePath ?? project.path,
+          ),
+        )
+      : undefined;
     // A PTY session's directory is its terminal's cwd; a structured
     // Session has no PTY, so its workspace is the ticket worktree — or
     // the project root a ticketless Session was pointed at.
@@ -158,6 +203,17 @@ export async function identifyVerb(
     ? { ok: true as const, project: ticket.project }
     : projectForCreate(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
+  const env = options.sessionEnv
+    ? await options.sessionEnv(
+        request.ctx.cwd,
+        environmentProjectRoot(
+          options.db,
+          resolved.project,
+          request.ctx.cwd,
+          ticket?.ok ? (ticket.ticket.worktreePath ?? ticket.project.path) : resolved.project.path,
+        ),
+      )
+    : undefined;
   return {
     v: 1,
     ok: true,

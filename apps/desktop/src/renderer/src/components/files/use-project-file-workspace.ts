@@ -71,7 +71,6 @@ export function useProjectFileWorkspace(
   const dirtyPaths = dirtyState.projectId === projectId ? dirtyState.paths : NO_DIRTY_PATHS;
   const [pending, setPending] = React.useState<PendingClose | null>(null);
   const currentPending = pending?.projectId === projectId ? pending : null;
-  const activeRelPath = files.activeRelPath;
 
   const markDirty = React.useCallback(
     (relPath: string, dirty: boolean) => {
@@ -232,21 +231,25 @@ export function useProjectFileWorkspace(
     [closeTab, confirmNext, peekDocument, saveDocument],
   );
 
+  // Both reports name the path they are about (VC-202). They used to bind to
+  // the workspace's ONE active file, which stopped describing anything the
+  // moment Home could show two editors at once — each pane's view binds its own
+  // path one level down, and this only has to say what the report means.
   const handleDirtyChange = React.useCallback(
-    (dirty: boolean) => {
-      if (projectId === null || activeRelPath === null) return;
-      markDirty(activeRelPath, dirty);
-      if (dirty) markProjectFileEdited(projectId, activeRelPath);
+    (relPath: string, dirty: boolean) => {
+      if (projectId === null) return;
+      markDirty(relPath, dirty);
+      if (dirty) markProjectFileEdited(projectId, relPath);
     },
-    [activeRelPath, markDirty, markProjectFileEdited, projectId],
+    [markDirty, markProjectFileEdited, projectId],
   );
 
   const handleViewStateChange = React.useCallback(
-    (viewState: unknown) => {
-      if (projectId === null || activeRelPath === null) return;
-      setProjectFileViewState(projectId, activeRelPath, viewState);
+    (relPath: string, viewState: unknown) => {
+      if (projectId === null) return;
+      setProjectFileViewState(projectId, relPath, viewState);
     },
-    [activeRelPath, projectId, setProjectFileViewState],
+    [projectId, setProjectFileViewState],
   );
 
   const cancelClose = React.useCallback(() => setPending(null), []);

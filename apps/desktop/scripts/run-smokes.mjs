@@ -167,6 +167,12 @@ const SERIAL = new Set([
   // Clicks and wheels a canvas and asserts the SGR mouse reports that reach
   // the PTY — the most focus-dependent probe in the suite.
   "terminal-smoke.mjs",
+  // Drags a tab across the window with real pointer events and asserts which
+  // drop zone lit up on the way (VC-202). Same failure mode as the probe above:
+  // a second Electron window on the same desktop intercepts the pointer
+  // mid-drag, and the drag cannot be waited out — it has already been released
+  // somewhere else.
+  "split-view-smoke.mjs",
 ]);
 
 /**

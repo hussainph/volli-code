@@ -27,6 +27,8 @@ import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
+import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
+import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -150,6 +152,7 @@ function SessionRow({
   provenance,
   trailing,
   editing,
+  drag,
   onActivate,
   onStartRename,
   onCommitRename,
@@ -170,6 +173,12 @@ function SessionRow({
   /** Right-edge metadata: live status for current rows, relative end time for history rows. */
   trailing: React.ReactNode;
   editing: boolean;
+  /**
+   * What this row would open if it were dropped on a pane (VC-202 §4), or
+   * `null` for a row that is not a door — which is the same condition that
+   * makes `onActivate` null, said for the other gesture.
+   */
+  drag: SplitDragPayload | null;
   /** `null` where there is nothing to open — a closed terminal record's pane is gone. */
   onActivate: (() => void) | null;
   onStartRename(): void;
@@ -185,6 +194,9 @@ function SessionRow({
       // would both nest an interactive control and open the Session on every
       // click into the field.
       onActivate={editing ? null : onActivate}
+      // …and a row being renamed does not drag either: the pointer is there to
+      // select text in the field under it.
+      {...splitDragSourceProps(editing ? null : drag)}
       leading={
         <Glyph
           aria-label={kind === "chat" ? "Chat" : "Terminal"}
@@ -248,6 +260,7 @@ function SessionList({
   variant,
   provenance,
   now,
+  projectId,
   ticketId,
   editingId,
   setEditingId,
@@ -269,6 +282,8 @@ function SessionList({
    * the age clock to both rather than branching on which one is on screen.
    */
   now: number;
+  /** Half of a drag payload's scope; the ticket below is the other half. */
+  projectId: string;
   ticketId: string;
   editingId: string | null;
   setEditingId(sessionId: string | null): void;
@@ -309,6 +324,16 @@ function SessionList({
                 )
               }
               editing={editingId === sessionId}
+              // A chat Session is durable, so it drags whether or not it has a
+              // tab: dropping it adopts it and mints one, exactly as clicking.
+              drag={{
+                type: "session",
+                scope: "ticket",
+                projectId,
+                ticketId,
+                kind: "chat",
+                sessionId,
+              }}
               // Always activatable, unlike a terminal row — a chat Session is
               // durable, so one whose attachment has closed still opens onto its
               // own history, and reattaching is the Retry the plane offers.
@@ -336,6 +361,20 @@ function SessionList({
               )
             }
             editing={editingId === record.id}
+            // Only an OPEN terminal drags: the tab is what a pane holds, and a
+            // closed record has none — the same fact that makes it inert below.
+            drag={
+              tabId === undefined
+                ? null
+                : {
+                    type: "session",
+                    scope: "ticket",
+                    projectId,
+                    ticketId,
+                    kind: "terminal",
+                    sessionId: tabId,
+                  }
+            }
             // Exited-but-open panes live in History but still activate their tab
             // and exact split pane; closed records (no live tab, so no `tabId`)
             // remain inert until resume lands.
@@ -385,6 +424,7 @@ function SessionList({
  * Rows rename inline (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
+  projectId,
   ticketId,
   creating,
   onNewSession,
@@ -393,6 +433,8 @@ export function TicketSessionsPanel({
   onActivateSession,
   onActivateChat,
 }: {
+  /** Whose project this ticket is — half of a row's drag payload (VC-202 §4). */
+  projectId: string;
   ticketId: string;
   creating: boolean;
   onNewSession(): void;
@@ -566,6 +608,7 @@ export function TicketSessionsPanel({
   }, [ageBoundaryAt, ageNow]);
 
   const listProps = {
+    projectId,
     // Read off the listing rows before the panel splits them into two record
     // arrays, which is where the row wrapper carrying it is lost (VC-131).
     provenance: ticketSessionProvenance(rows),

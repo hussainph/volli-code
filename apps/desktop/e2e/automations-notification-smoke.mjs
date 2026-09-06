@@ -266,14 +266,19 @@ try {
     "the whole by-hand path is silent — authoring and running post nothing",
     async () => {
       await page.getByRole("button", { name: "Automations", exact: true }).first().click();
-      await page.getByRole("heading", { name: "Automations" }).waitFor({ timeout: 15000 });
+      await page
+        .getByRole("heading", { name: "Automations", exact: true })
+        .waitFor({ timeout: 15000 });
       await page.getByRole("button", { name: "New Automation" }).first().click();
-      const form = page.getByRole("dialog");
+      const form = page.locator('[data-slot="automation-editor"]');
       await form.waitFor({ timeout: 15000 });
       await form.getByLabel("Name").fill("Nightly sweep");
       await form.getByLabel("Instructions").fill("/review the day");
       await form.getByRole("button", { name: "Create automation" }).click();
-      await form.waitFor({ state: "detached", timeout: 15000 });
+      await page
+        .locator("[data-automation-rail-row]")
+        .filter({ hasText: "Nightly sweep" })
+        .waitFor({ timeout: 15000 });
 
       // And the Run door itself, on an Automation with no pin: it inherits,
       // there is no default model on this profile, and it refuses for that

@@ -617,6 +617,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
               <ActiveBandRow
                 key={row.id}
                 row={row}
+                projectId={project.id}
                 ticketPrefix={project.ticketPrefix}
                 now={ageNow}
                 selected={isSelected(row)}
@@ -643,6 +644,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
                 <PreviousBandRow
                   key={entry.id}
                   row={entry.row}
+                  projectId={project.id}
                   ticketPrefix={project.ticketPrefix}
                   now={ageNow}
                   selected={isSelected(entry.row)}
@@ -669,6 +671,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
                         <PreviousBandRow
                           key={row.id}
                           row={row}
+                          projectId={project.id}
                           ticketPrefix={project.ticketPrefix}
                           now={ageNow}
                           selected={isSelected(row)}

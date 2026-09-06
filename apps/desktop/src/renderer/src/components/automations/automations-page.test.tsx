@@ -186,6 +186,14 @@ function button(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+function paragraph(copy: string): HTMLParagraphElement {
+  const found = [...document.querySelectorAll("p")].find(
+    (candidate) => candidate.textContent === copy,
+  );
+  if (found === undefined) throw new Error(`no paragraph reading ${copy}`);
+  return found;
+}
+
 /** Opens a tooltip through the pointer door its Radix trigger actually listens to. */
 async function showTooltip(trigger: HTMLElement): Promise<HTMLElement> {
   await act(async () => {
@@ -209,6 +217,16 @@ function setInputValue(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function openLanes(): Promise<void> {
+  const control = [...document.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent === "Lanes",
+  );
+  if (control === undefined) throw new Error("no Lanes view control");
+  await act(async () => {
+    control.click();
+  });
 }
 
 beforeEach(() => {
@@ -281,8 +299,8 @@ describe("the page", () => {
       ],
     });
 
-    expect(text()).toContain("Ticket enters Doing, Needs Review");
-    expect(text()).not.toContain("Only when I run it");
+    const row = document.querySelector('[data-automation-rail-row="automation-1"]');
+    expect(row?.textContent).toContain("Ticket enters Doing, Needs Review");
   });
 
   it("shows a pinned Runtime as one model-and-reasoning pair", async () => {
@@ -297,26 +315,41 @@ describe("the page", () => {
     expect(text()).toContain("claude-opus · high");
   });
 
-  it("offers the create action even with nothing listed", async () => {
+  it("offers the create action and preserves Run history with nothing listed", async () => {
     await mount({});
 
     expect(text()).toContain("New Automation");
+    expect(text()).toContain("Nothing saved yet");
     expect(text()).toContain("Nothing has run in this project yet.");
+  });
+
+  it("keeps both ownership groups visible in the persistent rail", async () => {
+    await mount({ automations: [automation({ projectId: null })] });
+
+    expect(text()).toContain("This project");
+    expect(text()).toContain("All projects");
+    expect(document.querySelector('[data-automation-rail-row="automation-1"]')).not.toBeNull();
   });
 });
 
 describe("enable and disable", () => {
-  it("is off until this machine says otherwise, and says what off means", async () => {
+  it("is off until this machine says otherwise, and marks the rail row", async () => {
     // VC-112: a machine fires nothing until someone turns something on there.
     await mount({ automations: [automation()] });
 
-    expect(text()).toContain("Won’t start on its own");
+    expect(document.querySelector('[aria-label="Switched off"]')).not.toBeNull();
+    expect(
+      (button("Enabled on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+    ).toBe("unchecked");
   });
 
-  it("drops that line once the switch is on here", async () => {
+  it("marks the selected record and rail row once switched on here", async () => {
     await mount({ automations: [automation()], enabled: ["automation-1"] });
 
-    expect(text()).not.toContain("Won’t start on its own");
+    expect(document.querySelector('[aria-label="Enabled"]')).not.toBeNull();
+    expect(
+      (button("Enabled on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+    ).toBe("checked");
   });
 
   it("writes through the command door and adopts the set it answers with", async () => {
@@ -394,7 +427,9 @@ describe("running by hand", () => {
       setInputValue(find, "nothing like this");
     });
 
-    expect(document.body.textContent).toContain("No tickets here.");
+    const ticketNotice = paragraph("No tickets here.");
+    expect(ticketNotice.classList.contains("text-ui")).toBe(true);
+    expect(ticketNotice.classList.contains("text-sm")).toBe(false);
   });
 });
 
@@ -480,6 +515,7 @@ describe("the lane view", () => {
 
   it("draws one lane per board column, plus the lane for records no column offers", async () => {
     await mount({ automations: [automation()] });
+    await openLanes();
 
     for (const label of ["Backlog", "Todo", "Doing", "Needs Review", "Done"]) {
       expect(text()).toContain(label);
@@ -487,6 +523,19 @@ describe("the lane view", () => {
     // The default Trigger is "Nothing else", so the seeded record is off board.
     expect(text()).toContain("No column");
     expect(document.querySelector('[data-lane-row="none:automation-1"]')).not.toBeNull();
+  });
+
+  it("calls the disarmed choice No Automation", async () => {
+    await mount({ automations: [doingOnly] });
+    await openLanes();
+
+    await act(async () => {
+      button("Arm Doing").dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+      );
+    });
+
+    expect(document.body.textContent).toContain("No Automation");
   });
 
   it("puts a SCHEDULE record in that lane too, rather than claiming every automation has a column", async () => {
@@ -506,6 +555,7 @@ describe("the lane view", () => {
         }),
       ],
     });
+    await openLanes();
 
     expect(document.querySelector('[data-lane-row="none:nightly"]')).not.toBeNull();
     expect(text()).not.toContain("Every automation has a column.");
@@ -523,6 +573,7 @@ describe("the lane view", () => {
         },
       ],
     });
+    await openLanes();
 
     expect(
       document.querySelector('[data-lane-row="doing:implement"]')?.getAttribute("data-lane-digit"),
@@ -550,6 +601,7 @@ describe("the lane view", () => {
         },
       ],
     });
+    await openLanes();
 
     expect(
       document.querySelector('[data-lane-row="doing:shared"]')?.getAttribute("data-lane-digit"),
@@ -575,6 +627,7 @@ describe("the lane view", () => {
       ],
       enabled: ["shared"],
     });
+    await openLanes();
 
     const bolt = button("Doing runs Standards sweep");
     expect(bolt.getAttribute("data-arming-state")).toBe("ready");
@@ -598,6 +651,7 @@ describe("the lane view", () => {
       ],
       enabled: [],
     });
+    await openLanes();
 
     const label = "Doing is armed with Standards sweep — switched off";
     const bolt = button(label);
@@ -675,8 +729,8 @@ describe("schedules (VC-130)", () => {
     await mount({ automations: [automation({ trigger: NIGHTLY })] });
     // The stored zone is shown ALWAYS (VC-112) — a row that hid it would leave
     // a reader unable to tell whose 21:00 this is.
-    expect(text()).toContain("Every day at 21:00 Europe/London");
-    expect(text()).not.toContain("Only when I run it");
+    const row = document.querySelector('[data-automation-rail-row="automation-1"]');
+    expect(row?.textContent).toContain("Every day at 21:00 Europe/London");
   });
 
   it("shows a Skipped occurrence in the Run history, never as a silence", async () => {
@@ -691,6 +745,7 @@ describe("schedules (VC-130)", () => {
     expect(text()).toContain("Volli wasn’t running");
     // One row per gap, saying how wide the gap was.
     expect(text()).toContain("3 occurrences");
+    expect(document.querySelector('[data-run-history-skip="skip-1"]')).not.toBeNull();
   });
 
   it("offers Run now on a skip, and starts ONE Run at the Project", async () => {

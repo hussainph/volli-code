@@ -38,12 +38,15 @@ import {
   displayTicketId,
   REASONING_LEVELS,
   shortSessionId,
+  VERB_TOOLS,
 } from "@volli/shared";
 import type {
   Automation,
   AuthorityPolicy,
   Project,
   ReasoningLevel,
+  RuntimeAskChoice,
+  RuntimeAskRequest,
   RuntimeSessionIdentity,
   RuntimeVerbCall,
   RuntimeVerbResult,
@@ -135,6 +138,25 @@ function refusal(text: string): RuntimeVerbResult {
   return { text };
 }
 
+/**
+ * The budget-ask capability one verb call rides in on (VC-204).
+ *
+ * Supplied by the attachment's own binding — the same parked-question machinery
+ * the authority gate escalates through — and absent when the call arrived with
+ * no way to put a question in front of a person, in which case a spent budget
+ * refuses the way it always did. The door never chooses who answers: it states
+ * the budget fact, and the binding owns the interaction.
+ */
+export type VerbBudgetAsk = (
+  request: RuntimeAskRequest,
+  signal: AbortSignal,
+) => Promise<RuntimeAskChoice>;
+
+/** The wire name the model called this verb by, read off the registry's own projection. */
+function wireToolName(verb: VerbToolKey): string {
+  return VERB_TOOLS.find((entry) => entry.key === verb)?.tool.name ?? verb;
+}
+
 /** One optional string field, trimmed, or a refusal naming the field. */
 function optionalText(
   input: Readonly<Record<string, unknown>>,
@@ -195,6 +217,74 @@ function callerActor(session: RuntimeSessionIdentity): TicketEventActor {
   return { kind: "session", sessionId: session.sessionId, ticketId: session.ticketId };
 }
 
+/**
+ * A spent delegation allowance, judged by the caller's project posture (VC-204).
+ *
+ * `ask` parks the call in front of the person driving; their "once" is recorded
+ * as one durable extension and this call re-claims under the widened allowance.
+ * Everything else — a `refuse` posture, a call that arrived without an ask
+ * capability, a declined or withdrawn question — lands on the same honest
+ * refusal the cap has always spoken, so the model's next move never depends on
+ * why the slot was not granted.
+ *
+ * One crash window is carried knowingly, and its failure direction is the
+ * safe one. The interaction's resolution commits durably before the parked
+ * promise settles, and the extension row is written only after — so a process
+ * lost between the two leaves a recorded "once" with no slot to show for it,
+ * and the replayed call asks again rather than reading the ledger's answer
+ * back. Asking a person twice is an annoyance; the alternatives are worse in
+ * both directions — granting from an answer this process never observed, or a
+ * slot no one approved. Every other boundary IS replay-proof without a second
+ * question: extension-before-claim re-claims under the widened allowance
+ * (`claimStart` counts extensions), and claim-before-start finds its claim row
+ * (`claimStart` is idempotent per tool call).
+ */
+async function delegationLimitOutcome(
+  options: AgentToolDoorOptions,
+  session: RuntimeSessionIdentity,
+  request: RuntimeVerbCall,
+  budgetAsk: VerbBudgetAsk | undefined,
+  signal: AbortSignal,
+  allowed: number,
+): Promise<{ granted: true } | { granted: false; text: string }> {
+  const spent = `This Ticket Session has already started the ${allowed} Sessions its in-ticket delegation allows.`;
+  const posture = options.authorityPolicy(session.projectId).budgets.delegationExceeded;
+  if (posture !== "ask" || budgetAsk === undefined) return { granted: false, text: spent };
+  let choice: RuntimeAskChoice;
+  try {
+    choice = await budgetAsk(
+      {
+        cause: "budget.delegation-children",
+        tool: wireToolName(request.verb),
+        toolCallId: request.toolCallId,
+        // The door does not know the turn; the binding correlates the question
+        // by tool call id, which is the identity that survives everywhere.
+        turnId: null,
+        reason: `${spent} Allowing this call starts one more delegated Session on its Ticket.`,
+        trip: "budget",
+        overridable: true,
+      },
+      signal,
+    );
+  } catch {
+    // A question nobody was shown, or one withdrawn when the turn stopped
+    // waiting. Either way no decision exists, so the refusal stands — the
+    // state the call was already in.
+    return { granted: false, text: spent };
+  }
+  if (choice !== "allow") {
+    return {
+      granted: false,
+      text: `${spent} The person driving declined to extend that allowance for this call.`,
+    };
+  }
+  options.delegation.recordExtension({
+    parentSessionId: session.sessionId,
+    toolCallId: request.toolCallId,
+  });
+  return { granted: true };
+}
+
 async function startSessionTool(
   options: AgentToolDoorOptions,
   session: RuntimeSessionIdentity,
@@ -202,8 +292,10 @@ async function startSessionTool(
   // Starting a Session is not withdrawable mid-flight: by the time an abort
   // could be read the Session either durably exists or never did, and a
   // half-honoured cancel would strand the very record the operation id
-  // protects. The wait family is where the signal earns its keep.
-  _signal: AbortSignal,
+  // protects. The signal is read only while a spent budget waits on a person —
+  // before anything durable begins.
+  signal: AbortSignal,
+  budgetAsk?: VerbBudgetAsk,
 ): Promise<RuntimeVerbResult> {
   const sessions = options.sessions();
   if (sessions === null) {
@@ -252,15 +344,35 @@ async function startSessionTool(
     if (resolved.ticket.id !== session.ticketId) {
       return refusal("This Ticket Session can only start Sessions on its own Ticket.");
     }
-    const claimed = options.delegation.claimStart({
+    let claimed = options.delegation.claimStart({
       ...claimRef,
       ticketId: session.ticketId,
       createCommandId: sessionCreateCommandId(operationId),
     });
+    if (!claimed.ok && claimed.reason === "limit") {
+      // The allowance ran out. Not necessarily the end (VC-204): the project's
+      // budget posture decides whether that is a wall or a question, and a
+      // person's "once" widens the allowance by exactly one before the same
+      // claim is made again — the ledger stays the only judge of a slot.
+      const outcome = await delegationLimitOutcome(
+        options,
+        session,
+        request,
+        budgetAsk,
+        signal,
+        claimed.allowed,
+      );
+      if (!outcome.granted) return refusal(outcome.text);
+      claimed = options.delegation.claimStart({
+        ...claimRef,
+        ticketId: session.ticketId,
+        createCommandId: sessionCreateCommandId(operationId),
+      });
+    }
     if (!claimed.ok) {
       return refusal(
         claimed.reason === "limit"
-          ? `This Ticket Session has already started the ${claimed.maxChildren} Sessions its in-ticket delegation allows.`
+          ? `This Ticket Session has already started the ${claimed.allowed} Sessions its in-ticket delegation allows.`
           : "This Ticket Session was not granted in-ticket delegation when it started.",
       );
     }
@@ -606,6 +718,7 @@ type VerbToolHandlers = Record<
     session: RuntimeSessionIdentity,
     request: RuntimeVerbCall,
     signal: AbortSignal,
+    budgetAsk?: VerbBudgetAsk,
   ) => Promise<RuntimeVerbResult>
 >;
 
@@ -641,11 +754,12 @@ export type AgentToolDoor = (
   session: RuntimeSessionIdentity,
   request: RuntimeVerbCall,
   signal: AbortSignal,
+  budgetAsk?: VerbBudgetAsk,
 ) => Promise<RuntimeVerbResult>;
 
 /** Build the one closure the Pi adapter hands every attachment that holds a verb. */
 export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoor {
-  return async (session, request, signal) => {
+  return async (session, request, signal, budgetAsk) => {
     const handler = VERB_TOOL_HANDLERS[request.verb];
     if (handler === undefined) {
       // Unreachable through a resolved surface, and refused rather than
@@ -653,6 +767,6 @@ export function createAgentToolDoor(options: AgentToolDoorOptions): AgentToolDoo
       // total over, so arriving here means the two disagreed.
       return refusal(`${request.verb} is not a verb this build can run.`);
     }
-    return handler(options, session, request, signal);
+    return handler(options, session, request, signal, budgetAsk);
   };
 }

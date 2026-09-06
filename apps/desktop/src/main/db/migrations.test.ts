@@ -2597,3 +2597,43 @@ describe("migrate — 038, retained armed-Run attempts (VC-228)", () => {
     db.close();
   });
 });
+
+describe("migrate — 039, the delegation-extensions reconciler (VC-204)", () => {
+  it("converges the lineage that ran VC-204's own 031 without main's automations 031", () => {
+    // Build the exact pre-merge branch shape: migrations through 030, followed
+    // by VC-204's original 031 extension table instead of main's Automation
+    // schema. The runner will never offer this database 031 again, so 039's
+    // reconciler is the only door left.
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 30)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.exec(`
+      CREATE TABLE session_delegation_extensions (
+        parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+        created_at        INTEGER NOT NULL,
+        PRIMARY KEY (parent_session_id, tool_call_id)
+      );
+    `);
+    db.pragma("user_version = 31");
+
+    migrate(db, dbPath);
+
+    // Both lineages land on one schema: main's 031 objects restored, the
+    // extension table kept, and the version at the front of history.
+    expect(columnNames(db, "automations")).toContain("trigger_spec");
+    expect(tableExists(db, "automation_column_arming")).toBe(true);
+    expect(tableExists(db, "session_delegation_extensions")).toBe(true);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+
+    // Re-offering 039 is a no-op rather than a duplicate-object error.
+    db.pragma("user_version = 38");
+    expect(() => migrate(db, dbPath)).not.toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

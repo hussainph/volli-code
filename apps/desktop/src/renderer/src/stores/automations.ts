@@ -2,8 +2,7 @@
  * The renderer's cache of the Automations a project can list (its own plus
  * every global one — `api.automations.list`), its Run history, the
  * machine-local enabled set, and the one piece of app-level view state the
- * feature owns: whether the editor dialog is open, for which project, and on
- * which record.
+ * feature owns: which project/record the page's embedded editor is showing.
  *
  * Read on demand — the command palette refreshes on open, the page on mount
  * and after every write — rather than subscribed: the record changes only
@@ -14,7 +13,7 @@
  *
  *  - **A save resolves the refusal STRING.** A rejected name, empty
  *    Instructions or an unspellable pin is a correction to what is still on
- *    screen in the dialog, not a failure behind the user's back.
+ *    screen in the editor, not a failure behind the user's back.
  *  - **Everything else toasts**, per the surface-every-failure convention:
  *    a read, a delete, a duplicate and an enable all happen with no form open
  *    to correct, so the toast is the only place a person could learn.
@@ -183,8 +182,8 @@ interface AutomationsState {
   closeEditor(): void;
   /**
    * Creates one Automation through main's validating door. Resolves `null` on
-   * success (cache refreshed, dialog left to the caller to close), or the
-   * refusal message for the dialog to show inline.
+   * success (cache refreshed and the embedded editor adopts the saved record),
+   * or the refusal message for the editor to show inline.
    */
   save(input: AutomationDraftInput): Promise<string | null>;
   /** Rewrites one Automation's editable fields, under the same refusal contract. */
@@ -421,10 +420,16 @@ export function createAutomationsStore() {
         });
         if (!result.ok) return result.error;
         // A global Automation is listable everywhere, but the only cached list
-        // guaranteed on screen is the project the dialog was opened under —
-        // other projects re-read on their next palette open.
+        // guaranteed on screen is the project whose editor created it — other
+        // projects re-read on their next palette open.
         const refreshProjectId = input.projectId ?? get().editor?.projectId;
-        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
+        if (refreshProjectId !== undefined) {
+          await get().refresh(refreshProjectId);
+          // The page editor stays open after Save. Adopt the canonical row main
+          // answered with so a create becomes an edit in place and subsequent
+          // saves target the durable record rather than repeating Create.
+          set({ editor: { projectId: refreshProjectId, automation: result.automation } });
+        }
         return null;
       } catch (error) {
         return errorMessage(error);
@@ -440,7 +445,10 @@ export function createAutomationsStore() {
         });
         if (!result.ok) return result.error;
         const refreshProjectId = get().editor?.projectId;
-        if (refreshProjectId !== undefined) await get().refresh(refreshProjectId);
+        if (refreshProjectId !== undefined) {
+          await get().refresh(refreshProjectId);
+          set({ editor: { projectId: refreshProjectId, automation: result.automation } });
+        }
         return null;
       } catch (error) {
         return errorMessage(error);

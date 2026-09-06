@@ -41,6 +41,18 @@ function reorder(column: Ticket[]): Ticket[] {
   );
 }
 
+/** Whether every column contains the same ticket ids in the same order. */
+function sameBoardOrder(
+  before: Record<TicketStatus, Ticket[]>,
+  after: Record<TicketStatus, Ticket[]>,
+): boolean {
+  return TICKET_STATUSES.every(
+    (status) =>
+      before[status].length === after[status].length &&
+      before[status].every((ticket, index) => ticket.id === after[status][index]?.id),
+  );
+}
+
 /**
  * Moves a ticket to `toStatus` at `toIndex` (clamped to the destination
  * column's bounds), rebalancing `order` in both the source and destination
@@ -88,6 +100,55 @@ export function moveTicket(
       result.push(...groups[status]);
     }
   }
+  return result;
+}
+
+/**
+ * Moves several tickets as one contiguous group.
+ *
+ * Group order is canonical board order (status left-to-right, then each
+ * column's manual order), not click order. `toIndex` addresses the destination
+ * AFTER the selected tickets have been removed, which makes one final group
+ * position unambiguous even when the selection spans or already occupies the
+ * destination column. Unknown and duplicate ids are ignored. The same array
+ * reference is returned when no known ticket moves or the resulting board
+ * order is unchanged.
+ */
+export function moveTickets(
+  tickets: readonly Ticket[],
+  ticketIds: readonly string[],
+  toStatus: TicketStatus,
+  toIndex: number,
+  now: number,
+): Ticket[] {
+  const selectedIds = new Set(ticketIds);
+  if (selectedIds.size === 0) return tickets as Ticket[];
+
+  const before = groupTicketsByStatus(tickets);
+  const selected = TICKET_STATUSES.flatMap((status) =>
+    before[status].filter((ticket) => selectedIds.has(ticket.id)),
+  );
+  if (selected.length === 0) return tickets as Ticket[];
+
+  const after = {} as Record<TicketStatus, Ticket[]>;
+  for (const status of TICKET_STATUSES) {
+    after[status] = before[status].filter((ticket) => !selectedIds.has(ticket.id));
+  }
+
+  const destination = after[toStatus];
+  const clampedIndex = Math.max(0, Math.min(toIndex, destination.length));
+  after[toStatus] = [
+    ...destination.slice(0, clampedIndex),
+    ...selected.map((ticket) => Object.assign({}, ticket, { status: toStatus, updatedAt: now })),
+    ...destination.slice(clampedIndex),
+  ];
+
+  // A drag that resolves back to the group's current slot should be a true
+  // no-op: preserve the caller's array and every ticket's updatedAt/reference.
+  if (sameBoardOrder(before, after)) return tickets as Ticket[];
+
+  const result: Ticket[] = [];
+  for (const status of TICKET_STATUSES) result.push(...reorder(after[status]));
   return result;
 }
 

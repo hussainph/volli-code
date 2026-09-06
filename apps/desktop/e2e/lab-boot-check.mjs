@@ -39,6 +39,9 @@ const SCRATCHES = [
   // Borrows Button/TabStrip/Tooltip and mounts its own Tooltip provider at the
   // root — the provider-shaped failure this check exists for (VC-55).
   "project-session-identity",
+  // Mounts the production Automations page against fixture IPC, including its
+  // Tooltip-bound lanes and floating composer picker (VC-222).
+  "automation-design-pass",
   // `settings-redesign` was here. It shipped (VC-111), so the lab prototype and
   // its private kit were deleted rather than left to rot into a second,
   // divergent settings design system beside the real one in

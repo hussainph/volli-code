@@ -90,7 +90,9 @@ async function mount(tickets: Ticket[]) {
                 projectId="p1"
                 ticketPrefix="PRB"
                 projectLabels={NO_LABELS}
-                selectedId={null}
+                selectedIds={[]}
+                draggingIds={[]}
+                groupDragIds={[]}
                 onSelect={() => {}}
                 onOpen={() => {}}
                 composerInitiallyOpen={false}

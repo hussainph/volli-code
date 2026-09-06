@@ -1,11 +1,14 @@
 import * as React from "react";
 
-import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
+import {
+  TerminalViewportBox,
+  useTerminalViewports,
+} from "@renderer/components/sessions/terminal-viewport-box";
 import { TicketTerminalOverlay } from "@renderer/components/sessions/ticket-terminal-host";
+import { paneIdForElement } from "@renderer/components/split/split-view-grid";
 import { createTerminalSplit } from "@renderer/components/sessions/session-create";
-import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useNewSessionShortcut } from "@renderer/hooks/use-new-session-shortcut";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import {
@@ -17,13 +20,10 @@ import {
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
-import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
-import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import { useBoardStore } from "@renderer/stores/board";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
 import { adjacentPaneId, type TerminalFocusDirection } from "@renderer/terminal/pane-navigation";
@@ -31,21 +31,28 @@ import { closeTerminalPane } from "@renderer/terminal/session-lifecycle";
 
 interface SessionsLayerProps {
   /**
-   * Home's own plane box is in front — a Session tab OR a File tab, as against
-   * the Board, a ticket workspace or another nav page. The layer stays MOUNTED
-   * regardless; this only toggles the box's visibility. Ticket terminals it
-   * also hosts are shown independently, overlaid on the ticket plane, even
-   * while this is hidden — so no live terminal is ever unmounted incidentally.
+   * Home's own plane box is in front — as against a ticket workspace that has
+   * taken Home over, or another nav page. The layer stays MOUNTED regardless;
+   * this only toggles the box's visibility. Ticket terminals it also hosts are
+   * shown independently, overlaid on the ticket's own panes, even while this is
+   * hidden — so no live terminal is ever unmounted incidentally.
+   *
+   * Since VC-202 the Board rides inside Home's plane too (it is the primary
+   * pane's permanent tab), so this no longer stands down for it: what the box
+   * holds is whatever Home's split grid draws.
    */
   visible: boolean;
   /**
-   * Which Home tab is in front, resolved once by `home-surface.tsx` — the
-   * permanent Board tab or one of the project's own Sessions. Handed down
-   * rather than derived here because two surfaces render off the same answer
-   * and a frame of disagreement would leave the user looking at nothing; see
-   * that module's doc.
+   * The tabs Home is actually SHOWING — one per pane of its split view,
+   * resolved once by `home-surface.tsx` and handed down (two surfaces render
+   * off the same answer and a frame of disagreement would leave the user
+   * looking at nothing; see `home-tabs.ts`).
+   *
+   * A list rather than the single active tab because a split surface shows
+   * several at once, and the one question this layer asks of it — may terminal
+   * focus still be held? — means "is that terminal in front in SOME pane".
    */
-  activeTabId: string;
+  visibleTabIds: readonly string[];
   /**
    * Home's right rail, or `null` when it is collapsed (VC-55).
    *
@@ -58,13 +65,15 @@ interface SessionsLayerProps {
    */
   rail?: React.ReactNode;
   /**
-   * The non-Session workbench plane in front: a Home File editor (VC-121) or a
-   * Browser Tab's renderer chrome and native-view anchor, else null.
+   * Home's plane: its split grid, with whatever each pane draws inside it —
+   * editors, chats, the Board, terminal anchors, a Browser Tab's renderer
+   * chrome and native-view anchor (VC-202). Null only while no project is
+   * selected or a ticket workspace has taken Home over.
    *
    * It arrives as a node for the reason {@link SessionsLayerProps.rail} does,
-   * and it stands in the SAME column as the Session planes — which is the
-   * whole point. Rendered one level up it would need a second row of its own,
-   * and the rail would then live at two positions in the tree: React
+   * and it stands in the SAME column as the terminals this layer hosts — which
+   * is the whole point. Rendered one level up it would need a second row of its
+   * own, and the rail would then live at two positions in the tree: React
    * reconciles by POSITION, so every Session↔File switch would unmount and
    * remount `HomeRail` and the Files navigator inside it would lose the folder
    * it was standing in. Opening a file from that navigator would reset it to
@@ -84,11 +93,19 @@ interface SessionsLayerProps {
  * the worktree-phase stream, the Session-activity stream, the harness catalog
  * and the ⌘T binding are all mounted here and nowhere else.
  *
- * Two regions: the Project Session planes (split trees plus whichever chat is
- * in front, hidden with `visible`) beside Home's own rail when the composition
- * one level up hands one down, and the resident {@link TicketTerminalOverlay}
- * (positioned over the ticket detail's plane when a ticket session tab is
- * active). Both read the one unified store.
+ * Two regions: Home's plane — its split grid, handed down as `plane`, with this
+ * project's live terminals positioned over whichever pane anchors each of them
+ * (VC-202) — beside Home's own rail when the composition one level up hands one
+ * down, and the resident {@link TicketTerminalOverlay}, which does the same for
+ * a ticket workspace's panes. Both read the one unified store, and both position
+ * through the one viewport registry.
+ *
+ * THE CHAT PLANE used to live here too, `absolute inset-0` over the same box.
+ * It moved into Home's pane cells with VC-202, because "the chat covers the
+ * plane" stopped being true the moment a surface had more than one: a chat is
+ * now one pane's content among several. Its state is registry-resident
+ * (@volli/session-presentation), so a remount costs nothing — which is why the
+ * chat could move and a terminal could not.
  *
  * THE TAB STRIP used to live inside this file's `hidden` wrapper. It moved to
  * `home-surface.tsx` in VC-54 for one reason: Home's strip has to stay on
@@ -102,12 +119,12 @@ interface SessionsLayerProps {
  * empty state (`board/board-empty.tsx`) — removing the Sessions page removed
  * the app's only proactive auth surface, and VC-52 shipped deliberately silent.
  */
-export function SessionsLayer({ visible, activeTabId, rail, plane = null }: SessionsLayerProps) {
+export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: SessionsLayerProps) {
   const byOwner = useSessionsStore((state) => state.byOwner);
   const setActivePane = useSessionsStore((state) => state.setActivePane);
   const setSplitRatio = useSessionsStore((state) => state.setSplitRatio);
   const markExited = useSessionsStore((state) => state.markExited);
-  const selected = useSelectedProject();
+  const selectedId = useSelectedProject()?.id ?? null;
   // The guard for closing a PANE. Closing a TAB is `home-surface.tsx`'s, which
   // owns the strip; both interpose a confirm before a busy PTY's teardown runs,
   // and only one of them can have a confirm up at a time.
@@ -200,26 +217,22 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
   // Sessions.
   useNewSessionShortcut();
 
-  const selectedId = selected?.id ?? null;
-  const previewHomeFile = useWorkspaceStore((state) => state.previewHomeFile);
-
-  // A chat in front covers the plane, so the terminals under it stand down.
-  // They stay mounted — only their visibility flips (see the keep-alive below).
-  const activeChatSessionId = parseChatTabId(activeTabId);
-  // A File or Browser tab covers the same column, and every Session pane stands
-  // down for it on exactly the same terms: mounted, not visible. The box itself
-  // stays on screen — it is what the workbench plane and optional rail stand in.
-  const panesVisible = visible && plane === null;
+  // Which terminals have a pane to be drawn in, and where. One map for both
+  // surfaces (`split/terminal-viewport-registry.ts`); this layer draws the
+  // entries its own scope owns and the ticket overlay draws the rest.
+  const viewports = useTerminalViewports();
 
   // Terminal focus can land on THIS surface's terminals too, so this surface
   // owes the same invariant a ticket's detail view owes for its own: the target
-  // must keep naming the terminal that is actually in front.
+  // must keep naming a terminal that is actually in front. With panes, "in
+  // front" means in front IN SOME PANE — zen mode is entered from one pane of
+  // several and must not be cleared by the pane beside it.
   const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
   const projectSessionFocused =
     terminalFocusTarget !== null &&
     terminalFocusTarget.ticketId === null &&
     terminalFocusTarget.projectId === selectedId &&
-    terminalFocusTarget.sessionId === activeTabId;
+    visibleTabIds.includes(terminalFocusTarget.sessionId);
   // A ticket target is enforced at the store layer (`clearTerminalFocusUnlessTicket`)
   // because no single ticket view outlives every ticket. A ticketless one needs no
   // such twin: this layer IS the app's always-mounted owner of the surface, so it
@@ -229,53 +242,9 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
   // target is set, must never be left holding one around a terminal nobody can see.
   React.useEffect(() => {
     if (terminalFocusTarget === null || terminalFocusTarget.ticketId !== null) return;
-    if (panesVisible && projectSessionFocused) return;
+    if (visible && projectSessionFocused) return;
     useUiStore.getState().setTerminalFocusTarget(null);
-  }, [terminalFocusTarget, projectSessionFocused, panesVisible]);
-
-  /**
-   * Where a file a chat names opens (VC-120). The raw tool path is translated
-   * FIRST — `resolveChatOpenTarget` — because an orchestrating Project Session
-   * spends its life pointing at ticket worktrees, and the untranslated string
-   * used to resolve against the main checkout and render raw ENOENT text:
-   *
-   *  • absolute under a ticket's worktree → that ticket's file tab, and its
-   *    workspace brought to front (the transcript pointed there by name);
-   *  • absolute under the main checkout → relativized into a Home File tab;
-   *  • relative → this chat's own venue, the main checkout, as before;
-   *  • anything else → a toast, and NO navigation — never a pane whose only
-   *    content is an error.
-   *
-   * Held across renders because {@link ChatPlane} hands it to every turn on
-   * screen: a fresh function here re-renders the whole transcript. Ticket
-   * worktrees are read off the board store at CLICK time for the same reason —
-   * subscribing would retie this callback to every board refresh.
-   */
-  const selectedPath = selected?.path ?? null;
-  const openProjectFile = React.useCallback(
-    (path: string) => {
-      if (selectedId === null || selectedPath === null) return;
-      const tickets = useBoardStore.getState().ticketsByProject[selectedId] ?? [];
-      const target = resolveChatOpenTarget({
-        path,
-        projectPath: selectedPath,
-        worktrees: chatWorktreeRefs(tickets),
-        scope: { kind: "project" },
-      });
-      if (target.kind === "outside") {
-        toastError(`${path} is outside this project.`);
-        return;
-      }
-      if (target.kind === "ticket-file") {
-        const workspace = useWorkspaceStore.getState();
-        workspace.openTicketFile(selectedId, target.ticketId, target.relPath);
-        workspace.openTicketWorkspace(selectedId, target.ticketId);
-        return;
-      }
-      previewHomeFile(selectedId, target.relPath);
-    },
-    [previewHomeFile, selectedId, selectedPath],
-  );
+  }, [terminalFocusTarget, projectSessionFocused, visible]);
 
   // ⌘D split, ⌘⌥arrow pane nav, ⌘+/-/0 font size — resolved off the focused
   // pane's data-* attributes, so it is surface-agnostic: the same handler drives
@@ -343,74 +312,69 @@ export function SessionsLayer({ visible, activeTabId, rail, plane = null }: Sess
 
   return (
     <>
-      {/* The Project Session planes — or the File/Browser workbench plane
-          standing in the same column — and, beside them, Home's rail. Flow layout, hidden (not
-          unmounted) when the Board tab or another page is in front. The row is
-          the outer box so the rail narrows what is in the column rather than
-          covering it, and it is the ONE place the rail is rendered from: see
-          `plane` on the props for what a second position would cost. */}
+      {/* Home's plane and, beside it, Home's rail. Flow layout, hidden (not
+          unmounted) when a ticket workspace has taken Home over or another page
+          is in front. The row is the outer box so the rail narrows what is in
+          the column rather than covering it, and it is the ONE place the rail is
+          rendered from: see `plane` on the props for what a second position
+          would cost. */}
       <div className={cn("flex min-h-0 flex-1", !visible && "hidden")}>
         <div
           className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
           onKeyDownCapture={handleTerminalShortcut}
         >
-          {/* Keep-alive: render every project's Project-Session split tree; only
-              the selected project's active tab is visible, the rest stay mounted. */}
+          {/* Keep-alive: render every project's Project-Session split tree, and
+              position each over the pane that published an anchor for it. A tab
+              no pane is showing keeps its box hidden and its engine alive —
+              which is the same statement `visible` makes to the tree inside. */}
           {Object.entries(byOwner).flatMap(([ownerId, container]) =>
             container.tabs
               .filter((tab) => tab.scope.kind === "project")
-              .map((tab) => (
-                <SessionSplitLayout
-                  key={tab.sessionId}
-                  ownerId={ownerId}
-                  tab={tab}
-                  visible={
-                    panesVisible &&
-                    ownerId === selected?.id &&
-                    tab.sessionId === container.activeSessionId &&
-                    // A chat plane is `absolute inset-0` over this same box, and
-                    // so is every split tree — a terminal left visible under one
-                    // would paint straight through it.
-                    activeChatSessionId === null
-                  }
-                  onActivate={(sessionId) => setActivePane(ownerId, tab.sessionId, sessionId)}
-                  onSplit={(sessionId, direction) =>
-                    void createTerminalSplit(tab.scope, tab.sessionId, sessionId, direction)
-                  }
-                  onClose={(sessionId) =>
-                    closeGuard.guard([sessionId], () =>
-                      closeTerminalPane(ownerId, tab.sessionId, sessionId),
-                    )
-                  }
-                  onResize={(splitId, ratio) =>
-                    setSplitRatio(ownerId, tab.sessionId, splitId, ratio)
-                  }
-                />
-              )),
+              .map((tab) => {
+                const published = viewports.get(tab.sessionId);
+                const anchor = published?.ownerId === ownerId ? published.anchor : null;
+                return (
+                  <TerminalViewportBox
+                    key={tab.sessionId}
+                    anchor={anchor}
+                    // The pane-focus half of a click into this terminal: the box
+                    // is a positioned sibling of Home's grid, so the cell's own
+                    // capture never sees it (validation V1). The climb starts
+                    // from the ANCHOR, which lives inside the pane's cell; a
+                    // hidden box has no anchor and cannot be clicked, and while
+                    // unsplit the action is an identity write — so firing
+                    // unconditionally is safe.
+                    onPointerDownCapture={() => {
+                      const paneId = paneIdForElement(anchor);
+                      if (paneId !== null) {
+                        useWorkspaceStore.getState().focusHomePane(ownerId, paneId);
+                      }
+                    }}
+                  >
+                    <SessionSplitLayout
+                      ownerId={ownerId}
+                      tab={tab}
+                      visible={anchor !== null}
+                      onActivate={(sessionId) => setActivePane(ownerId, tab.sessionId, sessionId)}
+                      onSplit={(sessionId, direction) =>
+                        void createTerminalSplit(tab.scope, tab.sessionId, sessionId, direction)
+                      }
+                      onClose={(sessionId) =>
+                        closeGuard.guard([sessionId], () =>
+                          closeTerminalPane(ownerId, tab.sessionId, sessionId),
+                        )
+                      }
+                      onResize={(splitId, ratio) =>
+                        setSplitRatio(ownerId, tab.sessionId, splitId, ratio)
+                      }
+                    />
+                  </TerminalViewportBox>
+                );
+              }),
           )}
 
-          {/* The chat in front, in a column of its own: the box above is
-              positioned, not a flex column, so the plane needs one to fill it.
-              Keyed by Session — the client, the fold and the queue are resident
-              (@volli/session-presentation's registry), so a remount costs
-              nothing and carries nothing over. */}
-          {selected && activeChatSessionId !== null && plane === null && (
-            <div className="absolute inset-0 flex min-h-0 flex-col">
-              <ChatPlane
-                key={activeChatSessionId}
-                sessionId={activeChatSessionId}
-                projectId={selected.id}
-                // Ticketless by construction: this layer hosts the project's
-                // OWN Sessions, which is what makes their venue the main
-                // checkout.
-                ticketId={null}
-                onOpenFile={openProjectFile}
-              />
-            </div>
-          )}
-
-          {/* In flow above the panes, which are `hidden` behind it rather than
-              unmounted — the same treatment a chat gets, for the same reason. */}
+          {/* In flow under the terminal boxes, which are positioned over the
+              anchors this grid publishes rather than covering the whole column. */}
           {plane}
         </div>
         {rail}

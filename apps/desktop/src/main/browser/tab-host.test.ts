@@ -64,6 +64,14 @@ class FakeWebContents {
     this.emit("devtools-closed");
   });
   setDevToolsWebContents = vi.fn();
+  setBackgroundThrottling = vi.fn();
+  // The host encodes JPEG, so the fake answers the same door: a NativeImage
+  // whose `toJPEG` returns the bytes the frame should carry.
+  captureBytes = "page";
+  capturePage = vi.fn(async () => ({
+    toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
+    toJPEG: () => Buffer.from(this.captureBytes),
+  }));
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -555,6 +563,64 @@ describe("BrowserTabHost navigation controls", () => {
 });
 
 describe("BrowserTabHost native surface", () => {
+  it("captures page and docked DevTools pixels in plane-relative positions", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const bounds = { x: 12, y: 48, width: 800, height: 600 };
+    host.setBounds(tab.tabId, bounds);
+    host.show(tab.tabId);
+    host.toggleDevTools(tab.tabId);
+    const tools = views[1];
+    if (tools === undefined) throw new Error("expected DevTools view");
+    tools.webContents.captureBytes = "tools";
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
+        bounds: { x: 0, y: 0, width: 800, height: 347 },
+      },
+      {
+        kind: "devtools",
+        dataUrl: "data:image/jpeg;base64,dG9vbHM=",
+        bounds: { x: 0, y: 348, width: 800, height: 252 },
+      },
+    ]);
+    expect(views[0]?.webContents.capturePage).toHaveBeenCalledOnce();
+    expect(tools.webContents.capturePage).toHaveBeenCalledOnce();
+  });
+
+  it("captures just the page when DevTools is closed, still plane-relative", async () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    // Deliberately NOT the default bounds: those start at 0,0, so a frame that
+    // forgot to subtract `entry.bounds` would answer identically and the case
+    // would prove nothing.
+    host.setBounds(tab.tabId, { x: 40, y: 24, width: 640, height: 480 });
+
+    await expect(host.capture(tab.tabId)).resolves.toEqual([
+      {
+        kind: "page",
+        dataUrl: "data:image/jpeg;base64,cGFnZQ==",
+        bounds: { x: 0, y: 0, width: 640, height: 480 },
+      },
+    ]);
+  });
+
+  it("refuses to capture a tab it does not have", async () => {
+    // The renderer asks by opaque id and a tab can close mid-overlay; the
+    // guarded IPC envelope turns this throw into `{ ok: false }`.
+    await expect(host.capture("tab-that-never-existed")).rejects.toThrow();
+  });
+
   it("sets renderer-measured bounds and attaches only the visible tab", () => {
     const first = host.open({
       url: "https://one.example.com",
@@ -578,6 +644,99 @@ describe("BrowserTabHost native surface", () => {
     expect(views[0]?.setBounds).toHaveBeenCalledWith(bounds);
     expect(fakeWindow.contentView.addChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
     expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
+  });
+
+  it("accepts a hide for a closed tab, because its surface is already detached", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    host.close(tab.tabId);
+    const detaches = fakeWindow.contentView.removeChildView.mock.calls.length;
+
+    // The renderer plane controller emits this as its React surface unmounts,
+    // which is exactly what closing the tab caused.
+    expect(() => host.hide(tab.tabId)).not.toThrow();
+
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toHaveLength(detaches);
+    expect(() => host.show(tab.tabId)).toThrow("Unknown Browser Tab");
+  });
+
+  it("accepts a hide for a tab whose WebContents died outside the close command", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    views[0]?.webContents.emit("destroyed");
+
+    expect(() => host.hide(tab.tabId)).not.toThrow();
+  });
+});
+
+describe("BrowserTabHost wakefulness", () => {
+  it("runs the engine at foreground pace while any agent hold is live, and restores throttling at the last release", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    const first = host.holdAwake(tab.tabId);
+    const second = host.holdAwake(tab.tabId);
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    // Releasing one hold twice is one release: the other Session's hold stands.
+    first();
+    first();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+    second();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("wakes the tab again when a fresh hold follows the last release", () => {
+    // A Session that drives a tab, stops, and drives it again must get the
+    // engine back. Restoring throttling has to leave the lease reusable, not
+    // spent (VC-252 review).
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+
+    host.holdAwake(tab.tabId)();
+    host.holdAwake(tab.tabId);
+
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false], [true], [false]]);
+  });
+
+  it("treats a hold on an unknown tab and a release after close as nothing to do", () => {
+    expect(() => host.holdAwake("missing")()).not.toThrow();
+
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]!.webContents;
+    const release = host.holdAwake(tab.tabId);
+    host.close(tab.tabId);
+
+    // The tab is already forgotten; a late release owes its torn-down
+    // contents no throttling answer.
+    expect(() => release()).not.toThrow();
+    expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
   });
 });
 

@@ -10,6 +10,8 @@ import {
   type ModelSelection,
 } from "@volli/shared";
 
+import { supersededModelId } from "@volli/agent-runtime";
+
 import { setAppState } from "../db/app-state-repo";
 import { prepared } from "../db/prepared";
 
@@ -145,6 +147,69 @@ export function writeHiddenModels(
     ),
     now,
   );
+}
+
+/**
+ * Repairs preferences after a complete upstream list replaced a provider's old
+ * catalog.
+ *
+ * Only successfully refreshed providers participate. A provider whose feed
+ * failed retains its last usable list and every preference naming it.
+ *
+ * For a successful provider there are two outcomes, and the difference matters
+ * to whoever set the preference. A model that was *renamed* is followed: the
+ * catalogue's own supersession policy says where the id went, so a default
+ * keeps pointing at the model the person chose. A model that is simply gone is
+ * retired: its default is cleared and its visibility entry dropped, so stored
+ * state cannot name rows no picker can show again.
+ */
+export function reconcileModelAccessPreferences(
+  db: Database.Database,
+  access: ModelAccessSnapshot,
+  now: number,
+): void {
+  const refreshed = new Set(access.refresh?.refreshedProviderIds ?? []);
+  if (refreshed.size === 0) return;
+  const present = new Set(
+    access.models.map((model) => `${model.providerId}\u0000${model.modelId}`),
+  );
+  const has = (providerId: string, modelId: string): boolean =>
+    present.has(`${providerId}\u0000${modelId}`);
+
+  /** The id this entry should name now: itself, its successor, or nothing. */
+  const settle = <T extends { providerId: string; modelId: string }>(entry: T): T | null => {
+    if (!refreshed.has(entry.providerId) || has(entry.providerId, entry.modelId)) return entry;
+    const successor = supersededModelId(entry.providerId, entry.modelId);
+    if (successor !== undefined && has(entry.providerId, successor)) {
+      return { ...entry, modelId: successor };
+    }
+    return null;
+  };
+
+  const defaults = readModelAccessDefaults(db);
+  const repaired: ModelAccessDefaults = {
+    global: defaults.global === null ? null : settle(defaults.global),
+    ticket: defaults.ticket === null ? null : settle(defaults.ticket),
+    utility: defaults.utility === null ? null : settle(defaults.utility),
+  };
+  if (JSON.stringify(repaired) !== JSON.stringify(defaults)) {
+    setAppState(db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, JSON.stringify(repaired), now);
+  }
+
+  const hidden = readHiddenModels(db);
+  const seen = new Set<string>();
+  const kept: HiddenModelRef[] = [];
+  for (const entry of hidden) {
+    const settled = settle(entry);
+    if (settled === null) continue;
+    // Someone may have hidden a model under both its old and its new name;
+    // following the rename must not leave the same row hidden twice.
+    const key = `${settled.providerId}\u0000${settled.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(settled);
+  }
+  if (JSON.stringify(kept) !== JSON.stringify(hidden)) writeHiddenModels(db, kept, now);
 }
 
 /**

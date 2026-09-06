@@ -52,6 +52,8 @@ import { isFileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
+import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
@@ -435,6 +437,9 @@ function SessionsPage({ projectId }: { projectId: string }) {
               }
               className={row.open ? undefined : "text-muted-foreground"}
               onActivate={row.reopenable ? () => openSession(projectId, row) : null}
+              // Draggable onto a pane (VC-202 §4): the same door, opened
+              // somewhere specific.
+              {...splitDragSourceProps(homeSessionDragPayload(projectId, row))}
             />
           ))}
         </div>
@@ -444,6 +449,28 @@ function SessionsPage({ projectId }: { projectId: string }) {
 }
 
 const EMPTY_IDS: readonly string[] = [];
+
+/**
+ * What one of these rows would open if it were dropped on a pane, or `null` for
+ * a row that is not a door.
+ *
+ * A chat drags whether or not a tab holds it — the Session is durable, so the
+ * drop adopts it and mints one, exactly as clicking would. A terminal drags
+ * only while it is OPEN: the tab is what a pane holds, and `reopenable` is
+ * already this list's word for "a closed terminal has nothing behind it".
+ */
+function homeSessionDragPayload(projectId: string, row: HomeSessionRow): SplitDragPayload | null {
+  if (row.kind === "terminal" && !row.open) return null;
+  if (!row.reopenable) return null;
+  return {
+    type: "session",
+    scope: "project",
+    projectId,
+    ticketId: null,
+    kind: row.kind,
+    sessionId: row.id,
+  };
+}
 
 /**
  * Put a Session back in front.

@@ -84,6 +84,16 @@ export interface AgentBrowserPortOptions {
   transportFor: (tabId: string) => CdpTransport;
   /** Resolves when the tab has settled enough to read; must honour the signal. */
   waitForLoad: (tabId: string, signal: AbortSignal, mode?: BrowserLoadWaitMode) => Promise<void>;
+  /**
+   * Holds one tab's engine at foreground pace and returns the release —
+   * production binds {@link BrowserTabHost.holdAwake}. Chromium throttles a
+   * hidden tab's timers, rendering and loads, and a Session keeps driving its
+   * tabs after the person switches workspaces (VC-252); the port takes a hold
+   * the first time it drives a tab and keeps it until the tab leaves scope or
+   * the attachment ends, so background work never depends on which workspace
+   * is on screen.
+   */
+  holdAwake: (tabId: string) => () => void;
 }
 
 /**
@@ -121,7 +131,11 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
       return wire.sendCommand(method, params);
     },
     dispose: () => {
-      if (!initialized || !wire.isAttached()) return;
+      // Attachment, not initialization, is what has to be given back. An
+      // `ensureReady` that attached and then failed or was withdrawn leaves
+      // `initialized` false over a live attachment, and while Chromium's
+      // debugger owns the tab the person cannot open their own DevTools on it.
+      if (!wire.isAttached()) return;
       initialized = false;
       try {
         wire.detach();
@@ -177,6 +191,18 @@ export function loadWaiter(
 
 export function createAgentBrowserPort(options: AgentBrowserPortOptions): RuntimeBrowserPort {
   const controllers = new Map<string, BrowserTabController>();
+  /** One live hold per driven tab; released with the tab's scope or the attachment. */
+  const wakes = new Map<string, () => void>();
+
+  const keepAwake = (tabId: string): void => {
+    if (!wakes.has(tabId)) wakes.set(tabId, options.holdAwake(tabId));
+  };
+
+  const releaseWake = (tabId: string): void => {
+    const release = wakes.get(tabId);
+    wakes.delete(tabId);
+    release?.();
+  };
 
   /** The Session's visible slice of the registry, by the scope rule above. */
   const visible = (): BrowserTabState[] =>
@@ -189,6 +215,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     if (tab === undefined) {
       controllers.get(tabId)?.dispose();
       controllers.delete(tabId);
+      releaseWake(tabId);
       throw new BrowserRefusal(
         "browser.unknown-tab",
         `No Browser Tab ${JSON.stringify(tabId)} is open to this Session: list tabs with browser_tabs, or open one with browser_navigate.`,
@@ -198,11 +225,24 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
   };
 
   /** The tab's controller, attached and generation-synced to the host's count. */
-  const controllerFor = async (tab: BrowserTabState): Promise<BrowserTabController> => {
+  const controllerFor = async (
+    tab: BrowserTabState,
+    signal?: AbortSignal,
+  ): Promise<BrowserTabController> => {
     let controller = controllers.get(tab.tabId);
     if (controller === undefined) {
-      controller = new BrowserTabController(options.transportFor(tab.tabId));
-      await controller.enable();
+      const pending = new BrowserTabController(options.transportFor(tab.tabId));
+      try {
+        await pending.enable(signal);
+      } catch (error) {
+        // Nothing else can reach this controller — it never entered the map, so
+        // the port's own dispose would walk straight past it. An enable that
+        // failed or was withdrawn may still have attached the debugger, so the
+        // only moment it can be handed back is here.
+        pending.dispose();
+        throw error;
+      }
+      controller = pending;
       controllers.set(tab.tabId, controller);
     }
     controller.syncGeneration(tab.generation);
@@ -218,10 +258,13 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     // oracle, and a cancelled call must not attach Chromium's debugger.
     resolve(tabId);
     signal.throwIfAborted();
+    // Hold before waiting: a hidden tab's load only settles the wait below if
+    // its engine runs at foreground pace while nobody is watching it.
+    keepAwake(tabId);
     await options.waitForLoad(tabId, signal, waitMode);
     signal.throwIfAborted();
     const tab = resolve(tabId);
-    const controller = await controllerFor(tab);
+    const controller = await controllerFor(tab, signal);
     const printed = await controller.snapshot(signal);
     return {
       tabId: tab.tabId,
@@ -318,7 +361,8 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     act: async (input) => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
-      const controller = await controllerFor(tab);
+      keepAwake(tab.tabId);
+      const controller = await controllerFor(tab, input.signal);
       await controller.act(
         {
           generation: input.generation,
@@ -336,7 +380,8 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     screenshot: async (input) => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
-      const controller = await controllerFor(tab);
+      keepAwake(tab.tabId);
+      const controller = await controllerFor(tab, input.signal);
       const shot = await controller.screenshot(input.signal);
       input.signal.throwIfAborted();
       return { tabId: tab.tabId, url: tab.url, ...shot };
@@ -355,6 +400,8 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     dispose: () => {
       for (const controller of controllers.values()) controller.dispose();
       controllers.clear();
+      for (const release of wakes.values()) release();
+      wakes.clear();
     },
   };
 }

@@ -697,6 +697,13 @@ describe("Session tRPC router", () => {
         calls.push(input);
         return {
           observedAt: 42,
+          refresh: {
+            added: 1,
+            removed: 2,
+            rejected: 3,
+            refreshedProviderIds: ["openai-codex"],
+            failedProviderIds: ["anthropic"],
+          },
           credentialToken: "root-secret",
           providers: [
             {
@@ -734,7 +741,19 @@ describe("Session tRPC router", () => {
       providerId: "openai-codex",
       modelId: "gpt-5.6-sol",
     });
-    expect(Object.keys(access).toSorted()).toEqual(["models", "observedAt", "providers"]);
+    expect(Object.keys(access).toSorted()).toEqual([
+      "models",
+      "observedAt",
+      "providers",
+      "refresh",
+    ]);
+    expect(access.refresh).toEqual({
+      added: 1,
+      removed: 2,
+      rejected: 3,
+      refreshedProviderIds: ["openai-codex"],
+      failedProviderIds: ["anthropic"],
+    });
     expect(Object.keys(access.providers[0]!).toSorted()).toEqual([
       "accountLabel",
       "billingSource",

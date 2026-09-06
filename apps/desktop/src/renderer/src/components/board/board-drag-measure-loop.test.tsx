@@ -197,7 +197,9 @@ function columnBoxes(root: Element, left: number, canvas: Box, out: [Element, Bo
   }
 
   const cards = [...root.querySelectorAll("article")];
-  const dropzone = cards[0]?.parentElement?.parentElement ?? null;
+  // Named by the production component so a layout-only wrapper around a card
+  // (for the multi-drop FLIP animation) cannot be mistaken for the column.
+  const dropzone = root.querySelector("[data-column-dropzone]");
   if (dropzone !== null && dropzone !== scroller) {
     const content = cards.length * CARD_H + Math.max(0, cards.length - 1) * CARD_GAP;
     out.push([

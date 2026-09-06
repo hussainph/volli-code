@@ -39,8 +39,22 @@ import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import lockfile from "proper-lockfile";
 
+import {
+  attachRefreshableCatalog,
+  modelsDevCatalogSource,
+  PiFileModelsStore,
+  type RefreshableCatalogs,
+} from "./model-catalog";
+
 /** The file Pi keeps its credentials in, inside its agent directory. */
 const AUTH_FILE = "auth.json";
+
+/**
+ * Volli's model-catalog cache, in the same directory. Volli's own file — the
+ * `pi` CLI neither reads nor writes it — but it belongs to the profile the
+ * credentials belong to, so an isolated `$PI_CODING_AGENT_DIR` isolates both.
+ */
+const MODELS_FILE = "volli-models.json";
 
 /** Owner-only, matching what the `pi` CLI leaves on disk. */
 const AUTH_FILE_MODE = 0o600;
@@ -72,6 +86,11 @@ export function piAuthFilePath(options: PiCredentialOptions = {}): string {
       ? expandTilde(configured)
       : join(homedir(), ".pi", "agent");
   return join(agentDir, AUTH_FILE);
+}
+
+/** Where the refreshed model catalog persists — resolved by the same rule. */
+export function piModelsFilePath(options: PiCredentialOptions = {}): string {
+  return join(dirname(piAuthFilePath(options)), MODELS_FILE);
 }
 
 function expandTilde(path: string): string {
@@ -120,13 +139,51 @@ export function piOwnedModels(options: PiCredentialOptions = {}): Models {
 export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAccess {
   registerBunOAuthFlows();
   const credentials = new PiFileCredentialStore(piAuthFilePath(options));
-  return { models: builtinModels({ credentials }), credentials };
+  // The store is what lets a refreshed catalog outlive this process: without
+  // it pi falls back to `InMemoryModelsStore` and every fetched model dies at
+  // restart. The wrapping is what makes "Refresh models" mean something — pi's
+  // built-in catalogs are frozen at publish time, and an unwrapped provider
+  // has no `refreshModels` for the button to reach (see `model-catalog.ts`).
+  const modelsStore = new PiFileModelsStore(piModelsFilePath(options));
+  const models = builtinModels({ credentials, modelsStore });
+  const catalogs = attachRefreshableCatalog(models, modelsDevCatalogSource(), {
+    store: modelsStore,
+  });
+  // Start restoration eagerly, but make its completion part of the returned
+  // access value. Every product path that can read or execute a model awaits
+  // this promise, so a model that exists only in the persisted list is
+  // present before the first lookup after restart, and a restore failure
+  // reaches the caller waiting on that operation instead of being discarded.
+  const catalogReady = restoreCatalogs(models, catalogs);
+  return { models, credentials, catalogReady, catalogs };
 }
 
-/** Pi's providers, and the credential store they read and write through. */
+async function restoreCatalogs(models: Models, catalogs: RefreshableCatalogs): Promise<void> {
+  const [publicCatalogs, nativeCatalogs] = await Promise.all([
+    catalogs.restore(),
+    models.refresh({
+      allowNetwork: false,
+      providers: models
+        .getProviders()
+        .filter((provider) => !catalogs.providerIds.includes(provider.id))
+        .map((provider) => provider.id),
+    }),
+  ]);
+  const errors = new Map([...publicCatalogs.errors, ...nativeCatalogs.errors]);
+  if (errors.size > 0) {
+    const providers = [...errors.keys()].toSorted().join(", ");
+    // Provider ids only. A credential or provider error may contain a response
+    // body, and startup diagnostics have no reason to carry those bytes.
+    throw new Error(`Could not restore model catalogs for: ${providers}.`);
+  }
+}
+
+/** Pi's providers, stores, public catalogs, and completion of local restore. */
 export interface PiModelAccess {
   models: Models;
   credentials: CredentialStore;
+  catalogReady: Promise<void>;
+  catalogs: RefreshableCatalogs;
 }
 
 /**

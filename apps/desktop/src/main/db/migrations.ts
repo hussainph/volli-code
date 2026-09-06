@@ -1670,6 +1670,41 @@ CREATE TABLE IF NOT EXISTS automation_pending_armed_run_attempts (
 );
 `;
 
+/**
+ * Person-approved slots past the in-ticket delegation allowance (VC-204).
+ * Authored as 031 and renumbered 039 after main's automations series took
+ * 031–038 — a version is a position in an ordered, already-applied history,
+ * not a name.
+ *
+ * Migration 030's `CHECK (max_children BETWEEN 1 AND 3)` stays exactly as it
+ * is: the stored grant remains the allowance a Session is BORN with, and no
+ * runtime path may widen it — a fan-out bound a caller could raise would not
+ * be a bound. What softened is the end of the allowance: each row here is one
+ * "once" a person answered when a Ticket Session asked to start one more child
+ * than its grant allows, and the claims ledger counts these rows on top of
+ * `max_children` when it judges the next claim.
+ *
+ * Keyed by the asking tool call so a replayed call finds its extension already
+ * recorded rather than asking twice. A slot is granted to the PARENT, not the
+ * call: an extension whose start later failed before the create command stays,
+ * and the next attempt consumes it without asking again — the person granted
+ * one more Session, and one more Session is what they get. No trigger guards
+ * these rows because they are append-only by construction: nothing updates an
+ * extension, and deleting one only narrows what a Session may do.
+ *
+ * `IF NOT EXISTS` for the reason 038 carries it: the convergence suites replay
+ * pending migrations over lineages whose `user_version` was walked back, and a
+ * re-run must find its own work rather than fail on it.
+ */
+const MIGRATION_039_SESSION_DELEGATION_EXTENSIONS = `
+CREATE TABLE IF NOT EXISTS session_delegation_extensions (
+  parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (parent_session_id, tool_call_id)
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1863,7 +1898,29 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "automations — retained armed-Run command ids for idempotent Retry",
     sql: MIGRATION_038_ARMED_RUN_ATTEMPTS,
   },
+  {
+    version: 39,
+    name: "session delegation extensions — person-approved slots past the in-ticket allowance",
+    sql: MIGRATION_039_SESSION_DELEGATION_EXTENSIONS,
+    apply: applyMigration039SessionDelegationExtensions,
+  },
 ];
+
+/**
+ * Migration 039's reconciler — the VC-204 branch shipped this table as its own
+ * 031 before main's automations series claimed 031–038, so a database from
+ * that lineage says `user_version = 31` while holding the extension table and
+ * MISSING main's 031 schema entirely. The runner will never offer that
+ * database 031 again — 032–039 are all it has left — so main's 031 rides
+ * here, exactly the way 024 carries 023's web-keys rebuild: probe-gated on the
+ * schema facts it changes (`trigger_spec` by column probe, the arming table by
+ * IF NOT EXISTS), a no-op on every lineage that ran main's own 031. Both
+ * halves converge on one schema whichever parallel 031 a database ran first.
+ */
+function applyMigration039SessionDelegationExtensions(db: Database.Database): void {
+  applyMigration031AutomationTriggers(db);
+  db.exec(MIGRATION_039_SESSION_DELEGATION_EXTENSIONS);
+}
 
 /**
  * Migration 031's reconciler. `ALTER TABLE … ADD COLUMN` is the one statement

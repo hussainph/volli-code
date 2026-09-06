@@ -90,6 +90,38 @@ export type JudgmentMode = "ask" | "auto";
 export const JUDGMENT_MODES = ["ask", "auto"] as const;
 
 /**
+ * What happens when a Session spends a budget to its end (VC-204).
+ *
+ * Two postures and not three, because "no budget at all" is not offered: the
+ * allowance itself stays fixed — it is the guardrail against a Session
+ * spiralling — and what a project chooses is only whether its end is a
+ * question or a wall. `ask` parks the call in front of the person driving,
+ * whose "once" extends the allowance by exactly one; `refuse` is the pre-VC-204
+ * behaviour, kept for projects that want an unattended fleet to hit a hard
+ * stop rather than a parked question nobody is present to answer.
+ *
+ * Deliberately not a {@link JudgmentMode}: judgment asks who rules on what the
+ * rules cannot answer, and a spent budget is not ambiguous — it is spent. When
+ * VC-28's classifier lands, whether a budget cause may be judged by it rather
+ * than a person is a separate eligibility question, and the default answer is
+ * no: starting more agents is spend, and spend is the category auto mode still
+ * flags to a human.
+ */
+export type BudgetPosture = "ask" | "refuse";
+
+export const BUDGET_POSTURES = ["ask", "refuse"] as const;
+
+/**
+ * The budget half of a project's authority policy: what each allowance does
+ * when it runs out. One field per budget cause, so a project that softens one
+ * cap has said nothing about the next cap this family grows.
+ */
+export interface AuthorityBudgetPolicy {
+  /** `budget.delegation-children`: a Ticket Session's in-ticket fan-out allowance. */
+  delegationExceeded: BudgetPosture;
+}
+
+/**
  * The kinds of caller a per-project policy can speak about.
  *
  * VC-92 ruled that "no environment variable means the user" is dead. Absence of
@@ -171,6 +203,7 @@ export interface AuthorityPolicy {
   /** The model allowed to judge what the rules cannot. Null until VC-28. */
   classifierModel: string | null;
   fallback: AuthorityFallback;
+  budgets: AuthorityBudgetPolicy;
   actors: Readonly<Record<AuthorityActorKind, AuthorityActorPolicy>>;
 }
 
@@ -263,6 +296,11 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
   // Anthropic's published defaults for the same mechanism, adopted with no
   // knowledge of how they were tuned — see `AuthorityFallback`.
   fallback: Object.freeze({ consecutiveDenials: 3, sessionDenials: 20 }),
+  // `ask` is VC-204's ruling: the in-ticket delegation allowance was always a
+  // soft cap in intent, and its end is a question for the person driving
+  // rather than a refusal. The allowance itself stays 3 and stays hard-coded —
+  // what this field softens is only what the end of it does.
+  budgets: Object.freeze({ delegationExceeded: "ask" }),
   actors: Object.freeze({
     user: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
@@ -340,6 +378,11 @@ export interface AuthorityActorPolicyOverride {
   awaitable?: AuthorityAwaitableOverride;
 }
 
+/** The budget half of an override; every field optional, absent inherits. */
+export interface AuthorityBudgetPolicyOverride {
+  delegationExceeded?: BudgetPosture;
+}
+
 /**
  * What a project may say about its own authority. Every field is optional and an
  * absent field inherits — a stored override records departures, never a
@@ -351,6 +394,7 @@ export interface AuthorityPolicyOverride {
   judgmentMode?: JudgmentMode;
   classifierModel?: string | null;
   fallback?: Partial<AuthorityFallback>;
+  budgets?: AuthorityBudgetPolicyOverride;
   actors?: Partial<Record<AuthorityActorKind, AuthorityActorPolicyOverride>>;
 }
 
@@ -410,6 +454,10 @@ export function resolveAuthorityPolicy(
         override.fallback?.consecutiveDenials ?? defaults.fallback.consecutiveDenials,
       sessionDenials: override.fallback?.sessionDenials ?? defaults.fallback.sessionDenials,
     },
+    budgets: {
+      delegationExceeded:
+        override.budgets?.delegationExceeded ?? defaults.budgets.delegationExceeded,
+    },
     actors: {
       user: resolveActor(override.actors?.user, defaults.actors.user),
       session: resolveActor(override.actors?.session, defaults.actors.session),
@@ -447,6 +495,8 @@ export function parseAuthorityPolicyOverride(value: unknown): AuthorityPolicyOve
   }
   const fallback = parseFallback(row.fallback);
   if (fallback !== undefined) override.fallback = fallback;
+  const budgets = parseBudgets(row.budgets);
+  if (budgets !== undefined) override.budgets = budgets;
   const actors = parseActors(row.actors);
   if (actors !== undefined) override.actors = actors;
   return override;
@@ -478,6 +528,16 @@ function parseFallback(value: unknown): Partial<AuthorityFallback> | undefined {
 
 function isThreshold(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+/** The read-path half of `budgets`, dropping what it cannot read like every field here. */
+function parseBudgets(value: unknown): AuthorityBudgetPolicyOverride | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const budgets: AuthorityBudgetPolicyOverride = {};
+  const posture = enumOrUndefined(row.delegationExceeded, BUDGET_POSTURES);
+  if (posture !== undefined) budgets.delegationExceeded = posture;
+  return Object.keys(budgets).length === 0 ? undefined : budgets;
 }
 
 function parseActors(
@@ -577,7 +637,7 @@ export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicy
 
   rejectUnknownKeys(
     row,
-    ["enforcement", "judgmentMode", "classifierModel", "fallback", "actors"],
+    ["enforcement", "judgmentMode", "classifierModel", "fallback", "budgets", "actors"],
     "",
     errors,
   );
@@ -609,6 +669,11 @@ export function validateAuthorityPolicyOverride(value: unknown): AuthorityPolicy
   if (row.fallback !== undefined) {
     const fallback = validateFallback(row.fallback, errors);
     if (fallback !== undefined) override.fallback = fallback;
+  }
+
+  if (row.budgets !== undefined) {
+    const budgets = validateBudgets(row.budgets, errors);
+    if (budgets !== undefined) override.budgets = budgets;
   }
 
   if (row.actors !== undefined) {
@@ -675,6 +740,25 @@ function validateFallback(
     else errors.push(`fallback.${key} must be a whole number of denials, 1 or greater.`);
   }
   return Object.keys(fallback).length === 0 ? undefined : fallback;
+}
+
+function validateBudgets(
+  value: unknown,
+  errors: string[],
+): AuthorityBudgetPolicyOverride | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    errors.push("budgets must be an object.");
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  rejectUnknownKeys(row, ["delegationExceeded"], "budgets.", errors);
+  const budgets: AuthorityBudgetPolicyOverride = {};
+  if (row.delegationExceeded !== undefined) {
+    const posture = enumOrUndefined(row.delegationExceeded, BUDGET_POSTURES);
+    if (posture === undefined) errors.push(badEnum("budgets.delegationExceeded", BUDGET_POSTURES));
+    else budgets.delegationExceeded = posture;
+  }
+  return Object.keys(budgets).length === 0 ? undefined : budgets;
 }
 
 function validateActors(

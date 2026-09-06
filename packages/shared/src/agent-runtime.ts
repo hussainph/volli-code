@@ -144,11 +144,25 @@ export interface ModelAccessModel {
   acceptsImageInput: boolean;
 }
 
+/** What one explicit model-catalog refresh changed or could not safely apply. */
+export interface ModelCatalogRefreshReport {
+  added: number;
+  removed: number;
+  /** Source models withheld because no unambiguous executable protocol existed. */
+  rejected: number;
+  /** Providers whose complete current list was applied, including unchanged lists. */
+  refreshedProviderIds: readonly string[];
+  /** Providers that retained their last usable list after an isolated failure. */
+  failedProviderIds: readonly string[];
+}
+
 /** The complete sanitized Model Access view at one observation time. */
 export interface ModelAccessSnapshot {
   observedAt: number;
   providers: readonly ModelAccessProvider[];
   models: readonly ModelAccessModel[];
+  /** Present only when this inspection explicitly refreshed catalogs. */
+  refresh?: ModelCatalogRefreshReport;
 }
 
 /** The Roles that attach a runtime. Subagent Sessions have no attachment of their own. */
@@ -242,14 +256,20 @@ export interface RuntimeRecoveryRef {
 }
 
 /**
- * Which half of {@link AuthorityFallback} sent the runtime to ask.
+ * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
+ * `budget`, the fact that no denial accrued at all.
  *
- * Worth naming rather than collapsing, because the two mean different things to
- * the person answering: a run of refusals back to back means the policy is in
- * the way of one line of work, while a total across the Session means it is in
- * the way of the Session.
+ * Worth naming rather than collapsing, because the three mean different things
+ * to the person answering: a run of refusals back to back means the policy is
+ * in the way of one line of work, a total across the Session means it is in
+ * the way of the Session, and a budget means nothing was refused yet — an
+ * allowance ran out and the call is waiting on "a little more" (VC-204).
+ * `budget` asks are raised by a verb's own door rather than by the escalation
+ * counter, so they never advance either {@link AuthorityFallback} threshold:
+ * the person already answered, and counting that answer as friction would
+ * escalate twice over one decision.
  */
-export type RuntimeAskTrip = "consecutive" | "session";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget";
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps
@@ -966,9 +986,18 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
   return sessionToolBindings(spec).map((binding) => binding.tool);
 }
 
-/** Sanitized failure surfaced through observations. Never contains secrets. */
+/**
+ * Sanitized failure surfaced through observations. Never contains secrets.
+ *
+ * `reasoning` is a provider refusing the conversation's own earlier reasoning:
+ * a `thinking` block whose signature no longer matches what was sent before
+ * it (Claude's preserved thinking), or one the provider says was modified. It
+ * is its own reason because it has its own repair — drop the reasoning and
+ * send the turn again — and because re-sending the same request never clears
+ * it, so it must not be mistaken for a transport fault worth retrying as is.
+ */
 export interface RuntimeFailure {
-  reason: "auth" | "configuration" | "context" | "model" | "aborted" | "unknown";
+  reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
 

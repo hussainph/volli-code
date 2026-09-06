@@ -1,5 +1,6 @@
 import type {
   BrowserWindow,
+  NativeImage,
   Rectangle,
   Session,
   WebContentsView,
@@ -9,7 +10,12 @@ import type {
 import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
-import type { BrowserTabCreatedBy, BrowserTabState } from "../../ipc/contract";
+import type {
+  BrowserTabBounds,
+  BrowserTabCaptureFrame,
+  BrowserTabCreatedBy,
+  BrowserTabState,
+} from "../../ipc/contract";
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
@@ -46,6 +52,8 @@ interface BrowserTabEntry {
   devToolsAttached: boolean;
   console: RuntimeBrowserConsoleMessage[];
   consoleTruncated: boolean;
+  /** Live agent holds against background throttling; see {@link BrowserTabHost.holdAwake}. */
+  wakeLeases: number;
 }
 
 /**
@@ -80,6 +88,17 @@ export const BROWSER_MAX_TABS_PER_PROJECT = 32;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
+
+/**
+ * Stand-in pixels are JPEG, not PNG, and this is a latency decision rather than
+ * a size one. An overlay cannot appear until the capture returns, so the
+ * encode sits on the critical path — and PNG's cost rises with image entropy,
+ * so a dense page pays far more than a plain one and the wait becomes
+ * unpredictable. Measured on the smoke fixture: PNG 20-52ms against JPEG
+ * 11-17ms, and the gap widens with real content. Quality 80 is invisible on a
+ * frame that exists to sit still behind a menu.
+ */
+const BROWSER_CAPTURE_JPEG_QUALITY = 80;
 const BROWSER_DEVTOOLS_RATIO = 0.42;
 const BROWSER_DEVTOOLS_DIVIDER_PX = 1;
 
@@ -340,6 +359,7 @@ export class BrowserTabHost {
       devToolsAttached: false,
       console: [],
       consoleTruncated: false,
+      wakeLeases: 0,
     };
     this.tabs.set(tabId, entry);
     view.webContents.setWindowOpenHandler(({ url }) => {
@@ -521,6 +541,53 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
+  /**
+   * Captures inert fallback pixels before the renderer hides this native plane
+   * for one of its overlays.
+   *
+   * A WebContentsView always composites above the BrowserWindow renderer. The
+   * live view therefore has to detach before a dialog or menu can cover it, but
+   * detaching without a replacement exposes an empty (usually black) native
+   * hole. These frames let the renderer paint the last visible page underneath
+   * its overlay instead. Only PNG pixels cross the boundary — never remote DOM,
+   * script, storage, or a WebContents handle.
+   */
+  async capture(tabId: string): Promise<BrowserTabCaptureFrame[]> {
+    const entry = this.requireTab(tabId);
+    const encode = (image: NativeImage): string =>
+      `data:image/jpeg;base64,${image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY).toString("base64")}`;
+    const split = browserSurfaceBounds(
+      entry.bounds,
+      entry.devToolsOpen && entry.devToolsView !== null,
+    );
+    // One place that knows the window→plane coordinate change, so the page and
+    // DevTools frames can never drift apart on it.
+    const planeRelative = (surface: Rectangle): BrowserTabBounds => ({
+      x: surface.x - entry.bounds.x,
+      y: surface.y - entry.bounds.y,
+      width: surface.width,
+      height: surface.height,
+    });
+    const pending: Promise<BrowserTabCaptureFrame>[] = [
+      entry.view.webContents.capturePage().then((image) => ({
+        kind: "page" as const,
+        dataUrl: encode(image),
+        bounds: planeRelative(split.page),
+      })),
+    ];
+    const devToolsBounds = split.devTools;
+    if (devToolsBounds !== null && entry.devToolsView !== null) {
+      pending.push(
+        entry.devToolsView.webContents.capturePage().then((image) => ({
+          kind: "devtools" as const,
+          dataUrl: encode(image),
+          bounds: planeRelative(devToolsBounds),
+        })),
+      );
+    }
+    return Promise.all(pending);
+  }
+
   /** Attaches exactly one selected native page (and its DevTools) to the live app window. */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
@@ -534,9 +601,24 @@ export class BrowserTabHost {
     this.layout(entry);
   }
 
-  /** Detaches the named page and DevTools when its workspace surface is no longer visible. */
+  /**
+   * Detaches the named page and DevTools when its workspace surface is no
+   * longer visible.
+   *
+   * Alone among the tab operations this one tolerates an unknown id, because
+   * hiding asks for an end state rather than an action: a tab that no longer
+   * exists has no native surface attached, which is exactly what the caller
+   * wanted. The renderer's plane controller emits one last hide as its React
+   * surface unmounts, and a closed tab is the ordinary reason that surface went
+   * away — `close` detaches and forgets the entry before the renderer hears
+   * about it. Throwing there reported a failure for work already done. Every
+   * other door still requires a live tab: `show`, `navigate`, and the rest
+   * cannot do anything meaningful without one, so an unknown id is a real
+   * fault.
+   */
   hide(tabId: string): void {
-    const entry = this.requireTab(tabId);
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return;
     if (this.attached?.entry !== entry) return;
     this.detachEntry(entry, this.attached.window);
     this.attached = null;
@@ -550,6 +632,76 @@ export class BrowserTabHost {
    */
   webContentsOf(tabId: string): WebContentsView["webContents"] {
     return this.requireTab(tabId).view.webContents;
+  }
+
+  /**
+   * Keeps one tab's engine at foreground pace while an agent drives it
+   * (VC-252).
+   *
+   * A hidden Browser Tab is a detached WebContentsView, and Chromium answers
+   * detachment with background throttling: timers near 1Hz, no animation
+   * frames, no compositor output. That is the right resource policy for a tab
+   * nobody is using — and exactly wrong for a tab a Session keeps driving
+   * after the person switches to another workspace, where it stalls loads and
+   * starves snapshots and screenshots of the frames they wait on until the
+   * tab is shown again.
+   *
+   * Measured, not argued — `e2e/browser-throttle-bench.mjs`, Electron 44 /
+   * Chromium 152 / macOS arm64, against the visible baseline of 100 timer
+   * ticks and 60 frames a second:
+   *
+   *   detached, no hold            1.0 ticks/s,  0 fps   (0.01x — the stall)
+   *   detached + own hold        100.0 ticks/s, 60 fps   (1.00x — the fix)
+   *   another detached tab         1.0 ticks/s,  0 fps   while the first holds
+   *   window's own renderer        1.0 ticks/s           minimised, first holds
+   *
+   * So the lease is PER-TAB in practice. Electron's 28.0.0 note —
+   * `backgroundThrottling: false` reaching every WebContents in the host
+   * BrowserWindow — reads wider than it measures: it says "displayed by", and
+   * neither a detached view nor a minimised window's own page is displayed.
+   * Holding one Browser Tab awake does not stop the rest of the app sleeping,
+   * and total app CPU across six open tabs did not move (3.2% -> 2.6%, inside
+   * noise). An earlier review claimed the opposite from the documentation
+   * alone; the bench is why this comment does not.
+   *
+   * The hold does span the driving attachment rather than one tool call, and
+   * that part is deliberate. Releasing per call would re-open the same wedge
+   * one level down: `act` returns, the page is still fetching or laying out
+   * what the click started, the hold drops, and the next `snapshot` reads a
+   * page that stopped working in the gap. People are unaffected either way —
+   * a plane a person can touch is attached, and an attached plane was never
+   * throttled.
+   *
+   * Both halves of the fix are load-bearing, and the bench shows why: a tab
+   * detached since birth and never held answers `Page.captureScreenshot`
+   * never at all (the bench gives up at the controller's own 15s bound),
+   * while the same tab under a hold answers in ~100ms.
+   *
+   * Returns the release. Releasing twice releases once, and a hold on a tab
+   * that is unknown or has since closed releases into nothing — wakefulness
+   * is resource policy, never a user operation to fail.
+   */
+  holdAwake(tabId: string): () => void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined) return () => undefined;
+    entry.wakeLeases += 1;
+    if (entry.wakeLeases === 1) this.applyWakePolicy(entry);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // A closed tab was already forgotten; its contents are tearing down and
+      // owe no throttling answer.
+      if (this.tabs.get(tabId) !== entry) return;
+      entry.wakeLeases -= 1;
+      if (entry.wakeLeases === 0) this.applyWakePolicy(entry);
+    };
+  }
+
+  /** Foreground pace while agent holds are live; Chromium's own thrift once none are. Window-wide, per the note on {@link BrowserTabHost.holdAwake}. */
+  private applyWakePolicy(entry: BrowserTabEntry): void {
+    const contents = entry.view.webContents;
+    if (!contents.isDestroyed()) contents.setBackgroundThrottling(entry.wakeLeases === 0);
   }
 
   /** Page console and renderer-failure evidence recorded from the moment the tab exists. */

@@ -54,6 +54,7 @@ function state(overrides: Partial<BrowserTabState> & { tabId: string }): Browser
  */
 function fakeHost(initial: BrowserTabState[]): {
   host: AgentBrowserHost;
+  tabs: Map<string, BrowserTabState>;
   opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[];
   navigated: { tabId: string; url: string }[];
 } {
@@ -63,6 +64,7 @@ function fakeHost(initial: BrowserTabState[]): {
   const navigated: { tabId: string; url: string }[] = [];
   let openCount = 0;
   return {
+    tabs,
     opened,
     navigated,
     host: {
@@ -123,15 +125,27 @@ function port(input: {
 function portWithHost(input: { tabs?: BrowserTabState[]; ticketId?: string | null }): {
   port: ReturnType<typeof createAgentBrowserPort>;
   opened: ReturnType<typeof fakeHost>["opened"];
+  hostTabs: Map<string, BrowserTabState>;
+  /** Every hold, wait and release, in the order the port performed them. */
+  wakeEvents: string[];
 } {
-  const { host, opened } = fakeHost(input.tabs ?? []);
+  const { host, opened, tabs } = fakeHost(input.tabs ?? []);
+  const wakeEvents: string[] = [];
   return {
     opened,
+    hostTabs: tabs,
+    wakeEvents,
     port: createAgentBrowserPort({
       host,
       scope: { projectId: "p1", ticketId: input.ticketId === undefined ? "t1" : input.ticketId },
       transportFor,
-      waitForLoad: async () => undefined,
+      waitForLoad: async (tabId) => {
+        wakeEvents.push(`wait ${tabId}`);
+      },
+      holdAwake: (tabId) => {
+        wakeEvents.push(`hold ${tabId}`);
+        return () => wakeEvents.push(`release ${tabId}`);
+      },
     }),
   };
 }
@@ -359,5 +373,81 @@ describe("createAgentBrowserPort", () => {
       width: 800,
       height: 600,
     });
+  });
+
+  it("holds a driven tab awake before waiting on its load, once, and releases when the attachment ends", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+
+    await driven.port.snapshot({ tabId: "user-1", signal });
+    await driven.port.snapshot({ tabId: "user-1", signal });
+
+    // The hold lands before the load wait: a hidden tab only finishes loading
+    // at foreground pace, so waiting first would burn the whole bound.
+    expect(driven.wakeEvents).toEqual(["hold user-1", "wait user-1", "wait user-1"]);
+
+    driven.port.dispose?.();
+    expect(driven.wakeEvents).toEqual([
+      "hold user-1",
+      "wait user-1",
+      "wait user-1",
+      "release user-1",
+    ]);
+  });
+
+  it("holds a tab awake before screenshotting it, with no snapshot in the call to do it for us", async () => {
+    // The screenshot path is the one that never reaches snapshotOf, so it is
+    // the only caller whose hold is entirely its own. Frames are exactly what
+    // a throttled engine stops producing, so losing this hold is the ticket's
+    // headline symptom coming straight back (VC-252 review).
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+
+    await driven.port.screenshot({ tabId: "user-1", signal });
+
+    expect(driven.wakeEvents).toEqual(["hold user-1"]);
+  });
+
+  it("hands back a transport whose enable failed, instead of leaking its attachment", async () => {
+    // A controller whose enable throws never enters the port's map, so the
+    // port's own dispose walks straight past it. If it does not let go here,
+    // Chromium's debugger stays attached to the tab and the person can no
+    // longer open DevTools on it (CodeRabbit, PR #457).
+    let disposed = 0;
+    const failing = createAgentBrowserPort({
+      host: fakeHost([state({ tabId: "user-1", createdBy: "user" })]).host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      transportFor: () => ({
+        send: async () => ({}),
+        ensureReady: async () => {
+          throw new Error("another debugger owns this tab");
+        },
+        dispose: () => {
+          disposed += 1;
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+
+    await expect(failing.snapshot({ tabId: "user-1", signal })).rejects.toThrow(
+      "another debugger owns this tab",
+    );
+    expect(disposed).toBe(1);
+  });
+
+  it("releases its hold on a tab that has left the Session's scope", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user" })],
+    });
+    await driven.port.snapshot({ tabId: "user-1", signal });
+
+    // The person closes the tab; the host's registry no longer lists it.
+    driven.hostTabs.delete("user-1");
+
+    await expect(driven.port.snapshot({ tabId: "user-1", signal })).rejects.toThrow(BrowserRefusal);
+    expect(driven.wakeEvents).toEqual(["hold user-1", "wait user-1", "release user-1"]);
   });
 });

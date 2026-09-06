@@ -13,6 +13,7 @@ import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/d
 import { EffortPill } from "./composer-effort-ui";
 import { ComposerPicker } from "./composer-picker-ui";
 import {
+  ComposerPickerStack,
   modelPillLabel,
   ModelPill,
   SessionComposer,
@@ -707,6 +708,18 @@ describe("the picker card", () => {
     expect(renderPicker(pickerState())).not.toContain('data-slot="command-input"');
   });
 
+  it("stays named and pointer-interactive when a positioning layer surrounds it", () => {
+    const html = renderPicker(pickerState());
+    const card = /<div data-slot="composer-picker" class="([^"]*)"/.exec(html)?.[1];
+
+    // Overlay layout makes only the surrounding layer click-through. The card
+    // keeps the mouse path while its labelled cmdk list remains driven by the
+    // focused textarea for keyboard and assistive-technology users.
+    expect(card).toContain("pointer-events-auto");
+    expect(html).toContain('aria-label="Commands"');
+    expect(html).toContain('role="listbox"');
+  });
+
   it("says so when nothing matched, without a sentence about it", () => {
     const html = renderPicker(pickerState({ rows: [] }));
 
@@ -785,6 +798,24 @@ describe("the picker card", () => {
  * looking perfect on an empty one.
  */
 describe("the picker's place in the composer stack", () => {
+  function renderStack(layout: "overlay"): string {
+    return renderToStaticMarkup(
+      <ComposerPickerStack
+        layout={layout}
+        value=""
+        onValueChange={() => undefined}
+        ready
+        interactionOpen={false}
+        promptTemplates={TEMPLATES}
+        skills={[]}
+        verbs={[]}
+        files={[]}
+      >
+        <textarea aria-label="Layout probe" />
+      </ComposerPickerStack>,
+    );
+  }
+
   it("costs no height at all while it is closed", () => {
     expect(renderPicker(null)).toBe("");
   });
@@ -803,18 +834,40 @@ describe("the picker's place in the composer stack", () => {
     expect(card).not.toMatch(/\bfixed\b/);
   });
 
-  it("stacks the picker above the input in one normal-flow column", () => {
+  it("keeps chat on the unchanged normal-flow default", () => {
     const html = renderComposer();
 
     // The stack is the composer's OUTERMOST element, so whatever wraps
     // SessionComposer — in the app, chat-plane's ResizeObserver'd bottom
     // mount — necessarily contains the picker's slot too, and the measured
-    // height grows when the picker opens.
+    // height grows when the picker opens. No layout prop is passed by chat.
     expect(
       html.startsWith('<div data-slot="composer-picker-stack" class="flex flex-col gap-2">'),
     ).toBe(true);
+    expect(html).not.toContain('data-slot="composer-picker-overlay"');
     // The composer's own shell comes after the picker's slot: growth happens
     // above the input, and the input itself does not move.
     expect(html.indexOf('data-slot="composer-picker-stack"')).toBeLessThan(html.indexOf("<form"));
+  });
+
+  it("offers an opt-in contained overlay that contributes no flow height", () => {
+    const html = renderStack("overlay");
+    const stack = /<div data-slot="composer-picker-stack" class="([^"]*)"/.exec(html)?.[1];
+    const layer = /<div data-slot="composer-picker-overlay" class="([^"]*)"/.exec(html)?.[1];
+
+    expect(stack).toContain("relative");
+    expect(stack).toContain("min-w-0");
+    expect(stack).not.toContain("gap-2");
+    expect(layer).toContain("absolute");
+    expect(layer).toContain("inset-x-0");
+    expect(layer).toContain("top-10");
+    expect(layer).toContain("max-w-full");
+    expect(layer).toContain("pointer-events-none");
+    // Suggestions paint over the textarea below its first line, but stay
+    // before it in DOM order so the focused textarea can continue forwarding
+    // arrows, Enter and Escape.
+    expect(html.indexOf('data-slot="composer-picker-overlay"')).toBeLessThan(
+      html.indexOf('aria-label="Layout probe"'),
+    );
   });
 });

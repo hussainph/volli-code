@@ -1,4 +1,5 @@
 import type {
+  BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
   BrowserTabListResult,
@@ -25,6 +26,7 @@ export interface BrowserApi {
   forward(input: BrowserTabIdInput): Promise<BrowserTabResult>;
   reload(input: BrowserTabIdInput): Promise<BrowserTabResult>;
   setBounds(input: BrowserTabSetBoundsInput): Promise<Result>;
+  capture(input: BrowserTabIdInput): Promise<BrowserTabCaptureResult>;
   show(input: BrowserTabIdInput): Promise<Result>;
   hide(input: BrowserTabIdInput): Promise<Result>;
   toggleDevTools(input: BrowserTabIdInput): Promise<Result>;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askInteractionId,
   askUserInteractionId,
+  budgetAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -1535,8 +1536,11 @@ describe("the frozen ask interaction id derivations", () => {
     // gated tool row to its interaction through the same strings.
     expect(askInteractionId("call-1")).toBe("ask:call-1");
     expect(askUserInteractionId("call-1")).toBe("ask-user:call-1");
+    expect(budgetAskInteractionId("call-1")).toBe("budget-ask:call-1");
     // Distinct prefixes on purpose: either answer settling the other's wait is
-    // the failure a shared prefix would not collide loudly on.
+    // the failure a shared prefix would not collide loudly on — and one tool
+    // call can raise both a gate ask and a budget ask (VC-204).
     expect(askInteractionId("x")).not.toBe(askUserInteractionId("x"));
+    expect(budgetAskInteractionId("x")).not.toBe(askInteractionId("x"));
   });
 });

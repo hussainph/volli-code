@@ -24,11 +24,84 @@ export type AssistantMessageOutcome =
   | { kind: "ignored" }
   | { kind: "failed"; failure: RuntimeFailure };
 
-const MAX_DIAGNOSTIC_LENGTH = 300;
+/**
+ * Long enough for a provider's whole refusal, including the sentence that
+ * says what to do about it. Anthropic's preserved-thinking 400 runs to about
+ * 360 characters once its envelope is off, and the clause that names what
+ * changed is the last one; 300 cut it (VC-242).
+ */
+const MAX_DIAGNOSTIC_LENGTH = 400;
 
 /** Long opaque runs are how provider keys and bearer tokens look in error text. */
-const OPAQUE_SECRET = /[A-Za-z0-9_-]{24,}/g;
+const OPAQUE_RUN = /[A-Za-z0-9_-]{24,}/g;
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z])[-_][A-Za-z0-9_-]+/gi;
+/**
+ * How long a `-` or `_` joined segment may be before the run stops reading as
+ * words. `prefix_mismatch_behavior` and `thinking-binding-controls-2026-08-01`
+ * are under it in every segment; a key is one long segment, or mixed case, or
+ * digits throughout, and the check below asks for all three to be absent.
+ */
+const MAX_WORD_SEGMENT = 12;
+
+/**
+ * Whether a long run is vocabulary rather than a credential.
+ *
+ * The opaque-run rule redacted `prefix_mismatch_behavior` (24 characters) and
+ * the beta header name (36) out of the one provider message whose whole point
+ * is naming them, leaving a person a sentence that says to set `[redacted]` to
+ * `"drop_block"` (VC-242). What tells those apart from a key is that they are
+ * lowercase words joined by separators: every segment short, at least one of
+ * them a plain word. A key has none of that at once — a raw hex or base64
+ * token is one long segment, a JWT segment is mixed case, a UUID has no
+ * alphabetic segment — so each still redacts.
+ */
+function readsAsWords(run: string): boolean {
+  if (run !== run.toLowerCase()) return false;
+  const segments = run.split(/[-_]/);
+  return (
+    segments.every((segment) => segment.length > 0 && segment.length <= MAX_WORD_SEGMENT) &&
+    segments.some((segment) => /^[a-z]+$/.test(segment))
+  );
+}
+
+/**
+ * The sentence inside a provider's error envelope, when the text is one.
+ *
+ * Anthropic's SDK renders a refused request as
+ * `400 {"type":"error","error":{"type":"invalid_request_error","message":"…"},"request_id":"…"}`
+ * and OpenAI's as `400 {"error":{"message":"…",…}}`. The envelope is for a
+ * log; the person waiting on the turn needs the sentence. The status code
+ * ahead of the brace is kept, because the auth classifier reads `401`/`403`
+ * off it, and anything that is not an envelope is returned as it came.
+ */
+function providerSentence(raw: string): string {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return raw;
+  let body: Record<string, unknown>;
+  try {
+    // Text that opens with `{` parses to an object or throws; there is no
+    // third case for the cast to be wrong about.
+    body = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return raw;
+  }
+  const message = errorMessageOf(body);
+  if (message === undefined) return raw;
+  const prefix = raw.slice(0, start).trim();
+  return prefix.length > 0 ? `${prefix} ${message}` : message;
+}
+
+/** `error.message`, then `message`, when the parsed body carries either as text. */
+function errorMessageOf(body: Record<string, unknown>): string | undefined {
+  const nested = body["error"];
+  const inner =
+    nested !== null && typeof nested === "object"
+      ? (nested as Record<string, unknown>)["message"]
+      : undefined;
+  const message = typeof inner === "string" && inner.length > 0 ? inner : body["message"];
+  return typeof message === "string" && message.length > 0 ? message : undefined;
+}
 const AUTH_SIGNAL =
   /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
 /**
@@ -43,6 +116,21 @@ const AUTH_SIGNAL =
 const CONTEXT_SIGNAL =
   /(context (?:length|limit|window)|too many tokens|maximum tokens|(?:prompt|input) is too long|exceeds the maximum number of tokens)/i;
 /**
+ * How Anthropic refuses the conversation's own earlier reasoning.
+ *
+ * Two sentences, one repair. Claude Fable 5.1's preserved thinking answers a
+ * `thinking` block whose signature is bound to a different prefix with
+ * ``Invalid `signature` in `thinking` block``; every thinking model answers a
+ * block that came back altered with ``blocks in the latest assistant message
+ * cannot be modified``. Neither clears on a resend, and both clear once the
+ * reasoning is dropped and the turn sent again — which is what
+ * {@link RuntimeFailure}'s `reasoning` arm exists to trigger (VC-242). The
+ * backtick-adjacent characters are wildcards so an envelope that escaped them
+ * still matches; the second alternative is bounded so the pattern stays linear.
+ */
+const REASONING_SIGNAL =
+  /(invalid .signature. in .thinking. block|(?:thinking|reasoning).{0,60}cannot be modified)/i;
+/**
  * How a connection that died mid-stream reads once the provider has rethrown
  * it. Deliberately narrower than pi-ai's own retry predicate: everything else a
  * model can fail with — a spent quota, a refused key, a payload it would build
@@ -56,18 +144,31 @@ const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["r
   auth: "auth",
   configuration: "configuration",
   context: "context",
+  // Reaches a person only after the runtime has already dropped the reasoning
+  // and been refused again, which is the generic dead end with a Retry: the
+  // one repair the doc names has been spent.
+  reasoning: "runtime-failure",
   model: "runtime-failure",
   aborted: "runtime-failure",
   unknown: "runtime-failure",
 };
 
-/** Strip secret-shaped substrings and bound the length. Never returns raw provider text. */
+/**
+ * Strip secret-shaped substrings and bound the length. Never returns raw
+ * provider text.
+ *
+ * Unwraps a provider's JSON error envelope first, so what is bounded and
+ * redacted is the sentence a person can act on rather than the framing around
+ * it. Every 24-character run is still suspect; only one that reads as joined
+ * lowercase words is let through, because that is documentation vocabulary
+ * and not a key ({@link readsAsWords}).
+ */
 export function sanitizeDiagnostic(raw: string): string {
-  const collapsed = raw
+  const collapsed = providerSentence(raw)
     .replace(/\s+/g, " ")
     .trim()
     .replace(PREFIXED_SECRET, "[redacted]")
-    .replace(OPAQUE_SECRET, "[redacted]");
+    .replace(OPAQUE_RUN, (run) => (readsAsWords(run) ? run : "[redacted]"));
   return collapsed.length > MAX_DIAGNOSTIC_LENGTH
     ? `${collapsed.slice(0, MAX_DIAGNOSTIC_LENGTH)}…`
     : collapsed;
@@ -78,8 +179,16 @@ export function attentionReasonFor(failure: RuntimeFailure): AttentionObservatio
   return ATTENTION_REASON[failure.reason];
 }
 
-/** Auth failures need explicit user recovery; everything else is a model failure. */
+/**
+ * Which of the runtime's recoveries a refusal is asking for.
+ *
+ * Reasoning is read first because it is the most specific sentence and
+ * because the text around it mentions headers and settings that the broader
+ * signals could mistake for their own. Auth failures need explicit user
+ * recovery; everything else is a model failure.
+ */
 export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] {
+  if (REASONING_SIGNAL.test(sanitized)) return "reasoning";
   if (CONTEXT_SIGNAL.test(sanitized)) return "context";
   return AUTH_SIGNAL.test(sanitized) ? "auth" : "model";
 }

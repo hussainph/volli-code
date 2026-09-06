@@ -4,11 +4,10 @@
  *
  * This is the surface VC-127 deliberately did not build — "building a lane view
  * before columns can be a Trigger would be drawing lanes with nothing to put in
- * them". Now they can, and the lanes have exactly one job the flat list below
- * them cannot do: they are where the ORDER lives. Everything else about a
- * record — create, edit, duplicate, enable, delete, run — stays in the list,
- * because this page is the one authoring surface and a second one drawn as a
- * board would be two.
+ * them". Now they can, and the lanes have exactly one job the persistent rail
+ * and editor cannot do: they are where the ORDER lives. Everything else about
+ * a record — create, edit, duplicate, enable, delete, run — stays in the editor,
+ * because a second authoring surface drawn as a board would still be two.
  *
  * Three rules the drawing has to keep saying:
  *

@@ -24,6 +24,12 @@
  *   Board      | set          | TicketDetail, full-bleed, NO Home strip
  *   a work tab | either       | Home strip + that Session/File/Browser plane
  *
+ * "Active tab" reads as the FOCUSED PANE's front tab since VC-202, which is the
+ * same sentence while nothing is split — the plane below the strip is a split
+ * grid, and an unsplit Home resolves to one pane holding the whole strip. The
+ * Board rides inside that grid now (it is the primary pane's permanent tab)
+ * rather than beside it; a ticket workspace still takes the whole page over.
+ *
  * A Home SESSION additionally gets the right rail (VC-55) — the ticket
  * workspace's panel at this scope, on the same ⌥⌘B and the same persisted
  * collapse. The board has none: a rail about where this Session runs, over a
@@ -52,15 +58,24 @@
  */
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { arrangeTabs, EMPTY_TAB_ORDER, errorMessage, type FileWorkspaceTab } from "@volli/shared";
+import {
+  arrangeTabs,
+  EMPTY_TAB_ORDER,
+  errorMessage,
+  resolveSplitView,
+  singlePaneSplitView,
+  SPLIT_VIEW_ROOT_PANE_ID,
+  type FileWorkspaceTab,
+  type ResolvedSplitViewPane,
+} from "@volli/shared";
 import { BROWSER_START_URL } from "../../../../browser-start-page";
 import type { BrowserTabState } from "../../../../ipc/contract";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { BrowserPane } from "@renderer/components/browser/browser-pane";
-import { HOME_BOARD_TAB, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
+import { HomePaneTabStrip, HomeTabStrip, type HomeTabDescriptor } from "./home-tab-strip";
+import { useHomeTabDescriptors } from "./home-tab-descriptors";
 import { HomeRail } from "./home-rail";
-import { fileTabLabels } from "@renderer/components/files/file-tab-labels";
 import { FileSaveGuardDialog } from "@renderer/components/files/save-guard-dialog";
 import { useProjectFileWorkspace } from "@renderer/components/files/use-project-file-workspace";
 import {
@@ -72,25 +87,42 @@ import {
 } from "./home-tabs";
 import { Board } from "@renderer/components/board/board";
 import { BoardBoundary } from "@renderer/components/board/board-boundary";
+import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionsLayer } from "@renderer/components/sessions/sessions-layer";
 import {
   startProjectChat,
   startProjectTerminal,
 } from "@renderer/components/sessions/session-create";
+import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
+import { SplitDnd } from "@renderer/components/split/split-dnd";
+import {
+  type SplitDragPayload,
+  type SplitDropOperation,
+  type SplitDropZone,
+} from "@renderer/components/split/split-drop";
+import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
+import {
+  nativeDropWrite,
+  reorderDropWrite,
+  tabDropWrite,
+  type SplitSurfaceWrites,
+} from "@renderer/components/split/split-surface-drop";
+import { paneStripLabel, paneTabs } from "@renderer/components/split/split-tab-partition";
+import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
+import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { FileView } from "@renderer/components/ticket/file-view";
 import { TicketDetail } from "@renderer/components/ticket/ticket-detail";
-import {
-  chatTabId,
-  chatTabStatus,
-  CHAT_TAB_FALLBACK_LABEL,
-} from "@renderer/components/ticket/ticket-chat-tab";
+import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId, parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
+import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
+import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
+import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import {
-  browserTabDisplayTitle,
   hydrateBrowserTabs,
   subscribeBrowserTabs,
   useBrowserTabsStore,
@@ -102,7 +134,6 @@ import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
-import { toastError } from "@renderer/lib/toast";
 
 const NO_TERMINAL_TABS: readonly SessionTab[] = [];
 const NO_OPEN_CHATS: readonly string[] = [];
@@ -163,6 +194,18 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   );
   const openTicketId = useWorkspaceStore((state) =>
     selectedId === null ? null : (state.byProject[selectedId]?.openTicketId ?? null),
+  );
+  // How Home's strip is ARRANGED and how its plane is SPLIT. Both move only
+  // when somebody drags or splits, so subscribing here costs this component
+  // (which hosts every live terminal in the app) nothing per frame — unlike the
+  // per-token chat reads, which stay one level down in the strips.
+  const tabOrder = useWorkspaceStore(
+    (state) =>
+      (selectedId === null ? undefined : state.byProject[selectedId]?.homeTabOrder) ??
+      EMPTY_TAB_ORDER,
+  );
+  const splitView = useWorkspaceStore((state) =>
+    selectedId === null ? null : (state.byProject[selectedId]?.homeSplitView ?? null),
   );
 
   /**
@@ -269,7 +312,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
 
   // ── What is on screen ────────────────────────────────────────────────────
   const boardTabActive = isHomeBoardTab(activeTabId);
-  const activeFileRelPath = parseFileTabId(activeTabId);
+  // The surface-active browser tab, or undefined. Under the split view this is
+  // the FOCUSED pane's front tab being a browser — the rail steps aside for it
+  // (main's own gating), while every pane's browser renders in its own cell.
   const activeBrowserTabId = parseBrowserTabId(activeTabId);
   const activeBrowserTab =
     activeBrowserTabId === null
@@ -294,11 +339,57 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   }, [selectedId, openTicketId, ticket, closeTicket]);
   const ticketTakesOver = boardTabActive && ticket !== undefined;
 
+  /**
+   * The strip, projected onto the panes that draw it (VC-202).
+   *
+   * `tabIds` is composed order and `arrangeTabs` is the person's own order over
+   * it (VC-189); the resolution then says which pane draws each of them. An
+   * UNSPLIT Home resolves to ONE pane holding exactly that arranged list with
+   * exactly the tab that was in front in front — so the grid below draws
+   * today's plane, and there is no second rendering path to drift.
+   */
+  const orderedTabIds = React.useMemo(
+    () =>
+      arrangeTabs(
+        [HOME_BOARD_TAB_ID, ...tabIds].map((id) => ({ id })),
+        tabOrder,
+        1,
+      ).map((tab) => tab.id),
+    [tabIds, tabOrder],
+  );
+  const split = resolveSplitView(
+    splitView ?? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID),
+    orderedTabIds,
+    HOME_BOARD_TAB_ID,
+  );
+  // What Home is SHOWING — one tab per pane. The sessions layer reads it to
+  // decide whether the terminal zen mode is holding is still on screen.
+  const visibleTabIds = split.panes.flatMap((pane) =>
+    pane.activeTabId === null ? [] : [pane.activeTabId],
+  );
+
+  // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
+  // front for itself, so this instance stands down while a ticket workspace has
+  // taken Home over (`hooks/use-split-shortcuts.ts`).
+  useSplitShortcuts({ projectId: selectedId, ticketId: null, orderedTabIds });
+
   // Terminal focus is an in-app zen mode: one terminal takes the whole canvas
   // and every piece of chrome steps aside, this strip included — exactly as the
   // ticket workspace's does. Any target at all means zen, and a target can only
   // ever name a surface that is itself in front.
-  const zen = useUiStore((state) => state.terminalFocusTarget !== null);
+  const terminalFocusTarget = useUiStore((state) => state.terminalFocusTarget);
+  const zen = terminalFocusTarget !== null;
+  // The Home Session zen is holding, if it is one of Home's: while it holds,
+  // that terminal takes the whole plane and the grid steps aside — which
+  // unpublishes every other pane's anchor and hides those terminals without
+  // unmounting one.
+  const zenSessionId =
+    terminalFocusTarget !== null &&
+    terminalFocusTarget.ticketId === null &&
+    terminalFocusTarget.projectId === selectedId &&
+    visibleTabIds.includes(terminalFocusTarget.sessionId)
+      ? terminalFocusTarget.sessionId
+      : null;
   const stripVisible = visible && selected !== null && !ticketTakesOver && !zen;
 
   // ── The rail ─────────────────────────────────────────────────────────────
@@ -352,6 +443,17 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const openHomeBoard = useWorkspaceStore((state) => state.openHomeBoard);
   const activateHomeFile = useWorkspaceStore((state) => state.activateHomeFile);
   const pinHomeFile = useWorkspaceStore((state) => state.pinHomeFile);
+  const previewHomeFile = useWorkspaceStore((state) => state.previewHomeFile);
+  const moveHomeTab = useWorkspaceStore((state) => state.moveHomeTab);
+  // The split view's own writers (VC-202). Every one of them is a no-op while
+  // Home is unsplit, which is what keeps the unsplit path untouched.
+  const moveHomeTabInPane = useWorkspaceStore((state) => state.moveHomeTabInPane);
+  const splitHomePane = useWorkspaceStore((state) => state.splitHomePane);
+  const moveHomeTabToPane = useWorkspaceStore((state) => state.moveHomeTabToPane);
+  const focusHomePane = useWorkspaceStore((state) => state.focusHomePane);
+  const setHomeSplitRatio = useWorkspaceStore((state) => state.setHomeSplitRatio);
+  const closeHomePane = useWorkspaceStore((state) => state.closeHomePane);
+  const removeHomeTabFromSplit = useWorkspaceStore((state) => state.removeHomeTabFromSplit);
   const closeHomeBrowserTab = useWorkspaceStore((state) => state.closeHomeBrowserTab);
   const setActiveSession = useSessionsStore((state) => state.setActiveSession);
 
@@ -392,6 +494,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
               return;
             }
             useBrowserTabsStore.getState().remove(descriptor.tabId);
+            // The split-view half of a close this store does not own — the same
+            // statement the chat and terminal branches make below. While split
+            // it lands the surface on the pane's own successor, so the MRU
+            // return inside closeHomeBrowserTab only ever runs unsplit.
+            removeHomeTabFromSplit(selectedId, descriptor.id);
             const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
             const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
             const workspace = useWorkspaceStore.getState().byProject[selectedId];
@@ -416,6 +523,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         // No busy guard and no confirm: the Session is durable, so closing the
         // view loses nothing — reopening it from the sidebar adopts the same
         // history, and the next render re-derives which tab comes forward.
+        // The pane that held it has to be told, though: a chat tab's lifetime
+        // lives in the chat store, so nothing else drops its pane assignment
+        // (a no-op while unsplit, where the MRU return is unchanged).
+        removeHomeTabFromSplit(selectedId, descriptor.id);
         useChatSessionsStore.getState().closeChatTab(selectedId, descriptor.sessionId);
         return;
       }
@@ -426,12 +537,24 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       const liveIds = sessionPanes(descriptor.tab.layout)
         .filter((pane) => pane.exitCode === null)
         .map((pane) => pane.sessionId);
-      closeGuard.guard(liveIds, () => closeTerminalSession(selectedId, descriptor.tab.sessionId));
+      // Inside the guard, so a close the person CANCELS leaves the panes
+      // exactly as they were.
+      closeGuard.guard(liveIds, () => {
+        removeHomeTabFromSplit(selectedId, descriptor.tab.sessionId);
+        closeTerminalSession(selectedId, descriptor.tab.sessionId);
+      });
     },
     // The controller's own callback, not the controller: its object identity
     // moves whenever a tab, a dirty flag or a pending close does, and this memo
     // also holds the terminal close guard.
-    [browserApi, closeGuard, closeHomeBrowserTab, requestCloseFile, selectedId],
+    [
+      browserApi,
+      closeGuard,
+      closeHomeBrowserTab,
+      removeHomeTabFromSplit,
+      requestCloseFile,
+      selectedId,
+    ],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
@@ -443,6 +566,230 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     }
     if (descriptor.kind === "terminal") renameTerminalSession(descriptor.tab.sessionId, title);
   }, []);
+
+  /**
+   * This surface's half of the drop-routing seam (`split-surface-drop.ts`):
+   * Home's store twins, and Home's own doors for a native payload. The
+   * decisions — pane-or-surface reorder, the unsplit centre's activation door,
+   * the first split's strip claim — live in the seam, one copy shared with the
+   * ticket workspace. `null` while no project is selected: there is no surface
+   * for a drop to write to.
+   */
+  const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
+    if (selectedId === null) return null;
+    return {
+      reorderSurface: (movedId, ids) => moveHomeTab(selectedId, movedId, ids),
+      reorderPane: (paneId, movedId, ids) => moveHomeTabInPane(selectedId, paneId, movedId, ids),
+      moveTabToPane: (tabId, paneId) => moveHomeTabToPane(selectedId, tabId, paneId),
+      splitPane: (paneId, edge, tabId, surfaceTabIds) =>
+        splitHomePane(selectedId, paneId, edge, { tabId, surfaceTabIds }),
+      // The door the row's own tab click takes: the tab comes to the front,
+      // and a terminal onto the container's own ledger too — the same pair
+      // `handleSelect` writes.
+      activateTab: (tabId, payload) => {
+        setHomeActiveTab(selectedId, tabId);
+        if (payload.type === "session" && payload.kind === "terminal") {
+          setActiveSession(selectedId, tabId);
+        }
+      },
+      // A chat is adopted and a terminal is not: only an open terminal may be
+      // dragged (its tab is what the pane takes), while a chat Session is
+      // durable and its tab is minted on arrival. A terminal whose tab closed
+      // mid-drag leaves nothing to place.
+      openPayload: (payload) => {
+        if (payload.type === "file") {
+          previewHomeFile(selectedId, payload.relPath);
+          return fileTabId(payload.relPath);
+        }
+        if (payload.kind === "chat") {
+          const chat = useChatSessionsStore.getState();
+          chat.adoptChatSession(payload.sessionId);
+          chat.openChatTab(selectedId, payload.sessionId);
+          return chatTabId(payload.sessionId);
+        }
+        return terminalTabs.some((tab) => tab.sessionId === payload.sessionId)
+          ? payload.sessionId
+          : null;
+      },
+    };
+  }, [
+    moveHomeTab,
+    moveHomeTabInPane,
+    moveHomeTabToPane,
+    previewHomeFile,
+    selectedId,
+    setActiveSession,
+    setHomeActiveTab,
+    splitHomePane,
+    terminalTabs,
+  ]);
+
+  /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
+  const reorderInPane = React.useCallback(
+    (paneId: string, movedId: string, ids: readonly string[]) => {
+      if (dropWrites === null) return;
+      reorderDropWrite(
+        { isSplit: splitView !== null, orderedTabIds },
+        dropWrites,
+        paneId,
+        movedId,
+        ids,
+      );
+    },
+    [dropWrites, orderedTabIds, splitView],
+  );
+
+  /** A tab let go somewhere on Home (VC-202 §4) — the seam routes, the twins write. */
+  const applySplitDrop = React.useCallback(
+    (operation: SplitDropOperation) => {
+      if (dropWrites === null) return;
+      tabDropWrite({ isSplit: splitView !== null, orderedTabIds }, dropWrites, operation);
+    },
+    [dropWrites, orderedTabIds, splitView],
+  );
+
+  /** A Session or file row dropped on a pane — opened by Home's doors, placed by the seam. */
+  const handleNativeDrop = React.useCallback(
+    (payload: SplitDragPayload, paneId: string, zone: SplitDropZone) => {
+      if (dropWrites === null) return;
+      nativeDropWrite(
+        { isSplit: splitView !== null, orderedTabIds },
+        dropWrites,
+        payload,
+        paneId,
+        zone,
+      );
+    },
+    [dropWrites, orderedTabIds, splitView],
+  );
+
+  /**
+   * Where a file a Home chat names opens (VC-120). The raw tool path is
+   * translated FIRST — `resolveChatOpenTarget` — because an orchestrating
+   * Project Session spends its life pointing at ticket worktrees, and the
+   * untranslated string used to resolve against the main checkout and render
+   * raw ENOENT text:
+   *
+   *  • absolute under a ticket's worktree → that ticket's file tab, and its
+   *    workspace brought to front (the transcript pointed there by name);
+   *  • absolute under the main checkout → relativized into a Home File tab;
+   *  • relative → this chat's own venue, the main checkout, as before;
+   *  • anything else → a toast, and NO navigation — never a pane whose only
+   *    content is an error.
+   *
+   * Held across renders because {@link ChatPlane} hands it to every turn on
+   * screen: a fresh function here re-renders the whole transcript. Ticket
+   * worktrees are read off the board store at CLICK time for the same reason —
+   * subscribing would retie this callback to every board refresh. (It lived in
+   * `sessions-layer.tsx` until VC-202 moved the chat plane into its pane.)
+   */
+  const selectedPath = selected?.path ?? null;
+  const openProjectFile = React.useCallback(
+    (path: string) => {
+      if (selectedId === null || selectedPath === null) return;
+      const tickets = useBoardStore.getState().ticketsByProject[selectedId] ?? [];
+      const target = resolveChatOpenTarget({
+        path,
+        projectPath: selectedPath,
+        worktrees: chatWorktreeRefs(tickets),
+        scope: { kind: "project" },
+      });
+      if (target.kind === "outside") {
+        toastError(`${path} is outside this project.`);
+        return;
+      }
+      if (target.kind === "ticket-file") {
+        const workspace = useWorkspaceStore.getState();
+        workspace.openTicketFile(selectedId, target.ticketId, target.relPath);
+        workspace.openTicketWorkspace(selectedId, target.ticketId);
+        return;
+      }
+      previewHomeFile(selectedId, target.relPath);
+    },
+    [previewHomeFile, selectedId, selectedPath],
+  );
+
+  /** What one pane's front tab draws — or, for a pane holding nothing, its menu. */
+  const paneContent = (pane: ResolvedSplitViewPane): React.ReactNode => {
+    if (selectedId === null || selected === null) return null;
+    const tabId = pane.activeTabId;
+    if (tabId === null) {
+      return (
+        <PaneEmptyState
+          onNewChat={() => void startProjectChat(selectedId)}
+          onNewTerminal={() => void startProjectTerminal(selectedId)}
+          onOpenFile={openQuickOpen}
+          onClosePane={() => closeHomePane(selectedId, pane.id)}
+        />
+      );
+    }
+    const relPath = parseFileTabId(tabId);
+    const chatSessionId = parseChatTabId(tabId);
+    const paneBrowserTabId = parseBrowserTabId(tabId);
+    const paneBrowserTab =
+      paneBrowserTabId === null
+        ? undefined
+        : browserTabs.find((tab) => tab.tabId === paneBrowserTabId);
+    return (
+      // The positioning context a terminal anchor needs, below whatever strip
+      // this pane draws — so a terminal fills its pane's content box and not the
+      // strip above it.
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {isHomeBoardTab(tabId) ? (
+          // Contained: a board that faults mid-render costs the board and a
+          // retry, not the whole window. See board-boundary.tsx.
+          <BoardBoundary projectId={selected.id}>
+            <Board projectId={selected.id} ticketPrefix={selected.ticketPrefix} />
+          </BoardBoundary>
+        ) : null}
+        {relPath !== null ? (
+          <HomePaneFileView
+            key={`${selected.id}:${relPath}`}
+            projectId={selected.id}
+            relPath={relPath}
+            initialViewState={fileWorkspace.viewStates[relPath]}
+            onViewStateChange={fileWorkspace.handleViewStateChange}
+            onDirtyChange={fileWorkspace.handleDirtyChange}
+          />
+        ) : null}
+        {chatSessionId !== null ? (
+          // Keyed by Session — the client, the fold and the queue are resident
+          // (@volli/session-presentation's registry), so a remount costs nothing
+          // and carries nothing over. Which is exactly why a chat may live in a
+          // pane cell while a terminal may not.
+          <ChatPlane
+            key={chatSessionId}
+            sessionId={chatSessionId}
+            projectId={selected.id}
+            // Ticketless by construction: Home hosts the project's OWN
+            // Sessions, which is what makes their venue the main checkout.
+            ticketId={null}
+            onOpenFile={openProjectFile}
+          />
+        ) : null}
+        {paneBrowserTab !== undefined ? (
+          // The native view is attached over this cell's own rectangle, and the
+          // main-process host shows any number of tabs at once (tab-host), so
+          // one browser per pane composes exactly as files and chats do.
+          // `visible` reaches the controller because a native view ignores the
+          // CSS `hidden` that stands the rest of this plane down.
+          <BrowserPane
+            key={paneBrowserTab.tabId}
+            tab={paneBrowserTab}
+            visible={visible}
+            api={browserApi}
+            onTabState={useBrowserTabsStore.getState().receive}
+          />
+        ) : null}
+        {relPath === null &&
+        chatSessionId === null &&
+        paneBrowserTabId === null &&
+        !isHomeBoardTab(tabId) ? (
+          <TerminalPaneAnchor tabId={tabId} ownerId={selected.id} />
+        ) : null}
+      </div>
+    );
+  };
 
   const rail =
     railVisible && selected !== null ? (
@@ -456,86 +803,129 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     ) : null;
 
   return (
-    <>
+    // ONE drag context for the whole surface (VC-202 §4): Home's strip, its
+    // panes and their drop zones are one gesture, and the strip is rendered
+    // here while the grid is handed to the layer below — so the context has to
+    // sit above both. A ticket workspace nests its OWN inside this one, which
+    // is what keeps a ticket tab from ever being dropped on Home.
+    <SplitDnd
+      // No subject, no origin: with no project selected there is no surface a
+      // payload could be checked against, and a null origin accepts nothing.
+      origin={
+        selectedId === null ? null : { scope: "project", projectId: selectedId, ticketId: null }
+      }
+      panes={split.panes.map((pane) => ({
+        paneId: pane.id,
+        tabIds: pane.tabIds.filter((id) => !isHomeBoardTab(id)),
+      }))}
+      onTabDrop={applySplitDrop}
+      onNativeDrop={handleNativeDrop}
+    >
       {stripVisible && selectedId !== null ? (
+        // The surface's own strip is the PRIMARY pane's strip — the pane that
+        // holds the permanent Board tab and never moves, which is what lets the
+        // full-width chrome survive a split unchanged.
         <HomeTabs
           projectId={selectedId}
+          pane={split.panes[0]!}
           terminalTabs={terminalTabs}
           chatIds={openChatIds}
           fileTabs={fileTabs}
           browserTabs={browserTabs}
           dirtyFilePaths={fileWorkspace.dirtyPaths}
-          activeTabId={activeTabId}
-          creating={creating}
           onSelect={handleSelect}
           onClose={handleClose}
           onRename={handleRename}
+          onReorder={(movedId, ids) => reorderInPane(split.primaryPaneId, movedId, ids)}
           onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
           onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-          onNewChat={() => void startProjectChat(selectedId)}
-          onNewSession={() => void startProjectTerminal(selectedId)}
-          onNewBrowser={() => void createBrowser()}
-          railCollapsed={railCollapsed}
-          railTogglable={!boardTabActive && activeBrowserTab === undefined}
-          onToggleRail={toggleRailCollapsed}
+          actions={{
+            creating,
+            onNewChat: () => void startProjectChat(selectedId),
+            onNewSession: () => void startProjectTerminal(selectedId),
+            onNewBrowser: () => void createBrowser(),
+            railCollapsed,
+            // A browser tab in front hides the rail (main's own gating): the
+            // native view owns that edge of the window.
+            railTogglable: !boardTabActive && activeBrowserTab === undefined,
+            onToggleRail: toggleRailCollapsed,
+          }}
         />
       ) : null}
 
-      {/* Always mounted, panes-only: it owns every live terminal in the app, so
-          it is never unmounted for a nav, project or tab change. Visible when a
-          Home SESSION, FILE, or BROWSER tab is in front — the board covers the same box.
+      {/* Always mounted: it owns every live terminal in the app, so it is never
+          unmounted for a nav, project or tab change. Its box is Home's plane —
+          the split grid, the Board included — and it stands down only for a
+          ticket workspace that has taken the whole page over.
 
-          Both the rail and the File editor are handed DOWN rather than rendered
+          Both the rail and the plane are handed DOWN rather than rendered
           beside this layer, so each keeps ONE position in the tree across the
           whole strip. React reconciles by position: a rail rendered from two
           branches would remount on every Session↔File switch, and the Files
           navigator inside it would lose the folder it was standing in — so
           opening a file would reset the navigator that opened it. */}
       <SessionsLayer
-        visible={visible && !boardTabActive}
-        activeTabId={activeTabId}
+        visible={visible && !ticketTakesOver}
+        visibleTabIds={visibleTabIds}
         rail={rail}
         plane={
-          activeBrowserTab !== undefined ? (
-            <BrowserPane
-              key={activeBrowserTab.tabId}
-              tab={activeBrowserTab}
-              visible={visible}
-              api={browserApi}
-              onTabState={useBrowserTabsStore.getState().receive}
+          selected === null || ticketTakesOver ? null : zenSessionId !== null ? (
+            // Zen: the focused Session takes the whole plane, and the grid is
+            // not rendered at all — so every other pane's anchor is unpublished
+            // and its terminal stops being drawn, without unmounting.
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <TerminalPaneAnchor tabId={zenSessionId} ownerId={selected.id} />
+            </div>
+          ) : (
+            <SplitViewGrid
+              view={split}
+              renderStrip={(pane) =>
+                // No strip on the primary pane (the surface's own is its) and
+                // none on a pane holding nothing: an empty tablist is a band of
+                // chrome about no tabs, and the pane's menu is the whole of
+                // what it has to say.
+                pane.isPrimary || pane.tabIds.length === 0 || selectedId === null ? null : (
+                  <HomePaneTabs
+                    projectId={selectedId}
+                    pane={pane}
+                    terminalTabs={terminalTabs}
+                    chatIds={openChatIds}
+                    fileTabs={fileTabs}
+                    browserTabs={browserTabs}
+                    dirtyFilePaths={fileWorkspace.dirtyPaths}
+                    onSelect={handleSelect}
+                    onClose={handleClose}
+                    onRename={handleRename}
+                    onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
+                    onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+                    onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+                  />
+                )
+              }
+              renderContent={paneContent}
+              renderOverlay={(pane) => <SplitDropZones paneId={pane.id} />}
+              onFocusPane={(paneId) => {
+                if (selectedId !== null) focusHomePane(selectedId, paneId);
+              }}
+              onResizeSplit={(splitId, ratio) => {
+                if (selectedId !== null) setHomeSplitRatio(selectedId, splitId, ratio);
+              }}
             />
-          ) : selected !== null && activeFileRelPath !== null ? (
-            <FileView
-              key={`${selected.id}:${activeFileRelPath}`}
-              projectId={selected.id}
-              relPath={activeFileRelPath}
-              initialViewState={fileWorkspace.viewStates[activeFileRelPath]}
-              onViewStateChange={fileWorkspace.handleViewStateChange}
-              onDirtyChange={fileWorkspace.handleDirtyChange}
-            />
-          ) : null
+          )
         }
       />
 
-      {visible && selected !== null && boardTabActive ? (
-        ticket !== undefined ? (
-          // Keyed so a ticket→ticket jump (nav history) remounts the detail:
-          // pending body/artifact autosaves flush on unmount to the ticket that
-          // authored them, never into the next ticket's editors.
-          <TicketDetail
-            key={ticket.id}
-            projectId={selected.id}
-            projectPath={selected.path}
-            ticketPrefix={selected.ticketPrefix}
-            ticket={ticket}
-          />
-        ) : (
-          // Contained: a board that faults mid-render costs the board and a
-          // retry, not the whole window. See board-boundary.tsx.
-          <BoardBoundary projectId={selected.id}>
-            <Board projectId={selected.id} ticketPrefix={selected.ticketPrefix} />
-          </BoardBoundary>
-        )
+      {visible && selected !== null && ticketTakesOver && ticket !== undefined ? (
+        // Keyed so a ticket→ticket jump (nav history) remounts the detail:
+        // pending body/artifact autosaves flush on unmount to the ticket that
+        // authored them, never into the next ticket's editors.
+        <TicketDetail
+          key={ticket.id}
+          projectId={selected.id}
+          projectPath={selected.path}
+          ticketPrefix={selected.ticketPrefix}
+          ticket={ticket}
+        />
       ) : null}
 
       <ConfirmCloseDialog
@@ -548,7 +938,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         onCancel={fileWorkspace.cancelClose}
         onChoose={fileWorkspace.chooseClose}
       />
-    </>
+    </SplitDnd>
   );
 }
 
@@ -574,52 +964,9 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
   );
 }
 
-/**
- * The strip, and the only place the per-token chat reads live.
- *
- * {@link HomeSurface} hosts every live terminal in the app and must not
- * re-render on a streamed word; a chat's title and lifecycle move on exactly
- * that. So they are subscribed here, as two primitive-valued reads rather than
- * one that builds descriptors — the same split `ticket-detail.tsx` makes, for
- * the same reason: a selector returning a fresh array of objects re-renders on
- * every folded batch, while shallow equality over strings costs nothing when
- * neither moved.
- */
-function HomeTabs({
-  projectId,
-  terminalTabs,
-  chatIds,
-  fileTabs,
-  browserTabs,
-  dirtyFilePaths,
-  activeTabId,
-  creating,
-  onSelect,
-  onClose,
-  onRename,
-  onPinFile,
-  onCloseOtherFiles,
-  onNewSession,
-  onNewChat,
-  onNewBrowser,
-  railCollapsed,
-  railTogglable,
-  onToggleRail,
-}: {
-  /** Home's file tabs are Main-checkout files of THIS project (Copy Path). */
-  projectId: string;
-  terminalTabs: readonly SessionTab[];
-  chatIds: readonly string[];
-  fileTabs: readonly FileWorkspaceTab[];
-  browserTabs: readonly BrowserTabState[];
-  dirtyFilePaths: ReadonlySet<string>;
-  activeTabId: string;
+/** The trailing cluster's props — only the surface's own strip carries them. */
+interface HomeStripActions {
   creating: boolean;
-  onSelect(tab: HomeTabDescriptor): void;
-  onClose(tab: HomeTabDescriptor): void;
-  onRename(tab: HomeTabDescriptor, title: string): void;
-  onPinFile(relPath: string): void;
-  onCloseOtherFiles(relPath: string): void;
   onNewSession(): void;
   onNewChat(): void;
   onNewBrowser(): void;
@@ -627,80 +974,111 @@ function HomeTabs({
   railCollapsed: boolean;
   railTogglable: boolean;
   onToggleRail(): void;
-}) {
-  const chatTitles = useChatSessionsStore(
-    useShallow((state) =>
-      chatIds.map(
-        (sessionId) =>
-          state.sessions[sessionId]?.projection?.session.title ?? CHAT_TAB_FALLBACK_LABEL,
-      ),
-    ),
-  );
-  const chatStatuses = useChatSessionsStore(
-    useShallow((state) => chatIds.map((sessionId) => chatTabStatus(state.sessions[sessionId]))),
-  );
-  // How this project's strip is ARRANGED (VC-189), and the action a drop
-  // writes it with. Subscribed here rather than in `HomeSurface`: that
-  // component hosts every live terminal in the app and re-renders for nothing
-  // it does not have to.
-  const tabOrder = useWorkspaceStore(
-    (state) => state.byProject[projectId]?.homeTabOrder ?? EMPTY_TAB_ORDER,
-  );
-  const moveHomeTab = useWorkspaceStore((state) => state.moveHomeTab);
-  const fileLabels = fileTabLabels(fileTabs.map((tab) => tab.relPath));
-  const composed: HomeTabDescriptor[] = [
-    HOME_BOARD_TAB,
-    ...terminalTabs.map((tab): HomeTabDescriptor => ({ kind: "terminal", id: tab.sessionId, tab })),
-    ...chatIds.map((sessionId, index): HomeTabDescriptor => ({
-      kind: "chat",
-      id: chatTabId(sessionId),
-      sessionId,
-      title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
-      status: chatStatuses[index] ?? "idle",
-    })),
-    ...fileTabs.map((tab, index): HomeTabDescriptor => {
-      const label = fileLabels[index] ?? { name: tab.relPath, hint: null };
-      return {
-        kind: "file",
-        id: fileTabId(tab.relPath),
-        relPath: tab.relPath,
-        title: label.name,
-        hint: label.hint,
-        preview: !tab.pinned,
-        dirty: dirtyFilePaths.has(tab.relPath),
-      };
-    }),
-    ...browserTabs.map((tab): HomeTabDescriptor => ({
-      kind: "browser",
-      id: browserTabId(tab.tabId),
-      tabId: tab.tabId,
-      title: browserTabDisplayTitle(tab),
-      loading: tab.loading,
-    })),
-  ];
-  // Compose by kind exactly as before, THEN arrange: the overlay is the only
-  // thing that crosses kind groups, and the permanent Board tab (index 0) is
-  // outside its reach.
-  const tabs = arrangeTabs(composed, tabOrder, 1);
+}
+
+interface HomePaneStripProps {
+  /** Home's file tabs are Main-checkout files of THIS project (Copy Path). */
+  projectId: string;
+  /** The pane this strip belongs to — which tabs it draws, and which is in front. */
+  pane: ResolvedSplitViewPane;
+  terminalTabs: readonly SessionTab[];
+  chatIds: readonly string[];
+  fileTabs: readonly FileWorkspaceTab[];
+  browserTabs: readonly BrowserTabState[];
+  dirtyFilePaths: ReadonlySet<string>;
+  onSelect(tab: HomeTabDescriptor): void;
+  onClose(tab: HomeTabDescriptor): void;
+  onRename(tab: HomeTabDescriptor, title: string): void;
+  onReorder(movedId: string, ids: readonly string[]): void;
+  onPinFile(relPath: string): void;
+  onCloseOtherFiles(relPath: string): void;
+}
+
+/**
+ * The surface's own strip — the primary pane's — and the only place the
+ * per-token chat reads live.
+ *
+ * {@link HomeSurface} hosts every live terminal in the app and must not
+ * re-render on a streamed word; a chat's title and lifecycle move on exactly
+ * that. So they are subscribed one level down, in
+ * {@link useHomeTabDescriptors}, and this component exists to be the thing that
+ * re-renders instead.
+ */
+function HomeTabs({ actions, ...strip }: HomePaneStripProps & { actions: HomeStripActions }) {
+  const tabs = paneTabs(strip.pane, useHomeTabDescriptors(strip));
 
   return (
     <HomeTabStrip
-      projectId={projectId}
+      projectId={strip.projectId}
       tabs={tabs}
-      activeTabId={activeTabId}
-      onReorder={(movedId, ids) => moveHomeTab(projectId, movedId, ids)}
-      creating={creating}
-      onSelect={onSelect}
-      onClose={onClose}
-      onRename={onRename}
-      onPinFile={onPinFile}
-      onCloseOtherFiles={onCloseOtherFiles}
-      onNewSession={onNewSession}
-      onNewChat={onNewChat}
-      onNewBrowser={onNewBrowser}
-      railCollapsed={railCollapsed}
-      railTogglable={railTogglable}
-      onToggleRail={onToggleRail}
+      activeTabId={strip.pane.activeTabId ?? ""}
+      onReorder={strip.onReorder}
+      onSelect={strip.onSelect}
+      onClose={strip.onClose}
+      onRename={strip.onRename}
+      onPinFile={strip.onPinFile}
+      onCloseOtherFiles={strip.onCloseOtherFiles}
+      {...actions}
+    />
+  );
+}
+
+/** One secondary pane's strip: the same tabs, named for its pane, no actions. */
+function HomePaneTabs(strip: HomePaneStripProps) {
+  const tabs = paneTabs(strip.pane, useHomeTabDescriptors(strip));
+
+  return (
+    <HomePaneTabStrip
+      label={paneStripLabel(strip.pane)}
+      projectId={strip.projectId}
+      tabs={tabs}
+      activeTabId={strip.pane.activeTabId ?? ""}
+      onReorder={strip.onReorder}
+      onSelect={strip.onSelect}
+      onClose={strip.onClose}
+      onRename={strip.onRename}
+      onPinFile={strip.onPinFile}
+      onCloseOtherFiles={strip.onCloseOtherFiles}
+    />
+  );
+}
+
+/**
+ * One pane's Home file editor, with its view-state and dirty reports bound to
+ * ITS path.
+ *
+ * A component rather than closures built in the render above, and that is the
+ * whole reason it exists: `FileView` holds these in effect and callback
+ * dependencies, so handlers whose identity changed every render would re-read
+ * the file from disk on every render.
+ */
+function HomePaneFileView({
+  relPath,
+  onDirtyChange,
+  onViewStateChange,
+  ...rest
+}: Omit<
+  React.ComponentProps<typeof FileView>,
+  "relPath" | "onDirtyChange" | "onViewStateChange"
+> & {
+  relPath: string;
+  onDirtyChange(relPath: string, dirty: boolean): void;
+  onViewStateChange(relPath: string, viewState: unknown): void;
+}) {
+  const handleDirtyChange = React.useCallback(
+    (dirty: boolean) => onDirtyChange(relPath, dirty),
+    [onDirtyChange, relPath],
+  );
+  const handleViewStateChange = React.useCallback(
+    (viewState: unknown) => onViewStateChange(relPath, viewState),
+    [onViewStateChange, relPath],
+  );
+  return (
+    <FileView
+      {...rest}
+      relPath={relPath}
+      onDirtyChange={handleDirtyChange}
+      onViewStateChange={handleViewStateChange}
     />
   );
 }

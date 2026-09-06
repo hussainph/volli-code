@@ -162,7 +162,9 @@ try {
       // The door out of the empty state is the page, because the rail never
       // authors (VC-112).
       await rail().getByRole("button", { name: "Automations", exact: true }).click();
-      await page.getByRole("heading", { name: "Automations" }).waitFor({ timeout: 15000 });
+      await page
+        .getByRole("heading", { name: "Automations", exact: true })
+        .waitFor({ timeout: 15000 });
       await backToBoard();
       return {
         ok: said.includes("No automations in this project yet."),

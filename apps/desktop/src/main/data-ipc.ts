@@ -84,7 +84,7 @@ import type {
   TicketIdInput,
   TicketLatestSignalsResult,
   TicketMovedNotice,
-  TicketMoveInput,
+  TicketMoveRequest,
   TicketResult,
   TicketSetLabelsInput,
   TicketSetPriorityInput,
@@ -147,6 +147,7 @@ import {
   deleteTicketCommand,
   interruptOnBackwardMove,
   moveTicketCommand,
+  moveTicketsCommand,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   unarchiveTicketCommand,
@@ -202,6 +203,12 @@ function databaseStorageBytes(dbPath: string): number {
     sizeBytes += statSync(`${dbPath}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
   }
   return sizeBytes;
+}
+
+function recordInterruptFailure(error: unknown): void {
+  console.error(
+    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
+  );
 }
 
 // ---- bootstrap payload --------------------------------------------------
@@ -667,70 +674,96 @@ export function registerDataIpcHandlers(
       };
     },
 
-    "volli:ticket-move": (input: TicketMoveInput): TicketsResult | Promise<TicketsResult> => {
+    "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
       const now = Date.now();
       const actor = { kind: "user" } as const;
-      // Snapshot the pre-move status BEFORE the move so the backward-move
-      // interrupt can decide whether the move left the active columns. Reading
-      // the raw row (never trusting the renderer) keeps the from-status honest.
-      const before = getTicketRow(db, input.ticketId);
-      const tickets = withTicketWake(db, input.ticketId, () =>
-        moveTicketCommand(db, input, { now, actor }),
-      );
-      // Main owns the armed-column arrival. Report only a real committed
-      // column change; a same-column reorder (or a mismatched project id that
-      // moved nothing) replaces no pending countdown. The Option-drag choice
-      // travels only on this door.
-      const moved = getTicketRow(db, input.ticketId);
-      if (
-        before !== undefined &&
-        moved !== undefined &&
-        before.status !== moved.status &&
-        moved.status === input.toStatus
-      ) {
+      const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
+      // Snapshot every pre-move row BEFORE the atomic move. Both the armed
+      // arrival and backward interrupt are derived from durable truth, never
+      // renderer state.
+      const before = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+
+      // One post-commit wake scope per selected ticket. Nesting is intentional:
+      // every mark is taken before the command, and every finally emits only
+      // after the command's one transaction has committed.
+      const runMove = () =>
+        "ticketIds" in input
+          ? moveTicketsCommand(db, input, { now, actor })
+          : moveTicketCommand(db, input, { now, actor });
+      const tickets = ticketIds.reduceRight<() => Ticket[]>(
+        (write, ticketId) => () => withTicketWake(db, ticketId, write),
+        runMove,
+      )();
+
+      const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+      // Main owns armed-column arrivals. A group drop is one deliberate move
+      // per selected Ticket, so every real column change reports independently
+      // with the same Option-drag choice.
+      for (const ticketId of ticketIds) {
+        const prior = before.get(ticketId);
+        const moved = after.get(ticketId);
+        if (
+          prior === undefined ||
+          moved === undefined ||
+          prior.status === moved.status ||
+          moved.status !== input.toStatus
+        ) {
+          continue;
+        }
         try {
           options.onDeliberateMove?.({
             projectId: moved.project_id,
-            ticketId: input.ticketId,
-            from: before.status as TicketStatus,
+            ticketId,
+            from: prior.status as TicketStatus,
             to: input.toStatus,
             ...(input.choice === undefined ? {} : { choice: input.choice }),
           });
         } catch (error) {
-          // The Ticket move already committed. A pending-projection failure is
-          // logged without lying to the renderer that its status change failed.
+          // The board transaction already committed. A pending-projection
+          // failure is evidence to log, not grounds to roll the move back.
           console.error(
             `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
           );
         }
       }
-      // The move committed above (its own transaction); the interrupt is the
-      // side effect, fired only for a real backward move (issue #78).
-      if (before !== undefined) {
-        const interrupt = interruptOnBackwardMove(
-          {
-            ticketId: input.ticketId,
-            fromStatus: before.status as TicketStatus,
-            toStatus: input.toStatus,
-          },
-          options.interruptTicketSessions,
-        );
-        if (interrupt instanceof Promise) {
-          return interrupt.then(
-            () => ({ ok: true, tickets }),
-            (error: unknown) => {
-              // The board mutation already committed. An after-the-fact Esc
-              // delivery failure is operational evidence, not grounds to lie
-              // to the renderer that its deliberate move failed.
-              console.error(
-                `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-              );
-              return { ok: true, tickets };
+
+      // Interrupt all affected Sessions in parallel. A delivery failure cannot
+      // roll the already-committed board transaction back; it remains
+      // operational evidence rather than turning a successful move into a lie.
+      const pending: Promise<string[]>[] = [];
+      for (const ticketId of ticketIds) {
+        const row = before.get(ticketId);
+        const moved = after.get(ticketId);
+        if (
+          row === undefined ||
+          moved === undefined ||
+          moved.project_id !== input.projectId ||
+          row.status === moved.status ||
+          moved.status !== input.toStatus
+        ) {
+          continue;
+        }
+        try {
+          const interrupt = interruptOnBackwardMove(
+            {
+              ticketId,
+              fromStatus: row.status as TicketStatus,
+              toStatus: input.toStatus,
             },
+            options.interruptTicketSessions,
           );
+          if (interrupt instanceof Promise) pending.push(interrupt);
+        } catch (error) {
+          recordInterruptFailure(error);
         }
       }
-      return { ok: true, tickets };
+      if (pending.length === 0) return { ok: true, tickets };
+      return Promise.allSettled(pending).then((results) => {
+        for (const result of results) {
+          if (result.status === "rejected") recordInterruptFailure(result.reason);
+        }
+        return { ok: true, tickets };
+      });
     },
 
     "volli:ticket-set-priority": (input: TicketSetPriorityInput): TicketResult => {

@@ -13,6 +13,7 @@ function buttonTag(html: string, label: string): string {
 function panel(creating: boolean): string {
   return renderToStaticMarkup(
     <TicketSessionsPanel
+      projectId="project-1"
       ticketId="ticket-6"
       creating={creating}
       onNewSession={noop}

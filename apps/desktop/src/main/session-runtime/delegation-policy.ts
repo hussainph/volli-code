@@ -25,7 +25,18 @@ import type { RuntimeSessionRole, VerbToolKey } from "@volli/shared";
  */
 export const MAX_TICKET_SESSION_DELEGATION_DEPTH = 1;
 
-/** Per-parent cap, kept small enough that the shared worktree stays legible. */
+/**
+ * Per-parent allowance, kept small enough that the shared worktree stays
+ * legible.
+ *
+ * An allowance, not a wall (VC-204): this is what a Ticket Session may spend on
+ * its own authority. The end of it is judged by the project's budget posture —
+ * `ask` parks the next start in front of the person driving, whose "once" is
+ * recorded as one extension row in the claims ledger; `refuse` keeps the old
+ * hard stop. What no posture changes is that the Session cannot widen this
+ * number itself: the stored grant is pinned by a schema CHECK, and extensions
+ * are written only from a person's answer through the interaction ledger.
+ */
 export const MAX_TICKET_SESSION_DELEGATION_CHILDREN = 3;
 
 /**
@@ -85,7 +96,12 @@ export interface DelegationClaimRef {
 export type TicketDelegationClaim =
   | { ok: true; delegation: TicketSessionDelegation }
   | { ok: false; reason: "not-granted" }
-  | { ok: false; reason: "limit"; maxChildren: number };
+  /**
+   * `allowed` is the whole current allowance — the born grant plus every
+   * person-approved extension — so a refusal can name the real number rather
+   * than the born one after "once" has already been said.
+   */
+  | { ok: false; reason: "limit"; allowed: number };
 
 /** The tool-door half: a durable, idempotent unit of the parent grant's fan-out. */
 export interface TicketSessionDelegationClaims {
@@ -109,6 +125,17 @@ export interface TicketSessionDelegationClaims {
   ): TicketDelegationClaim;
   /** Release only a claim proved not to have created a durable Session. */
   releaseIfUnstarted(input: DelegationClaimRef): void;
+  /**
+   * Record one person-approved slot past the born allowance (VC-204).
+   *
+   * Written only after the person driving answered "once" to this call's
+   * budget ask — never from any agent-reachable path — and keyed by the asking
+   * tool call so a replayed call finds its extension rather than earning a
+   * second. The slot belongs to the parent, not the call: if the start it was
+   * granted for never became durable, the next attempt spends it without
+   * asking again, which is what the person's "one more" meant.
+   */
+  recordExtension(input: DelegationClaimRef): void;
 }
 
 /** The claims table's primary key, as one string. */

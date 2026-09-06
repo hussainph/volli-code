@@ -214,6 +214,27 @@ export function askInteractionId(toolCallId: string): string {
 }
 
 /**
+ * The interaction id one spent-budget question is asked under (VC-204).
+ *
+ * Durable on the same terms as {@link askInteractionId}, and a third derivation
+ * rather than a reuse of `ask:` for a reason that is about collision, not
+ * taste: both derive from a tool call id, and one call can raise both
+ * questions — the gate may ask about a `session_start` call and, once allowed,
+ * the verb's own door may ask about its budget. Under one prefix the second
+ * `opened` emit would dedupe against the first inside the same attachment and
+ * park a question nobody was ever shown. Today no gate rule judges a verb
+ * tool, so the collision cannot happen yet — which is exactly when to keep the
+ * segments apart, while it costs a prefix rather than a wedge.
+ *
+ * No renderer correlation is added on purpose: a budget-asked call is not a
+ * gated row, so the card lands at the transcript foot by construction — the
+ * same place a model's own `ask-user:` question draws.
+ */
+export function budgetAskInteractionId(toolCallId: string): string {
+  return `budget-ask:${toolCallId}`;
+}
+
+/**
  * The interaction id one `ask_user` call is asked under.
  *
  * Durable on the same terms as {@link askInteractionId}, and a second derivation

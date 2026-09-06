@@ -74,7 +74,19 @@ export type HomeTabDescriptor =
 /** The Board tab, spelled once. */
 export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD_TAB_ID };
 
-interface HomeTabStripProps {
+/**
+ * What a strip needs to draw Home's tabs, whatever strip it is.
+ *
+ * Two now: the surface's own full-width strip ({@link HomeTabStrip}) and a
+ * secondary pane's ({@link HomePaneTabStrip}, VC-202). They differ in the
+ * tablist's name and in the trailing actions cluster — a pane strip has none,
+ * because the controls up there act on the SURFACE and there is exactly one of
+ * it. Everything about how a tab is drawn is shared, and shared as a component
+ * rather than as a convention: two copies of the park badge, the preview
+ * italics and the rename plumbing is how a strip drifts from the strip beside
+ * it on the same screen.
+ */
+interface HomeTabListProps {
   /**
    * The project whose Main checkout Home's File tabs come from — what Copy Path
    * resolves against. Home has no ticket, so those paths never resolve into a
@@ -98,6 +110,9 @@ interface HomeTabStripProps {
   onPinFile(relPath: string): void;
   /** "Close Others" on a File tab — closes every OTHER File tab, guards included. */
   onCloseOtherFiles(relPath: string): void;
+}
+
+interface HomeTabStripProps extends HomeTabListProps {
   onNewSession(): void;
   onNewChat(): void;
   onNewBrowser(): void;
@@ -142,15 +157,6 @@ interface HomeTabStripProps {
  * #51), and a chat Session holds none.
  */
 export function HomeTabStrip({
-  projectId,
-  tabs,
-  activeTabId,
-  onSelect,
-  onClose,
-  onRename,
-  onReorder,
-  onPinFile,
-  onCloseOtherFiles,
   onNewSession,
   onNewChat,
   onNewBrowser,
@@ -158,21 +164,13 @@ export function HomeTabStrip({
   railCollapsed,
   railTogglable,
   onToggleRail,
+  ...list
 }: HomeTabStripProps) {
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-  // Every tab but the permanent Board tab may be dragged; the strip holds this
-  // list's identity steady for dnd-kit itself.
-  const movableIds = tabs.filter((tab) => tab.kind !== "board").map((tab) => tab.id);
-
   return (
     <TabStrip
       variant="folder"
       label="Home tabs"
-      reorder={onReorder === undefined ? undefined : { ids: movableIds, onReorder }}
+      reorder={reorderFor(list)}
       actions={
         <>
           {/* The chord hint stays: ⌘T / ⌥⌘T resolve against the surface in front
@@ -214,6 +212,54 @@ export function HomeTabStrip({
         </>
       }
     >
+      <HomeTabList {...list} />
+    </TabStrip>
+  );
+}
+
+/**
+ * ONE SECONDARY PANE's strip (VC-202): the same tabs, named for the pane, with
+ * no actions cluster — the surface's controls live on the surface's own strip,
+ * which is the primary pane's.
+ */
+export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
+  return (
+    <TabStrip variant="folder" label={label} reorder={reorderFor(list)}>
+      <HomeTabList {...list} />
+    </TabStrip>
+  );
+}
+
+/**
+ * Every tab but the permanent Board tab may be dragged — which is the same
+ * statement made twice for the two halves that could otherwise disagree (the
+ * other is the absent `dragId` below). A strip with no `onReorder` mounts no
+ * drag machinery at all.
+ */
+function reorderFor({ tabs, onReorder }: HomeTabListProps) {
+  if (onReorder === undefined) return undefined;
+  return { ids: tabs.filter((tab) => tab.kind !== "board").map((tab) => tab.id), onReorder };
+}
+
+/** The tabs themselves, drawn the same wherever the strip around them is. */
+function HomeTabList({
+  projectId,
+  tabs,
+  activeTabId,
+  onSelect,
+  onClose,
+  onRename,
+  onPinFile,
+  onCloseOtherFiles,
+}: HomeTabListProps) {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const stop = tabStopIndex(
+    tabs.length,
+    tabs.findIndex((tab) => tab.id === activeTabId),
+  );
+
+  return (
+    <>
       {tabs.map((descriptor, index) => {
         const active = descriptor.id === activeTabId;
         const tabStop = index === stop;
@@ -304,7 +350,7 @@ export function HomeTabStrip({
           />
         );
       })}
-    </TabStrip>
+    </>
   );
 }
 

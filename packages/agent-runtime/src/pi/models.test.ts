@@ -5,7 +5,14 @@ import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "@volli/shared";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPiAgentRuntime } from "./runtime";
-import { PiFileCredentialStore, piAuthFilePath, piOwnedModels } from "./models";
+import { PiFileModelsStore } from "./model-catalog";
+import {
+  PiFileCredentialStore,
+  piAuthFilePath,
+  piModelsFilePath,
+  piOwnedModelAccess,
+  piOwnedModels,
+} from "./models";
 
 const OAUTH = {
   type: "oauth",
@@ -297,7 +304,46 @@ describe("PiFileCredentialStore writes", () => {
   });
 });
 
+describe("piModelsFilePath", () => {
+  it("keeps the catalog cache beside Pi's auth.json, under the same profile rules", () => {
+    expect(piModelsFilePath({ agentDir: "/explicit/agent" })).toBe(
+      "/explicit/agent/volli-models.json",
+    );
+    process.env.PI_CODING_AGENT_DIR = "/env/agent";
+    expect(piModelsFilePath()).toBe("/env/agent/volli-models.json");
+  });
+});
+
 describe("piOwnedModels", () => {
+  it("drops a cached addition with no current admission proof before catalogReady resolves", async () => {
+    const agentDir = agentDirWith("{}");
+    const first = piOwnedModelAccess({ agentDir });
+    await first.catalogReady;
+    const sibling = first.models.getModel("opencode-go", "glm-5.3");
+    expect(sibling).toBeDefined();
+    if (sibling === undefined) return;
+    const added = { ...sibling, id: "glm-5.3-flash", name: "Persisted after restart" };
+    await new PiFileModelsStore(piModelsFilePath({ agentDir })).write("opencode-go", {
+      models: [added],
+      checkedAt: 1,
+    });
+
+    const restarted = piOwnedModelAccess({ agentDir });
+    await restarted.catalogReady;
+
+    expect(restarted.models.getModel("opencode-go", added.id)).toBeUndefined();
+  });
+
+  it("surfaces catalog restoration failures without provider error details", async () => {
+    const access = piOwnedModelAccess({ agentDir: agentDirWith("{ secret-ish malformed auth") });
+    const failure = await access.catalogReady.catch((error: Error) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) return;
+    expect(failure.message).toMatch(/Could not restore model catalogs for:/);
+    expect(failure.message).not.toContain("secret-ish");
+  });
+
   it("registers Pi's built-in providers against the credentials on disk", async () => {
     const models = piOwnedModels({
       agentDir: agentDirWith(JSON.stringify({ "openai-codex": OAUTH })),
@@ -315,6 +361,19 @@ describe("piOwnedModels", () => {
   it("reports a provider with nothing stored as unconfigured", async () => {
     const models = piOwnedModels({ agentDir: agentDirWith("{}") });
     await expect(models.checkAuth("openai-codex")).resolves.toBeUndefined();
+  });
+
+  it("gives every built-in provider a refreshable catalog", () => {
+    // The premise of VC-135: pi ships its catalogs frozen and only radius
+    // implements `refreshModels`, so without the wrapping the Refresh button
+    // re-reads the same static lists forever. Every provider — static ones
+    // wrapped, dynamic ones on their own contract — must now answer it.
+    const models = piOwnedModels({ agentDir: agentDirWith("{}") });
+    const providers = models.getProviders();
+    expect(providers.length).toBeGreaterThan(0);
+    for (const provider of providers) {
+      expect(provider.refreshModels, provider.id).toBeDefined();
+    }
   });
 
   it("is what a runtime built without an injected collection uses", async () => {

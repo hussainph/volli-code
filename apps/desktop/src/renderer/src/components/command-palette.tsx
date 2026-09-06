@@ -1,5 +1,7 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { Icon } from "@phosphor-icons/react";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
@@ -22,6 +24,20 @@ import {
   paletteRunContext,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
+import {
+  PALETTE_SCOPES,
+  automationRowMatch,
+  commandPaletteFilter,
+  paletteEmptyCopy,
+  paletteScopeById,
+  parsePaletteScopeQuery,
+  sessionRowContext,
+  sessionRowMatch,
+  showScopeSuggestions,
+  slicePaletteSection,
+  ticketRowMatch,
+  type PaletteScopeId,
+} from "@renderer/components/command-palette-search";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
@@ -30,7 +46,6 @@ import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab"
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
 import { toastError } from "@renderer/lib/toast";
-import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
@@ -45,6 +60,16 @@ interface CommandPaletteProps {
 
 /** No tickets/sessions to show while closed — keeps the derivation below free. */
 const EMPTY_COMMAND_PALETTE_ITEMS: CommandPaletteItems = { tickets: [], sessions: [] };
+
+/** Nothing expanded — the shared reset value, so the resets compare equal. */
+const NOTHING_EXPANDED: ReadonlySet<PaletteScopeId> = new Set();
+
+/** Each scope suggestion row wears its section's own glyph. */
+const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
+  tickets: TicketIcon,
+  sessions: ChatCircleIcon,
+  automations: LightningIcon,
+};
 
 /**
  * The palette row, written once for both groups — they were two copies of one
@@ -64,7 +89,45 @@ const PALETTE_ROW = `flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";
 
-/** Universal ⌘K destination picker for tickets, open terminals, and durable chats. */
+interface ShowAllRowProps {
+  sectionId: PaletteScopeId;
+  /** The section's full match count — what expanding reveals. */
+  total: number;
+  /** The section's plural noun, spoken in the row. */
+  noun: string;
+  onExpand: (sectionId: PaletteScopeId) => void;
+}
+
+/**
+ * The "Show all N …" row a truncated section ends with (VC-205).
+ *
+ * `forceMount` because its value is not supposed to match the search — cmdk
+ * mounts it on our say-so, and the zero score it earns under a query sorts it
+ * after every real match natively. With no query there is no sort and it sits
+ * where it is rendered: last in its group.
+ */
+function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
+  return (
+    <Command.Item
+      forceMount
+      value={`show all ${noun}`}
+      onSelect={() => onExpand(sectionId)}
+      className={PALETTE_ROW}
+    >
+      <CaretDownIcon aria-hidden className={PALETTE_ROW_ICON} />
+      <span className="min-w-0 flex-1 truncate text-ui font-medium">
+        Show all {total} {noun}
+      </span>
+    </Command.Item>
+  );
+}
+
+/**
+ * Universal ⌘K destination picker for tickets, open terminals, and durable
+ * chats. Tickets lead (VC-205); each section truncates behind a "Show all"
+ * row; and a completed `@` token — typed, or picked from the rows `@` itself
+ * surfaces — narrows the palette to one section.
+ */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
@@ -98,6 +161,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     Readonly<Record<string, SessionProvenance>>
   >({});
   const [query, setQuery] = React.useState("");
+  // The `@` scope chip (VC-205): a completed `@sessions` narrows the palette
+  // to one section. It is state beside the query, not text inside it, so the
+  // token never pollutes what cmdk's native filter scores rows against.
+  const [scope, setScope] = React.useState<PaletteScopeId | null>(null);
+  // Which sections have had their "Show all" row taken. Reset on every
+  // keystroke: a changed query is a new result set, and a new result set
+  // starts truncated again.
+  const [expanded, setExpanded] = React.useState<ReadonlySet<PaletteScopeId>>(NOTHING_EXPANDED);
   const openTicketId = useWorkspaceStore((state) =>
     selectedProjectId === null ? null : (state.byProject[selectedProjectId]?.openTicketId ?? null),
   );
@@ -161,8 +232,59 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
 
   React.useEffect(() => {
-    if (!open) setQuery("");
+    if (!open) {
+      setQuery("");
+      setScope(null);
+      setExpanded(NOTHING_EXPANDED);
+    }
   }, [open]);
+
+  const handleQueryChange = React.useCallback((next: string) => {
+    setExpanded(NOTHING_EXPANDED);
+    // A leading "@sessions " becomes the chip. Any remainder stays in the
+    // input, so typing and pasting "@sessions auth" have identical meaning.
+    const parsed = parsePaletteScopeQuery(next);
+    if (parsed !== null) {
+      setScope(parsed.scope.id);
+      setQuery(parsed.query);
+      return;
+    }
+    setQuery(next);
+  }, []);
+
+  const applyScope = React.useCallback((next: PaletteScopeId | null) => {
+    setScope(next);
+    setQuery("");
+    setExpanded(NOTHING_EXPANDED);
+  }, []);
+
+  const expandSection = React.useCallback((sectionId: PaletteScopeId) => {
+    setExpanded((previous) => new Set(previous).add(sectionId));
+  }, []);
+
+  // Which rows each section mounts: every row the palette's cmdk filter would
+  // keep, truncated behind a "Show all" row past the section limit. The same
+  // filter scores this slice and the mounted rows, so truncation cannot drift
+  // from native matching or VC-205's Ticket-section priority.
+  const ticketSlice = React.useMemo(
+    () => slicePaletteSection(items.tickets, ticketRowMatch, query, expanded.has("tickets")),
+    [items.tickets, query, expanded],
+  );
+  const sessionSlice = React.useMemo(
+    () => slicePaletteSection(items.sessions, sessionRowMatch, query, expanded.has("sessions")),
+    [items.sessions, query, expanded],
+  );
+  const automationSlice = slicePaletteSection(
+    automationRuns,
+    automationRowMatch,
+    query,
+    expanded.has("automations"),
+  );
+
+  const scopeDef = paletteScopeById(scope);
+  const showTickets = scope === null || scope === "tickets";
+  const showSessions = scope === null || scope === "sessions";
+  const showAutomations = scope === null || scope === "automations";
 
   // The palette is a global destination surface, so it reads durable chat rows
   // for every tracked project while open. Resident titles overlay those rows in
@@ -219,6 +341,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       open={open}
       onOpenChange={onOpenChange}
       label="Search tickets and sessions"
+      filter={commandPaletteFilter}
       loop
       // The app's one `--scrim`, plus a blur no other overlay takes. This used
       // to be a notch heavier than the dialog's — 35/55 against 30/50, a
@@ -235,11 +358,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           type size, not one per surface. */}
       <div className="flex h-9 items-center gap-2 border-b border-border px-4">
         <MagnifyingGlassIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        {scopeDef !== null ? (
+          <span className="inline-flex h-7 shrink-0 items-center rounded-full border border-border bg-accent px-2 text-ui font-medium text-foreground">
+            {scopeDef.label}
+          </span>
+        ) : null}
         <Command.Input
           autoFocus
           value={query}
-          onValueChange={setQuery}
-          placeholder="Search tickets and sessions…"
+          onValueChange={handleQueryChange}
+          onKeyDown={(event) => {
+            // The chip deletes like the token it replaced: Backspace at an
+            // empty field clears the scope.
+            if (event.key === "Backspace" && query === "" && scope !== null) applyScope(null);
+          }}
+          placeholder={
+            scopeDef === null
+              ? "Search tickets and sessions…"
+              : `Search ${scopeDef.label.toLowerCase()}…`
+          }
           className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
         />
         <kbd className="rounded-md border border-border bg-muted px-1 py-1 text-label text-muted-foreground">
@@ -247,116 +384,79 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         </kbd>
       </div>
       <Command.List className="max-h-[min(460px,60vh)] overflow-y-auto p-2 [scrollbar-gutter:stable]">
-        <Command.Empty className={EMPTY_INLINE}>No matching tickets or sessions.</Command.Empty>
+        <Command.Empty className={EMPTY_INLINE}>{paletteEmptyCopy(scope)}</Command.Empty>
 
-        {automationRuns.length > 0 || selectedProjectId !== null ? (
-          <Command.Group heading="Automations" className={MENU_LABEL_CMDK}>
-            {automationRuns.map((item) => (
+        {showScopeSuggestions(query, scope) ? (
+          <Command.Group heading="Filter" className={MENU_LABEL_CMDK}>
+            {PALETTE_SCOPES.map((candidate) => {
+              const ScopeIcon = SCOPE_ICONS[candidate.id];
+              return (
+                <Command.Item
+                  key={`scope:${candidate.id}`}
+                  value={candidate.token}
+                  keywords={[candidate.label]}
+                  onSelect={() => applyScope(candidate.id)}
+                  className={PALETTE_ROW}
+                >
+                  <ScopeIcon aria-hidden className={PALETTE_ROW_ICON} />
+                  <span className="min-w-0 flex-1 truncate text-ui font-medium">
+                    Only {candidate.label.toLowerCase()}
+                  </span>
+                  <span className="shrink-0 font-mono text-label text-muted-foreground">
+                    {candidate.token}
+                  </span>
+                </Command.Item>
+              );
+            })}
+          </Command.Group>
+        ) : null}
+
+        {showTickets && ticketSlice.visible.length > 0 ? (
+          <Command.Group heading="Tickets" className={MENU_LABEL_CMDK}>
+            {ticketSlice.visible.map(({ row: item, match }) => (
               <Command.Item
-                key={`automation-run:${item.automationId}`}
-                value={`run automation ${item.name} ${item.ticketDisplayId}`}
-                keywords={[item.name, item.ticketDisplayId, "run", "automation"]}
+                key={`ticket:${item.ticketId}`}
+                value={match.value}
+                keywords={match.keywords}
                 onSelect={() => {
-                  // The palette closes now, but VC-234's universal landing
-                  // rule keeps the current workspace in place. Success toasts
-                  // with the fresh Session as an explicit action.
-                  void runAutomationOnTicket({
-                    target: { kind: "automation", automationId: item.automationId },
-                    automationName: item.name,
-                    ticketId: item.ticketId,
-                    ticketDisplayId: item.ticketDisplayId,
-                    // Run by name, on the Automation's own Runtime. The
-                    // per-invocation override lives where a person has already
-                    // stopped to choose (VC-112), not on a name typed in flight.
-                    modelOverride: null,
+                  useProjectsStore.getState().select(item.projectId);
+                  useWorkspaceStore.getState().openTicketWorkspace(item.projectId, item.ticketId, {
+                    tabId: TICKET_BODY_TAB_ID,
                   });
                   finishNavigation();
                 }}
                 className={PALETTE_ROW}
               >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <TicketIcon aria-hidden className={PALETTE_ROW_ICON} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">{item.name}</span>
+                  <span className="truncate text-ui font-medium">{item.title}</span>
                   <span className="truncate text-label text-muted-foreground">
-                    {item.ownership === "global" ? "All projects" : "This project"}
+                    <span className="font-mono">{item.displayId}</span> · {item.projectName}
                   </span>
                 </span>
-                <span className="shrink-0 text-label text-muted-foreground">
-                  Run on {item.ticketDisplayId}
-                </span>
+                <span className="shrink-0 text-label text-muted-foreground">Open ticket</span>
               </Command.Item>
             ))}
-            {selectedProjectId !== null ? (
-              <Command.Item
-                key="automations-page"
-                value="automations new automation create automation"
-                keywords={["new", "create", "automation", "edit", "page"]}
-                onSelect={() => {
-                  // NAVIGATION, not authoring. The palette runs Automations
-                  // (above) and goes to the page that authors them; it does
-                  // not open the form itself, because only that page authors
-                  // (VC-112) and a create summoned from anywhere is a second
-                  // authoring surface wearing a palette row.
-                  useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
-                  finishNavigation();
-                }}
-                className={PALETTE_ROW}
-              >
-                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">Automations</span>
-                  <span className="truncate text-label text-muted-foreground">
-                    New, edit, duplicate
-                  </span>
-                </span>
-              </Command.Item>
+            {ticketSlice.hiddenCount > 0 ? (
+              <ShowAllRow
+                sectionId="tickets"
+                total={ticketSlice.visible.length + ticketSlice.hiddenCount}
+                noun="tickets"
+                onExpand={expandSection}
+              />
             ) : null}
           </Command.Group>
         ) : null}
 
-        {editorCommands.length > 0 ? (
-          <Command.Group heading="Editor" className={MENU_LABEL_CMDK}>
-            {editorCommands.map((item) => (
-              <Command.Item
-                key={`editor:${item.id}`}
-                value={`go to line jump ${item.title}`}
-                keywords={["go to line", "goto", "jump", "line number"]}
-                onSelect={() => {
-                  finishNavigation();
-                  // After the dialog is gone: Monaco's line prompt is an overlay
-                  // widget of the editor and needs the focus this dialog is
-                  // still holding — and hands back on close.
-                  requestAnimationFrame(() => {
-                    if (!runGoToLine()) {
-                      toastError("Couldn't go to line: no editor is open.");
-                    }
-                  });
-                }}
-                className={PALETTE_ROW}
-              >
-                <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ui font-medium">{item.title}</span>
-                  <span className="truncate text-label text-muted-foreground">{item.hint}</span>
-                </span>
-                <span className="shrink-0 text-label text-muted-foreground">⌃G</span>
-              </Command.Item>
-            ))}
-          </Command.Group>
-        ) : null}
-
-        {items.sessions.length > 0 ? (
+        {showSessions && sessionSlice.visible.length > 0 ? (
           <Command.Group heading="Sessions" className={MENU_LABEL_CMDK}>
-            {items.sessions.map((item) => {
-              const context =
-                item.ticketDisplayId === null
-                  ? `${item.projectName} · Project Session`
-                  : `${item.ticketDisplayId} · ${item.ticketTitle}`;
+            {sessionSlice.visible.map(({ row: item, match }) => {
+              const context = sessionRowContext(item);
               return (
                 <Command.Item
                   key={`session:${item.sessionId}`}
-                  value={`session ${item.title} ${context} ${item.projectName}`}
-                  keywords={[item.title, context, item.projectName]}
+                  value={match.value}
+                  keywords={match.keywords}
                   onSelect={() => {
                     useProjectsStore.getState().select(item.projectId);
                     if (item.sessionKind === "chat") {
@@ -419,40 +519,123 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 </Command.Item>
               );
             })}
+            {sessionSlice.hiddenCount > 0 ? (
+              <ShowAllRow
+                sectionId="sessions"
+                total={sessionSlice.visible.length + sessionSlice.hiddenCount}
+                noun="sessions"
+                onExpand={expandSection}
+              />
+            ) : null}
           </Command.Group>
         ) : null}
 
-        <Command.Group
-          heading="Tickets"
-          className={cn("mt-1 border-t border-border pt-1", MENU_LABEL_CMDK)}
-        >
-          {items.tickets.map((item) => (
-            <Command.Item
-              key={`ticket:${item.ticketId}`}
-              value={`ticket ${item.displayId} ${item.title} ${item.projectName}`}
-              keywords={[item.displayId, item.title, item.projectName]}
-              onSelect={() => {
-                useProjectsStore.getState().select(item.projectId);
-                useWorkspaceStore.getState().openTicketWorkspace(item.projectId, item.ticketId, {
-                  tabId: TICKET_BODY_TAB_ID,
-                });
-                finishNavigation();
-              }}
-              className={PALETTE_ROW}
-            >
-              <TicketIcon aria-hidden className={PALETTE_ROW_ICON} />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-ui font-medium">{item.title}</span>
-                <span className="truncate text-label text-muted-foreground">
-                  <span className="font-mono">{item.displayId}</span> · {item.projectName}
+        {showAutomations && (automationSlice.visible.length > 0 || selectedProjectId !== null) ? (
+          <Command.Group heading="Automations" className={MENU_LABEL_CMDK}>
+            {automationSlice.visible.map(({ row: item, match }) => (
+              <Command.Item
+                key={`automation-run:${item.automationId}`}
+                value={match.value}
+                keywords={match.keywords}
+                onSelect={() => {
+                  // The palette closes now, but VC-234's universal landing
+                  // rule keeps the current workspace in place. Success toasts
+                  // with the fresh Session as an explicit action.
+                  void runAutomationOnTicket({
+                    target: { kind: "automation", automationId: item.automationId },
+                    automationName: item.name,
+                    ticketId: item.ticketId,
+                    ticketDisplayId: item.ticketDisplayId,
+                    // Run by name, on the Automation's own Runtime. The
+                    // per-invocation override lives where a person has already
+                    // stopped to choose (VC-112), not on a name typed in flight.
+                    modelOverride: null,
+                  });
+                  finishNavigation();
+                }}
+                className={PALETTE_ROW}
+              >
+                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">{item.name}</span>
+                  <span className="truncate text-label text-muted-foreground">
+                    {item.ownership === "global" ? "All projects" : "This project"}
+                  </span>
                 </span>
-              </span>
-              <span className="shrink-0 text-label text-muted-foreground">Open ticket</span>
-            </Command.Item>
-          ))}
-        </Command.Group>
+                <span className="shrink-0 text-label text-muted-foreground">
+                  Run on {item.ticketDisplayId}
+                </span>
+              </Command.Item>
+            ))}
+            {automationSlice.hiddenCount > 0 ? (
+              <ShowAllRow
+                sectionId="automations"
+                total={automationSlice.visible.length + automationSlice.hiddenCount}
+                noun="automations"
+                onExpand={expandSection}
+              />
+            ) : null}
+            {selectedProjectId !== null ? (
+              <Command.Item
+                key="automations-page"
+                value="automations new automation create automation"
+                keywords={["new", "create", "automation", "edit", "page"]}
+                onSelect={() => {
+                  // NAVIGATION, not authoring. The palette runs Automations
+                  // (above) and goes to the page that authors them; it does
+                  // not open the form itself, because only that page authors
+                  // (VC-112) and a create summoned from anywhere is a second
+                  // authoring surface wearing a palette row.
+                  useWorkspaceStore.getState().setNav(selectedProjectId, "automations");
+                  finishNavigation();
+                }}
+                className={PALETTE_ROW}
+              >
+                <LightningIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">Automations</span>
+                  <span className="truncate text-label text-muted-foreground">
+                    New, edit, duplicate
+                  </span>
+                </span>
+              </Command.Item>
+            ) : null}
+          </Command.Group>
+        ) : null}
+
+        {scope === null && editorCommands.length > 0 ? (
+          <Command.Group heading="Editor" className={MENU_LABEL_CMDK}>
+            {editorCommands.map((item) => (
+              <Command.Item
+                key={`editor:${item.id}`}
+                value={`go to line jump ${item.title}`}
+                keywords={["go to line", "goto", "jump", "line number"]}
+                onSelect={() => {
+                  finishNavigation();
+                  // After the dialog is gone: Monaco's line prompt is an overlay
+                  // widget of the editor and needs the focus this dialog is
+                  // still holding — and hands back on close.
+                  requestAnimationFrame(() => {
+                    if (!runGoToLine()) {
+                      toastError("Couldn't go to line: no editor is open.");
+                    }
+                  });
+                }}
+                className={PALETTE_ROW}
+              >
+                <ListNumbersIcon aria-hidden className={PALETTE_ROW_ICON} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ui font-medium">{item.title}</span>
+                  <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+                </span>
+                <span className="shrink-0 text-label text-muted-foreground">⌃G</span>
+              </Command.Item>
+            ))}
+          </Command.Group>
+        ) : null}
       </Command.List>
       <div className="flex h-9 items-center justify-end gap-4 border-t border-border px-4 text-label text-muted-foreground">
+        <span>@ filter</span>
         <span>↑↓ navigate</span>
         <span>↵ open</span>
       </div>

@@ -4,6 +4,8 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { displayTicketId, type Label, type Ticket } from "@volli/shared";
 
+import type { TicketDragData } from "@renderer/components/board/board-dnd";
+import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
@@ -130,6 +132,9 @@ export const SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
 export function SortableTicketShell({
   ticket,
   projectId,
+  selected,
+  dragHidden,
+  dragTicketIds,
   onSelect,
   onOpen,
   dataAttributes,
@@ -137,7 +142,12 @@ export function SortableTicketShell({
 }: {
   ticket: Ticket;
   projectId: string;
-  onSelect(ticketId: string): void;
+  selected: boolean;
+  /** Every selected source stays mounted as a layout placeholder during a group drag. */
+  dragHidden: boolean;
+  /** The complete payload a drop target receives if this card starts a drag. */
+  dragTicketIds: readonly string[];
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /**
    * Double-click opens the ticket's full-page detail view (ticket-detail-mvp
    * step 3). Safe alongside dnd-kit: the board's `distance: 4` activation
@@ -150,8 +160,13 @@ export function SortableTicketShell({
   children: React.ReactNode;
 }) {
   const reducedMotion = useReducedMotion();
+  const dragData = React.useMemo<TicketDragData>(
+    () => ({ kind: "tickets", projectId, ticketIds: dragTicketIds }),
+    [projectId, dragTicketIds],
+  );
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
+    data: dragData,
     transition: reducedMotion ? null : SORT_TRANSITION,
   });
 
@@ -176,18 +191,30 @@ export function SortableTicketShell({
 
   return (
     <TicketContextMenu ticket={ticket} projectId={projectId}>
-      <div
-        ref={setNodeRef}
-        style={{ transform: CSS.Transform.toString(transform), transition }}
-        className={cn(isDragging && "opacity-40")}
-        onClick={() => onSelect(ticket.id)}
-        onDoubleClick={onOpen ? () => onOpen(ticket.id) : undefined}
-        {...dataAttributes}
-        {...attributes}
-        {...listeners}
-        onKeyDown={handleKeyDown}
-      >
-        {children}
+      <div data-board-ticket-slot={ticket.id}>
+        <div
+          ref={setNodeRef}
+          style={{ transform: CSS.Transform.toString(transform), transition }}
+          className={cn(
+            "transition-[opacity] duration-150 ease-out",
+            (isDragging || dragHidden) && "opacity-40",
+          )}
+          onClick={(event) =>
+            onSelect(ticket.id, {
+              toggle: event.metaKey || event.ctrlKey,
+              range: event.shiftKey,
+            })
+          }
+          onDoubleClick={onOpen ? () => onOpen(ticket.id) : undefined}
+          {...dataAttributes}
+          {...attributes}
+          aria-pressed={selected}
+          data-selected={selected || undefined}
+          {...listeners}
+          onKeyDown={handleKeyDown}
+        >
+          {children}
+        </div>
       </div>
     </TicketContextMenu>
   );
@@ -200,9 +227,12 @@ interface TicketCardProps {
   /** The board's owning project's label rows — constant for the whole board tree. */
   projectLabels: readonly Label[];
   selected: boolean;
+  dragHidden: boolean;
+  /** Omitted for an unselected card, whose payload is just its own id. */
+  dragTicketIds?: readonly string[];
   /** What is running on this ticket, or `null` for nothing (VC-100). */
   sessionActivity: TicketSessionActivity | null;
-  onSelect(ticketId: string): void;
+  onSelect(ticketId: string, gesture: TicketSelectionGesture): void;
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
 }
@@ -221,12 +251,23 @@ export const TicketCard = React.memo(function TicketCard({
   ticketPrefix,
   projectLabels,
   selected,
+  dragHidden,
+  dragTicketIds,
   sessionActivity,
   onSelect,
   onOpen,
 }: TicketCardProps) {
+  const ownDragIds = React.useMemo(() => [ticket.id], [ticket.id]);
   return (
-    <SortableTicketShell ticket={ticket} projectId={projectId} onSelect={onSelect} onOpen={onOpen}>
+    <SortableTicketShell
+      ticket={ticket}
+      projectId={projectId}
+      selected={selected}
+      dragHidden={dragHidden}
+      dragTicketIds={dragTicketIds ?? ownDragIds}
+      onSelect={onSelect}
+      onOpen={onOpen}
+    >
       <TicketCardContent
         ticket={ticket}
         ticketPrefix={ticketPrefix}

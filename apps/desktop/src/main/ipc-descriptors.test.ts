@@ -35,6 +35,7 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-forward",
       "volli:browser-reload",
       "volli:browser-set-bounds",
+      "volli:browser-capture",
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
@@ -65,12 +66,13 @@ describe("BROWSER_IPC descriptor table", () => {
     expect(guard([])).toBe(false);
   });
 
-  it("requires one opaque string id for close, history, visibility, reload, and DevTools", () => {
+  it("requires one opaque string id for close, history, capture, visibility, reload, and DevTools", () => {
     const channels = [
       "volli:browser-close",
       "volli:browser-back",
       "volli:browser-forward",
       "volli:browser-reload",
+      "volli:browser-capture",
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
@@ -566,6 +568,23 @@ describe("DATA_IPC descriptor table", () => {
 
     it("accepts a valid move payload", () => {
       expect(guard([valid])).toBe(true);
+    });
+
+    it("accepts a non-empty multi-ticket move payload", () => {
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketIds: ["t1", "t2"] }])).toBe(true);
+    });
+
+    it("rejects an empty multi-ticket selection", () => {
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketIds: [] }])).toBe(false);
+    });
+
+    it("rejects any payload carrying both move discriminators, even when one arm is invalid", () => {
+      expect(guard([{ ...valid, ticketIds: ["t2"] }])).toBe(false);
+      expect(guard([{ ...valid, ticketIds: [] }])).toBe(false);
+      const { ticketId: _ticketId, ...shared } = valid;
+      expect(guard([{ ...shared, ticketId: undefined, ticketIds: ["t2"] }])).toBe(false);
     });
 
     it("rejects a status outside the ticket vocabulary", () => {
