@@ -171,8 +171,17 @@ export interface ModelAccessSnapshot {
   refresh?: ModelCatalogRefreshReport;
 }
 
-/** The Roles that attach a runtime. Subagent Sessions have no attachment of their own. */
-export type RuntimeSessionRole = Extract<SessionRole, "ticket" | "project">;
+/**
+ * The Roles that attach a runtime: every Role there is.
+ *
+ * Since VC-9 a Subagent Session is a real Session with an attachment, a
+ * transcript and a model of its own — never a hidden thread inside its
+ * parent — so this is the whole of {@link SessionRole} rather than a subset.
+ * It stays a separate name because it answers a different question (which
+ * Roles the prompt and identity vocabularies are total over), and because a
+ * future Role that does NOT attach would leave this one narrower again.
+ */
+export type RuntimeSessionRole = SessionRole;
 
 /** Volli identities every runtime attachment carries, whatever its Role. All opaque. */
 interface RuntimeIdentityFields {
@@ -195,14 +204,33 @@ export interface ProjectRuntimeIdentity extends RuntimeIdentityFields {
 }
 
 /**
+ * A Subagent Session's identity (VC-9): the Session that delegated it, and the
+ * Ticket it inherited from that Session — or none, when the parent had none.
+ *
+ * The parent is part of the identity because it is what the Role MEANS: a
+ * subagent is a bounded helper for one other Session, and the host binds
+ * that Session here so the answer can be delivered to it without the child
+ * ever naming it. The Ticket is nullable here and nowhere else in this union,
+ * because a subagent is the one Role whose Ticket is not its own.
+ */
+export interface SubagentRuntimeIdentity extends RuntimeIdentityFields {
+  role: Extract<RuntimeSessionRole, "subagent">;
+  ticketId: string | null;
+  parentSessionId: string;
+}
+
+/**
  * Role and identity are one value, not two agreeing fields.
  *
  * The Role decides what the runtime may assume about the Session — a Ticket to
- * work, or a project root and nothing else — so a spec that named the Role
- * separately from the identity could state a Ticket Session with no Ticket. Here
- * that shape does not typecheck.
+ * work, a project root and nothing else, or a parent to answer — so a spec that
+ * named the Role separately from the identity could state a Ticket Session with
+ * no Ticket, or a subagent with no parent. Here those shapes do not typecheck.
  */
-export type RuntimeSessionIdentity = TicketRuntimeIdentity | ProjectRuntimeIdentity;
+export type RuntimeSessionIdentity =
+  | TicketRuntimeIdentity
+  | ProjectRuntimeIdentity
+  | SubagentRuntimeIdentity;
 
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";

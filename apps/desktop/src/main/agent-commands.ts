@@ -30,7 +30,11 @@ import { getProjectAuthorityPolicy, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
 import { runGitCapturing, runGitCapturingAsync } from "./worktree";
 
-export { composeProjectBrief, composeTicketBrief } from "./agent-dispatch/briefs";
+export {
+  composeProjectBrief,
+  composeSubagentBrief,
+  composeTicketBrief,
+} from "./agent-dispatch/briefs";
 export { CHAT_PEEK_ENTRIES } from "./agent-dispatch/session-verbs";
 export type { AgentCommandService, AgentCommandServiceOptions } from "./agent-dispatch/context";
 

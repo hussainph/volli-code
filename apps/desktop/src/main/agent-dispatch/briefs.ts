@@ -85,3 +85,36 @@ export function composeTicketBrief(input: {
 export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
   return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
+
+/**
+ * The Subagent Brief (VC-9): what a bounded helper is told about where it is
+ * and who asked, before the delegated task itself arrives as its first message.
+ *
+ * Orientation only, deliberately. The task is the parent's words and travels as
+ * the kickoff message, marked as such, so the Brief's job is the context the
+ * task assumes: the parent Session by handle, the Ticket the parent works (by
+ * display id — the child can read the body with the `volli` CLI it shares),
+ * and the working directory, which is the parent's own. The `volli` sentence is
+ * the other two Briefs', verbatim, for the reason the Project Brief gives.
+ */
+export function composeSubagentBrief(input: {
+  project: Pick<Project, "path" | "ticketPrefix">;
+  parent: { handle: string; title: string | null };
+  ticket: Pick<Ticket, "ticketNumber" | "title" | "usesWorktree" | "worktreePath"> | null;
+}): string {
+  const parent =
+    input.parent.title === null
+      ? `Session ${input.parent.handle}`
+      : `Session ${input.parent.handle} (${JSON.stringify(input.parent.title)})`;
+  const where =
+    input.ticket === null
+      ? `Your working directory is the project root at ${input.project.path}, which you share with your parent.`
+      : input.ticket.usesWorktree && input.ticket.worktreePath !== null
+        ? `Your working directory is your parent's Ticket worktree at ${input.ticket.worktreePath}, which you share with it. The main checkout at ${input.project.path} is reference-only — never modify it.`
+        : `Your working directory is the project's Main checkout at ${input.project.path}, which you share with your parent.`;
+  const ticket =
+    input.ticket === null
+      ? "Your parent has no Ticket."
+      : `Your parent works Ticket ${displayTicketId(input.project.ticketPrefix, input.ticket.ticketNumber)} (${JSON.stringify(input.ticket.title)}); read it with \`volli ticket show\` if the task needs it.`;
+  return `This is a Subagent Session, delegated one task by ${parent}. ${ticket} ${where}\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
+}
