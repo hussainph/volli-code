@@ -610,6 +610,28 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("routes the picker view over IPC", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: fixture.runtime,
+      readModelPickerView: () => "all",
+      writeModelPickerView: (view) => {
+        writes.push(view);
+        return view;
+      },
+    });
+
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.pickerView", input: undefined }),
+    ).resolves.toEqual({ ok: true, data: "all" });
+    await expect(
+      invoke(sender(), { procedure: "modelAccess.setPickerView", input: "defaults" }),
+    ).resolves.toEqual({ ok: true, data: "defaults" });
+    expect(writes).toEqual(["defaults"]);
+    await registration.close();
+  });
+
   it("routes the create-only Session start over IPC, answering identity alone", async () => {
     // VC-16's optimistic open: this is the fast half of a chat start, and what
     // makes it fast is that it answers a Session id and nothing about an

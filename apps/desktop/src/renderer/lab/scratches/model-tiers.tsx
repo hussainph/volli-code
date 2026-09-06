@@ -222,6 +222,8 @@ function labModelAccess(): ModelAccessClient {
     },
     compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
     setCompactionPolicy: (policy) => Promise.resolve(policy),
+    pickerView: () => Promise.resolve("all" as const),
+    setPickerView: (view) => Promise.resolve(view),
     beginSignIn: () => Promise.reject(new Error("Sign-in needs the main process")),
     signOut: () => Promise.reject(new Error("Sign-out needs the main process")),
   };

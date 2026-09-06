@@ -14,6 +14,7 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  MODEL_PICKER_VIEWS,
   MODEL_PURPOSES,
   REASONING_LEVELS,
   scrubSessionAttention,
@@ -22,6 +23,7 @@ import {
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
+  type ModelPickerView,
   type ModelPurpose,
   type ReasoningLevel,
   type RendererSessionEvent,
@@ -132,6 +134,9 @@ export interface SessionRouterContext {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
+  readModelPickerView?: () => ModelPickerView;
+  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -378,6 +383,7 @@ const hiddenModelsSchema = z
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
+const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 const modelCatalogRefreshReportSchema = z.object({
   added: nonNegativeSafeInteger,
@@ -701,6 +707,20 @@ export function createSessionRouter() {
             unavailable("Model Access preferences are unavailable on this transport");
           }
           return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
+        }),
+      pickerView: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readModelPickerView) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return modelPickerViewSchema.parse(ctx.readModelPickerView());
+      }),
+      setPickerView: instrumentedProcedure
+        .input(modelPickerViewSchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeModelPickerView) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return modelPickerViewSchema.parse(await ctx.writeModelPickerView(input));
         }),
     }),
     session: t.router({

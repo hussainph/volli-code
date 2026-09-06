@@ -264,6 +264,26 @@ export function defaultModelRequiredForTier(tier: ModelTier): string {
   return `${DEFAULT_MODEL_REQUIRED} The ${tier} tier resolved to nothing.`;
 }
 
+/**
+ * Which list a model picker opens on (VC-259): every model this profile can
+ * run, or the short list of tiers it has already chosen.
+ *
+ * A profile-wide preference rather than a per-picker one: the chat composer
+ * and the New-ticket Create & start row are the same control drawn twice, and
+ * a toggle that remembered a different answer in each would read as two
+ * settings. Stored by main beside the other Model Access preferences; the
+ * renderer only reads and writes it through that door.
+ */
+export const MODEL_PICKER_VIEWS = ["all", "defaults"] as const;
+export type ModelPickerView = (typeof MODEL_PICKER_VIEWS)[number];
+
+/** All models: what every picker showed before the Defaults view existed. */
+export const DEFAULT_MODEL_PICKER_VIEW: ModelPickerView = "all";
+
+export function isModelPickerView(value: unknown): value is ModelPickerView {
+  return typeof value === "string" && (MODEL_PICKER_VIEWS as readonly string[]).includes(value);
+}
+
 /** One catalog model the user toggled out of composers and pickers. */
 export interface HiddenModelRef {
   providerId: string;

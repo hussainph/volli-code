@@ -34,6 +34,8 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
       compactionPolicy: () => rpc.modelAccess.compactionPolicy.query(),
       setCompactionPolicy: (policy) =>
         rpc.modelAccess.setCompactionPolicy.mutate({ autoCompaction: policy.autoCompaction }),
+      pickerView: () => rpc.modelAccess.pickerView.query(),
+      setPickerView: (view) => rpc.modelAccess.setPickerView.mutate(view),
       beginSignIn: (providerId, type, onUpdate) => beginSignIn(providerId, type, onUpdate),
       signOut: async (providerId) => {
         expect(await window.api.modelAccess.signOut(providerId));

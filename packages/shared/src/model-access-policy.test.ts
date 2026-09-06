@@ -6,6 +6,9 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isDefaultModelRequired,
   isModelHidden,
+  isModelPickerView,
+  DEFAULT_MODEL_PICKER_VIEW,
+  MODEL_PICKER_VIEWS,
   AGENT_MODEL_TIERS,
   MODEL_TIER_ROWS,
   MODEL_TIERS,
@@ -194,6 +197,20 @@ describe("isDefaultModelRequired", () => {
 
   it("does not claim unrelated failures", () => {
     expect(isDefaultModelRequired("socket hang up")).toBe(false);
+  });
+});
+
+describe("the picker view", () => {
+  it("opens on every model until a profile chooses otherwise", () => {
+    expect(MODEL_PICKER_VIEWS).toEqual(["all", "defaults"]);
+    expect(DEFAULT_MODEL_PICKER_VIEW).toBe("all");
+  });
+
+  it("recognizes the two views and nothing else", () => {
+    expect(isModelPickerView("all")).toBe(true);
+    expect(isModelPickerView("defaults")).toBe(true);
+    expect(isModelPickerView("tiers")).toBe(false);
+    expect(isModelPickerView(null)).toBe(false);
   });
 });
 

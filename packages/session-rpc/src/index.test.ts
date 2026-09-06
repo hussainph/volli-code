@@ -1010,6 +1010,29 @@ describe("Session tRPC router", () => {
     await expect(caller.modelAccess.setCompactionPolicy({ autoCompaction: true })).rejects.toThrow(
       "unavailable",
     );
+    await expect(caller.modelAccess.pickerView()).rejects.toThrow("unavailable");
+    await expect(caller.modelAccess.setPickerView("defaults")).rejects.toThrow("unavailable");
+  });
+
+  it("round-trips the picker view as one word", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readModelPickerView: () => "all",
+      writeModelPickerView: (view) => {
+        writes.push(view);
+        return view;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.pickerView()).resolves.toBe("all");
+    await expect(caller.modelAccess.setPickerView("defaults")).resolves.toBe("defaults");
+    expect(writes).toEqual(["defaults"]);
+    // The vocabulary is closed at the edge: a word the renderer did not get
+    // from the shared list never reaches storage.
+    await expect(caller.modelAccess.setPickerView("tiers" as never)).rejects.toThrow();
   });
 
   it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {

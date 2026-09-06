@@ -6,6 +6,7 @@ import type {
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   ModelAccessSnapshot,
+  ModelPickerView,
   ModelPurpose,
   ModelSelection,
 } from "@volli/shared";
@@ -39,6 +40,9 @@ export interface ModelAccessClient {
   compactionPolicy(): Promise<CompactionPolicy>;
   /** Saves the whole policy — the one global switch. */
   setCompactionPolicy(policy: CompactionPolicy): Promise<CompactionPolicy>;
+  /** Which list the model pickers open on (VC-259). */
+  pickerView(): Promise<ModelPickerView>;
+  setPickerView(view: ModelPickerView): Promise<ModelPickerView>;
   /**
    * Starts a sign-in and routes its updates to `onUpdate`.
    *
@@ -103,6 +107,10 @@ export function ModelAccessProvider({
       // reads this policy per compaction, off the database, so a Session
       // already running picks the change up without anything here telling it.
       setCompactionPolicy: (policy) => client.setCompactionPolicy(policy),
+      // No revision bump here either: the view is how a picker OPENS, not what
+      // it may offer, and the pill that changed it already holds the new word.
+      pickerView: () => client.pickerView(),
+      setPickerView: (view) => client.setPickerView(view),
       revision,
     }),
     [client, revision],

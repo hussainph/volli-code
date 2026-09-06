@@ -1,13 +1,16 @@
 import type Database from "better-sqlite3";
 import {
   DEFAULT_COMPACTION_POLICY,
+  DEFAULT_MODEL_PICKER_VIEW,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  isModelPickerView,
   MODEL_TIERS,
   REASONING_LEVELS,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
+  type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
   visualModelProblem,
@@ -36,6 +39,8 @@ export const MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY = "volli:model-access-hidd
  * ignored on read — the switch it sits beside is still honoured.
  */
 export const COMPACTION_POLICY_APP_STATE_KEY = "volli:compaction-policy";
+/** Which list the model pickers open on — see {@link ModelPickerView}. */
+export const MODEL_PICKER_VIEW_APP_STATE_KEY = "volli:model-picker-view";
 
 const MAX_IDENTIFIER_LENGTH = 512;
 
@@ -245,6 +250,28 @@ export function writeCompactionPolicy(
   const next: CompactionPolicy = { autoCompaction: policy.autoCompaction };
   setAppState(db, COMPACTION_POLICY_APP_STATE_KEY, JSON.stringify(next), now);
   return next;
+}
+
+/**
+ * The list the model pickers open on.
+ *
+ * Absent or unreadable reads as {@link DEFAULT_MODEL_PICKER_VIEW} — every
+ * model — because that is what every picker showed before the Defaults view
+ * existed, and a preference nobody set is not a reason to show them less.
+ */
+export function readModelPickerView(db: Database.Database): ModelPickerView {
+  const stored = readAppState(db, MODEL_PICKER_VIEW_APP_STATE_KEY);
+  return isModelPickerView(stored) ? stored : DEFAULT_MODEL_PICKER_VIEW;
+}
+
+/** Stores the view — one word, which is the whole preference. */
+export function writeModelPickerView(
+  db: Database.Database,
+  view: ModelPickerView,
+  now: number,
+): ModelPickerView {
+  setAppState(db, MODEL_PICKER_VIEW_APP_STATE_KEY, JSON.stringify(view), now);
+  return view;
 }
 
 /**

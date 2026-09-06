@@ -15,6 +15,7 @@ import type {
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
+  ModelPickerView,
   ModelPurpose,
   ModelSelection,
   SessionStartResult,
@@ -119,6 +120,8 @@ export interface RegisterSessionRpcIpcOptions {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  readModelPickerView?: () => ModelPickerView;
+  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
   /** Create-only (no attach): the renderer's optimistic chat-open — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -174,6 +177,8 @@ export function registerSessionRpcIpcHandlers(options: RegisterSessionRpcIpcOpti
           writeHiddenModels: options.writeHiddenModels,
           readCompactionPolicy: options.readCompactionPolicy,
           writeCompactionPolicy: options.writeCompactionPolicy,
+          readModelPickerView: options.readModelPickerView,
+          writeModelPickerView: options.writeModelPickerView,
           createSession: options.createSession,
           attachSession: options.attachSession,
           diagnostics,
@@ -309,6 +314,10 @@ async function callProcedure(
       return caller.modelAccess.compactionPolicy();
     case "modelAccess.setCompactionPolicy":
       return caller.modelAccess.setCompactionPolicy(request.input as never);
+    case "modelAccess.pickerView":
+      return caller.modelAccess.pickerView();
+    case "modelAccess.setPickerView":
+      return caller.modelAccess.setPickerView(request.input as never);
     case "sessions.create":
       return caller.sessions.create(request.input as never);
     case "sessions.attach":

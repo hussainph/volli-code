@@ -41,11 +41,16 @@
  * in the app.
  */
 import * as React from "react";
-import { DEFAULT_COMPACTION_POLICY, EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
+import {
+  DEFAULT_COMPACTION_POLICY,
+  DEFAULT_MODEL_PICKER_VIEW,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+} from "@volli/shared";
 import type {
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
+  ModelPickerView,
   ModelSelection,
   ModelPurpose,
 } from "@volli/shared";
@@ -158,17 +163,24 @@ const PROVIDERS: ModelAccessSnapshot["providers"] = [
  *
  * `ticket` is what the composer must read (VC-53's purposes); seeding both with
  * one model would look correct whichever it read.
+ *
+ * The advanced rows (VC-259) are seeded so the pill's Defaults view has a
+ * table to show: Fast on its own model, Deep on one with seven stops, and
+ * Visual left unset so one row reads through the Ticket fallback.
  */
 const SEEDED_DEFAULTS: ModelAccessDefaults = {
   ...EMPTY_MODEL_ACCESS_DEFAULTS,
   global: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "medium" },
   ticket: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
+  fast: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+  deep: { providerId: "openai-codex", modelId: "gpt-5.6-luna", reasoningLevel: "xhigh" },
 };
 
 /** A Model Access client with no main process behind it — reads only. */
 function labModelAccess(): ModelAccessClient {
   let defaults: ModelAccessDefaults = SEEDED_DEFAULTS;
   let hidden: readonly HiddenModelRef[] = [];
+  let pickerView: ModelPickerView = DEFAULT_MODEL_PICKER_VIEW;
   return {
     inspect: () =>
       Promise.resolve({ observedAt: Date.now(), providers: PROVIDERS, models: MODELS }),
@@ -184,6 +196,11 @@ function labModelAccess(): ModelAccessClient {
     },
     compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
     setCompactionPolicy: (policy) => Promise.resolve(policy),
+    pickerView: () => Promise.resolve(pickerView),
+    setPickerView: (view) => {
+      pickerView = view;
+      return Promise.resolve(view);
+    },
     beginSignIn: () => Promise.reject(new Error("Sign-in needs the main process")),
     signOut: () => Promise.reject(new Error("Sign-out needs the main process")),
   };

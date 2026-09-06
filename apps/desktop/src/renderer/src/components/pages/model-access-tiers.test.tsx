@@ -81,6 +81,8 @@ async function renderSettings(defaults: ModelAccessDefaults): Promise<void> {
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
     setCompactionPolicy: async (policy) => policy,
+    pickerView: async () => "all" as const,
+    setPickerView: async (view) => view,
     beginSignIn: async () => {
       throw new Error("not under test");
     },

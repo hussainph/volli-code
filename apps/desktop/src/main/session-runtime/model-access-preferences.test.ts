@@ -9,14 +9,17 @@ import {
   MODEL_ACCESS_DEFAULT_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
   MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
+  MODEL_PICKER_VIEW_APP_STATE_KEY,
   readCompactionPolicy,
   readDefaultModelSelection,
   readHiddenModels,
   readModelAccessDefaults,
+  readModelPickerView,
   reconcileModelAccessPreferences,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
+  writeModelPickerView,
 } from "./model-access-preferences";
 
 let ctx: TestDb | null = null;
@@ -588,5 +591,26 @@ describe("the stored compaction policy", () => {
     );
 
     expect(readCompactionPolicy(ctx.db)).toEqual({ autoCompaction: false });
+  });
+});
+
+describe("the stored picker view", () => {
+  it("opens on every model until a profile chooses otherwise", () => {
+    ctx = openTestDb();
+    expect(readModelPickerView(ctx.db)).toBe("all");
+
+    // A blob this build cannot read is not a reason to show fewer models.
+    setAppState(ctx.db, MODEL_PICKER_VIEW_APP_STATE_KEY, "not-json", 1);
+    expect(readModelPickerView(ctx.db)).toBe("all");
+    setAppState(ctx.db, MODEL_PICKER_VIEW_APP_STATE_KEY, JSON.stringify("tiers"), 2);
+    expect(readModelPickerView(ctx.db)).toBe("all");
+  });
+
+  it("round-trips the view", () => {
+    ctx = openTestDb();
+    expect(writeModelPickerView(ctx.db, "defaults", 1)).toBe("defaults");
+    expect(readModelPickerView(ctx.db)).toBe("defaults");
+    expect(writeModelPickerView(ctx.db, "all", 2)).toBe("all");
+    expect(readModelPickerView(ctx.db)).toBe("all");
   });
 });

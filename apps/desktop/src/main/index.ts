@@ -166,10 +166,12 @@ import {
   readCompactionPolicy,
   readHiddenModels,
   readModelAccessDefaults,
+  readModelPickerView,
   reconcileModelAccessPreferences,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
+  writeModelPickerView,
 } from "./session-runtime/model-access-preferences";
 import {
   registerDegradedSessionRpcIpcHandlers,
@@ -1483,6 +1485,12 @@ app.whenReady().then(async () => {
           writeCompactionPolicy:
             sessionDb !== null
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
+              : undefined,
+          readModelPickerView:
+            sessionDb !== null ? () => readModelPickerView(sessionDb) : undefined,
+          writeModelPickerView:
+            sessionDb !== null
+              ? (view) => writeModelPickerView(sessionDb, view, Date.now())
               : undefined,
           createSession: sessions?.create,
           // Every renderer Retry rides this wrapper. A ready attachment is the
