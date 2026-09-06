@@ -50,6 +50,28 @@ describe("HomeTabStrip Browser Tabs", () => {
     // The way in is the "+" menu's Browser row now, not a second labelled
     // button on the strip — see `new-session-control.test.tsx`.
     expect(html).not.toContain('aria-label="New Browser Tab"');
+    // The person's own tab wears the plain browser glyph.
+    expect(html).toContain('data-browser-tab-mark="user"');
+    expect(html).not.toContain('aria-label="Driven by a Session"');
+  });
+
+  it("marks a promoted agent tab as driven, so the strip says an agent may still be steering it", () => {
+    // "Open as tab" puts a Session's tab in the person's strip beside their
+    // own (VC-238 §4). Without the mark the two are indistinguishable, and the
+    // person cannot tell which page moves under them.
+    const promoted: HomeTabDescriptor = {
+      kind: "browser",
+      id: "browser:tab-8",
+      tabId: "tab-8",
+      title: "Agent page",
+      loading: false,
+      driven: true,
+    };
+
+    const html = draw([HOME_BOARD_TAB, promoted], promoted.id);
+
+    expect(html).toContain('data-browser-tab-mark="session"');
+    expect(html).toContain('aria-label="Driven by a Session"');
   });
 });
 
