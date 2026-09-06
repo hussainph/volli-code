@@ -290,6 +290,48 @@ describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
     expect(entries.map((entry) => entry.id)).not.toContain("sibling-entry");
   });
 
+  it("does not let malformed or irrelevant records choose the main branch tip", async () => {
+    const owned = fixture();
+    const content = readFileSync(owned.path, "utf8").trimEnd();
+    writeFileSync(
+      owned.path,
+      `${content}\n${JSON.stringify("primitive")}\n${JSON.stringify({ kind: "noise", seq: "invalid" })}\n${JSON.stringify({ kind: "noise", seq: 1.5 })}\n${JSON.stringify({ kind: "entry", id: 42, seq: 4 })}\n{not-json}\n`,
+    );
+
+    await migrateLegacySidecar(owned.path);
+    const migrated = readFileSync(owned.path, "utf8");
+    const validRecords = migrated
+      .trimEnd()
+      .split("\n")
+      .flatMap((line) => {
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          return [parsed];
+        } catch {
+          return [];
+        }
+      });
+    const tip = validRecords.find(
+      (record) => record["kind"] === "value" && record["namespace"] === "pi.branch.tip",
+    );
+
+    expect(migrated).toContain("{not-json}");
+    expect(tip?.["value"]).toBe("entry-3");
+  });
+
+  it("keeps the legacy parent Session id in the new header", async () => {
+    const owned = fixture();
+    const lines = readFileSync(owned.path, "utf8").trimEnd().split("\n");
+    const header = JSON.parse(lines[0]!) as Record<string, unknown>;
+    header["parentSessionId"] = "parent-1";
+    writeFileSync(owned.path, [JSON.stringify(header), ...lines.slice(1)].join("\n") + "\n");
+
+    await migrateLegacySidecar(owned.path);
+    expect(JSON.parse(readFileSync(owned.path, "utf8").split("\n")[0]!)).toMatchObject({
+      parentSessionId: "parent-1",
+    });
+  });
+
   it("does not touch a file it does not recognise", async () => {
     const owned = fixture();
     const foreign = join(owned.root, "not-a-session.jsonl");
@@ -302,11 +344,35 @@ describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
     expect(readFileSync(foreign, "utf8")).toBe(`${JSON.stringify({ hello: "world" })}\n`);
   });
 
+  it("leaves an invalid JSON header untouched", async () => {
+    const owned = fixture();
+    writeFileSync(owned.path, "{not-json}\n");
+
+    expect(await migrateLegacySidecar(owned.path)).toEqual({
+      kind: "skipped",
+      reason: "unrecognized",
+    });
+    expect(readFileSync(owned.path, "utf8")).toBe("{not-json}\n");
+  });
+
   it("reports a file that is not there rather than creating one", async () => {
     const owned = fixture();
     expect(await migrateLegacySidecar(join(owned.root, "absent.jsonl"))).toEqual({
       kind: "skipped",
       reason: "unrecognized",
+    });
+  });
+
+  it("does not invent an identity from an incomplete legacy bag", async () => {
+    const owned = fixture();
+    const lines = readFileSync(owned.path, "utf8").trimEnd().split("\n");
+    const header = JSON.parse(lines[0]!) as Record<string, unknown>;
+    header["metadata"] = { volliSessionId: "s1", volliThreadId: "t1" };
+    writeFileSync(owned.path, [JSON.stringify(header), ...lines.slice(1)].join("\n") + "\n");
+
+    expect(await migrateLegacySidecar(owned.path)).toMatchObject({
+      kind: "migrated",
+      identity: null,
     });
   });
 

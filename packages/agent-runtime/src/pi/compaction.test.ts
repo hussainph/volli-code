@@ -304,6 +304,60 @@ describe("contextMessages", () => {
     ]);
   });
 
+  it("does not replay a failed assistant message as conversation context", () => {
+    expect(
+      contextMessages([
+        messageEntry(user("start")),
+        messageEntry(assistant("failed", { stopReason: "aborted" })),
+      ]),
+    ).toEqual([user("start")]);
+  });
+
+  it("projects branch summaries and ignores custom entries like Pi 0.85.0", () => {
+    const path: Entry[] = [
+      {
+        type: "branch_summary",
+        id: "summary-1",
+        parentId: null,
+        seq: 1,
+        timestamp: 10,
+        fromId: "entry-1",
+        summary: "work on the sibling branch",
+        fromHook: false,
+      },
+      {
+        type: "branch_summary",
+        id: "summary-empty",
+        parentId: "summary-1",
+        seq: 2,
+        timestamp: 11,
+        fromId: null,
+        summary: "",
+        fromHook: false,
+      },
+      {
+        type: "custom",
+        id: "custom-1",
+        parentId: "summary-empty",
+        seq: 3,
+        timestamp: 12,
+        customType: "application.marker",
+        data: { ignored: true },
+      },
+      messageEntry(user("carry on")),
+    ];
+
+    expect(contextMessages(path)).toEqual([
+      {
+        role: "branchSummary",
+        summary: "work on the sibling branch",
+        fromId: "entry-1",
+        timestamp: 10,
+      },
+      user("carry on"),
+    ]);
+  });
+
   it("expands a retained tail without its reasoning, and everything after it whole (VC-242)", () => {
     // Keep-tail compaction is the shape the preserved-thinking doc names as
     // failing: the kept turns' reasoning was produced against the history the

@@ -449,7 +449,7 @@ async function appendCompactionEntry(
       [insertEntry(parented), setValue(MAIN_BRANCH_TIP, parented.id)],
       mutationContext,
     );
-    return { ...parented, seq: commit.seqs[0] ?? commit.firstSeq, timestamp: commit.timestamp };
+    return { ...parented, seq: commit.firstSeq, timestamp: commit.timestamp };
   }, context);
 }
 

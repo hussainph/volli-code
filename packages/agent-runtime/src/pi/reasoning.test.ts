@@ -161,11 +161,13 @@ describe("providerReasoningDropped", () => {
     message.diagnostics = droppedDiagnostic([
       { type: "future_prefix_rewrite", path: "messages.1.content.0" },
       { path: "messages.2.content.0" },
+      { type: "future_without_a_path" },
     ]);
 
     expect(providerReasoningDropped(message, "turn-1")).toMatchObject({
-      count: 2,
+      count: 3,
       causes: ["unknown"],
+      paths: ["messages.1.content.0", "messages.2.content.0"],
     });
   });
 
