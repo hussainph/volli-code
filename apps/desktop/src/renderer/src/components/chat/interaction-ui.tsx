@@ -176,17 +176,18 @@ const OPTION_MARK =
  *  - **A paragraph's rag is `pretty`'s, not `balance`'s.** Balance evens a
  *    title's lines and stops being meaningful past a few; the ask is a
  *    sentence that grew, and `pretty` keeps its last lines from orphaning
- *    however long it gets.
+ *    however long it gets. Long prose also takes the shared `leading-prose`
+ *    rhythm rather than the denser line height of a one-line UI label.
  *  - **The pane can only spare so much of itself.** The card is anchored to
  *    the bottom of the plane and grows upward, so an ask that ignored
  *    `ask_user`'s own one-or-two-sentence guidance used to push the card past
  *    the top of the transcript, where it cut off unreadable. The cap is a
- *    fraction of the viewport rather than a fixed rem, because what it has to
- *    leave room for is the transcript, and on a short window that is less —
- *    anything the ask needs past its share scrolls inside it.
+ *    fraction of the chat plane's size container rather than the window: a
+ *    top/bottom split can make a pane short without changing `vh`. Anything
+ *    the ask needs past its share scrolls inside it.
  */
-const ASK_PROSE =
-  "max-h-[min(40vh,16rem)] overflow-y-auto break-words text-sm font-medium text-pretty whitespace-pre-line";
+const QUESTION_PROSE =
+  "max-h-[min(40cqh,16rem)] overflow-y-auto break-words text-sm leading-prose font-medium text-pretty whitespace-pre-line";
 
 /**
  * The row's own verb, on the row that is one press from a decision.
@@ -390,7 +391,7 @@ function DecisionCard({
               and the reader is doing the same kind of work. Weight leads it
               rather than size: the heading rung is a page's headline, and a
               card that interrupts a transcript for one sentence is not one. */}
-          <p className={cn(ASK_PROSE, "text-foreground")}>{interaction.title}</p>
+          <p className="text-sm font-medium text-balance text-foreground">{interaction.title}</p>
           {/* The object of the decision, not a caption on it. This is the
               command or the path being authorized, and at the foot mount it is
               the only place the subject appears at all — truncated to one
@@ -992,7 +993,7 @@ function QuestionStep({
       {/* A paragraph carrying the group's name, not a heading: the card sits
           inside a transcript with an outline of its own, and the request's
           identity is already on the form and in the live region. */}
-      <p id={headingId} className={cn(ASK_PROSE, "text-foreground")}>
+      <p id={headingId} className={cn(QUESTION_PROSE, "text-foreground")}>
         {step.heading}
       </p>
       {interaction.detail ? (
