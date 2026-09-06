@@ -20,6 +20,7 @@
  * apps/desktop's chat/transport.ts and stores/chat-sessions.ts.
  */
 export * from "./activity";
+export * from "./activity-island";
 export * from "./client";
 export * from "./compaction-boundary";
 export * from "./composer-effort";

@@ -135,7 +135,7 @@ export const WORKSPACE_ENVIRONMENT_REMINDER_ID = "reminder:workspace-environment
  *
  * `session-static` and not `role-static`, which is the whole reason it is a
  * message-side block instead of a system-prompt layer: membership is
- * `bundle(Role) ∪ grants(session)`, so two Project Sessions differing only by a
+ * `bundle(Role) ∪ grants(session)`, so two Board Sessions differing only by a
  * grant compose different bytes here. In the prompt that would have split their
  * Cache Prefix; on the message side it is bought once and invalidates nothing.
  *

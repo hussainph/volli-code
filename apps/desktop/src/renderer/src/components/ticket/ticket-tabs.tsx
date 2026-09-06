@@ -30,8 +30,9 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { sessionProvenanceHoverLine } from "@volli/shared";
+import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
+import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
@@ -134,6 +135,8 @@ export interface TicketTabDescriptor {
   loading?: boolean;
   /** A `"browser"` tab a Session owns and may be driving (VC-238). */
   driven?: boolean;
+  /** Who holds a `"browser"` tab (VC-239), for the strip's holder dot. */
+  heldBy?: BrowserTabHolder | null;
   /**
    * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
    * are always persistent and never set this. Preview labels render italic.
@@ -366,6 +369,11 @@ function TicketTab({
         // worktree badge.
         sessionId !== null ? (
           <SessionProvenanceMark provenance={provenance} rowTitle={tab.label} />
+        ) : tab.kind === "browser" ? (
+          // A held Browser tab wears its holder's colour here (VC-239), on
+          // screen or not: the strip is where a person learns a Session is
+          // driving a tab they are not looking at.
+          <BrowserHolderDot holder={tab.heldBy ?? null} />
         ) : tab.badge === "worktree" ? (
           // A quiet dot marking a file resolved from the ticket's worktree copy
           // rather than the main checkout (decision #6).

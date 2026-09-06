@@ -63,7 +63,7 @@ import {
 } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
 
-export const title = "Project session · identity, info, empty chat";
+export const title = "Board Session · identity, info, empty chat";
 export const note = "Streak / Board / Venue ×5, with caption treatments (VC-55 pass 4)";
 export const viewport = "window" as const;
 
@@ -189,7 +189,7 @@ const BOARD = [
 ] as const;
 
 /**
- * The rail's Sessions page. PROJECT sessions only — a ticket's sessions live in
+ * The rail's Sessions page. BOARD Sessions only — a ticket's sessions live in
  * that ticket's own rail, and listing them here would make Home a second index
  * of the same rows.
  */
@@ -1038,19 +1038,19 @@ function RailTabs({ page, onSelect }: { page: RailPage; onSelect(next: RailPage)
 }
 
 /**
- * SESSIONS — project session history, and ONLY project sessions.
+ * SESSIONS — Board Session history, and ONLY Board Sessions.
  *
  * The scoping is the decision, not a filter: a ticket's sessions already have a
  * home in that ticket's own rail, so listing them here would make Home a second
- * index of the same rows. What has no home today is the project session you
- * closed — which is also VC-54's "closed project-session tabs are reopenable
+ * index of the same rows. What has no home today is the Board Session you
+ * closed — which is also VC-54's "closed Board Session tabs are reopenable
  * from Home". This page IS that surface; the two tickets should not build it
  * twice.
  */
 function RailSessions() {
   return (
     <div className="flex flex-col gap-2 px-4 pb-8">
-      <h3 className="text-label uppercase text-muted-foreground">Project sessions</h3>
+      <h3 className="text-label uppercase text-muted-foreground">Board sessions</h3>
       <div className="flex flex-col gap-px">
         {PROJECT_SESSIONS.map((session) => (
           <button

@@ -43,6 +43,7 @@ function tab(overrides: Partial<BrowserTabState> & { tabId: string }): BrowserTa
     canGoBack: false,
     canGoForward: false,
     generation: 1,
+    heldBy: null,
     ...overrides,
   };
 }

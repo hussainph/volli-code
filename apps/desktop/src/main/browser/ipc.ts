@@ -101,6 +101,23 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       ok: true,
       dataUrl: host.pictureOf(input.pictureId),
     }),
+    // The person's hold controls (VC-239). Each is an explicit press on the
+    // chrome pill or the cursor's label; nothing here is inferred from input
+    // into the page. What the displaced or asked Session is TOLD is not this
+    // handler's business — the host emits a hold event and index.ts relays it
+    // in-band, so the notice reaches the Session whichever door moved the hold.
+    "volli:browser-take-over": (input: BrowserTabIdInput) => ({
+      ok: true,
+      tab: host.takeOver(input.tabId).tab,
+    }),
+    "volli:browser-hand-back": (input: BrowserTabIdInput) => ({
+      ok: true,
+      tab: host.handBack(input.tabId),
+    }),
+    "volli:browser-ask-to-leave": (input: BrowserTabIdInput): Result => {
+      host.askToLeave(input.tabId);
+      return { ok: true };
+    },
   };
 
   registerGuardedIpcHandlers(BROWSER_IPC, handlers);

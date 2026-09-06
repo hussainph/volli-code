@@ -34,6 +34,7 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     canGoBack: false,
     canGoForward: false,
     generation: 0,
+    heldBy: null,
     ...overrides,
   };
 }
@@ -64,5 +65,24 @@ describe("BrowserPane address bar", () => {
 
     expect(html).toContain('role="alert"');
     expect(html).toContain("Could not load page: CONNECTION_REFUSED");
+  });
+});
+
+describe("BrowserPane holder pill (VC-239)", () => {
+  it("shows the holder from pushed tab state, and nothing for a free tab", () => {
+    expect(draw(tab())).not.toContain("browser-holder-pill");
+    const held = draw(
+      tab({
+        heldBy: {
+          kind: "session",
+          sessionId: "ses-a",
+          name: "Fix checkout form",
+          color: "#d07c00",
+        },
+      }),
+    );
+    expect(held).toContain('data-holder="session"');
+    expect(held).toContain("Fix checkout form");
+    expect(draw(tab({ heldBy: { kind: "person" } }))).toContain('data-holder="person"');
   });
 });

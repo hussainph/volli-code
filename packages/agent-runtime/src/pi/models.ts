@@ -41,7 +41,7 @@ import lockfile from "proper-lockfile";
 
 import {
   attachRefreshableCatalog,
-  modelsDevCatalogSource,
+  piDevCatalogSource,
   PiFileModelsStore,
   type RefreshableCatalogs,
 } from "./model-catalog";
@@ -146,7 +146,7 @@ export function piOwnedModelAccess(options: PiCredentialOptions = {}): PiModelAc
   // has no `refreshModels` for the button to reach (see `model-catalog.ts`).
   const modelsStore = new PiFileModelsStore(piModelsFilePath(options));
   const models = builtinModels({ credentials, modelsStore });
-  const catalogs = attachRefreshableCatalog(models, modelsDevCatalogSource(), {
+  const catalogs = attachRefreshableCatalog(models, piDevCatalogSource(), {
     store: modelsStore,
   });
   // Start restoration eagerly, but make its completion part of the returned

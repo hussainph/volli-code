@@ -22,7 +22,7 @@
  *    of preload.cjs, stripping would break it at a distance, and the build
  *    FAILS with the CAUTION's own instruction: make the entries disjoint again.
  */
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const DESKTOP_DIR = resolve(import.meta.dirname, "..");
@@ -46,14 +46,27 @@ function runtimeChunkDefinitions(source) {
   return names;
 }
 
+/**
+ * Every sandboxed preload the build emits. The cursor overlay's (VC-239) is
+ * optional only so a scratch directory holding just the app preload still
+ * verifies; a real build always has both.
+ */
+const PRELOADS = ["preload.cjs", "cursor-preload.cjs"];
+
 export function verifyPreloadStandalone(targetDir) {
-  const preloadPath = join(targetDir, "preload.cjs");
+  const present = PRELOADS.filter((file) => existsSync(join(targetDir, file)));
+  if (present.length === 0) throw new Error("verify-preload-standalone: no preload.cjs found");
+  for (const file of present) verifyOnePreload(targetDir, file);
+}
+
+function verifyOnePreload(targetDir, file) {
+  const preloadPath = join(targetDir, file);
   const preload = readFileSync(preloadPath, "utf8");
 
   const runtimeRequire = /^require\("\.\/(rolldown-runtime-[\w-]+\.cjs)"\);\s*$/m;
   const match = preload.match(runtimeRequire);
   if (!match) {
-    console.log("verify-preload-standalone: OK — preload.cjs requires no runtime chunk.");
+    console.log(`verify-preload-standalone: OK — ${file} requires no runtime chunk.`);
     return;
   }
 
@@ -66,7 +79,7 @@ export function verifyPreloadStandalone(targetDir) {
   );
   if (used.length > 0) {
     throw new Error(
-      `verify-preload-standalone: preload.cjs actually USES runtime-chunk helper(s) ` +
+      `verify-preload-standalone: ${file} actually USES runtime-chunk helper(s) ` +
         `${used.join(", ")} from ${match[1]}. A shared chunk has split out of the sandboxed ` +
         `preload, which cannot require sibling files — make the main and preload entries ` +
         `dependency-disjoint again (see the pack CAUTION in vite.config.ts) instead of stripping.`,
@@ -82,7 +95,7 @@ export function verifyPreloadStandalone(targetDir) {
     ),
   );
   console.log(
-    `verify-preload-standalone: stripped vestigial require of ${match[1]} from preload.cjs ` +
+    `verify-preload-standalone: stripped vestigial require of ${match[1]} from ${file} ` +
       `(no helper from it is referenced).`,
   );
 }

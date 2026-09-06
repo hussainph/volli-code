@@ -41,7 +41,20 @@ import {
 } from "./session-ledger";
 import type { SessionUsage } from "./session-usage";
 
-export type SessionRole = "project" | "ticket" | "subagent";
+/** The Roles a Session may be created under, as a runtime list a stored string is checked against. */
+export const SESSION_ROLES = ["project", "ticket", "subagent"] as const;
+export type SessionRole = (typeof SESSION_ROLES)[number];
+
+/**
+ * The glossary word for each Role (CONTEXT.md "Session Role"), for prose a
+ * person or an agent reads. The enum value is a frozen durable field written
+ * into Session history and stays `project`; the word for it is Board.
+ */
+export const SESSION_ROLE_NAMES: Record<SessionRole, string> = {
+  project: "Board Session",
+  ticket: "Ticket Session",
+  subagent: "Subagent Session",
+};
 
 /** Volli's reasoning policy, independent of any provider's type names. */
 export const REASONING_LEVELS = [
@@ -165,8 +178,17 @@ export interface ModelAccessSnapshot {
   refresh?: ModelCatalogRefreshReport;
 }
 
-/** The Roles that attach a runtime. Subagent Sessions have no attachment of their own. */
-export type RuntimeSessionRole = Extract<SessionRole, "ticket" | "project">;
+/**
+ * The Roles that attach a runtime: every Role there is.
+ *
+ * Since VC-9 a Subagent Session is a real Session with an attachment, a
+ * transcript and a model of its own — never a hidden thread inside its
+ * parent — so this is the whole of {@link SessionRole} rather than a subset.
+ * It stays a separate name because it answers a different question (which
+ * Roles the prompt and identity vocabularies are total over), and because a
+ * future Role that does NOT attach would leave this one narrower again.
+ */
+export type RuntimeSessionRole = SessionRole;
 
 /** Volli identities every runtime attachment carries, whatever its Role. All opaque. */
 interface RuntimeIdentityFields {
@@ -189,14 +211,33 @@ export interface ProjectRuntimeIdentity extends RuntimeIdentityFields {
 }
 
 /**
+ * A Subagent Session's identity (VC-9): the Session that delegated it, and the
+ * Ticket it inherited from that Session — or none, when the parent had none.
+ *
+ * The parent is part of the identity because it is what the Role MEANS: a
+ * subagent is a bounded helper for one other Session, and the host binds
+ * that Session here so the answer can be delivered to it without the child
+ * ever naming it. The Ticket is nullable here and nowhere else in this union,
+ * because a subagent is the one Role whose Ticket is not its own.
+ */
+export interface SubagentRuntimeIdentity extends RuntimeIdentityFields {
+  role: Extract<RuntimeSessionRole, "subagent">;
+  ticketId: string | null;
+  parentSessionId: string;
+}
+
+/**
  * Role and identity are one value, not two agreeing fields.
  *
  * The Role decides what the runtime may assume about the Session — a Ticket to
- * work, or a project root and nothing else — so a spec that named the Role
- * separately from the identity could state a Ticket Session with no Ticket. Here
- * that shape does not typecheck.
+ * work, a project root and nothing else, or a parent to answer — so a spec that
+ * named the Role separately from the identity could state a Ticket Session with
+ * no Ticket, or a subagent with no parent. Here those shapes do not typecheck.
  */
-export type RuntimeSessionIdentity = TicketRuntimeIdentity | ProjectRuntimeIdentity;
+export type RuntimeSessionIdentity =
+  | TicketRuntimeIdentity
+  | ProjectRuntimeIdentity
+  | SubagentRuntimeIdentity;
 
 /** Where execution happens. Local is the only venue built today. */
 export type ExecutionVenue = "local";
@@ -508,6 +549,19 @@ export interface RuntimeWebSearchResults {
   truncated: boolean;
 }
 
+/**
+ * Who holds a Browser Tab — whose turn it is to drive it (VC-239).
+ *
+ * At most one party at a time: one Session, or the person. `null` is a free
+ * tab. Reads never need a hold; a write takes a free tab's hold, keeps its
+ * own, and is refused on anyone else's. The holder is named in the tab list so
+ * a Session can see contention before it fails on it.
+ */
+export type RuntimeBrowserHolder =
+  | { kind: "session"; sessionId: string; self: boolean }
+  | { kind: "person" }
+  | null;
+
 /** One Browser Tab as the runtime lists it: bounded metadata, never page content. */
 export interface RuntimeBrowserTab {
   /** Product-owned opaque id — never a positional Chromium tab index. */
@@ -521,9 +575,22 @@ export interface RuntimeBrowserTab {
    * shows a Session only its own tabs by default, so this usually names the
    * caller; it is here so a parent that is shown a child's tabs can tell them
    * apart from its own.
+   *
+   * Separate from {@link heldBy}, and deliberately: ownership says whose tab
+   * this IS — who may see it, whose attachment end closes it, whose cap it
+   * counts against — while the hold says whose turn it is to write to it right
+   * now. A Session owns its headless tabs permanently and holds one only while
+   * it is driving it; the person owns none and may hold any.
    */
   ownerSessionId: string | null;
+  /** Who holds it right now, or `null` for a free tab. */
+  heldBy: RuntimeBrowserHolder;
 }
+
+/** The answer to taking a hold: yours now (or already), or somebody else's. */
+export type RuntimeBrowserHoldOutcome =
+  | { kind: "held"; tabId: string }
+  | { kind: "refused"; tabId: string; holder: NonNullable<RuntimeBrowserHolder> };
 
 /** Every Browser Tab the host let this Session see. */
 export interface RuntimeBrowserTabList {
@@ -674,8 +741,45 @@ export interface RuntimeBrowserPort {
   act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserActResult>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
+  /**
+   * Take a tab's hold, or learn who has it (VC-239). Optional as a PAIR with
+   * {@link release}: a Session whose frozen surface predates the hold tools is
+   * handed a port without them, and the surface offers `browser_acquire` and
+   * `browser_release` exactly when the port carries both. The writes above
+   * take the hold implicitly either way, so such a Session still works.
+   */
+  acquire?(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
+  /** Give a hold back early. Releasing a tab this Session does not hold is a no-op. */
+  release?(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
   /** Releases host-private debugger/controller resources when an attachment ends. */
   dispose?(): void;
+}
+
+/** A Browser port whose hold pair is present — what the two hold tools bind to. */
+export type RuntimeBrowserHoldPort = RuntimeBrowserPort &
+  Required<Pick<RuntimeBrowserPort, "acquire" | "release">>;
+
+/**
+ * The port narrowed to its hold pair, or `undefined` when it carries neither.
+ * Carrying exactly one is refused loudly: a Session that could take a hold and
+ * not give it back — or the reverse — would be a surface no rule describes.
+ */
+export function browserHoldPort(
+  port: RuntimeBrowserPort | undefined,
+): RuntimeBrowserHoldPort | undefined {
+  if (port === undefined) return undefined;
+  const hasAcquire = port.acquire !== undefined;
+  const hasRelease = port.release !== undefined;
+  if (!hasAcquire && !hasRelease) return undefined;
+  if (!hasAcquire || !hasRelease) {
+    throw new Error(
+      "A Browser port must carry both browser_acquire and browser_release or neither; the hold tools are offered together.",
+    );
+  }
+  // The same object, proven: both methods were just read as present, so the
+  // narrowing is a fact about `port` rather than a copy that could lose a
+  // `this`-bound method.
+  return port as RuntimeBrowserHoldPort;
 }
 
 /**
@@ -862,9 +966,11 @@ export interface SessionRuntimeSpec {
    * Reach the Browser Tabs the host owns, through the one {@link RuntimeBrowserPort}.
    *
    * Optional on the same terms as {@link webFetch}: absence is what decides
-   * whether the model is offered any browser tool. One port carries all six
-   * names — a Session with somewhere to send a browser action has all of them,
-   * and one with nowhere has none.
+   * whether the model is offered any browser tool. One port carries every
+   * browser name — a Session with somewhere to send a browser action has all
+   * of them, and one with nowhere has none. The one qualification is the hold
+   * pair (VC-239): a port without `acquire`/`release` offers the six that
+   * shipped before them, which is how a Session frozen with six keeps six.
    */
   browser?: RuntimeBrowserPort;
   /**
@@ -919,6 +1025,16 @@ export interface RuntimeVerbCall {
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
+  /**
+   * Structured facts for the transcript row, never for the model (VC-9).
+   *
+   * Rides the tool result's `details` slot, which the activity mapper reads
+   * and the model does not see. Exists for one row today: a `delegate` row
+   * links to the child Session by id and names it by title, and parsing
+   * either out of {@link text} would tie the transcript to the door's prose.
+   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   */
+  details?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */
@@ -943,15 +1059,18 @@ export type SessionToolBinding =
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
-  // Six arms, one port: each browser tool carries the whole RuntimeBrowserPort,
+  // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
   // because the port is the capability and the names are only the model-facing
   // grain — the runtime switches on the name and calls the method it stands for.
+  // The two hold arms carry the port with its optional pair proven present.
   | { tool: "browser_tabs"; port: RuntimeBrowserPort }
   | { tool: "browser_navigate"; port: RuntimeBrowserPort }
   | { tool: "browser_snapshot"; port: RuntimeBrowserPort }
   | { tool: "browser_act"; port: RuntimeBrowserPort }
   | { tool: "browser_screenshot"; port: RuntimeBrowserPort }
   | { tool: "browser_console"; port: RuntimeBrowserPort }
+  | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
+  | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -984,6 +1103,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // a tool no Session can be offered would be the same landmine VC-3 defused,
   // re-laid one vocabulary entry at a time.
   const browser = spec.browser;
+  // The hold pair is offered together or not at all (VC-239): a port carrying
+  // one of `acquire`/`release` without the other is a build bug, not a
+  // smaller surface, and it is caught here where the cost is a thrown error
+  // rather than a Session that can take a hold it cannot give back.
+  const hold = browserHoldPort(browser);
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
@@ -995,6 +1119,8 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     browser_screenshot:
       browser === undefined ? null : { tool: "browser_screenshot", port: browser },
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
+    browser_acquire: hold === undefined ? null : { tool: "browser_acquire", port: hold },
+    browser_release: hold === undefined ? null : { tool: "browser_release", port: hold },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

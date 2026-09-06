@@ -29,6 +29,7 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     canGoBack: false,
     canGoForward: false,
     generation: 0,
+    heldBy: null,
     ...overrides,
   };
 }

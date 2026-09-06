@@ -99,7 +99,7 @@ export type SessionRowScope = "project" | "ticket";
 /**
  * Which scope a Session was created in. The immutable creation fact matters:
  * an archived ticket can leave its Session without a current `ticketId`, but
- * that does not turn the Ticket Session into a Project Session.
+ * that does not turn the Ticket Session into a Board Session.
  */
 export function sessionRowScope(session: { readonly bornTicketless: boolean }): SessionRowScope {
   return session.bornTicketless ? "project" : "ticket";
@@ -128,7 +128,7 @@ export interface ActiveSessionRow {
   id: string;
   /**
    * The ticket this row belongs to, or `null` for a ticketless Session — a
-   * project Project Session, or one whose ticket has left the board.
+   * Board Session, or one whose ticket has left the board.
    */
   ticket: Ticket | null;
   title: string;
@@ -243,7 +243,7 @@ export function listingOutputStamps(input: {
   containers: Readonly<Record<string, SessionContainer>>;
   /** The project's ticket ids — the container keys its ticket Sessions live under. */
   ticketIds: Iterable<string>;
-  /** The project's own id, which is the container key its Project Sessions live under. */
+  /** The project's own id, which is the container key its Board Sessions live under. */
   projectOwnerId: string;
 }): Record<string, number> {
   const stamps: Record<string, number> = {};
@@ -429,7 +429,7 @@ export interface BuildActiveSessionListingInput {
    *
    * It arrives on its own key because {@link BuildActiveSessionListingInput.containers}
    * is walked BY TICKET, while the store files a project container in that same
-   * flat map under the PROJECT's id (`ownerKey`: projectId for a project Session, ticketId
+   * flat map under the PROJECT's id (`ownerKey`: projectId for a Board Session, ticketId
    * for ticket). A live project terminal therefore sat under a key no ticket
    * loop would ever ask for, and reached neither band — only its ended siblings
    * got in, via the durable records below. Absent reads as none.
@@ -747,7 +747,7 @@ export function buildActiveSessionListing(
 
   /**
    * How recently a terminal row did anything, when no quiet stamp can say. A
-   * ticket dates its own rows; a project Session tab has no ticket to borrow from and
+   * ticket dates its own rows; a Board Session tab has no ticket to borrow from and
    * falls back to the Session's own newest durable fact, then to 0 — a sort key
    * we could not establish, never a stamp invented from `now`.
    */
@@ -760,7 +760,7 @@ export function buildActiveSessionListing(
    * the row came out of the PROJECT container, and a project container holding
    * a pane is itself proof of ticketless birth — the store files it under
    * `ownerKey({kind: "project"})`, a key only a Session created with no ticket
-   * can ever land on. This matters because a live project Session pane's record is
+   * can ever land on. This matters because a live Board Session pane's record is
    * routinely absent from `records` (that listing leads with ended Sessions),
    * and defaulting to `false` there would strip the cleanup exemption from
    * exactly the rows {@link isCleanupExempt} exists to protect.
@@ -911,9 +911,9 @@ export function buildActiveSessionListing(
   }
 
   // 1b. The project's project container, on exactly the terms a ticket's tabs
-  // get. A Project Session has no ticket, so it can never be the Needs-Review
+  // get. A Board Session has no ticket, so it can never be the Needs-Review
   // promotion; but it is a terminal the user started and is watching, and a
-  // band that omits it is wrong about what is running. Ended Project Sessions
+  // band that omits it is wrong about what is running. Ended Board Sessions
   // already arrived through the durable records below; this is the live half
   // that had no route in.
   const projectSessionTabs = input.projectContainer?.tabs ?? [];

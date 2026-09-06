@@ -35,11 +35,12 @@ const NO_SKILLS: SessionSkillPorts = {
 
 const CODING_AND_ASK: SessionToolSurfacePorts = {
   resolve: () => ["read", "edit", "write", "execute", "ask_user"],
+  recorded: async () => null,
   record: async () => undefined,
 };
 
 const NO_GRANTS: SessionGrantPorts = {
-  resolveBirth: () => ({ grants: [], delegation: null }),
+  resolveBirth: () => ({ grants: [], delegation: null, parentSessionId: null }),
   recordBirth: () => undefined,
 };
 
@@ -85,13 +86,15 @@ describe("Sessions", () => {
       operationId: "operation-ticket",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: "VC-1",
     });
     await door.create({
       operationId: "operation-project",
       projectId: "project-2",
       ticketId: null,
-      title: "Project chat",
+      role: "project",
+      title: "Board chat",
     });
 
     expect(asked).toEqual([
@@ -100,7 +103,7 @@ describe("Sessions", () => {
     ]);
   });
 
-  it("create mints a Ticket Session and a project Session through the one door — ticketId is the Role", async () => {
+  it("create mints a Ticket Session and a Board Session through the one door — ticketId is the Role", async () => {
     const ticketsAsked: string[] = [];
     const { commands, sessions: door } = sessions({
       ticketBelongsToProject: (_projectId, ticketId) => {
@@ -113,13 +116,15 @@ describe("Sessions", () => {
       operationId: "operation-ticket",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: "VC-1",
     });
     const ticketless = await door.create({
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      role: "project",
+      title: "Board chat",
     });
 
     // Both are durable and addressable NOW — the attach follows separately,
@@ -158,6 +163,7 @@ describe("Sessions", () => {
       operationId: "operation-cli",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: null,
       actor: { kind: "session", sessionId: "driver-session", ticketId: "ticket-9" },
     });
@@ -165,6 +171,7 @@ describe("Sessions", () => {
       operationId: "operation-human",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: null,
     });
     // No Ticket, no Ticket Event — planner history is Ticket history.
@@ -172,6 +179,7 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
       title: null,
     });
 
@@ -204,6 +212,7 @@ describe("Sessions", () => {
       operationId: "operation-1",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: "VC-1",
     });
 
@@ -238,7 +247,11 @@ describe("Sessions", () => {
         resolveBirth: (input) => {
           order.push(`resolve-grant:${input.role}`);
           expect(input.delegation).toEqual(delegation);
-          return { grants: ["session.start"], delegation: input.delegation ?? null };
+          return {
+            grants: ["session.start"],
+            delegation: input.delegation ?? null,
+            parentSessionId: null,
+          };
         },
         recordBirth: (_sessionId, birth) => {
           order.push(`record-grant:${birth.grants.join(",")}`);
@@ -249,6 +262,7 @@ describe("Sessions", () => {
           order.push(`resolve-surface:${grants?.join(",")}`);
           return ["read", "session.start"];
         },
+        recorded: async () => null,
         record: () => {
           order.push("record-surface");
           return Promise.resolve();
@@ -260,6 +274,7 @@ describe("Sessions", () => {
       operationId: "operation-delegated",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: "Delegated work",
       delegation,
     });
@@ -277,6 +292,7 @@ describe("Sessions", () => {
     const { commands, sessions: door } = sessions({
       toolSurface: {
         resolve: () => ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+        recorded: async () => null,
         record: async (sessionId, tools) => {
           recorded.push({ sessionId, tools });
         },
@@ -287,6 +303,7 @@ describe("Sessions", () => {
       operationId: "operation-tools",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
       title: "Frozen surface",
     });
 
@@ -311,6 +328,7 @@ describe("Sessions", () => {
             roles.push(role);
             return ["read"];
           },
+          recorded: async () => null,
           record: async () => undefined,
         },
       }).sessions;
@@ -319,16 +337,109 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
-      title: "A project chat",
+      role: "project",
+      title: "A Board chat",
     });
     await door().create({
       operationId: "operation-ticket",
       projectId: "project-1",
       ticketId: "ticket-1",
+      role: "ticket",
       title: "Ticket work",
     });
 
     expect(roles).toEqual(["project", "ticket"]);
+  });
+
+  it("mints a Subagent Session as its own Role: stated on create, on the utility model, bounded by its parent (VC-9)", async () => {
+    const modelRoles: string[] = [];
+    const surfaceAsks: { role: string; within: readonly string[] | undefined }[] = [];
+    const births: { role: string; parentSessionId: string | null }[] = [];
+    const { commands, sessions: door } = sessions({
+      readDefaultModel: (role) => {
+        modelRoles.push(role);
+        return MODEL;
+      },
+      toolSurface: {
+        resolve: (role, _grants, within) => {
+          surfaceAsks.push({ role, within });
+          return ["read", "edit", "write", "execute", "web_fetch"];
+        },
+        // The parent's own frozen surface, as the store recorded it: the child
+        // may inherit web access only because the parent held it.
+        recorded: async () => ["read", "edit", "write", "execute", "ask_user", "web_fetch"],
+        record: async () => undefined,
+      },
+      grants: {
+        resolveBirth: (input) => {
+          births.push({
+            role: input.role,
+            parentSessionId: input.parentSessionId ?? null,
+          });
+          return { grants: [], delegation: null, parentSessionId: null };
+        },
+        recordBirth: () => undefined,
+      },
+    });
+
+    const child = await door.create({
+      operationId: "operation-child",
+      projectId: "project-1",
+      // Inherited from the parent, which is exactly why the Ticket cannot say
+      // what Role this is.
+      ticketId: "ticket-1",
+      role: "subagent",
+      parentSessionId: "parent-session",
+      title: "Find the flaky test",
+    });
+
+    expect(child).toEqual({ sessionId: "session-1", model: MODEL });
+    expect(commands[0]).toMatchObject({
+      commandId: "operation-child:create",
+      // The parent rides the create intent: a ledger fact, not a host table's.
+      command: {
+        kind: "session.create",
+        ticketId: "ticket-1",
+        role: "subagent",
+        parentSessionId: "parent-session",
+      },
+    });
+    // Cost-efficient background work: the `utility` rung, not the Ticket's.
+    expect(modelRoles).toEqual(["subagent"]);
+    expect(surfaceAsks).toEqual([
+      {
+        role: "subagent",
+        within: ["read", "edit", "write", "execute", "ask_user", "web_fetch"],
+      },
+    ]);
+    expect(births).toEqual([{ role: "subagent", parentSessionId: "parent-session" }]);
+  });
+
+  it("refuses a Subagent Session that names no parent, and a parent on any other Role, before anything durable exists", async () => {
+    const { commands, sessions: door } = sessions();
+
+    await expect(
+      door.create({
+        operationId: "operation-orphan",
+        projectId: "project-1",
+        ticketId: null,
+        role: "subagent",
+        title: null,
+      }),
+    ).rejects.toMatchObject({ code: "PARENT_REQUIRED" });
+    // A Ticket Session with a parent is a caller that confused the two kinds
+    // of child: a `session.start` peer carries delegation ancestry, not this.
+    await expect(
+      door.create({
+        operationId: "operation-confused",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        parentSessionId: "parent-session",
+        title: null,
+      }),
+    ).rejects.toMatchObject({ code: "PARENT_REQUIRED" });
+    expect(commands).toEqual([]);
   });
 
   it("never re-resolves the surface for a Session that already exists", async () => {
@@ -343,6 +454,7 @@ describe("Sessions", () => {
           resolves += 1;
           return ["read"];
         },
+        recorded: async () => null,
         record: async () => undefined,
       },
     });
@@ -351,6 +463,7 @@ describe("Sessions", () => {
       operationId: "operation-1",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
       title: "Frozen at birth",
     });
     await door.attach({ operationId: "operation-2", sessionId: "session-1" });
@@ -381,7 +494,7 @@ describe("Sessions", () => {
   });
 
   it("records the app default for any Session that never recorded a model — one rule, no Role read", async () => {
-    // In real data only a project Session born before the model policy can
+    // In real data only a Board Session born before the model policy can
     // reach this branch (every mint above records at birth), but the rule is
     // stated for every Session rather than re-deriving the Role to scope it.
     const { commands, sessions: door } = sessions({ readModelSelection: async () => null });
@@ -990,7 +1103,13 @@ describe("Sessions", () => {
     });
 
     await expect(
-      door.create({ operationId: "op", projectId: "project-1", ticketId: "ticket-1", title: null }),
+      door.create({
+        operationId: "op",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        title: null,
+      }),
     ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
     expect(startedEvents).toEqual([]);
   });
@@ -1001,6 +1120,7 @@ function startInput(operationId: string) {
     operationId,
     projectId: "project-1",
     ticketId: "ticket-1",
+    role: "ticket" as const,
     title: "VC-1",
   };
 }

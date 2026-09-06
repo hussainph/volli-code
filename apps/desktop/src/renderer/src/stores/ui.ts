@@ -49,7 +49,7 @@
  *
  * `homeRailMode` — which page HOME's rail shows (Now / Sessions / Files /
  * Search), and
- * `homeEmptyVisual` — which drawing a Project Session's empty chat opens on
+ * `homeEmptyVisual` — which drawing a Board Session's empty chat opens on
  * (Streak / Board / Venue, VC-55). Both persist app-wide for the same reason
  * `railMode` does, and both are their own key rather than a widening of the
  * ticket rail's: the two rails offer different pages, and a ticket's empty chat
@@ -321,7 +321,7 @@ interface UiState {
   railMode: TicketRailMode;
   /** Active Home-rail page. Persisted app-wide (see module doc). */
   homeRailMode: HomeRailMode;
-  /** Which drawing a Project Session's empty chat opens on. Persisted app-wide. */
+  /** Which drawing a Board Session's empty chat opens on. Persisted app-wide. */
   homeEmptyVisual: EmptyVisual;
   /**
    * Whether the rails draw what a Session, Ticket or project has cost.

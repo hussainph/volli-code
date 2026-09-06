@@ -51,6 +51,10 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   edit: "edit-file",
   write: "write-file",
   bash: "run-command",
+  // The delegate verb's wire name (VC-9). The only product verb with a kind of
+  // its own, because it is the only one whose row opens something — the child
+  // Session — rather than reporting a fact.
+  session_delegate: "delegate",
 };
 
 /**
@@ -217,11 +221,13 @@ function descriptorFor(
   return {
     kind,
     nativeToolName: toolName,
+    // A browse row's object is the page, which only the facet knows; every
+    // other kind asks the subject reader, VC-9's `delegate` included.
     subject:
       browse === null
-        ? subjectFor(kind, input, toolName)
+        ? subjectFor(kind, input, toolName, output)
         : { label: displayUrl(browse.url), path: null, lineRange: null },
-    outcome: endedAt === null ? null : outcomeFor(output, rawOutput),
+    outcome: endedAt === null ? null : outcomeFor(output, rawOutput, kind),
     startedAt,
     endedAt,
     ...(browse === null ? {} : { browse }),
@@ -326,10 +332,41 @@ function withoutImageBytes(rawOutput: unknown): unknown {
   return { ...result, content: stripped };
 }
 
-function subjectFor(kind: ActivityKind, input: RuntimeActivityValue, toolName: string) {
+/** The first line of a delegated task, as the helper's name when none was given. */
+const DELEGATE_LABEL_LIMIT = 80;
+
+function subjectFor(
+  kind: ActivityKind,
+  input: RuntimeActivityValue,
+  toolName: string,
+  output: RuntimeActivityValue,
+) {
   const source = recordOf(input);
   if (kind === "run-command") {
     return { label: cleanPayloadText(readField(source, "command")), path: null, lineRange: null };
+  }
+  if (kind === "delegate") {
+    // The helper's name is the title if the parent gave one, else the task's
+    // first line; the child's id is a fact only the host has, and it arrives
+    // on the result's `details` once the child exists.
+    const title = cleanPayloadText(readField(source, "title"));
+    const task = cleanPayloadText(readField(source, "task"));
+    const firstLine = task?.split("\n")[0]?.trim() ?? null;
+    const agentName =
+      title ??
+      (firstLine === null
+        ? null
+        : firstLine.length > DELEGATE_LABEL_LIMIT
+          ? `${firstLine.slice(0, DELEGATE_LABEL_LIMIT - 1)}…`
+          : firstLine);
+    const details = recordOf(readField(recordOf(output), "details"));
+    return {
+      label: agentName,
+      path: null,
+      lineRange: null,
+      agentName,
+      sessionId: cleanPayloadText(readField(details, "sessionId")),
+    };
   }
   const path =
     cleanPayloadText(readField(source, "path")) ?? cleanPayloadText(readField(source, "filePath"));
@@ -346,7 +383,11 @@ function readRange(input: Record<string, RuntimeActivityValue> | null) {
   return offset === null || limit === null ? null : { start: offset, end: offset + limit - 1 };
 }
 
-function outcomeFor(output: RuntimeActivityValue, rawOutput: unknown): ActivityOutcome {
+function outcomeFor(
+  output: RuntimeActivityValue,
+  rawOutput: unknown,
+  kind: ActivityKind,
+): ActivityOutcome {
   const result = recordOf(output);
   const details = recordOf(readField(result, "details")) ?? result;
   const rawResult = recordOf(rawOutput);
@@ -363,6 +404,11 @@ function outcomeFor(output: RuntimeActivityValue, rawOutput: unknown): ActivityO
     removedLines: completePatch === null ? null : countDiffLines(completePatch, "-"),
     diff: patch,
     summary: summaryFor(result),
+    // One child per delegate call today; counted off the fact that a child
+    // id came back, so a refusal (no child) reads as zero rather than one.
+    ...(kind === "delegate"
+      ? { childCount: cleanPayloadText(readField(details, "sessionId")) === null ? 0 : 1 }
+      : {}),
   };
 }
 

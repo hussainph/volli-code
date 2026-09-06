@@ -81,6 +81,55 @@ describe("TicketTabStrip", () => {
     expect(html).toContain('data-testid="ticket-browser-tab"');
     expect(html).toContain("Volli docs");
     expect(html).toContain('aria-label="Close Volli docs"');
+    expect(html).not.toContain("browser-holder-dot");
+  });
+
+  it("wears the holder's colour dot on a held Browser Tab, active or not (VC-239)", () => {
+    const html = renderToStaticMarkup(
+      <TicketTabStrip
+        projectId="project-1"
+        ticketId="ticket-1"
+        tabs={[
+          { id: "doc", kind: "body", label: "VC-6" },
+          {
+            id: "browser:tab-8",
+            kind: "browser",
+            label: "Checkout",
+            browserTabId: "tab-8",
+            loading: false,
+            heldBy: {
+              kind: "session",
+              sessionId: "ses-a",
+              name: "Fix checkout form",
+              color: "#d07c00",
+            },
+          },
+          {
+            id: "browser:tab-9",
+            kind: "browser",
+            label: "Pricing",
+            browserTabId: "tab-9",
+            loading: false,
+            heldBy: { kind: "person" },
+          },
+        ]}
+        activeTabId="doc"
+        creating={false}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onRenameSessionTab={noop}
+        onNewSession={noop}
+        onNewChat={noop}
+        onNewBrowser={noop}
+        railCollapsed={false}
+        onToggleRail={noop}
+      />,
+    );
+
+    expect(html).toContain("background-color:#d07c00");
+    expect(html).toContain('title="Held by Fix checkout form"');
+    expect(html).toContain('data-holder="person"');
+    expect(html).toContain('title="Yours"');
   });
 
   it("puts creation in the trailing action cluster, out of the tab scroller", () => {

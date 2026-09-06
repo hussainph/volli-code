@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  The Session cursor overlay (VC-239): a second renderer entry that draws one
+  SessionCursor and nothing else. Main loads it into a small transparent
+  WebContentsView placed over a Browser Tab's native plane, sized to the
+  drawing and moved with the Session's actions. It shares the app's tokens by
+  being in the same build; it shares nothing else — its bridge is the five-verb
+  cursor preload, never the app's.
+
+  The CSP is the app's minus everything this page does not do: no workers, no
+  wasm, no images. `style-src 'unsafe-inline'` stays because the cursor's
+  position and colour are inline custom properties.
+-->
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Session cursor</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/cursor/main.tsx"></script>
+  </body>
+</html>

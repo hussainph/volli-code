@@ -415,6 +415,12 @@ const api = {
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
       invoke("volli:browser-picture", input),
+    takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-take-over", input),
+    handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-hand-back", input),
+    askToLeave: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-ask-to-leave", input),
     /** Subscribes to full chrome snapshots; returns the unsubscribe. */
     onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>
@@ -833,7 +839,7 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
-    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
     /** Which Automations are switched on on this machine (VC-127). */
@@ -1012,7 +1018,7 @@ const api = {
    * Session's venue is the project's main checkout, and a ticket's may be too.
    */
   venue: {
-    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Project Session. */
+    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Board Session. */
     snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
       invoke("volli:venue-snapshot", { projectId, ticketId }),
   },

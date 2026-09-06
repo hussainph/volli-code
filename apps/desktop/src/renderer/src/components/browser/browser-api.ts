@@ -37,5 +37,9 @@ export interface BrowserApi {
   setPresentation(input: BrowserTabSetPresentationInput): Promise<BrowserTabResult>;
   /** One picture the transcript names, as a data URL — or null once the host let it go. */
   picture(input: BrowserPictureInput): Promise<BrowserPictureResult>;
+  /** The person's hold controls (VC-239): take the tab, give it back, ask the holder to leave. */
+  takeOver(input: BrowserTabIdInput): Promise<BrowserTabResult>;
+  handBack(input: BrowserTabIdInput): Promise<BrowserTabResult>;
+  askToLeave(input: BrowserTabIdInput): Promise<Result>;
   onTabState(callback: (event: BrowserTabStateEvent) => void): () => void;
 }

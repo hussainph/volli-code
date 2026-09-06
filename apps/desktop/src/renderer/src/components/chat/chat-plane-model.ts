@@ -913,11 +913,11 @@ function attentionDismissKey(attention: SessionAttention): string {
  * unavailable in a catalog that has answered — and both lead to the same place,
  * because there is now only one place. Sign-in used to fork on whether a manual
  * Ticket terminal existed to hand off to; it happens inside Settings now, so a
- * project chat and a Ticket chat get the same answer and neither is sent to a
+ * Board chat and a Ticket chat get the same answer and neither is sent to a
  * terminal to finish a Settings task.
  *
  * That is also why Retry is unconditional here. It used to be withheld from a
- * project chat, on the honest ground that retrying a run whose sign-in could
+ * Board chat, on the honest ground that retrying a run whose sign-in could
  * not be reached was offering a button that could not work. The sign-in is
  * reachable from both now, so the run is retryable from both.
  */

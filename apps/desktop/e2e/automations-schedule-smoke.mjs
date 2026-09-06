@@ -318,7 +318,7 @@ try {
 
   await attempt(10, "the scheduled record's own Run names the Project, not a Ticket", async () => {
     // The Trigger decides the Target (VC-112), so Play on a scheduled row must
-    // open the Project Session the schedule itself would open. A Ticket dialog
+    // open the Board Session the schedule itself would open. A Ticket dialog
     // here would quietly make the by-hand Run a different piece of work from
     // the one the timer starts — on the very surface a person uses to check
     // what the schedule does.

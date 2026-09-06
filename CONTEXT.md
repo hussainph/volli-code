@@ -25,7 +25,7 @@ _Avoid_: ticket worktree, artifact view
 
 **Home**:
 The project-level tabbed workspace, and the app's landing page. Its permanent
-first tab is the Board; the project's own Project Sessions and Project Files
+first tab is the Board; the project's own Board Sessions and Project Files
 open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
 fills the surface and Home's tab strip steps aside, so only one tab strip is
 ever on screen.
@@ -83,13 +83,25 @@ _Avoid_: pane session, split session, harness process, terminal pane, UI tab
 
 **Session Role**:
 The product scope a Session acts within: `project`, `ticket`, or `subagent`.
-Project Sessions orchestrate project work; Ticket Sessions execute with explicit
+Board Sessions orchestrate project work; Ticket Sessions execute with explicit
 Ticket and worktree context; Subagent Sessions perform a bounded delegation and
 remain durable children of the Session that created them. Role determines the
-default context, tool bundle, and authority policy, not a separate Session type.
-A Project Session runs on the Main checkout with no worktree and no board
-involvement, and is recorded in Session history exactly as a Ticket Session is.
-_Avoid_: harness mode, agent mode, plan mode, scratch session
+default context, tool bundle, and authority policy, not a separate Session type,
+and it is stored on the Session rather than read off its Ticket (VC-9). A Board
+Session runs on the Main checkout with no worktree and no Ticket of its own — it
+sees the whole board, and its lifecycle moves no card — and is recorded in
+Session history exactly as a Ticket Session is. A Subagent Session is started by
+a parent's `session_delegate` call, shares the parent's working directory and
+inherits its Ticket, holds every coding tool and no agent-control verb or
+`ask_user`, and carries its parent on the Session itself (`parentSessionId`, a
+ledger fact). When its first turn completes a notice from Volli — the child's
+handle, state and title, none of its words — is steered into the parent, and the
+parent reads the answer with `volli session answer <handle>`, so the child's
+prose reaches it as a tool result and never as its user; the parent is never
+parked on it, and stopping the parent stops its children. Write-capable children
+in a shared tree are VC-266's question.
+_Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
+Project Session, project chat
 
 **Authority Snapshot**:
 The durable policy one attachment runs under: which actions are
@@ -199,7 +211,7 @@ BrowserTabHost — never loaded into the app's own renderer. A tab has a
 product-owned opaque id, a mode-scoped session partition isolated from the app
 renderer and from every other mode, and a per-tab generation that advances on
 navigation. People browse in them; Sessions reach them only through the Browser
-port's six `browser_*` tools, which speak the accessibility-snapshot/ref
+port's eight `browser_*` tools, which speak the accessibility-snapshot/ref
 dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
 remote debugging port ever opens. Everything a page contributes — title,
 snapshot, console, pixels — is untrusted third-party content in the same
@@ -225,8 +237,11 @@ The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
 person's tab. Ownership is who may drive a tab through the Browser port: a
 Session sees the person's tabs and its own, so two Sessions on one Ticket
 never see each other's. It is separate from the storage partition, which stays
-per Ticket. Six tabs per owner; the person's own cap is counted apart, so a
-fleet of agents can never stop a person opening one.
+per Ticket. Six headless tabs per owner; the person's own cap is counted
+apart, so a fleet of agents can never stop a person opening one. Distinct from
+a **tab hold**: ownership says whose tab it is and outlives every turn, while
+a hold says whose turn it is to write to it right now. A Session owns its
+headless tabs and holds one only while it drives it.
 _Avoid_: creator, session tab (ambiguous with the Session's own tabs)
 
 **Presentation**:
@@ -239,6 +254,45 @@ the cookies, or anything the agent sees. A tab the person has shown is
 theirs and survives its Session.
 _Avoid_: visibility (that is whether the native plane is attached right now),
 shown/hidden as states (they are the actions)
+**Tab hold**:
+One party's turn to drive a Browser Tab (VC-239): one Session, or the person,
+never both. Reads never need it; a write (`browser_act`, `browser_navigate`)
+takes a free tab's hold, keeps its own, and is refused on anybody else's with
+the holder named. A tab a Session opens is its own from birth;
+`browser_acquire` and `browser_release` take and give one back explicitly. A
+hold ends when the Session releases it, its turn ends, its attachment ends,
+the tab closes, or the person takes over — and by nothing else, so there is
+no stale hold to time out. The person is never locked out: their own input
+into the page is always delivered, and the address bar, back, forward and
+reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
+are the person's explicit controls on the chrome pill and the cursor label;
+the affected Session is told in one in-band line. `heldBy` rides the tab's
+state so every surface — the pill, the tab strip's holder dot, the cursor —
+agrees on who has it.
+_Avoid_: lock, lease (that is the wake hold against throttling), tab owner
+(a separate fact — see **Tab owner**; a headless tab can be held, and a held
+tab is not thereby owned)
+
+**Session cursor**:
+The arrow drawn over a Browser Tab while a Session holds it (VC-239), in that
+Session's identity colour with its name on a small label. Drawn by one
+app-owned transparent `WebContentsView` main places above the page — never
+inside the page, which could read, hide or fake it, and never in the app's
+React tree, which the page composites over. It glides to each target before
+the input goes there and the click is dispatched only once it has landed, so
+it never claims a spot a click did not go to. Only the on-screen tab draws
+one; a hidden tab keeps its cursor's last position and pays no delay. It
+yields with the plane and never appears in a screenshot or a frozen frame.
+_Avoid_: pointer overlay, ghost cursor, agent mouse
+
+**Session colour**:
+An identity colour, never a state colour (VC-239): which Session, not how it
+is doing. Eight hues fanned around the accent at one lightness in
+`@volli/shared`'s `session-color.ts`, keyed by a stable hash of the Session
+id and resolved by main across the Sessions holding tabs so concurrent ones
+differ. Worn by the cursor, the chrome pill and the strip's holder dot, and
+by nothing that means a state — `ui/status-dot.tsx` owns those.
+_Avoid_: status colour, agent colour (for a state), theme accent
 
 **Agent CLI**:
 The bash-composable `volli` verb surface a Session's shell (or a person's
@@ -553,7 +607,7 @@ The ticket-scoped body of source changes relative to its base branch, including 
 _Avoid_: artifact, diff (when referring to the whole body of work)
 
 **Main checkout**:
-The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
+The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Board Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
 Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
@@ -642,7 +696,7 @@ _resolved_ model and reasoning produced a given Session. A Run owns exactly one
 Session and always starts a fresh one: it never wakes an existing Session, whose
 Authority Snapshot was granted while a person was present and whose context is
 stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. A Project Session can start one too, through the `automation.run` tool its
+time. A Board Session can start one too, through the `automation.run` tool its
 Role bundle holds; the Run it starts carries the automation Actor and is
 indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
 and only a human restarts it. A Session a user opens from the composer belongs

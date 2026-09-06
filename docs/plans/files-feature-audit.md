@@ -25,7 +25,7 @@ Five distinct entry points lead to a file view:
 | **Files nav item** (`sidebar/nav-list.tsx`) | Main checkout only | `FilesPage` workbench: tab strip + one `FileView` (`pages/files-page.tsx`, 349 lines) |
 | **Sidebar file tree** (`sidebar/file-tree.tsx`, 433 lines) | Main checkout only; visible only while Files nav is active (`primary-sidebar.tsx:83`) | Previews/pins tabs in the Files workbench |
 | **Ticket workspace** (`ticket/ticket-detail.tsx`) | Worktree-aware | File tabs (`FileView` with `ticketId`), diff tabs (`DiffView`), rail Files/Diffs navigators |
-| **Chat file mentions + activity rows** (`ui/ai-elements/chat-markdown.tsx`, `chat/activity-ui.tsx`) | Ticket chats → ticket tabs; project chats → **Files page** | `onOpenFile(path)` with the raw tool path |
+| **Chat file mentions + activity rows** (`ui/ai-elements/chat-markdown.tsx`, `chat/activity-ui.tsx`) | Ticket chats → ticket tabs; Board chats → **Files page** | `onOpenFile(path)` with the raw tool path |
 | **`@file` picker / artifacts** (composer, Document Mode) | Index over main checkout + `.volli/artifacts` | Autosaving Document Mode editor |
 
 Supporting layers, bottom to top:
@@ -63,13 +63,13 @@ Two facts that frame everything else:
    ticket scope**: a right-rail Files navigator (`ticket-files-panel.tsx`), a
    Diffs navigator, and preview/pin file tabs in the session view
    (`openTicketFile`/`previewTicketFile`/`pinTicketFile`). The proposal's gap
-   is Home/project-session scope only.
+   exists only in Home's Board Session scope.
 
 ## 2. The reported bugs, verified
 
 ### 2.1 "Files outside the main repo folder fire an ENOENT error" — CONFIRMED, two mechanisms (FIXED on this branch — see §5.1)
 
-A **project-session** chat routes every file click to the Files page:
+A **Board chat** routes every file click to the Files page:
 `sessions-layer.tsx:222` (`openProjectFile`) calls
 `previewProjectFile(...)` + `setNav(..., "files")`, and `:356` hands it to every
 transcript row. The path handed over is the **raw tool-input path** — activity
@@ -77,7 +77,7 @@ descriptors carry it unrelativized (`agent-runtime/src/pi/activity.ts:180`,
 `subjectFor`), and neither `chat-markdown.tsx` nor `activity-ui.tsx` maps it
 before calling `onOpenFile`.
 
-An orchestrating project session spends much of its life operating on ticket
+An orchestrating Board Session spends much of its life operating on ticket
 worktrees under `~/.volli/worktrees/…`. So:
 
 - A **relative path that exists only in a worktree** resolves against the main
@@ -176,7 +176,7 @@ while for TS some visible errors are false positives.
 ## 4. The proposal, assessed
 
 > Remove Files as a first-class nav item; move the file picker to the right
-> sidebar tab inside global/project sessions; open tabs in the session view;
+> sidebar tab inside Board Sessions; open tabs in the session view;
 > offer a visible "open in a first-class editor" menu.
 
 **The shape is right, and cheaper than it looks.** Point by point:
@@ -196,7 +196,7 @@ while for TS some visible errors are false positives.
 3. **Open tabs in the session view** — ticket scope: already true. Home scope:
    Home tabs are board + sessions today (`home-tabs.ts`); file tabs become a
    third kind, reusing the shared `FileWorkspaceState` reducer and `FileView`.
-   This also **fixes bug §2.1 properly**: a project chat's file click lands in
+   This also **fixes bug §2.1 properly**: a Board chat's file click lands in
    a Home file tab instead of bouncing the whole app to the Files nav.
 4. **"Open in <editor>" menu** — new main IPC: detect installed editors
    (bundle-id probes: VS Code, Cursor, Zed, Xcode, plus Terminal apps),
@@ -220,8 +220,8 @@ while for TS some visible errors are false positives.
 
 - Fix path routing (§2.1) *independently and first* — it bites today, in every
   scope, and none of the structural moves depend on it.
-- Do not remove the nav item before Home file tabs exist, or project-session
-  file clicks have nowhere to land.
+- Do not remove the nav item before Home file tabs exist, or Board chat file
+  clicks have nowhere to land.
 - Worktree-aware "Open in" must ship with (or before) the nav removal, so the
   fallback exists the day the first-class surface disappears.
 
@@ -245,7 +245,7 @@ Ordered; each slice is independently shippable.
    resolved appearance; delete the catalog/picker; align Monaco chrome colors
    with app tokens where cheap (background, gutter, selection).
 3. **Home-scope file access** (high). Files page in the Home rail; file tabs
-   beside session tabs in the Home strip; project-chat file clicks land there.
+   beside session tabs in the Home strip; Board chat file clicks land there.
 4. **Remove Files from primary nav** (high; depends on 3). Retire
    `files-page.tsx` + `file-tab-strip.tsx` or rehome them; tolerant-read the
    persisted `"files"` nav key; keep the file tree component only if the Home

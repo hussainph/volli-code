@@ -31,7 +31,15 @@ import { rejectedReceipt } from "./wire";
 
 /* ------------------------------------------------------------------ scripts */
 
-const SESSION = { id: "durable", projectId: "p1", ticketId: null, title: null, createdAt: 0 };
+const SESSION = {
+  id: "durable",
+  projectId: "p1",
+  ticketId: null,
+  role: "project" as const,
+  parentSessionId: null,
+  title: null,
+  createdAt: 0,
+};
 const ACCEPTED_RECEIPT: CommandReceipt = {
   id: "receipt-accepted",
   commandId: "command-accepted",
@@ -58,7 +66,7 @@ const REFUSED = {
 
 /**
  * The durable policy every structured Session records before anything attaches
- * — a project chat's from the app default, a Ticket Session's the same. A
+ * — a Board chat's from the app default, a Ticket Session's the same. A
  * projection without one is a Session whose model has not been written down,
  * which is what the deliverability tests below vary.
  */
@@ -544,7 +552,7 @@ describe("session derivations", () => {
     expect(isWorking(sliceOf({ transcript: turning }))).toBe(false);
   });
 
-  it("asks the same durable model policy of a project chat and a Ticket Session", () => {
+  it("asks the same durable model policy of a Board chat and a Ticket Session", () => {
     // The carve-out that used to live here read birth as a licence to deliver
     // without one. Both Roles record the app default before anything attaches
     // now, so an absent selection means the same thing on either.

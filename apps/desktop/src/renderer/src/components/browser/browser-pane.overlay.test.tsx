@@ -27,6 +27,7 @@ const tab: BrowserTabState = {
   canGoBack: false,
   canGoForward: false,
   generation: 0,
+  heldBy: null,
 };
 
 let container: HTMLDivElement | null = null;

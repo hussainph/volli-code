@@ -10,6 +10,8 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
       id: "session-1",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Implementer",
       createdAt: 0,
     },

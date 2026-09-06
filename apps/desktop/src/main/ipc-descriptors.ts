@@ -290,6 +290,18 @@ export const BROWSER_IPC: {
       args.length === 1 && isRecord(args[0]) && typeof args[0]["pictureId"] === "string",
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-take-over": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-hand-back": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-ask-to-leave": {
+    guard: isBrowserTabIdArgs,
+    invalidError: "Invalid Browser Tab request",
+  },
 };
 
 /** Every Browser Tab command, derived so handler registration cannot omit one. */
@@ -687,7 +699,7 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input) || typeof input["projectId"] !== "string") return false;
-      // `ticketId: null` is the Project-Session arm and must pass; `undefined`
+      // `ticketId: null` is the Board Session arm and must pass; `undefined`
       // must not — a caller that forgot the key is asking a different question
       // from one that said "no ticket".
       return input["ticketId"] === null || typeof input["ticketId"] === "string";

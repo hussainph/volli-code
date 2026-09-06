@@ -107,6 +107,14 @@ export type ActivitySubject = {
   path: string | null;
   /** 1-based inclusive line span when the harness reported a partial read. */
   lineRange: { start: number; end: number } | null;
+  /**
+   * The helper a `delegate` row started, by the name it was given (VC-9).
+   * Structured rather than riding `nativeToolName` or free-text `summary`,
+   * which the transcript design flagged as the gap.
+   */
+  agentName?: string | null;
+  /** Set only when the subject is a Session, so the UI can open it — the `path` of a `delegate` row. */
+  sessionId?: string | null;
 };
 
 /** Measured results. Rendered in the row's right-aligned meta slot. */
@@ -122,6 +130,8 @@ export type ActivityOutcome = {
   diff: string | null;
   /** Short and human-readable. The raw output stays on the tool part. */
   summary: string | null;
+  /** How many child Sessions a `delegate` row opened (VC-9). */
+  childCount?: number | null;
 };
 
 export type ActivityDescriptor = {
@@ -140,6 +150,8 @@ export const EMPTY_ACTIVITY_SUBJECT: ActivitySubject = {
   label: null,
   path: null,
   lineRange: null,
+  agentName: null,
+  sessionId: null,
 };
 
 export function isActivityKind(value: unknown): value is ActivityKind {
@@ -215,6 +227,8 @@ function readSubject(value: unknown): ActivitySubject {
     label: optionalString(value.label),
     path: optionalString(value.path),
     lineRange: readLineRange(value.lineRange),
+    agentName: optionalString(value.agentName),
+    sessionId: optionalString(value.sessionId),
   };
 }
 
@@ -263,6 +277,7 @@ function readOutcome(value: unknown): ActivityOutcome | null {
     removedLines: optionalNumber(value.removedLines),
     diff: optionalString(value.diff),
     summary: optionalString(value.summary),
+    childCount: optionalNumber(value.childCount),
   };
 }
 

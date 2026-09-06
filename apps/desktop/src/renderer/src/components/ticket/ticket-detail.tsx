@@ -883,6 +883,7 @@ export function TicketDetail({
       browserTabId: tab.tabId,
       loading: tab.loading,
       driven: tab.ownerSessionId !== null,
+      heldBy: tab.heldBy,
     })),
   ];
   // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one
@@ -1371,6 +1372,9 @@ export function TicketDetail({
               projectId={ticket.projectId}
               ticketId={ticket.id}
               onOpenFile={openFile}
+              // A delegate row's child inherits this Ticket, so it opens as
+              // one of this Ticket's own chats (VC-9).
+              onOpenSession={activateChat}
             />
           ) : null}
           {paneBrowserTab !== undefined ? (

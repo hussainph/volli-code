@@ -50,7 +50,7 @@ export function PrimarySidebar() {
   const settingsOpen = useUiStore((state) => state.settingsOpen);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
   // The Session bands ride with Home, which is the one page their rows navigate
-  // into — both a ticket workspace and a Project Session are reached from there.
+  // into — both a ticket workspace and a Board Session are reached from there.
   const sessionsVisible = !settingsOpen && activeNav === "home";
 
   return (

@@ -82,6 +82,11 @@ function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAt
   };
 }
 
+/** A port method a test never means to reach. */
+const unusedPortMethod = async (): Promise<never> => {
+  throw new Error("unused");
+};
+
 function userMessage(text: string, id = "message-1"): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] };
 }
@@ -707,6 +712,7 @@ describe("Pi native adapter attach", () => {
     const scopes: unknown[] = [];
     const listed: unknown[] = [];
     const dispose = vi.fn();
+    const sixToolTurnEnded = vi.fn();
     const { binding, runtime } = await attached({
       resolveRuntimeContext: async () => ({
         ...context,
@@ -745,22 +751,87 @@ describe("Pi native adapter attach", () => {
           console: async () => {
             throw new Error("unused");
           },
+          turnEnded: sixToolTurnEnded,
           dispose,
         };
       },
     });
 
     // The scope is the adapter's word, from the Session's own context — never
-    // a value the model or the port could invent. The Session id rides with it
-    // (VC-238): it is the owner every tab this port opens is stamped with.
+    // a value the model or the port could invent. The Session and attachment
+    // ride with it: a hold is taken in that name and judged against it
+    // (VC-239), and the same Session id is the owner every tab the port opens
+    // is stamped with (VC-238).
     expect(scopes).toEqual([
-      { projectId: "project-1", ticketId: "ticket-1", sessionId: SESSION_ID },
+      {
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        sessionId: SESSION_ID,
+        attachmentId: ATTACHMENT_ID,
+      },
     ]);
     await runtime.spec.browser?.tabs({ signal: new AbortController().signal });
     expect(listed).toEqual([false]);
+    // A surface frozen with six binds six: the port reaches the runtime
+    // without its hold pair, so the tool array is the one the record promised.
+    expect(runtime.spec.browser?.acquire).toBeUndefined();
+    expect(runtime.spec.browser?.release).toBeUndefined();
+    // Six tools or eight, a turn's end reaches the SAME port: the copy handed
+    // to the runtime is not the one the adapter tells, so the implicit hold
+    // its writes took still ends with the turn.
+    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+    expect(sixToolTurnEnded).toHaveBeenCalledOnce();
 
     await binding.release("requested");
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("hands a surface frozen with the hold pair the whole port, and ends its holds when the turn does (VC-239)", async () => {
+    const turnEnded = vi.fn();
+    const { runtime, sink } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "browser_tabs",
+          "browser_navigate",
+          "browser_snapshot",
+          "browser_act",
+          "browser_screenshot",
+          "browser_console",
+          "browser_acquire",
+          "browser_release",
+        ],
+      }),
+      resolveBrowserPort: () => ({
+        tabs: async () => ({ tabs: [] }),
+        navigate: unusedPortMethod,
+        snapshot: unusedPortMethod,
+        act: unusedPortMethod,
+        screenshot: unusedPortMethod,
+        console: unusedPortMethod,
+        acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
+        release: async (input) => ({ tabId: input.tabId }),
+        turnEnded,
+      }),
+    });
+
+    expect(runtime.spec.browser?.acquire).toBeDefined();
+    expect(runtime.spec.browser?.release).toBeDefined();
+
+    // A turn starting ends nothing; a turn completing or interrupted ends
+    // every hold — told BEFORE the fact reaches the sink, so no hold outlives
+    // its turn by even one write.
+    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
+    expect(turnEnded).not.toHaveBeenCalled();
+    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+    expect(turnEnded).toHaveBeenCalledTimes(1);
+    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
+    expect(turnEnded).toHaveBeenCalledTimes(2);
+    expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
   });
 
   it("refuses attachment rather than binding a frozen browser surface the host cannot answer", async () => {
@@ -1003,7 +1074,7 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([undefined]);
   });
 
-  it("starts a ticketless project Session in the project root under the project Role", async () => {
+  it("starts a ticketless Board Session in the project root under the `project` Role", async () => {
     const { runtime } = await attached(
       {
         resolveRuntimeContext: async () => ({
@@ -1014,7 +1085,7 @@ describe("Pi native adapter attach", () => {
           projectId: "project-1",
           ticketId: null,
           rootThreadId: sessionRootThreadId(SESSION_ID),
-          brief: "A project-scoped chat Session.",
+          brief: "A Board Session.",
           model: context.model,
           toolSurface: context.toolSurface,
           promptResources: [],
@@ -1033,7 +1104,7 @@ describe("Pi native adapter attach", () => {
       ticketId: null,
     });
     expect(spec.workspacePath).toBe("/work/volli");
-    expect(spec.brief).toEqual({ text: "A project-scoped chat Session." });
+    expect(spec.brief).toEqual({ text: "A Board Session." });
     expect(spec.model).toEqual(context.model);
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
   });

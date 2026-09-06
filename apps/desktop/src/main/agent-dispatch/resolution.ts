@@ -193,7 +193,7 @@ export function projectForCreate(
 /**
  * The display id of the ticket an actor's session is itself working, for the
  * "via VC-9's session" attribution. `null` when the actor has no
- * session ticket (a Project Session) or it no longer resolves.
+ * session ticket (a Board Session) or it no longer resolves.
  */
 export function actorSessionTicketDisplay(
   db: Database.Database,

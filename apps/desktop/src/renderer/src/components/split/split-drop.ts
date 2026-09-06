@@ -13,7 +13,7 @@
  *  2. **Whether a payload may land here at all.** The sidebars drag NATIVELY
  *     (HTML5 `dataTransfer`), and their rows outlive the surface they were
  *     dragged from: a ticket-A Session must not land on ticket B or on Home,
- *     and a project Session must not land in a ticket workspace. Tabs never
+ *     and a Board Session must not land in a ticket workspace. Tabs never
  *     move between surfaces (§ "Deliberate constraints").
  *  3. **Which store write a drop is.** Reorder inside one pane, move to another
  *     pane, or split a pane open — one function, so the two surfaces cannot

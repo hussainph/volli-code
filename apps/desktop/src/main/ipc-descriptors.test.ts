@@ -41,6 +41,9 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-toggle-devtools",
       "volli:browser-set-presentation",
       "volli:browser-picture",
+      "volli:browser-take-over",
+      "volli:browser-hand-back",
+      "volli:browser-ask-to-leave",
     ]);
   });
 

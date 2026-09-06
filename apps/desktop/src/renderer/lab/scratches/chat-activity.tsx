@@ -723,6 +723,55 @@ const TALL_ASK = ask("ask-tall", "How should the cutover run?", [
 ]);
 
 /**
+ * The question a model sends when it stops to check direction mid-turn and
+ * has more than a decision to report: several paragraphs of measured
+ * findings, with the line breaks between them the only structure it sent.
+ * Sized to the shape VC-265's screenshot reported — tall enough that a
+ * collapsed, unbroken rendering pushes a card past the top of the transcript.
+ */
+const LONG_QUESTION = [
+  "Direction check before I write the tests.",
+  "Measured on this machine: the runner needs a real window, and CI has none, so I plan to gate the suite behind a flag and leave the driver to opt in. The gate would live in the runner rather than in each test, which keeps the suite honest where the flag is off.",
+  "The part I have not decided is what the flag defaults to.",
+  "Defaulting it on makes the driver's first run slower and the flakes visible from day one; defaulting it off means the suite CI runs is not the suite a release runs.",
+  "There is a third option — a per-file opt-in comment — but it scatters the policy across the suite, and every new test has to remember it.",
+  "Whichever way this goes I will write the runner-side gate first and the tests behind it second, so the flag is real before anything depends on it.",
+  "Which default do you want, and where should the gate sit?",
+].join("\n\n");
+
+/**
+ * The ask composed in paragraphs (VC-265).
+ *
+ * A model that ignored `ask_user`'s one-or-two-sentence guidance twice over:
+ * the question is several paragraphs long, and the line breaks between them
+ * are the only structure it sent. This is the fixture for how that reads —
+ * breaks kept rather than folded into one run, and capped at the pane's share
+ * of the viewport with the rest one scroll away, so the card stops at a height
+ * the transcript can still see past.
+ */
+const LONG_ASK = ask("ask-long", LONG_QUESTION, [
+  {
+    id: "prompt:0",
+    label: LONG_QUESTION,
+    detail: null,
+    options: [
+      {
+        id: "question:0:cmV2ZXJ0",
+        label: "Same release",
+        description: "the rollback is a revert",
+      },
+      {
+        id: "question:0:d2FpdA",
+        label: "One release later",
+        description: "the rollback is a restore, and the flag ships first",
+      },
+    ],
+    multiple: false,
+    custom: true,
+  },
+]);
+
+/**
  * The walk, and two switches inside it. Question two's descriptions are long
  * enough that trailing them after the title would wrap, so its rows stack — and
  * it declares `custom`, so the box is there beside them where question one, which
@@ -791,6 +840,7 @@ const ASKS = [
   { name: "multi", interaction: MULTI_SELECT_ASK },
   { name: "stepped", interaction: STEPPED_ASK },
   { name: "tall", interaction: TALL_ASK },
+  { name: "long", interaction: LONG_ASK },
 ] as const;
 
 // Signed-in models only, because that is the whole of what the pill is ever

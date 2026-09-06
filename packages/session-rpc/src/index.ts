@@ -18,6 +18,7 @@ import {
 import {
   MODEL_PURPOSES,
   REASONING_LEVELS,
+  SESSION_ROLES,
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
@@ -81,7 +82,7 @@ function isRendererStreamTransient(
 export interface SessionCreateInput {
   operationId: string;
   projectId: string;
-  /** The Role: a Ticket Session when set, a project Session when null. */
+  /** The Role: a Ticket Session when set, a Board Session when null. */
   ticketId: string | null;
   title: string | null;
   /**
@@ -474,6 +475,13 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
     ticketId: nullableString,
+    // Stated, never derived from `ticketId` (VC-9). This raw command is the
+    // lab transport's door only; the product `sessions.create` route below
+    // states the two Roles a person can choose through `roleImpliedByTicket`.
+    role: z.enum(SESSION_ROLES),
+    // The lab transport can only ever mint a root Session: the field is
+    // stated, never derived, and pinned null at this door.
+    parentSessionId: z.null(),
     title: nullableString,
   }),
   z.object({
@@ -657,12 +665,12 @@ export function createSessionRouter() {
         .input(
           z
             .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the project default"; clearing
+            // Clearing ticket/utility means "use the Board default"; clearing
             // global would leave every purpose resolving to nothing, which is a
             // state the UI never offers and this edge refuses to mint.
             .refine(
               (input) => input.purpose !== "global" || input.selection !== null,
-              "The project default cannot be cleared — choose a model instead",
+              "The Board default cannot be cleared — choose a model instead",
             ),
         )
         .mutation(async ({ ctx, input }) => {

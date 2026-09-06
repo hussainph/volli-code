@@ -3,7 +3,7 @@
  *
  * The Home empty chat opens on a field of many — every Session ever run in
  * Volli, project and ticket, across every project — because "many" is what a
- * Project Session's scope IS, and it is read before anything is read. A ticket
+ * Board Session's scope IS, and it is read before anything is read. A ticket
  * chat cannot draw this, and that asymmetry is the identity signal.
  *
  * THE WINDOW IS FIXED at {@link STREAK_WEEKS} weeks so the grid cannot grow

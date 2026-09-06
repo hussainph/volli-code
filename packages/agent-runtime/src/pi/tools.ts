@@ -50,12 +50,13 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import { sessionToolBindings, verbEntry } from "@volli/shared";
-import { createBrowserTool } from "./browser-tools";
+import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
 import type {
   CodingToolId,
   NonCodingToolId,
+  RuntimeVerbResult,
   RuntimeWebDocument,
   RuntimeWebSearchResults,
   SessionInteractionResolution,
@@ -211,8 +212,14 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
       case "browser_console":
         // Six names, one port, one factory: the binding arms all carry the
         // whole RuntimeBrowserPort, and the factory picks the method the name
-        // stands for. See ./browser-tools.ts for why the grain is six.
+        // stands for. See ./browser-tools.ts for why the grain is per intent.
         return createBrowserTool(binding.tool, binding.port, spec.signal);
+      case "browser_acquire":
+      case "browser_release":
+        // The hold pair (VC-239) binds to the port with `acquire`/`release`
+        // proven present — `sessionToolBindings` offered these names only
+        // because the port carries both.
+        return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
       default:
         // The verb half, and the one branch that cannot be a case label: its
         // members are registry data, so there is no closed set of literals to
@@ -282,7 +289,7 @@ function verbObjectSchema(
 export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
-): AgentTool<TSchema, undefined> {
+): AgentTool<TSchema, RuntimeVerbResult["details"]> {
   const entry = verbEntry(binding.verb);
   if (entry?.tool === undefined) {
     // Unreachable from a resolved surface — `resolveAgentToolSurface` admits
@@ -296,7 +303,11 @@ export function createVerbTool(
     label: entry.tool.name,
     description: entry.tool.description,
     parameters,
-    async execute(toolCallId, params, callSignal): Promise<AgentToolResult<undefined>> {
+    async execute(
+      toolCallId,
+      params,
+      callSignal,
+    ): Promise<AgentToolResult<RuntimeVerbResult["details"]>> {
       const withdrawn = new AbortController();
       const abandon = (): void => withdrawn.abort();
       const signals = [signal, callSignal].filter((one) => one !== undefined);
@@ -316,7 +327,9 @@ export function createVerbTool(
           },
           withdrawn.signal,
         );
-        return { content: [{ type: "text", text: result.text }], details: undefined };
+        // `details` is the host's structured aside for the transcript row; the
+        // model reads `content` and nothing else.
+        return { content: [{ type: "text", text: result.text }], details: result.details };
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }

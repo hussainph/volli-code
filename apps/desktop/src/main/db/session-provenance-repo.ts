@@ -9,14 +9,14 @@
  * after Session mint but before its Run row lands.
  *
  * `session_delegations` is not that source. It records ancestry only for a
- * Ticket Session's claimed `session.start`; a Project Session can start Ticket
+ * Ticket Session's claimed `session.start`; a Board Session can start Ticket
  * work without a delegation, while the Ticket event is written by every Ticket
  * door. The event lookup stays scoped by Ticket so
  * `ticket_events_ticket (ticket_id, created_at)` makes it an index seek before
  * the payload comparison.
  *
  * ── PROJECT RUNS' PRE-INSERT WINDOW ───────────────────────────────────────
- * A scheduled Run creates a Project Session, which deliberately has no Ticket
+ * A scheduled Run creates a Board Session, which deliberately has no Ticket
  * event. The Session must still exist before `automation_runs` can reference it,
  * so a process death between those two transactions used to leave no launch
  * evidence and falsely credit a person.
@@ -78,7 +78,7 @@ export function readSessionProvenance(
       WHERE command.session_id = ?
       LIMIT 1`,
   ).get(query.sessionId);
-  // The pre-Run window for a Project Session: its accepted Run marked the
+  // The pre-Run window for a Board Session: its accepted Run marked the
   // stable create command before mint, but the projection that names the
   // Automation has not landed (and after a crash may never land).
   if (pendingRun !== undefined) return { kind: "automation", automationName: null };

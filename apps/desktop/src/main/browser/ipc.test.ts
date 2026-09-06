@@ -41,6 +41,7 @@ const tab: BrowserTabState = {
   canGoBack: false,
   canGoForward: false,
   generation: 2,
+  heldBy: null,
 };
 
 let host: {

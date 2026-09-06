@@ -15,6 +15,7 @@ import {
   errorMessage,
   expandCommandInvocation,
   isAutomationRuntimePin,
+  roleImpliedByTicket,
   sameAutomationRunRequestIdentity,
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
@@ -202,7 +203,7 @@ export interface AutomationProjectRunRequest {
    * derived from the Trigger of the Automation being run: the schedule timer
    * (`main/index.ts`) arrives here `unattended`, and "Run now" on a Skipped
    * occurrence arrives here `attended` — same Automation, same schedule, same
-   * Project Session, and a person standing at one of them.
+   * Board Session, and a person standing at one of them.
    */
   attendance: AutomationRunAttendance;
 }
@@ -226,7 +227,7 @@ export interface AutomationRunner {
   /**
    * Runs an Automation against a PROJECT rather than a Ticket (VC-130): the
    * schedule's own door, and the one behind "Run now" on a Skipped occurrence.
-   * It opens a Project Session, because `ticketId === null` is that Role.
+   * It opens a Board Session, because `ticketId === null` is that Role.
    */
   runForProject(input: AutomationProjectRunRequest): Promise<RunAutomationOutcome>;
   /** Resume a persistent first-message intent after any successful Session attach. */
@@ -508,6 +509,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         operationId: plan.sessionOperationId,
         projectId: plan.projectId,
         ticketId: plan.ticketId,
+        // A Run opens a Ticket Session or a project one, and its Ticket says
+        // which — the same two Roles a person's door can choose between.
+        role: roleImpliedByTicket(plan.ticketId),
         // An Unbound Run has no record to take a name from, so its Session
         // wears the one name that IS true of it — the same words its Run row
         // prints, rather than a second spelling of "nothing named this".

@@ -2,6 +2,10 @@
  * Which tickets on a board have an agent running on them, and when that answer
  * next changes on its own.
  *
+ * "Board" here is the surface, not the Role: this is Ticket Session activity as
+ * the Board draws it, and has nothing to do with the Board Session Role
+ * (CONTEXT.md "Session Role") — a Board Session has no card and never lights one.
+ *
  * The board's answer to the question the sidebar's Active band answers one row
  * at a time: a card should be able to say "something is happening here" without
  * the user going to the navigator and reading it Session by Session. So this is
@@ -124,7 +128,7 @@ export function buildBoardSessionActivity(
   }
 
   for (const record of input.chatSessions) {
-    // A ticketless chat is a project Project Session; it has no card to light.
+    // A ticketless chat is a Board Session; it has no card to light.
     if (record.ticketId === null) continue;
     mark(record.ticketId, record.activity);
   }

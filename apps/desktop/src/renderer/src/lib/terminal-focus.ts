@@ -9,7 +9,7 @@
  * BOTH surfaces that host a terminal may enter it: a ticket's tab strip and
  * Home's own Session tabs. It used to be ticket-only, and nothing about the
  * feature justified that — the gate simply demanded an `openTicketId` because
- * the target type demanded a `ticketId`. A Project Session is a Session; the
+ * the target type demanded a `ticketId`. A Board Session is a Session; the
  * PTY it holds fills a canvas exactly as well.
  *
  * Two callers answer the same question — the control drawn ON the pane

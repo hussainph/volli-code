@@ -79,7 +79,7 @@ export interface AutoTitlerOptions {
   readModelDefaults(): ModelAccessDefaults;
   /**
    * The Ticket a Ticket Session is work on, for the prompt's background. Never
-   * called for a project chat. `null` when the Ticket has gone.
+   * called for a Board chat. `null` when the Ticket has gone.
    */
   readTicket(ticketId: string): AutoTitleTicket | null;
   inspectModelAccess(input: { signal: AbortSignal }): Promise<ModelAccessSnapshot>;

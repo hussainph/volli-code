@@ -128,7 +128,14 @@ function composition(
 async function create(runtime: SessionRuntime) {
   return runtime.command({
     commandId: "create",
-    command: { kind: "session.create", projectId: "project", ticketId: "ticket", title: null },
+    command: {
+      kind: "session.create",
+      projectId: "project",
+      ticketId: "ticket",
+      role: "ticket",
+      parentSessionId: null,
+      title: null,
+    },
   });
 }
 

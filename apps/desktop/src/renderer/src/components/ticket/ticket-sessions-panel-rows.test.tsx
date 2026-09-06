@@ -48,6 +48,8 @@ const fixture = vi.hoisted(() => {
     waitingOn: "question",
     lastActivityAt: 2,
     bornTicketless: false,
+    role: "ticket",
+    parentSessionId: null,
   };
   // `live: false` is what puts a chat Session in History (session-history.ts).
   const ended: ChatSessionRecord = {

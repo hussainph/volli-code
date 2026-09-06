@@ -150,7 +150,7 @@ describe("the preload policy each entry declares", () => {
 describe("what the hot path actually resolves", () => {
   const SESSION_ID = "abcdef12-3456-7890-abcd-ef1234567890";
 
-  /** A project with one Project Session, and a service watching both engine doors. */
+  /** A project with one Board Session, and a service watching both engine doors. */
   function scenario() {
     ctx = openTestDb();
     insertProject(

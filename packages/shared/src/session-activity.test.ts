@@ -89,6 +89,8 @@ describe("readActivityDescriptor", () => {
         label: "src/index.ts",
         path: "/workspace/src/index.ts",
         lineRange: { start: 1, end: 48 },
+        agentName: null,
+        sessionId: null,
       },
       outcome: {
         exitCode: 0,
@@ -101,6 +103,7 @@ describe("readActivityDescriptor", () => {
         // Strings are trimmed on read, so a diff loses its trailing newline.
         diff: "--- a\n+++ b",
         summary: "Edited one file",
+        childCount: null,
       },
       startedAt: 10,
       endedAt: 42,
@@ -321,7 +324,13 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
     ).toEqual({
       kind: "browse",
       nativeToolName: "browser_act",
-      subject: { label: "example.com/sign-in", path: null, lineRange: null },
+      subject: {
+        label: "example.com/sign-in",
+        path: null,
+        lineRange: null,
+        agentName: null,
+        sessionId: null,
+      },
       outcome: null,
       startedAt: null,
       endedAt: null,

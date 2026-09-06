@@ -23,6 +23,8 @@ function projectionWith(
       id: "session",
       projectId: "project",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Plan the migration",
       createdAt: 1,
     },
@@ -107,6 +109,8 @@ describe("chatSessionRecord", () => {
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
     });
   });
 
@@ -123,6 +127,8 @@ describe("chatSessionRecord", () => {
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
     });
   });
 
