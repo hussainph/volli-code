@@ -221,6 +221,39 @@ are different capabilities with different policies.
 _Avoid_: webview, BrowserView, preview pane (for the tab itself), browser
 session (when meaning a tab)
 
+**Headless tab**:
+A Browser Tab a Session opened and nobody has asked to see (VC-238). It has
+its real viewport, wake hold, console and screenshots, but is in no strip, in
+no tab order, and attached to no window. Every Session-created tab is born
+this way; a person's own tabs never are. A headless tab is visible only in the
+chat that owns it — as the **tab card** under the browser row that touched it,
+and in the chat's `N tabs` inventory chip — and it closes with its owner
+Session's attachment or when its Ticket is archived. The model can never
+reveal one; the person can.
+_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it is)
+
+**Tab owner**:
+The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
+person's tab. Ownership is who may drive a tab through the Browser port: a
+Session sees the person's tabs and its own, so two Sessions on one Ticket
+never see each other's. It is separate from the storage partition, which stays
+per Ticket. Six headless tabs per owner; the person's own cap is counted
+apart, so a fleet of agents can never stop a person opening one. Distinct from
+a **tab hold**: ownership says whose tab it is and outlives every turn, while
+a hold says whose turn it is to write to it right now. A Session owns its
+headless tabs and holds one only while it drives it.
+_Avoid_: creator, session tab (ambiguous with the Session's own tabs)
+
+**Presentation**:
+Where a Browser Tab is drawn, decided by the person and held by main:
+`headless` (nowhere), `preview` (pinned live above the owning chat's
+composer, one per Session), or `tab` (an item in the Home or Ticket strip,
+marked as driven). A person's tabs are always `tab`. Show, Hide and Open as
+tab change presentation and nothing else — not the owner, the generation,
+the cookies, or anything the agent sees. A tab the person has shown is
+theirs and survives its Session.
+_Avoid_: visibility (that is whether the native plane is attached right now),
+shown/hidden as states (they are the actions)
 **Tab hold**:
 One party's turn to drive a Browser Tab (VC-239): one Session, or the person,
 never both. Reads never need it; a write (`browser_act`, `browser_navigate`)
@@ -236,8 +269,9 @@ are the person's explicit controls on the chrome pill and the cursor label;
 the affected Session is told in one in-band line. `heldBy` rides the tab's
 state so every surface — the pill, the tab strip's holder dot, the cursor —
 agrees on who has it.
-_Avoid_: lock, lease (that is the wake hold against throttling), ownership
-(a tab is not owned; it is held for a turn)
+_Avoid_: lock, lease (that is the wake hold against throttling), tab owner
+(a separate fact — see **Tab owner**; a headless tab can be held, and a held
+tab is not thereby owned)
 
 **Session cursor**:
 The arrow drawn over a Browser Tab while a Session holds it (VC-239), in that

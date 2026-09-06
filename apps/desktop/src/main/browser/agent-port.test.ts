@@ -10,7 +10,7 @@ import {
   type AgentBrowserHost,
 } from "./agent-port";
 import type { CdpTransport, TabCursorDriver } from "./cdp-controller";
-import type { BrowserSessionHolder } from "./tab-host";
+import { BrowserSessionTabLimitError, type BrowserSessionHolder } from "./tab-host";
 
 /** The one-button page every scripted transport answers with. */
 const BUTTON_TREE = {
@@ -34,10 +34,15 @@ const BUTTON_TREE = {
 };
 
 function state(overrides: Partial<BrowserTabState> & { tabId: string }): BrowserTabState {
+  const createdBy = overrides.createdBy ?? "user";
   return {
     projectId: "p1",
     ticketId: null,
-    createdBy: "user",
+    createdBy,
+    // An agent tab defaults to THIS port's Session so existing fixtures that
+    // only said `createdBy: "session"` still describe the Session's own tab.
+    ownerSessionId: createdBy === "session" ? ME.sessionId : null,
+    presentation: createdBy === "session" ? "headless" : "tab",
     url: "https://example.com/",
     title: "Example",
     loading: false,
@@ -62,20 +67,38 @@ const sameHolder = (a: BrowserSessionHolder, b: BrowserSessionHolder): boolean =
  * the host is list/open/navigate/history, and this fake answers exactly that
  * — no Electron, no views. Opens are recorded so provenance can be asserted.
  */
-function fakeHost(initial: BrowserTabState[]): {
+type OpenedRecord = {
+  url: string;
+  projectId: string;
+  ticketId: string | null;
+  createdBy: string;
+  ownerSessionId?: string | null;
+};
+
+function fakeHost(
+  initial: BrowserTabState[],
+  options: {
+    sessionCap?: number;
+    declineCapture?: boolean;
+    console?: Record<string, { level: "warn" | "error"; text: string }[]>;
+  } = {},
+): {
   host: AgentBrowserHost;
   tabs: Map<string, BrowserTabState>;
-  opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[];
+  opened: OpenedRecord[];
   navigated: { tabId: string; url: string }[];
+  closedHeadlessFor: string[];
+  captures: string[];
   /** The hold table, with the real host's rules: holder or person or nobody. */
   holds: Map<string, { kind: "session"; holder: BrowserSessionHolder } | { kind: "person" }>;
   /** Every hold end, as `why:tabId`, in order. */
   ended: string[];
 } {
   const tabs = new Map(initial.map((one) => [one.tabId, one]));
-  const opened: { url: string; projectId: string; ticketId: string | null; createdBy: string }[] =
-    [];
+  const opened: OpenedRecord[] = [];
   const navigated: { tabId: string; url: string }[] = [];
+  const closedHeadlessFor: string[] = [];
+  const captures: string[] = [];
   const holds = new Map<
     string,
     { kind: "session"; holder: BrowserSessionHolder } | { kind: "person" }
@@ -111,6 +134,8 @@ function fakeHost(initial: BrowserTabState[]): {
     tabs,
     opened,
     navigated,
+    closedHeadlessFor,
+    captures,
     holds,
     ended,
     host: {
@@ -157,17 +182,37 @@ function fakeHost(initial: BrowserTabState[]): {
       },
       open: (input) => {
         opened.push(input);
+        if (options.sessionCap !== undefined && input.createdBy === "session") {
+          const owned = [...tabs.values()].filter(
+            (one) => one.ownerSessionId === input.ownerSessionId,
+          ).length;
+          if (owned >= options.sessionCap) throw new BrowserSessionTabLimitError();
+        }
         openCount += 1;
         const created = state({
           tabId: `opened-${openCount}`,
           projectId: input.projectId,
           ticketId: input.ticketId,
           createdBy: input.createdBy,
+          ownerSessionId: input.createdBy === "session" ? input.ownerSessionId : null,
           url: input.url,
           title: "",
         });
         tabs.set(created.tabId, created);
         return { ...created };
+      },
+      capturePicture: async (tabId) => {
+        captures.push(tabId);
+        return options.declineCapture === true ? null : `live:${tabId}:${captures.length}`;
+      },
+      keepScreenshot: (tabId, base64Png) => `kept:${tabId}:${base64Png}`,
+      closeHeadlessOwnedBy: (sessionId) => {
+        closedHeadlessFor.push(sessionId);
+        const closing = [...tabs.values()]
+          .filter((one) => one.ownerSessionId === sessionId && one.presentation === "headless")
+          .map((one) => one.tabId);
+        for (const tabId of closing) tabs.delete(tabId);
+        return closing;
       },
       navigate: (tabId, url) => {
         navigated.push({ tabId, url });
@@ -180,7 +225,10 @@ function fakeHost(initial: BrowserTabState[]): {
       back: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       forward: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
       reload: (tabId) => ({ ...(tabs.get(tabId) ?? state({ tabId })) }),
-      consoleOf: () => ({ messages: [], truncated: false }),
+      consoleOf: (tabId) => ({
+        messages: (options.console ?? {})[tabId] ?? [],
+        truncated: false,
+      }),
     },
   };
 }
@@ -200,10 +248,19 @@ function transportFor(): CdpTransport {
   };
 }
 
-function port(input: {
+interface PortInput {
   tabs?: BrowserTabState[];
   ticketId?: string | null;
-}): ReturnType<typeof portWithHost>["port"] {
+  /** The attachment the harness's default port speaks for; {@link ME} unless said. */
+  session?: BrowserSessionHolder;
+  sessionCap?: number;
+  declineCapture?: boolean;
+  console?: Record<string, { level: "warn" | "error"; text: string }[]>;
+  sharesTabsOf?: (ownerSessionId: string) => boolean;
+  cursorFor?: (tabId: string) => TabCursorDriver | undefined;
+}
+
+function port(input: PortInput): ReturnType<typeof portWithHost>["port"] {
   return portWithHost(input).port;
 }
 
@@ -213,6 +270,8 @@ interface PortHarness {
   hostTabs: Map<string, BrowserTabState>;
   holds: ReturnType<typeof fakeHost>["holds"];
   ended: string[];
+  closedHeadlessFor: string[];
+  captures: string[];
   /** Every hold, wait and release, in the order the port performed them. */
   wakeEvents: string[];
   /** A second port over the SAME host, speaking for another attachment. */
@@ -222,12 +281,15 @@ interface PortHarness {
   ): ReturnType<typeof createAgentBrowserPort>;
 }
 
-function portWithHost(input: {
-  tabs?: BrowserTabState[];
-  ticketId?: string | null;
-  cursorFor?: (tabId: string) => TabCursorDriver | undefined;
-}): PortHarness {
-  const { host, opened, tabs, holds, ended } = fakeHost(input.tabs ?? []);
+function portWithHost(input: PortInput): PortHarness {
+  const { host, opened, tabs, holds, ended, closedHeadlessFor, captures } = fakeHost(
+    input.tabs ?? [],
+    {
+      ...(input.sessionCap === undefined ? {} : { sessionCap: input.sessionCap }),
+      ...(input.declineCapture === undefined ? {} : { declineCapture: input.declineCapture }),
+      ...(input.console === undefined ? {} : { console: input.console }),
+    },
+  );
   const wakeEvents: string[] = [];
   const portFor = (
     session: BrowserSessionHolder,
@@ -237,6 +299,7 @@ function portWithHost(input: {
       host,
       scope: { projectId: "p1", ticketId: input.ticketId === undefined ? "t1" : input.ticketId },
       session,
+      ...(input.sharesTabsOf === undefined ? {} : { sharesTabsOf: input.sharesTabsOf }),
       transportFor,
       waitForLoad: async (tabId) => {
         wakeEvents.push(`wait ${tabId}`);
@@ -252,9 +315,11 @@ function portWithHost(input: {
     hostTabs: tabs,
     holds,
     ended,
+    closedHeadlessFor,
+    captures,
     wakeEvents,
     portFor,
-    port: portFor(ME),
+    port: portFor(input.session ?? ME),
   };
 }
 
@@ -283,12 +348,12 @@ async function clickSave(
 const signal = new AbortController().signal;
 
 describe("createAgentBrowserPort", () => {
-  it("lists the user's tabs and this Ticket's own agent tabs, and nothing from other Tickets", async () => {
+  it("lists the user's tabs and this Session's own agent tabs, and nothing another Session opened", async () => {
     const listing = await port({
       tabs: [
         state({ tabId: "user-1", createdBy: "user" }),
         state({ tabId: "mine", createdBy: "session", ticketId: "t1" }),
-        state({ tabId: "theirs", createdBy: "session", ticketId: "t2" }),
+        state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" }),
       ],
     }).tabs({ signal });
 
@@ -314,6 +379,7 @@ describe("createAgentBrowserPort", () => {
         projectId: "p1",
         ticketId: "t1",
         createdBy: "session",
+        ownerSessionId: ME.sessionId,
       },
     ]);
     expect(project.opened).toEqual([
@@ -322,6 +388,7 @@ describe("createAgentBrowserPort", () => {
         projectId: "p1",
         ticketId: null,
         createdBy: "session",
+        ownerSessionId: ME.sessionId,
       },
     ]);
     // The answer is already the page as structure — the settled act loop.
@@ -343,7 +410,9 @@ describe("createAgentBrowserPort", () => {
 
   it("refuses to touch a tab outside the Session's scope, as unknown rather than as forbidden", async () => {
     const scoped = port({
-      tabs: [state({ tabId: "theirs", createdBy: "session", ticketId: "t2" })],
+      tabs: [
+        state({ tabId: "theirs", createdBy: "session", ticketId: "t2", ownerSessionId: "s9" }),
+      ],
     });
 
     const attempt = scoped.snapshot({ tabId: "theirs", signal });
@@ -352,6 +421,243 @@ describe("createAgentBrowserPort", () => {
     await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
       "browser.unknown-tab",
     );
+  });
+
+  it("hides a sibling Session's tabs on the same Ticket: it can neither list nor drive them (VC-238)", async () => {
+    const sibling = state({
+      tabId: "sibling",
+      createdBy: "session",
+      ticketId: "t1",
+      ownerSessionId: "s2",
+    });
+    const mine = state({ tabId: "mine", createdBy: "session", ticketId: "t1" });
+    const scoped = port({ tabs: [sibling, mine, state({ tabId: "user-1" })] });
+
+    const listing = await scoped.tabs({ signal });
+    expect(listing.tabs.map((tab) => tab.tabId).toSorted()).toEqual(["mine", "user-1"]);
+    expect(listing.tabs.find((tab) => tab.tabId === "mine")?.ownerSessionId).toBe(ME.sessionId);
+    expect(listing.tabs.find((tab) => tab.tabId === "user-1")?.ownerSessionId).toBeNull();
+
+    const attempt = scoped.act({
+      tabId: "sibling",
+      generation: 1,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
+      "browser.unknown-tab",
+    );
+  });
+
+  it("leaves a seam for VC-9: a host-supplied predicate may widen visibility to another Session's tabs", async () => {
+    const child = state({ tabId: "child", createdBy: "session", ownerSessionId: "s-child" });
+    const stranger = state({ tabId: "stranger", createdBy: "session", ownerSessionId: "s9" });
+    const { host } = fakeHost([child, stranger]);
+    const shared = createAgentBrowserPort({
+      host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      sharesTabsOf: (owner) => owner === "s-child",
+      transportFor,
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+
+    const listing = await shared.tabs({ signal });
+
+    expect(listing.tabs.map((tab) => tab.tabId)).toEqual(["child"]);
+    // Visibility is actuation, not only reading: a shared tab can be driven,
+    // and a tab the predicate excludes still refuses as unknown.
+    const seen = await shared.snapshot({ tabId: "child", signal });
+    const acted = await shared.act({
+      tabId: "child",
+      generation: seen.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(acted.target).toEqual({ ref: "e1", name: "Save" });
+    await expect(
+      shared.snapshot({ tabId: "stranger", signal }).catch((error: BrowserRefusal) => error.rule),
+    ).resolves.toBe("browser.unknown-tab");
+  });
+
+  it("carries the tab's owner and its load failure on every answer, so the card need not guess", async () => {
+    const broken = portWithHost({
+      tabs: [
+        state({
+          tabId: "mine",
+          createdBy: "session",
+          ticketId: "t1",
+          title: "Broken",
+          error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+        }),
+      ],
+      console: { mine: [{ level: "error", text: "boom" }] },
+    });
+
+    const read = await broken.port.snapshot({ tabId: "mine", signal });
+    const shot = await broken.port.screenshot({ tabId: "mine", signal });
+    const logged = await broken.port.console({ tabId: "mine", signal });
+
+    for (const answer of [read, shot, logged]) {
+      expect(answer).toMatchObject({
+        tabId: "mine",
+        title: "Broken",
+        ownerSessionId: ME.sessionId,
+        error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+      });
+    }
+  });
+
+  it("reports a person's tab as unowned and healthy, which is what makes the owner field worth reading", async () => {
+    const mixed = portWithHost({ tabs: [state({ tabId: "user-1", createdBy: "user" })] });
+
+    const read = await mixed.port.snapshot({ tabId: "user-1", signal });
+
+    expect(read.ownerSessionId).toBeNull();
+    expect(read.error).toBeNull();
+  });
+
+  it("tells a refusal which page it was aimed at, so a refused act still names its tab", async () => {
+    const driven = portWithHost({
+      tabs: [
+        state({
+          tabId: "mine",
+          createdBy: "session",
+          ticketId: "t1",
+          url: "https://example.com/sign-in",
+          title: "Sign in",
+          generation: 4,
+        }),
+      ],
+    });
+
+    // A stale generation is refused deep in the controller, which knows the
+    // rule and nothing about the tab.
+    const refusal = await driven.port
+      .act({ tabId: "mine", generation: 1, kind: "click", ref: "e1", signal })
+      .catch((error: BrowserRefusal) => error);
+
+    expect(refusal).toBeInstanceOf(BrowserRefusal);
+    expect((refusal as BrowserRefusal).rule).toBe("browser.stale-ref");
+    expect((refusal as BrowserRefusal).page).toEqual({
+      tabId: "mine",
+      url: "https://example.com/sign-in",
+      title: "Sign in",
+      ownerSessionId: ME.sessionId,
+      error: null,
+    });
+  });
+
+  it("leaves a refusal raised before any tab was in hand without a page to name", async () => {
+    const refusal = await port({})
+      .navigate({ navigation: { kind: "url", url: "file:///etc/passwd" }, signal })
+      .catch((error: BrowserRefusal) => error);
+
+    expect((refusal as BrowserRefusal).page).toBeNull();
+  });
+
+  it("photographs a tab it opened this call, not only one it was handed", async () => {
+    const fresh = portWithHost({});
+
+    const opened = await fresh.port.navigate({
+      navigation: { kind: "url", url: "https://example.com/new" },
+      signal,
+    });
+
+    expect(fresh.captures).toEqual(["opened-1"]);
+    expect(opened.picture).toBe("live:opened-1:1");
+    expect(opened.ownerSessionId).toBe(ME.sessionId);
+  });
+
+  it("refuses the per-Session cap under its own rule, naming what the model can do about it", async () => {
+    const capped = port({
+      tabs: [state({ tabId: "mine", createdBy: "session", ticketId: "t1" })],
+      sessionCap: 1,
+    });
+
+    const attempt = capped.navigate({
+      navigation: { kind: "url", url: "https://example.com/more" },
+      signal,
+    });
+
+    await expect(attempt).rejects.toThrow(BrowserRefusal);
+    await expect(attempt.catch((error: BrowserRefusal) => error.rule)).resolves.toBe(
+      "browser.session-tab-limit",
+    );
+    await expect(attempt.catch((error: BrowserRefusal) => error.message)).resolves.toContain(
+      "reuse an open tab",
+    );
+  });
+
+  it("photographs the tab after a navigation and after an action, and names what the action touched", async () => {
+    const driven = portWithHost({
+      tabs: [state({ tabId: "mine", createdBy: "session", ticketId: "t1", generation: 1 })],
+    });
+
+    const opened = await driven.port.navigate({
+      tabId: "mine",
+      navigation: { kind: "url", url: "https://example.com/next" },
+      signal,
+    });
+    expect(opened.picture).toBe("live:mine:1");
+
+    const acted = await driven.port.act({
+      tabId: "mine",
+      generation: opened.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(acted.target).toEqual({ ref: "e1", name: "Save" });
+    expect(acted.picture).toBe("live:mine:2");
+    // A plain read photographs nothing: the page did not change.
+    const read = await driven.port.snapshot({ tabId: "mine", signal });
+    expect(read.picture).toBeNull();
+    expect(driven.captures).toEqual(["mine", "mine"]);
+  });
+
+  it("carries no picture when the host declined to look, without failing the action", async () => {
+    const watched = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user", generation: 1 })],
+      declineCapture: true,
+    });
+    await watched.port.snapshot({ tabId: "user-1", signal });
+
+    const acted = await watched.port.act({
+      tabId: "user-1",
+      generation: 1,
+      kind: "press",
+      key: "Enter",
+      signal,
+    });
+
+    expect(acted.target).toBeNull();
+    expect(acted.picture).toBeNull();
+  });
+
+  it("closes the Session's headless tabs when the attachment ends, through the host", async () => {
+    const ending = portWithHost({
+      tabs: [
+        state({ tabId: "headless", createdBy: "session", ticketId: "t1" }),
+        state({
+          tabId: "shown",
+          createdBy: "session",
+          ticketId: "t1",
+          presentation: "preview",
+        }),
+      ],
+    });
+
+    ending.port.dispose?.();
+
+    // The Session's OWN id, not the Ticket's: the assertion that fails if
+    // dispose stops calling the host, or confuses the two scopes. Which tabs
+    // that closes is the host's rule, proved against the real host in
+    // tab-host.test.ts rather than against this fake's copy of it.
+    expect(ending.closedHeadlessFor).toEqual([ME.sessionId]);
   });
 
   it("keeps acting honest across the seam: the host's generation is the one refs are judged by", async () => {
@@ -499,7 +805,13 @@ describe("createAgentBrowserPort", () => {
     expect(shot).toEqual({
       tabId: "user-1",
       url: "https://example.com/page",
+      title: "Example",
+      ownerSessionId: null,
+      error: null,
       base64Png: "cGl4ZWxz",
+      // The same bytes, kept for the person (VC-238): the tool description
+      // promises the picture to both parties, and the id is how the card gets it.
+      picture: "kept:user-1:cGl4ZWxz",
       width: 800,
       height: 600,
     });
@@ -801,7 +1113,16 @@ describe("createAgentBrowserPort holds (VC-239)", () => {
 
   it("refuses a hold tool call on a tab outside the Session's scope as unknown, and respects the signal", async () => {
     const harness = portWithHost({
-      tabs: [state({ tabId: "theirs", createdBy: "session", ticketId: "t2" })],
+      // Another SESSION's tab, which is what puts it out of scope since
+      // VC-238: visibility follows ownership, not the Ticket.
+      tabs: [
+        state({
+          tabId: "theirs",
+          createdBy: "session",
+          ticketId: "t2",
+          ownerSessionId: OTHER.sessionId,
+        }),
+      ],
     });
     expect(await ruleOf(harness.port.acquire({ tabId: "theirs", signal }))).toBe(
       "browser.unknown-tab",

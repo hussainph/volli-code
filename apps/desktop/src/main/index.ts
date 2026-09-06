@@ -300,6 +300,9 @@ import {
   createCursorOverlay,
   type CursorOverlay,
 } from "./browser/cursor-overlay";
+import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
+import { BrowserPictureStore } from "./browser/picture-store";
+import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -2514,6 +2517,14 @@ app.whenReady().then(async () => {
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // The pictures a transcript card shows (VC-238): live captures bounded in
+    // memory, model-requested screenshots also on disk under userData — never
+    // the Blob store, whose Session links become the next turn's input.
+    pictures: new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    }),
     // The holder's name for the pill and the cursor label (VC-239), from the
     // Session's own projection. A launch with no runtime has no Sessions to
     // hold a tab, so the placeholder is never what a person sees.
@@ -2526,6 +2537,19 @@ app.whenReady().then(async () => {
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
+  // An archived Ticket's headless agent tabs have no one left to drive them
+  // and nobody who can see them (VC-238 §6). Shown tabs are the person's.
+  closeHeadlessTabsOnTicketArchive(browserTabs, subscribeTicketWake);
+  // A smoke cannot take a model turn for $0, so the headless-tab lane opens a
+  // Session tab through this door instead (`e2e/browser-headless-smoke.mjs`).
+  // Two locks, not one: an unpackaged build AND the smoke's own flag. The flag
+  // alone would ship a door that hands the whole tab host to anything that can
+  // set an environment variable on a packaged app, which is a wider grant than
+  // any test is worth. Smokes run the built-but-unpackaged app, so this is the
+  // same door for them and no door at all for a release.
+  if (isDev && process.env["VOLLI_SMOKE_BROWSER_HOST"] === "1") {
+    (globalThis as { volliBrowserHost?: BrowserTabHost }).volliBrowserHost = browserTabs;
+  }
   // The Session cursor overlay (VC-239): one small transparent view over the
   // on-screen Browser Tab, loading the app's own cursor page under its own
   // partition and five-verb preload — never the app bridge, and never inside

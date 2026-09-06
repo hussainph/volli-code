@@ -759,7 +759,9 @@ describe("Pi native adapter attach", () => {
 
     // The scope is the adapter's word, from the Session's own context — never
     // a value the model or the port could invent. The Session and attachment
-    // ride with it (VC-239): a hold is taken in that name and judged against it.
+    // ride with it: a hold is taken in that name and judged against it
+    // (VC-239), and the same Session id is the owner every tab the port opens
+    // is stamped with (VC-238).
     expect(scopes).toEqual([
       {
         projectId: "project-1",

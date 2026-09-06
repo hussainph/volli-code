@@ -145,10 +145,6 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // the name there is the whole change when VC-269's peek overlay gives a
     // child's plan someone to be read by.
     expect(surface).not.toContain("todo_write");
-    // `browser_acquire`/`browser_release` joined this list after VC-9 wrote it
-    // and are NOT a Role decision: the fixture asks for the whole interaction
-    // vocabulary, so anything appended to `NON_CODING_TOOL_IDS` lands here
-    // unless a Role withholds it.
     expect(surface).toEqual([
       "read",
       "edit",
@@ -162,6 +158,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      // The hold pair rides the same all-or-nothing membership as the six
+      // (VC-239): one port answers them all, so a Subagent that may browse
+      // may also take and give back a tab's hold.
       "browser_acquire",
       "browser_release",
     ]);
