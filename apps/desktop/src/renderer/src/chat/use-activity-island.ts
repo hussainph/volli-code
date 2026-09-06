@@ -9,18 +9,24 @@
  * result to `ActivityIsland`; nothing else composes an island.
  *
  * HOW A FEED PLUGS IN, and why the shape is what it is. A feed is a hook
- * `useIslandX(sessionId, …, push)` returning `{ model, actions }` where
- * `model` is a `Pick` of {@link ActivityIslandModel} and `actions` a `Pick`
- * of {@link ActivityIslandActions}. Adding one is one import and one spread
- * into each of the two objects below — literally, which is the point: the
- * two remaining feeds (subagents, VC-269; shells, VC-270) should each land
- * as a two-line change here and nothing else in this file. The plan feed
- * predates the shape and returns its plan bare; it is assigned rather than
- * spread, and that is the whole of the exception.
+ * over its own store returning its slice of {@link ActivityIslandModel} and
+ * its `Pick` of {@link ActivityIslandActions}. Adding one is one import and
+ * one spread into each of the two objects below — literally, which is the
+ * point: the remaining feed (subagents, VC-269) should land as a two-line
+ * change here and nothing else in this file. Three are live:
+ *
+ *  • tabs   — `useIslandTabs` (this ticket), `{ model: { tabs }, actions }`.
+ *  • plan   — `useIslandPlan` (VC-6), which predates the shape and returns
+ *             its plan bare; assigned rather than spread.
+ *  • shells — `useIslandShells` (VC-270), `{ shells, flash, openShell,
+ *             killShell }` flat. Its verbs spread; its shells assign.
  *
  * THE NOW CHANNEL IS SHARED. One {@link useIslandFlash} for the island, and
- * every feed is handed its `push`. Latest wins; the feeds never join the two
- * registers. What the island holds for how long is the island's business.
+ * a feed announces through its `push`. Latest wins across feeds; no feed
+ * joins the two registers. The shell feed keeps its own latest-transition
+ * state (it was built before this channel existed), so the seam relays each
+ * new one into the channel — one effect, keyed on the flash's id, so a
+ * re-render that changed nothing re-announces nothing.
  *
  * Lives in `src/chat/`, not `components/chat/`, beside `use-island-plan.ts`
  * and `use-session-controller.ts`: these are bindings, not components (VC-6).
@@ -33,6 +39,7 @@ import {
   EMPTY_ACTIVITY_ISLAND,
 } from "@volli/session-presentation";
 
+import { useIslandShells } from "@renderer/components/chat/island-shells";
 import { useIslandFlash } from "./use-island-flash";
 import { useIslandPlan } from "./use-island-plan";
 import { useIslandTabs } from "./use-island-tabs";
@@ -41,6 +48,18 @@ import type { ChatSessionsStore } from "./use-session-controller";
 export interface ActivityIslandBinding {
   model: ActivityIslandModel;
   actions: ActivityIslandActions;
+}
+
+/** What the mount supplies: the lab's own store, and where a shell's tail opens. */
+export interface ActivityIslandDeps {
+  /** The UI lab's own chat-sessions store; omitted in the app. */
+  store?: ChatSessionsStore;
+  /**
+   * Where `openShell` puts a shell's tail — the MOUNT's decision, not the
+   * feed's (VC-270). Omitted means the verb opens nowhere, which the lab
+   * accepts because it has no shells to open.
+   */
+  openShellOutput?: (shellId: string) => void;
 }
 
 /**
@@ -66,33 +85,41 @@ const UNWIRED_ACTIONS: ActivityIslandActions = {
 export function useActivityIsland(
   sessionId: string,
   projectId: string,
-  store?: ChatSessionsStore,
+  deps: ActivityIslandDeps = {},
 ): ActivityIslandBinding {
   const { flash, push } = useIslandFlash();
   const tabs = useIslandTabs(sessionId, projectId, push);
-  const plan = useIslandPlan(sessionId, store);
+  const plan = useIslandPlan(sessionId, deps.store);
+  const shells = useIslandShells(sessionId, { openOutput: deps.openShellOutput });
   // VC-269: `const agents = useIslandAgents(sessionId, push);`
-  // VC-270: `const shells = useIslandShells(sessionId, push);`
+
+  // The shell feed's latest transition, relayed into the shared channel.
+  const shellFlash = shells.flash;
+  React.useEffect(() => {
+    if (shellFlash !== null) push(shellFlash.event, shellFlash.payload);
+  }, [push, shellFlash]);
 
   const model = React.useMemo<ActivityIslandModel>(
     () => ({
       ...EMPTY_ACTIVITY_ISLAND,
       ...tabs.model,
       // VC-269: `...agents.model,`
-      // VC-270: `...shells.model,`
       plan,
+      shells: shells.shells,
       flash,
     }),
-    [flash, plan, tabs.model],
+    [flash, plan, shells.shells, tabs.model],
   );
+  const { openShell, killShell } = shells;
   const actions = React.useMemo<ActivityIslandActions>(
     () => ({
       ...UNWIRED_ACTIONS,
       ...tabs.actions,
       // VC-269: `...agents.actions,`
-      // VC-270: `...shells.actions,`
+      openShell,
+      killShell,
     }),
-    [tabs.actions],
+    [killShell, openShell, tabs.actions],
   );
   return React.useMemo(() => ({ model, actions }), [model, actions]);
 }

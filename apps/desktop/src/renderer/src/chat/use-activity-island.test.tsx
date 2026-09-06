@@ -16,8 +16,9 @@ import {
   islandEmpty,
   type ChatSessionTransport,
 } from "@volli/session-presentation";
-import type { BrowserTabState } from "../../../ipc/contract";
+import type { BackgroundShellState, BrowserTabState } from "../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
@@ -48,6 +49,30 @@ function tab(over: Partial<BrowserTabState> & { tabId: string }): BrowserTabStat
     heldBy: null,
     ...over,
   };
+}
+
+function shell(over: Partial<BackgroundShellState> & { shellId: string }): BackgroundShellState {
+  return {
+    sessionId: SESSION,
+    projectId: PROJECT,
+    ticketId: null,
+    command: "pnpm lab",
+    title: null,
+    state: "running",
+    code: null,
+    signal: null,
+    startedAt: 1,
+    exitedAt: null,
+    pid: 4242,
+    ...over,
+  };
+}
+
+function shells(rows: readonly BackgroundShellState[]): void {
+  useBackgroundShellsStore.setState({
+    byId: Object.fromEntries(rows.map((one) => [one.shellId, one])),
+    hydrated: true,
+  });
 }
 
 function registry(tabs: readonly BrowserTabState[]): void {
@@ -112,6 +137,7 @@ beforeEach(() => {
   } as unknown as BrowserApi;
   vi.stubGlobal("api", { browser });
   registry([]);
+  shells([]);
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
   container = document.createElement("div");
   document.body.append(container);
@@ -128,10 +154,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount(store = chatStore()) {
+async function mount(store = chatStore(), openShellOutput?: (shellId: string) => void) {
   const seen: ActivityIslandBinding[] = [];
   function Probe() {
-    seen.push(useActivityIsland(SESSION, PROJECT, store));
+    seen.push(useActivityIsland(SESSION, PROJECT, { store, openShellOutput }));
     return null;
   }
   await act(async () => {
@@ -190,18 +216,38 @@ describe("useActivityIsland", () => {
     expect(probe.latest().model.flash).toMatchObject({ event: "Opened", payload: "github.com" });
   });
 
+  it("spreads the shell feed's slice and verbs in, and opens a tail where the mount says (VC-270)", async () => {
+    shells([shell({ shellId: "sh-1" })]);
+    const openShellOutput = vi.fn();
+    const probe = await mount(chatStore(), openShellOutput);
+
+    const { model, actions } = probe.latest();
+    expect(model.shells).toEqual([{ id: "sh-1", command: "pnpm lab", state: "running", code: null }]);
+    actions.openShell("sh-1");
+    expect(openShellOutput).toHaveBeenCalledWith("sh-1");
+  });
+
+  it("relays a shell transition into the one now channel", async () => {
+    shells([shell({ shellId: "sh-1" })]);
+    const probe = await mount();
+    expect(probe.latest().model.flash).toBeNull();
+
+    await act(async () => shells([shell({ shellId: "sh-1", state: "exited", code: 0 })]));
+    expect(probe.latest().model.flash).toMatchObject({ payload: "pnpm lab" });
+    const first = probe.latest().model.flash;
+
+    // A re-render that changed nothing re-announces nothing.
+    await act(async () => {
+      useBrowserTabsStore.setState({ byId: { ...useBrowserTabsStore.getState().byId } });
+    });
+    expect(probe.latest().model.flash).toBe(first);
+  });
+
   it("keeps the verbs it has no feed for, and none of them throws", async () => {
     const probe = await mount();
     const { actions } = probe.latest();
 
-    for (const verb of [
-      "peekAgent",
-      "promoteAgent",
-      "stopAgent",
-      "openShell",
-      "killShell",
-      "jumpStep",
-    ] as const) {
+    for (const verb of ["peekAgent", "promoteAgent", "stopAgent", "jumpStep"] as const) {
       expect(() => actions[verb]("x")).not.toThrow();
     }
   });

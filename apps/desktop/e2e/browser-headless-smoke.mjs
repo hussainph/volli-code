@@ -1,20 +1,25 @@
 /**
- * Acceptance smoke for headless agent Browser Tabs (VC-238), against the BUILT
- * app: headless → show → hide → open as tab → hide → close.
+ * Acceptance smoke for headless agent Browser Tabs (VC-238, driven from the
+ * Activity Island since VC-268), against the BUILT app:
+ * headless → show here → hide → open as tab → show here → hide → close.
  *
  * A Session-owned tab is born headless — in no strip, attached to no window —
- * and the only place a person sees it is the chat that owns it. This smoke
- * opens one the way the Browser port does (through the host, behind the
- * `VOLLI_SMOKE_BROWSER_HOST` door, because a $0 smoke cannot take a model
- * turn), then drives every presentation from the person's side:
+ * and the only place a person sees it is the chat that owns it: the island
+ * above its composer. This smoke opens one the way the Browser port does
+ * (through the host, behind the `VOLLI_SMOKE_BROWSER_HOST` door, because a $0
+ * smoke cannot take a model turn), then drives every presentation from the
+ * person's side:
  *
- *   1. the tab is in the chat's chip and in NO strip, and no native view is attached;
- *   2. Show pins it above the composer, attached BESIDE the person's own tab in the
- *      other pane of a split — two native views on screen together;
- *   3. Hide returns it to headless; nothing the agent sees changed;
- *   4. Open as tab promotes it into the strip with the Session mark, and Hide
- *      takes it back out;
- *   5. Close removes it everywhere; a second Session's tab was never listed.
+ *   1. the island's tabs cluster counts it, it is in NO strip, and no native
+ *      view is attached;
+ *   2. the card's row pins it above the composer, attached BESIDE the person's
+ *      own tab in the other pane of a split — two native views on screen
+ *      together;
+ *   3. Hide on the preview returns it to headless; nothing the agent sees changed;
+ *   4. Open as tab promotes it into the strip with the Session mark; the island
+ *      says so, and its row brings it back here, where Hide takes it out again;
+ *   5. Close from the card removes it everywhere and the island with it; a
+ *      second Session's tab was never listed.
  *
  * MANUALLY-RUN or CI (needs a display + the built app); not part of `vp test`.
  *
@@ -67,7 +72,11 @@ async function startFixtureServer() {
 // Page-wide, on purpose: under a split each pane draws its own strip, and the
 // question every check asks is about the surface as a whole.
 const browserStripTabs = (page) => page.getByTestId("home-browser-tab");
-const chip = (page) => page.locator("[data-browser-tabs-chip]");
+const island = (page) => page.locator("[data-activity-island]");
+const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
+const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
+/** The tabs card is a Radix portal, so it is found page-wide, never under the pill. */
+const tabsCard = (page) => page.locator('[data-island-card="tabs"]');
 const preview = (page) => page.locator("[data-browser-preview]");
 const focusedEmptyRow = (page, label) =>
   page.locator(
@@ -95,11 +104,30 @@ async function attachedViews(app) {
   });
 }
 
-/** Presses a chip-menu action for the one tab the chip lists, and closes the menu. */
-async function chipAction(page, name) {
-  await chip(page).click();
-  await page.getByRole("button", { name, exact: true }).click();
+/** Pins the island's tabs card open and hands back the one row it lists. */
+async function pinTabsCard(page, tabId) {
+  await tabsCluster(page).click();
+  const row = tabsCard(page).locator(`[data-island-row="${tabId}"]`);
+  await waitUntil("the tab's row in the pinned card", async () =>
+    (await row.count()) === 1 ? true : null,
+  );
+  return row;
+}
+
+/** The row IS the verb: activating it pins the tab here. Then the card is released. */
+async function showHere(page, tabId) {
+  const row = await pinTabsCard(page, tabId);
+  await row.click();
   await page.keyboard.press("Escape");
+}
+
+/** Close arms on the first press and fires on the second; the card goes with its last row. */
+async function closeFromCard(page, tabId) {
+  const row = await pinTabsCard(page, tabId);
+  const close = row.locator("..").getByRole("button", { name: "Close tab", exact: true });
+  await row.hover();
+  await close.click();
+  await tabsCard(page).getByRole("button", { name: "Click again to close", exact: true }).click();
 }
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-browser-headless-");
@@ -136,12 +164,13 @@ async function main() {
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
   // A SHORT window on purpose, near the usability floor. The pinned preview
-  // sits between the transcript and the composer, and the chat's own chip
-  // floats over the transcript: on a tall developer window they cannot reach
-  // each other, and on a short one they can. A chip that came down over the
-  // preview's header swallowed the clicks meant for its Hide button, and only
-  // CI's smaller screen found it. Sizing the window here is what keeps this
-  // smoke able to find it again.
+  // sits between the transcript and the composer, and the island sits above
+  // the composer with its card opening UPWARD over the preview: on a tall
+  // developer window nothing is crowded, and on a short one everything is.
+  // The chip this smoke used to drive once came down over the preview's
+  // header and swallowed its Hide button, and only CI's smaller screen found
+  // it. Sizing the window here is what keeps this smoke able to find the
+  // next such collision.
   await app.evaluate(({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
     window?.setSize(1000, 700);
@@ -197,9 +226,10 @@ async function main() {
     return label === null || label === "" ? null : label;
   });
 
+  let agentTabId = null;
   await must(
     1,
-    "an agent tab is born headless: counted by the chat's chip, in no strip, attached nowhere",
+    "an agent tab is born headless: counted by the island's tabs cluster, in no strip, attached nowhere",
     async () => {
       const opened = await app.evaluate(
         (_electron, input) => {
@@ -217,8 +247,11 @@ async function main() {
           owner: sessionId,
         },
       );
-      await waitUntil("the chat's tab chip", async () =>
-        (await chip(page).getAttribute("data-browser-tabs-chip")) === "1" ? true : null,
+      agentTabId = opened[0].tabId;
+      await waitUntil("the island's tabs cluster", async () =>
+        (await tabsCount(page).getAttribute("data-island-count").catch(() => null)) === "1"
+          ? true
+          : null,
       );
       const stripCount = await browserStripTabs(page).count();
       const attached = await attachedViews(app);
@@ -234,12 +267,12 @@ async function main() {
 
   await must(
     2,
-    "Show pins the tab above the composer, attached beside the person's own tab in the other pane",
+    "the card's row pins the tab above the composer, attached beside the person's own tab in the other pane",
     async () => {
-      await chipAction(page, "Show");
-      // Both planes, because the chip's popover is an overlay: while it was
-      // open every native view stood down onto frozen pixels, and the person's
-      // pane comes back only once it has closed.
+      await showHere(page, agentTabId);
+      // Both planes, because the island's card is a popover overlay: while it
+      // was open every native view stood down onto frozen pixels, and the
+      // person's pane comes back only once it has closed.
       const state = await waitUntil(
         "the preview to be pinned and attached beside the person's pane",
         async () => {
@@ -286,9 +319,9 @@ async function main() {
 
   await must(
     4,
-    "Open as tab puts it in the strip with the Session mark, and Hide takes it out again",
+    "Open as tab puts it in the strip with the Session mark; the island says so, brings it back, and Hide takes it out",
     async () => {
-      await chipAction(page, "Show");
+      await showHere(page, agentTabId);
       await waitUntil("the preview", async () =>
         (await preview(page).count()) === 1 ? true : null,
       );
@@ -299,41 +332,60 @@ async function main() {
           tab.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
         ),
       );
-      // The promoted tab took the chat's pane; bring the chat back to reach its chip.
+      // The promoted tab took the chat's pane; bring the chat back to reach its island.
       await page.locator(`[role="tab"][aria-label="${chatTabLabel}"]`).first().click();
-      await waitUntil("the chat's chip again", async () =>
-        (await chip(page).count()) === 1 ? true : null,
+      await waitUntil("the island again", async () =>
+        (await island(page).count()) === 1 ? true : null,
       );
-      await chipAction(page, "Hide");
+      // The island has no Hide of its own: a strip tab comes back HERE through
+      // the same row, and the preview's Hide returns it to headless. The row
+      // says where the tab is before it is moved.
+      const row = await pinTabsCard(page, agentTabId);
+      const rowText = await row.textContent();
+      await page.keyboard.press("Escape");
+      await showHere(page, agentTabId);
       await waitUntil("one strip tab", async () => (await browserStripTabs(page).count()) === 1);
-      const mine = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
+      await waitUntil("the preview", async () =>
+        (await preview(page).count()) === 1 ? true : null,
+      );
+      await preview(page).getByRole("button", { name: "Hide", exact: true }).click();
+      const mine = await waitUntil("the tab to go headless", async () => {
+        const found = (await hostTabs(app)).find((tab) => tab.ownerSessionId === sessionId);
+        return found?.presentation === "headless" ? found : null;
+      });
       return {
-        ok: marks.toSorted().join(",") === "session,user" && mine?.presentation === "headless",
-        detail: `marks=${JSON.stringify(marks)} presentation=${mine?.presentation}`,
+        ok:
+          marks.toSorted().join(",") === "session,user" &&
+          (rowText ?? "").includes("as a tab") &&
+          mine?.presentation === "headless" &&
+          (await browserStripTabs(page).count()) === 1,
+        detail: `marks=${JSON.stringify(marks)} row=${JSON.stringify(rowText)} presentation=${mine?.presentation}`,
       };
     },
   );
 
   await must(
     5,
-    "Close removes it from the chat and the host; the other Session's tab and the person's stand",
+    "Close from the card removes it from the chat and the host, and the island with it; the other Session's tab and the person's stand",
     async () => {
-      await chipAction(page, "Close");
-      await waitUntil("the chip to disappear", async () =>
-        (await chip(page).count()) === 0 ? true : null,
+      await closeFromCard(page, agentTabId);
+      await waitUntil("the island to disappear", async () =>
+        (await island(page).count()) === 0 ? true : null,
       );
       const tabs = await hostTabs(app);
       const errorToasts = await page
         .getByText(/Could not (show|hide|open|close) Browser Tab/i)
         .count();
+      const cardsLeft = await tabsCard(page).count();
       return {
         ok:
           tabs.filter((tab) => tab.ownerSessionId === sessionId).length === 0 &&
           tabs.some((tab) => tab.ownerSessionId === "another-session") &&
           tabs.some((tab) => tab.createdBy === "user") &&
+          cardsLeft === 0 &&
           errorToasts === 0 &&
           pageErrors.length === 0,
-        detail: `tabs=${JSON.stringify(tabs.map((tab) => [tab.createdBy, tab.ownerSessionId, tab.presentation]))} errorToasts=${errorToasts} pageErrors=${JSON.stringify(pageErrors)}`,
+        detail: `tabs=${JSON.stringify(tabs.map((tab) => [tab.createdBy, tab.ownerSessionId, tab.presentation]))} cards=${cardsLeft} errorToasts=${errorToasts} pageErrors=${JSON.stringify(pageErrors)}`,
       };
     },
   );

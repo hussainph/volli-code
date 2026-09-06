@@ -77,6 +77,9 @@ import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
+import { useActivityIsland } from "@renderer/chat/use-activity-island";
+import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
+import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
 import {
   CompactionBoundary,
@@ -139,27 +142,10 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
-import { useShallow } from "zustand/react/shallow";
 
-import type { BrowserTabState } from "../../../../ipc/contract";
-import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
-import {
-  BrowserCardHostContext,
-  type BrowserCardHost,
-} from "@renderer/components/browser/browser-tab-card";
-import { BrowserTabsChip } from "@renderer/components/browser/browser-tabs-chip";
-import {
-  browserTabOwnerLabel,
-  previewedBrowserTab,
-  sessionBrowserTabs,
-  useBrowserTabsStore,
-} from "@renderer/stores/browser-tabs";
-import {
-  childSessionIds,
-  sessionTitleOf,
-  useProjectSessionsStore,
-} from "@renderer/stores/project-sessions";
+import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -269,6 +255,17 @@ export function ChatPlane({
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
+  // Where a background shell's tail opens (VC-270's hand-off): a modal over
+  // this chat, mounted only while open — see `ShellOutputDialog`. The shells
+  // bridge is read here rather than inside the dialog so the lab, which has
+  // no bridge and no shells, mounts neither.
+  const shellsApi = typeof window === "undefined" ? undefined : window.api?.shells;
+  const [openShellId, setOpenShellId] = React.useState<string | null>(null);
+  const closeShellOutput = React.useCallback(() => setOpenShellId(null), []);
+  const island = useActivityIsland(sessionId, projectId, {
+    ...(store === undefined ? {} : { store }),
+    ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
+  });
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
@@ -1061,28 +1058,6 @@ export function ChatPlane({
       <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
         <FileMentionProvider onOpenFile={onOpenFile}>
           <Conversation className="min-h-0 bg-background">
-            {/* The chat has no header, so the inventory of the tabs its
-                Sessions hold floats at the TRANSCRIPT's top-right corner
-                (VC-238 §8); absent while there is nothing to count.
-
-                Inside the Conversation rather than over the whole plane, and
-                that is load-bearing: the pinned preview sits below the
-                transcript in flow, so a chip positioned against the plane
-                came down over the preview's own header on a short window and
-                swallowed the clicks meant for its Hide button. Bounded to
-                the scroller, the two can never overlap however short the
-                plane gets. */}
-            {browser !== null && browser.tabs.length > 0 ? (
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end px-3 pt-2">
-                <BrowserTabsChip
-                  className="pointer-events-auto bg-background/70 shadow-raised backdrop-blur-md"
-                  tabs={browser.tabs}
-                  api={browser.api}
-                  sessionId={sessionId}
-                  sessionTitle={browser.sessionTitle}
-                />
-              </div>
-            ) : null}
             {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
@@ -1179,9 +1154,23 @@ export function ChatPlane({
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
-          {/* Overlay on the composer, never in its place. Ask-user cards (and
-              later plans / subagent activity) stack above the input so a
-              follow-up can still be typed while the card waits. */}
+          {/* The Activity Island (VC-268): what this Session holds beyond the
+              chat stream — its Browser Tabs, its plan, its background shells
+              — a SIBLING of the interaction stack, sharing its shell material
+              and never absorbed into it (VC-247). It decides for itself when
+              there is nothing to draw (`islandEmpty`, inside the component);
+              no guard here, because a second one could disagree with it. The
+              spacing to the composer rides the pill so it leaves with it. The
+              overlay ignores hits so its padding does not cover the
+              transcript; the island carries controls, so it opts back in. */}
+          <ActivityIsland
+            model={island.model}
+            actions={island.actions}
+            className="pointer-events-auto mb-2"
+          />
+          {/* Overlay on the composer, never in its place. Ask-user cards
+              stack above the input so a follow-up can still be typed while
+              the card waits. */}
           <ComposerInteractionStack
             interaction={pending}
             resolving={pending ? resolving.has(pending.id) : false}
@@ -1236,54 +1225,11 @@ export function ChatPlane({
           </ComposerInteractionStack>
         </ContentColumn>
       </div>
+      {shellsApi === undefined ? null : (
+        <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
+      )}
     </div>
   );
-}
-
-/* ------------------------------------------------------------ browser tabs */
-
-/**
- * What this chat knows about the Browser Tabs its Sessions hold (VC-238): the
- * inventory the chip counts, the one tab pinned as its preview, and the host
- * a row's card needs to act. Null where there is no bridge — the UI lab — so
- * every browser surface in the chat simply does not exist there.
- *
- * Children are read off the project listing's provenance, the same fact the
- * sidebar's mark draws; a child's tabs count here because a parent that
- * started a Session is answerable for the tabs it opened.
- */
-function useChatBrowserTabs(
-  sessionId: string,
-  projectId: string,
-): {
-  api: BrowserApi;
-  tabs: BrowserTabState[];
-  preview: BrowserTabState | null;
-  sessionTitle(sessionId: string): string | null;
-  ownerLabel(tab: BrowserTabState): string;
-  cardHost: BrowserCardHost;
-} | null {
-  const api = typeof window === "undefined" ? undefined : window.api?.browser;
-  const rows = useProjectSessionsStore((state) => state.byProject[projectId]);
-  const children = React.useMemo(() => childSessionIds(rows, sessionId), [rows, sessionId]);
-  const tabs = useBrowserTabsStore(
-    useShallow((state) => sessionBrowserTabs(state.byId, sessionId, children)),
-  );
-  const preview = useBrowserTabsStore((state) => previewedBrowserTab(state.byId, sessionId));
-  const sessionTitle = React.useCallback((id: string) => sessionTitleOf(rows, id), [rows]);
-  const cardHost = React.useMemo(
-    () => (api === undefined ? null : { sessionId, api, sessionTitle }),
-    [api, sessionId, sessionTitle],
-  );
-  if (api === undefined || cardHost === null) return null;
-  return {
-    api,
-    tabs,
-    preview,
-    sessionTitle,
-    ownerLabel: (tab) => browserTabOwnerLabel(tab, sessionId, sessionTitle),
-    cardHost,
-  };
 }
 
 /* ------------------------------------------------------------ model access */
