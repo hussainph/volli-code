@@ -4,11 +4,14 @@ import {
   applyUsageLimitsUpdate,
   clampPercent,
   elapsedShare,
+  formatCheckedAgo,
   formatDuration,
   formatResetsIn,
+  isUsageStale,
   paceOf,
   remainingPercent,
   resolveUsageLimitsAfterProbe,
+  usageTone,
   type UsageLimits,
   type UsageWindow,
 } from "./usage-limits";
@@ -116,6 +119,41 @@ describe("formatResetsIn", () => {
     expect(formatResetsIn(window({ resetsAt: new Date(NOW).toISOString() }), NOW)).toBe(
       "resets now",
     );
+  });
+});
+
+describe("usageTone", () => {
+  // Sixty percent of the window has elapsed in every case below.
+  it("is critical at a tenth left, whatever the pace", () => {
+    expect(usageTone(window({ usedPercent: 90 }), NOW)).toBe("critical");
+    expect(usageTone(window({ usedPercent: 95, resetsAt: undefined }), NOW)).toBe("critical");
+  });
+
+  it("asks for attention at a quarter left, or when spending runs ahead", () => {
+    expect(usageTone(window({ usedPercent: 75 }), NOW)).toBe("attention");
+    // Half left, but 60% of the window gone: ahead of even.
+    expect(usageTone(window({ usedPercent: 50 }), NOW)).toBe("normal");
+    expect(usageTone(window({ usedPercent: 70 }), NOW)).toBe("attention");
+  });
+
+  it("is ordinary with plenty left and no reading that says otherwise", () => {
+    expect(usageTone(window({ usedPercent: 40 }), NOW)).toBe("normal");
+    expect(usageTone(window({ usedPercent: 40, resetsAt: undefined }), NOW)).toBe("normal");
+  });
+});
+
+describe("formatCheckedAgo", () => {
+  it("reads under the minute as just now, otherwise as an age", () => {
+    expect(formatCheckedAgo(NOW - 30_000, NOW)).toBe("checked just now");
+    expect(formatCheckedAgo(NOW - 4 * 60_000, NOW)).toBe("checked 4m ago");
+    expect(formatCheckedAgo(NOW - 26 * HOUR, NOW)).toBe("checked 1d 2h ago");
+  });
+});
+
+describe("isUsageStale", () => {
+  it("turns stale at ten minutes, past the probe's own freshness hold", () => {
+    expect(isUsageStale({ checkedAt: NOW - 5 * 60_000 }, NOW)).toBe(false);
+    expect(isUsageStale({ checkedAt: NOW - 10 * 60_000 }, NOW)).toBe(true);
   });
 
   it("has nothing to say without a usable reset time", () => {

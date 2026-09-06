@@ -2,12 +2,13 @@
  * The usage row's notation, asserted where a screenshot cannot hold it still.
  *
  * Everything the row states is derived from one anchored `now` — the percent,
- * the hairline's position, the pace word, the countdown — so the assertions
- * here pin `now` the way the lab scratch does and check that each derived fact
- * landed where the drawing needs it: the bar's width is the REMAINING share
- * (not the used one), the hairline sits at the share of the window still to
- * come (so it meets the fill's edge when pace is on), and a window with no
- * reset still renders a row rather than vanishing.
+ * the hairline's position, the bar's tone, the countdown, the age — so the
+ * assertions here pin `now` the way the lab scratch does and check that each
+ * derived fact landed where the drawing needs it: the bar's width is the
+ * REMAINING share (not the used one), the hairline sits at the share of the
+ * window still to come (so it meets the fill's edge when pace is on), the
+ * fill's colour follows the tone rule, and a window with no reset still
+ * renders a row rather than vanishing.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
@@ -21,7 +22,7 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 
 /** Sixty percent of a five-hour window elapsed, sixty percent used: on pace. */
 const LIMITS: UsageLimits = {
-  checkedAt: NOW,
+  checkedAt: NOW - 60_000,
   windows: [
     {
       id: "five_hour",
@@ -34,13 +35,17 @@ const LIMITS: UsageLimits = {
   ],
 };
 
+function withUsed(usedPercent: number): UsageLimits {
+  return { ...LIMITS, windows: [{ ...LIMITS.windows[0]!, usedPercent }] };
+}
+
 describe("ModelAccessUsage", () => {
-  it("states the remaining share, the pace word, and the anchored countdown", () => {
+  it("states the remaining share and the anchored countdown, and no pace words", () => {
     const html = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW} />);
     expect(html).toContain("Session");
     expect(html).toContain("40% left");
     expect(html).toContain("resets in 2h");
-    expect(html).toContain("On pace");
+    expect(html).not.toContain("pace");
   });
 
   it("fills the bar with what is left and marks even spending at the time left", () => {
@@ -52,53 +57,64 @@ describe("ModelAccessUsage", () => {
   });
 
   it("draws the hairline past the fill's edge when spending runs ahead", () => {
-    const ahead: UsageLimits = {
-      checkedAt: NOW,
-      windows: [{ ...LIMITS.windows[0]!, usedPercent: 90 }],
-    };
-    const html = renderToStaticMarkup(<ModelAccessUsage limits={ahead} now={NOW} />);
-    // 10% left, but 40% of the window still to come: the gap is the overrun.
-    expect(html).toContain("width:10%");
+    const html = renderToStaticMarkup(<ModelAccessUsage limits={withUsed(70)} now={NOW} />);
+    // 30% left, but 40% of the window still to come: the gap is the overrun.
+    expect(html).toContain("width:30%");
     expect(html).toContain("left:40%");
-    expect(html).toContain("Ahead of pace");
-    expect(html).toContain("10% left");
   });
 
-  it("carries the pace word on the glyph only, and the row's facts in the bar's label", () => {
+  it("colours the fill by the tone rule: ordinary, attention, critical", () => {
+    // 60% left at 40% of the window to go: plenty, and lasting.
+    expect(renderToStaticMarkup(<ModelAccessUsage limits={withUsed(40)} now={NOW} />)).toContain(
+      'data-tone="normal"',
+    );
+    // 30% left with 40% to go: ahead of pace, the early warning.
+    expect(renderToStaticMarkup(<ModelAccessUsage limits={withUsed(70)} now={NOW} />)).toContain(
+      'data-tone="attention"',
+    );
+    // A tenth left.
+    expect(renderToStaticMarkup(<ModelAccessUsage limits={withUsed(90)} now={NOW} />)).toContain(
+      'data-tone="critical"',
+    );
+    const html = renderToStaticMarkup(<ModelAccessUsage limits={withUsed(90)} now={NOW} />);
+    expect(html).toContain("bg-destructive");
+    expect(html).not.toContain("bg-primary");
+  });
+
+  it("carries the row's facts in the bar's label, and the age in its title", () => {
     const html = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW} />);
-    expect(html).toContain('role="img" title="On pace" aria-label="On pace"');
-    expect(html).toContain("Session: 40% left, 40% of the window left, resets in 2h");
+    expect(html).toContain('aria-label="Session: 40% left, 40% of the window left, resets in 2h"');
+    expect(html).toContain(
+      'title="Session: 40% left, 40% of the window left, resets in 2h · checked 1m ago"',
+    );
+  });
+
+  it("says when it was checked on the surface only once the reading is old", () => {
+    const fresh = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW} />);
+    expect(fresh).not.toContain(">checked 1m ago<");
+    const stale = renderToStaticMarkup(
+      <ModelAccessUsage limits={{ ...LIMITS, checkedAt: NOW - 23 * 60_000 }} now={NOW} />,
+    );
+    expect(stale).toContain(">checked 23m ago<");
   });
 
   it("prints whole points however precisely the provider spoke", () => {
-    const precise: UsageLimits = {
-      checkedAt: NOW,
-      windows: [{ ...LIMITS.windows[0]!, usedPercent: 0.29 * 100 }],
-    };
-    const html = renderToStaticMarkup(<ModelAccessUsage limits={precise} now={NOW} />);
+    const html = renderToStaticMarkup(<ModelAccessUsage limits={withUsed(0.29 * 100)} now={NOW} />);
     expect(html).toContain("71% left");
     expect(html).toContain("width:71%");
     expect(html).not.toContain("71.0");
   });
 
-  it("draws no fill and no pace once the reset has passed, and says so", () => {
-    const html = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW + 3 * HOUR} />);
-    expect(html).toContain("resets now");
-    expect(html).toContain("left:0%");
-    expect(html).not.toContain("pace");
+  it("draws no fill once nothing is left, and no hairline off the bar once the reset has passed", () => {
+    const spent = renderToStaticMarkup(<ModelAccessUsage limits={withUsed(100)} now={NOW} />);
+    expect(spent).toContain("0% left");
+    expect(spent).not.toContain("width:");
+    const passed = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW + 3 * HOUR} />);
+    expect(passed).toContain("resets now");
+    expect(passed).toContain("left:0%");
   });
 
-  it("draws no fill at all when nothing is left", () => {
-    const spent: UsageLimits = {
-      checkedAt: NOW,
-      windows: [{ ...LIMITS.windows[0]!, usedPercent: 100 }],
-    };
-    const html = renderToStaticMarkup(<ModelAccessUsage limits={spent} now={NOW} />);
-    expect(html).toContain("0% left");
-    expect(html).not.toContain("width:");
-  });
-
-  it("still draws a window that states no reset — no countdown, no hairline, no pace", () => {
+  it("still draws a window that states no reset — no countdown, no hairline", () => {
     const bare: UsageLimits = {
       checkedAt: NOW,
       windows: [{ id: "seven_day_opus", kind: "weekly", label: "Weekly · Opus", usedPercent: 8 }],
@@ -108,9 +124,7 @@ describe("ModelAccessUsage", () => {
     expect(html).toContain("92% left");
     expect(html).not.toContain("resets in");
     expect(html).not.toContain("left:");
-    expect(html).not.toContain("pace");
-    // The glyph's slot is still reserved, so the bar ends where its neighbours' do.
-    expect(html).toContain("size-3.5 shrink-0");
+    expect(html).toContain('data-tone="normal"');
   });
 
   it("says one line and draws no bar for an account with nothing to show", () => {
@@ -131,7 +145,8 @@ describe("ModelAccessUsage", () => {
       </>,
     );
     expect(html).toContain("No subscription usage windows on this account.");
-    expect(html).toContain("Usage limits couldn&#x27;t be read.");
+    // The failed line names its retry: the page's own Refresh.
+    expect(html).toContain("Usage limits couldn&#x27;t be read. Refresh to try again.");
     expect(html).not.toContain("width:");
     expect(html).not.toContain("% left");
   });

@@ -13,15 +13,22 @@
  *     panel's weekly row (0.6% elapsed, 4% used) is the near-coincidence to
  *     squint at. If the hairline reads as a glitch in the fill rather than a
  *     second fact, the fix is the hairline's contrast, not a legend.
- *   • THE LONG COUNTDOWN. `resets in 6d 23h` beside `resets in 45m` — the
- *     weekly row must not read as a different control because its number is
- *     wider. tabular-nums is doing that work; check it survives a light canvas.
- *   • LIGHT IS A DIFFERENT COLOUR. Toggle Light/Dark. The pace glyphs carry
- *     hue (`--attention`, `--positive`, both solved per appearance), so the
- *     Ahead panel's trend-up must stay a legible amber-brown on light, not mud.
+ *   • THE COLOUR IS THE VERDICT. Primary, then `--attention` at a quarter
+ *     left or when ahead of pace, then `--destructive` at a tenth. The Ahead
+ *     panel puts all three in one account: check that amber on a 39%-left bar
+ *     reads as "watch this" and not as a different kind of bar, and that the
+ *     6% stub in destructive is still a bar and not a dot.
+ *   • THE LONG LABEL AND THE LONG COUNTDOWN. `Weekly · Claude sonnet 4 5` is
+ *     what a model-scoped header actually produces, and it shares a line with
+ *     its countdown; `resets in 6d 23h` beside `resets in 45m` must not make
+ *     the weekly row read as a different control. Narrow the window: the
+ *     countdown clips before the percent does.
+ *   • LIGHT IS A DIFFERENT COLOUR. Toggle Light/Dark. The three fills are
+ *     solved per appearance, so amber must stay a legible amber-brown on
+ *     light, not mud, and the hairline must still read on every fill.
  *
  * Every fixture is pinned to one fixed `now`, the way the real component
- * anchors a mount — a scratch that ticked would be judging a liveness the
+ * anchors a snapshot — a scratch that ticked would be judging a liveness the
  * feature does not have.
  */
 import * as React from "react";
@@ -30,7 +37,8 @@ import type { UsageLimits } from "@volli/shared";
 import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage";
 
 export const title = "Usage limits (VC-263)";
-export const note = "Remaining bar, elapsed hairline, pace glyph — healthy, ahead, unsupported";
+export const note =
+  "Remaining bar, elapsed hairline, tone by colour — healthy, ahead, stale, unsupported";
 
 /** One moment, so every countdown and pace reading is exact. */
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -84,12 +92,13 @@ const AHEAD: UsageLimits = {
       windowDurationMins: 10_080,
     },
     {
-      id: "seven_day_opus",
+      id: "seven_day_claude_sonnet_4_5",
       kind: "weekly",
-      label: "Weekly · Opus",
+      // The label a model-scoped header really yields, and the longest one.
+      label: "Weekly · Claude sonnet 4 5",
       usedPercent: 8,
       // No reset stated: the row must survive without its countdown and without
-      // a pace reading, and still line up with its neighbours.
+      // a hairline, and still line up with its neighbours.
       windowDurationMins: 10_080,
     },
   ],
@@ -97,12 +106,13 @@ const AHEAD: UsageLimits = {
 
 /**
  * The edges: a session window fully spent with time left (no fill at all,
- * hairline standing alone), and one whose reset has passed with nothing newer
- * reported yet (`resets now`, hairline at the left edge, no pace — a window
- * that is over has none). Both must still read as the same control.
+ * hairline standing alone), one whose reset has passed with nothing newer
+ * reported yet (`resets now`, hairline at the left edge), and the whole
+ * reading old enough — forty minutes — that the account says when it was
+ * checked. All of it must still read as the same control.
  */
 const EDGES: UsageLimits = {
-  checkedAt: NOW - 60_000,
+  checkedAt: NOW - 40 * 60_000,
   windows: [
     {
       id: "session",
@@ -172,7 +182,7 @@ export default function UsageLimitsScratch() {
       <Frame label="Healthy · Codex">
         <ModelAccessUsage limits={CODEX} now={NOW} />
       </Frame>
-      <Frame label="Spent · reset passed">
+      <Frame label="Spent · reset passed · stale">
         <ModelAccessUsage limits={EDGES} now={NOW} />
       </Frame>
       <Frame label="Unsupported / couldn't read">

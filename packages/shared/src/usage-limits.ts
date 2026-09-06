@@ -157,6 +157,54 @@ export function formatResetsIn(window: Pick<UsageWindow, "resetsAt">, now: numbe
   return `resets in ${formatDuration(resetsAt - now)}`;
 }
 
+/** What colour the bar wears: the reading a glance is meant to take. */
+export type UsageTone = "normal" | "attention" | "critical";
+
+/** At or under this much left, the bar is critical. */
+export const USAGE_CRITICAL_LEFT_PERCENT = 10;
+/** At or under this much left, the bar asks for attention. */
+export const USAGE_ATTENTION_LEFT_PERCENT = 25;
+
+/**
+ * The bar's tone from what is left and how fast it is going.
+ *
+ * Little left is critical whatever the pace. Attention is either a quarter
+ * left or spending running ahead of the window: the second is the early
+ * warning — 39% left at 45% of the window to go will run out before the
+ * reset if the rate holds, and a bar still wearing its ordinary colour would
+ * say otherwise.
+ */
+export function usageTone(window: UsageWindow, now: number): UsageTone {
+  const remaining = remainingPercent(window);
+  if (remaining <= USAGE_CRITICAL_LEFT_PERCENT) return "critical";
+  if (remaining <= USAGE_ATTENTION_LEFT_PERCENT) return "attention";
+  if (paceOf(window, now) === "ahead") return "attention";
+  return "normal";
+}
+
+/**
+ * How old a reading may be before the surface says so.
+ *
+ * Twice the on-demand probe's freshness hold: an ordinary inspection inside
+ * that hold shows a read up to five minutes old, and that is the normal case,
+ * not a stale one. Past ten minutes the account has neither been probed nor
+ * heard from on a turn, and a person about to start a long Session should
+ * know the bars are a memory.
+ */
+export const USAGE_STALE_AFTER_MS = 10 * 60_000;
+
+/** `checked 4m ago`, or `checked just now` under the minute. */
+export function formatCheckedAgo(checkedAt: number, now: number): string {
+  const age = now - checkedAt;
+  if (age < 60_000) return "checked just now";
+  return `checked ${formatDuration(age)} ago`;
+}
+
+/** Whether a reading is old enough that the surface should say when it was taken. */
+export function isUsageStale(limits: Pick<UsageLimits, "checkedAt">, now: number): boolean {
+  return now - limits.checkedAt >= USAGE_STALE_AFTER_MS;
+}
+
 /**
  * Folds one partial report into what is held for the account.
  *
