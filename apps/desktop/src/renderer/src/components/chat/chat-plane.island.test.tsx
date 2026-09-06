@@ -180,9 +180,9 @@ describe("the Activity Island in the chat plane", () => {
     const pill = island();
     expect(pill).not.toBeNull();
     expect(
-      pill?.querySelector('[data-island-cluster="tabs"] [data-island-count]')?.getAttribute(
-        "data-island-count",
-      ),
+      pill
+        ?.querySelector('[data-island-cluster="tabs"] [data-island-count]')
+        ?.getAttribute("data-island-count"),
     ).toBe("1");
     // A sibling of the interaction stack, inside the composer's column —
     // never inside the stack, never absorbing it. The stack's origin wraps

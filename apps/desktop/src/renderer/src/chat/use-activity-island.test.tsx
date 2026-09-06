@@ -222,7 +222,9 @@ describe("useActivityIsland", () => {
     const probe = await mount(chatStore(), openShellOutput);
 
     const { model, actions } = probe.latest();
-    expect(model.shells).toEqual([{ id: "sh-1", command: "pnpm lab", state: "running", code: null }]);
+    expect(model.shells).toEqual([
+      { id: "sh-1", command: "pnpm lab", state: "running", code: null },
+    ]);
     actions.openShell("sh-1");
     expect(openShellOutput).toHaveBeenCalledWith("sh-1");
   });

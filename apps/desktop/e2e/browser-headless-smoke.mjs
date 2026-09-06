@@ -249,7 +249,9 @@ async function main() {
       );
       agentTabId = opened[0].tabId;
       await waitUntil("the island's tabs cluster", async () =>
-        (await tabsCount(page).getAttribute("data-island-count").catch(() => null)) === "1"
+        (await tabsCount(page)
+          .getAttribute("data-island-count")
+          .catch(() => null)) === "1"
           ? true
           : null,
       );

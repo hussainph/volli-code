@@ -376,4 +376,3 @@ describe("the now channel", () => {
     expect(probe.lines()[2]).toBe("Pinned here · github.com");
   });
 });
-

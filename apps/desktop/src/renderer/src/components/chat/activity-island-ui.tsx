@@ -614,9 +614,7 @@ function RowState({ children }: { children: string | null }) {
  */
 function RowOwner({ children }: { children: string | null }) {
   if (children === null) return null;
-  return (
-    <span className="min-w-0 truncate text-label text-muted-foreground/70">· {children}</span>
-  );
+  return <span className="min-w-0 truncate text-label text-muted-foreground/70">· {children}</span>;
 }
 
 function RowActions({ children }: React.PropsWithChildren) {

@@ -153,8 +153,7 @@ export function islandTabOf(
     state: tab.loading ? "loading" : "ready",
     promoted: tab.presentation !== "headless",
     surface: tab.presentation === "headless" ? null : tab.presentation,
-    owner:
-      tab.ownerSessionId === sessionId ? null : browserTabOwnerLabel(tab, sessionId, titleOf),
+    owner: tab.ownerSessionId === sessionId ? null : browserTabOwnerLabel(tab, sessionId, titleOf),
   };
 }
 
