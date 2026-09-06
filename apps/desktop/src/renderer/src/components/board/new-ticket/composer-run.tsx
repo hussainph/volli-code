@@ -31,10 +31,12 @@ import { resolveDefaultModel, type ModelSelection } from "@volli/shared";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import {
+  composerTierRows,
   ModelPill,
   offerableModels,
   type ComposerModel,
   type ComposerModelSelection,
+  type ComposerTierRow,
 } from "@renderer/components/chat/composer-ui";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 
@@ -44,6 +46,8 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
  * future reader think they were told apart.
  */
 const NO_MODELS: readonly ComposerModel[] = [];
+/** The tier table before it has been read, or after a read that failed. */
+const NO_TIERS: readonly ComposerTierRow[] = [];
 
 /**
  * What the pill names before anything has been resolved.
@@ -57,6 +61,8 @@ const NO_SELECTION: ComposerModelSelection = { providerId: "", modelId: "", reas
 
 export interface ComposerRun {
   models: readonly ComposerModel[];
+  /** The pill's Defaults view (VC-259): the tier table over the same catalog. */
+  tiers: readonly ComposerTierRow[];
   /**
    * What Create & start will run, or null when the composer has nothing to
    * say: Model Access is unreachable, the catalog read failed, or no default is
@@ -87,6 +93,7 @@ export interface ComposerRun {
 export function useComposerRun(projectDefault: ModelSelection | null = null): ComposerRun {
   const access = useModelAccessClient();
   const [models, setModels] = React.useState<readonly ComposerModel[]>(NO_MODELS);
+  const [tiers, setTiers] = React.useState<readonly ComposerTierRow[]>(NO_TIERS);
   const [selection, setSelection] = React.useState<ModelSelection | null>(null);
   const inspect = access?.inspect;
   const hiddenModels = access?.hiddenModels;
@@ -100,6 +107,7 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
       .then(([snapshot, hidden, configured]) => {
         if (!current) return;
         setModels(offerableModels(snapshot.models, snapshot.providers, hidden));
+        setTiers(composerTierRows(configured, snapshot.models, snapshot.providers, hidden));
         // The chain in rung order, exactly as main resolves a start: the
         // project's own preference first, then `resolveDefaultModel` — the
         // policy, not a guess: an unset Ticket default MEANS the project
@@ -112,6 +120,7 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
         // question from the same defaults.
         if (!current) return;
         setModels(NO_MODELS);
+        setTiers(NO_TIERS);
         setSelection(null);
       });
     return () => {
@@ -119,7 +128,7 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
     };
   }, [defaults, hiddenModels, inspect, projectDefault, revision]);
 
-  return { models, selection, setSelection };
+  return { models, tiers, selection, setSelection };
 }
 
 /**
@@ -144,7 +153,7 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
  * than one level to choose between.
  */
 export function ComposerRunRow({ run }: { run: ComposerRun }) {
-  const { models, selection, setSelection } = run;
+  const { models, tiers, selection, setSelection } = run;
   const stops =
     selection === null
       ? []
@@ -159,6 +168,7 @@ export function ComposerRunRow({ run }: { run: ComposerRun }) {
           model change can never leave a level behind that this one cannot run. */}
       <ModelPill
         models={models}
+        tiers={tiers}
         selection={selection ?? NO_SELECTION}
         // Never disabled by an empty title: choosing what a ticket will run on
         // is independent of whether the ticket is ready to be created. The pill

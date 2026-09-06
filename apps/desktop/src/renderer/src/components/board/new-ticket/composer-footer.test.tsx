@@ -7,6 +7,7 @@ import { ComposerFooter } from "./composer-footer";
 
 const run: ComposerRun = {
   models: [],
+  tiers: [],
   selection: null,
   setSelection: () => {},
 };

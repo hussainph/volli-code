@@ -59,14 +59,24 @@ import {
   PromptInputTools,
 } from "@renderer/components/ui/ai-elements/prompt-input";
 import {
+  acceptsImageInputIn,
+  AGENT_MODEL_TIERS,
+  DEFAULT_MODEL_PICKER_VIEW,
+  errorMessage,
   expandCommandInvocation,
+  isModelHidden,
+  modelTierRow,
   offeredComposerVerbs,
+  resolveModelTier,
   visibleModels,
+  type AgentModelTier,
   type HiddenModelRef,
   type ComposerVerb,
   type IndexedFile,
+  type ModelAccessDefaults,
   type ModelAccessModel,
   type ModelAccessProvider,
+  type ModelPickerView,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -101,7 +111,7 @@ import {
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
-import { ModelMark } from "@renderer/components/models/model-identity";
+import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -110,6 +120,9 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Segmented } from "@renderer/components/ui/segmented";
+import { useModelAccessClient } from "@renderer/lib/model-access-client";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
 export interface SessionComposerProps {
@@ -120,6 +133,8 @@ export interface SessionComposerProps {
   /** A row action removed its focused control; hand focus to the persistent input. */
   onComposerFocusRequest?(): void;
   models: readonly ComposerModel[];
+  /** The user's tier table, which gives the pill its Defaults view (VC-259). */
+  tiers?: readonly ComposerTierRow[];
   selection: ComposerModelSelection;
   /** The Session's provider as the catalog names it — see {@link modelPillLabel}. */
   selectionProviderLabel?: string;
@@ -314,6 +329,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   textareaRef,
   onComposerFocusRequest,
   models,
+  tiers,
   selection,
   selectionProviderLabel,
   onSelectionChange,
@@ -640,6 +656,7 @@ export const SessionComposer = React.memo(function SessionComposer({
             )}
             <ModelPill
               models={models}
+              tiers={tiers}
               selection={selection}
               selectionProviderLabel={selectionProviderLabel}
               disabled={modelChoiceDisabled}
@@ -1213,6 +1230,96 @@ export function offerableModels(
   }));
 }
 
+/**
+ * Why a tier row cannot be picked, or `ready` when it can.
+ *
+ * Four ways a tier fails to name a model this Session could run right now,
+ * told apart because each sends the person somewhere different: `unset` is a
+ * Settings row to fill, `hidden` a Settings toggle to flip, `signed-out` a
+ * provider to sign in to, and `unavailable` a model the catalog no longer
+ * lists. The row still shows in every case — the table is the user's own
+ * configuration, and a row that vanished would read as a tier that does not
+ * exist rather than one that needs attention.
+ */
+export type ComposerTierState = "ready" | "unset" | "hidden" | "signed-out" | "unavailable";
+
+/** One tier as the picker's Defaults view draws it (VC-259). */
+export interface ComposerTierRow {
+  tier: AgentModelTier;
+  /** The Settings row's label — "Fast", "Ticket Sessions". */
+  label: string;
+  /** Its one-line job, as the tool description and Settings state it. */
+  hint: string;
+  state: ComposerTierState;
+  /**
+   * The model the tier resolves to, or null when nothing on its ladder is
+   * set. Present for every non-`unset` state so a signed-out or hidden row can
+   * still name what it would have run.
+   */
+  model: {
+    providerId: string;
+    providerLabel: string;
+    modelId: string;
+    label: string;
+  } | null;
+  /** The tier's stored reasoning level, riding beside its model. */
+  reasoningLevel: string | null;
+}
+
+/**
+ * The tier table as a picker offers it: each agent-facing tier, the model it
+ * resolves to today, and whether that model is one this picker could pin.
+ *
+ * Resolution is the shared walk (`resolveModelTier`), with the catalog's
+ * image predicate so the Visual row is honest about a Ticket fallback that
+ * cannot see. What this adds is the picker's own question — could a person
+ * pick this right now? — answered against the SAME two filters
+ * {@link offerableModels} applies: the catalog's availability, then the
+ * user's curation. Utility is not here: nobody starts a Session on it.
+ */
+export function composerTierRows(
+  defaults: ModelAccessDefaults,
+  models: readonly ModelAccessModel[],
+  providers: readonly ModelAccessProvider[],
+  hidden: readonly HiddenModelRef[],
+): readonly ComposerTierRow[] {
+  const sees = acceptsImageInputIn(models);
+  return AGENT_MODEL_TIERS.map((tier) => {
+    const { label, hint } = modelTierRow(tier);
+    const resolved = resolveModelTier(defaults, tier, sees);
+    if (resolved === null) {
+      return { tier, label, hint, state: "unset", model: null, reasoningLevel: null };
+    }
+    const { selection } = resolved;
+    const listed = models.find(
+      (model) => model.providerId === selection.providerId && model.modelId === selection.modelId,
+    );
+    const state: ComposerTierState =
+      listed === undefined || listed.state === "unavailable"
+        ? "unavailable"
+        : listed.state === "authentication-required"
+          ? "signed-out"
+          : isModelHidden(hidden, selection)
+            ? "hidden"
+            : "ready";
+    return {
+      tier,
+      label,
+      hint,
+      state,
+      model: {
+        providerId: selection.providerId,
+        providerLabel:
+          providers.find((provider) => provider.id === selection.providerId)?.label ??
+          selection.providerId,
+        modelId: selection.modelId,
+        label: listed?.label ?? selection.modelId,
+      },
+      reasoningLevel: selection.reasoningLevel,
+    };
+  });
+}
+
 /** The selected model's own stop set, or nothing when the list does not hold it. */
 function effortLevels(
   models: readonly ComposerModel[],
@@ -1266,13 +1373,80 @@ export function modelPillLabel(
 }
 
 /**
+ * Which list the pill opens on, remembered per profile (VC-259).
+ *
+ * Read once from Model Access on mount and written through on every change;
+ * the local word is the one the pill draws, so a toggle never waits on the
+ * round trip. Without a client — the fixture gallery, a test — the pill opens
+ * on every model and remembers nothing, which is what it did before the
+ * Defaults view existed.
+ *
+ * A failed write is surfaced and the view is kept: the person asked for the
+ * other list and got it; what failed is only the memory of it.
+ */
+function useModelPickerView(
+  /** Whether this pill has a table to show at all; without one nothing is read. */
+  enabled: boolean,
+): [ModelPickerView, (view: ModelPickerView) => void] {
+  const client = useModelAccessClient();
+  const [view, setView] = React.useState<ModelPickerView>(DEFAULT_MODEL_PICKER_VIEW);
+  const read = enabled ? client?.pickerView : undefined;
+  React.useEffect(() => {
+    if (read === undefined) return;
+    let current = true;
+    read()
+      .then((stored) => {
+        if (current) setView(stored);
+      })
+      // A preference that could not be read is the default, not an error a
+      // person can act on — the pill still opens, on every model.
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [read]);
+  const change = React.useCallback(
+    (next: ModelPickerView) => {
+      setView(next);
+      client?.setPickerView(next).catch((error: unknown) => {
+        toastError(`Couldn't remember the model list: ${errorMessage(error)}`);
+      });
+    },
+    [client],
+  );
+  return [view, change];
+}
+
+const PICKER_VIEWS: readonly { key: ModelPickerView; label: string }[] = [
+  { key: "all", label: "All models" },
+  { key: "defaults", label: "Defaults" },
+];
+
+/** What a tier row says in place of a model it cannot offer. */
+const TIER_STATE_LABEL: Record<Exclude<ComposerTierState, "ready">, string> = {
+  unset: "unset",
+  hidden: "hidden",
+  "signed-out": "signed out",
+  unavailable: "not available",
+};
+
+/**
  * Exported for the New-ticket composer, which picks the model a Ticket Session
  * will be BORN with (VC-56). The two surfaces answer the same question one
  * moment apart — what will this Session run as — so a second pill shaped
  * slightly differently would be the same control drawn twice.
+ *
+ * `tiers` is the user's own tier table (VC-259), and its presence is what
+ * draws the All models / Defaults toggle at the top of the list. A caller
+ * without one — the Automation run override, which pins for one Run — gets
+ * the plain list. Picking a tier row pins the exact model and level it
+ * resolved to, through the same `onChange` a model row calls: the Session is
+ * pinned to a model, never to a tier name, so a later Settings change does
+ * not move a running Session.
  */
 export function ModelPill({
   models,
+  tiers,
   selection,
   selectionProviderLabel,
   disabled,
@@ -1281,6 +1455,7 @@ export function ModelPill({
   onOpenChange,
 }: {
   models: readonly ComposerModel[];
+  tiers?: readonly ComposerTierRow[];
   selection: ComposerModelSelection;
   selectionProviderLabel?: string;
   disabled: boolean;
@@ -1290,6 +1465,14 @@ export function ModelPill({
   onOpenChange?(open: boolean): void;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  // The toggle exists only where there is a table to show; without one the
+  // list is every model and the remembered word is never even read.
+  const [view, setView] = useModelPickerView(tiers !== undefined);
+  const showDefaults = tiers !== undefined && view === "defaults";
+  const tierModels = React.useMemo(
+    () => (tiers ?? []).flatMap((row) => (row.model === null ? [] : [row.model])),
+    [tiers],
+  );
   // Controlled when `open` is present, uncontrolled otherwise — the ordinary
   // Radix shape, so a caller that never types `/model` notices nothing. The
   // internal state stays the uncontrolled half and is written either way:
@@ -1376,59 +1559,174 @@ export function ModelPill({
           segment on the selected row, and past four levels it did not hold it
           anyway — the row that exists to name a model truncated the name to
           nothing so the qualifier could fit. Rows are model names now. */}
-      <PopoverContent align="start" side="top" className="w-72 p-0">
+      {/* `w-72` for a list of names; `w-88` where the Defaults view puts a tier
+          name, a model name and a level on one row (VC-259) — one width for
+          both views, so the toggle moves nothing but the rows. */}
+      <PopoverContent
+        align="start"
+        side="top"
+        className={cn("p-0", tiers === undefined ? "w-72" : "w-88")}
+      >
         <PromptInputCommand>
-          <PromptInputCommandInput placeholder="Model" />
+          {/* Inside the command root, so arrow keys reach the list from the
+              toggle too; the search field keeps focus in the All view through
+              its own `autoFocus`, which the popover's focus scope honours. No
+              motion on the switch: a control used tens of times a day. */}
+          {tiers !== undefined ? (
+            <div className="flex h-8 items-center border-b px-2">
+              <Segmented<ModelPickerView>
+                ariaLabel="Model list"
+                testId="model-picker-view"
+                value={view}
+                options={PICKER_VIEWS}
+                onChange={setView}
+              />
+            </div>
+          ) : null}
+          {/* No search box over the Defaults view: five rows, nothing to
+              filter, and a field that filtered nothing would be a lie. */}
+          {showDefaults ? null : <PromptInputCommandInput placeholder="Model" autoFocus />}
           <PromptInputCommandList>
-            <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>
-            {providers.map((provider) => (
-              <PromptInputCommandGroup key={provider.id} heading={provider.label}>
-                {models
-                  .filter((model) => model.providerId === provider.id)
-                  .map((model) => {
-                    const selected =
-                      model.providerId === selection.providerId &&
-                      model.modelId === selection.modelId;
-                    return (
-                      // A model row, and only a model row. It used to carry the
-                      // effort segment on whichever row was selected — up to
-                      // seven pressable buttons inside a listbox option, kept
-                      // from also picking the row by a `stopPropagation`. Effort
-                      // is a chip in the footer now, so the workaround and the
-                      // thing it worked around both left together.
-                      <PromptInputCommandItem
-                        key={model.id}
-                        value={`${model.providerId} ${model.modelId} ${model.label}`}
-                        onSelect={() => {
-                          onChange({
-                            ...selection,
-                            providerId: model.providerId,
-                            modelId: model.modelId,
-                            // The stop set changes under the effort chip when
-                            // the model does; a level the incoming model cannot
-                            // run is rewritten rather than held.
-                            reasoningLevel: reclampEffort(
-                              model.reasoningLevels,
-                              selection.reasoningLevel,
-                            ),
-                          });
-                          setOpen(false);
-                        }}
-                      >
-                        <CheckIcon
-                          className={cn("size-3.5 shrink-0", !selected && "invisible")}
-                          weight="bold"
-                        />
-                        <ModelMark model={model} providerLabel={model.providerLabel} />
-                        <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
-                      </PromptInputCommandItem>
-                    );
-                  })}
+            {showDefaults ? (
+              <PromptInputCommandGroup>
+                {tiers.map((row) => (
+                  <TierRow
+                    key={row.tier}
+                    row={row}
+                    siblings={tierModels}
+                    selected={
+                      row.model !== null &&
+                      row.model.providerId === selection.providerId &&
+                      row.model.modelId === selection.modelId &&
+                      row.reasoningLevel === selection.reasoningLevel
+                    }
+                    onPick={() => {
+                      if (row.model === null || row.reasoningLevel === null) return;
+                      onChange({
+                        ...selection,
+                        providerId: row.model.providerId,
+                        modelId: row.model.modelId,
+                        reasoningLevel: row.reasoningLevel,
+                      });
+                      setOpen(false);
+                    }}
+                  />
+                ))}
               </PromptInputCommandGroup>
-            ))}
+            ) : null}
+            {showDefaults ? null : <PromptInputCommandEmpty>No match</PromptInputCommandEmpty>}
+            {showDefaults
+              ? null
+              : providers.map((provider) => (
+                  <PromptInputCommandGroup key={provider.id} heading={provider.label}>
+                    {models
+                      .filter((model) => model.providerId === provider.id)
+                      .map((model) => {
+                        const selected =
+                          model.providerId === selection.providerId &&
+                          model.modelId === selection.modelId;
+                        return (
+                          // A model row, and only a model row. It used to carry the
+                          // effort segment on whichever row was selected — up to
+                          // seven pressable buttons inside a listbox option, kept
+                          // from also picking the row by a `stopPropagation`. Effort
+                          // is a chip in the footer now, so the workaround and the
+                          // thing it worked around both left together.
+                          <PromptInputCommandItem
+                            key={model.id}
+                            value={`${model.providerId} ${model.modelId} ${model.label}`}
+                            onSelect={() => {
+                              onChange({
+                                ...selection,
+                                providerId: model.providerId,
+                                modelId: model.modelId,
+                                // The stop set changes under the effort chip when
+                                // the model does; a level the incoming model cannot
+                                // run is rewritten rather than held.
+                                reasoningLevel: reclampEffort(
+                                  model.reasoningLevels,
+                                  selection.reasoningLevel,
+                                ),
+                              });
+                              setOpen(false);
+                            }}
+                          >
+                            <CheckIcon
+                              className={cn("size-3.5 shrink-0", !selected && "invisible")}
+                              weight="bold"
+                            />
+                            <ModelMark model={model} providerLabel={model.providerLabel} />
+                            <span className="min-w-0 flex-1 truncate tabular-nums">
+                              {model.label}
+                            </span>
+                          </PromptInputCommandItem>
+                        );
+                      })}
+                  </PromptInputCommandGroup>
+                ))}
           </PromptInputCommandList>
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * One tier in the Defaults view: the tier's name, then the model it resolves
+ * to and the level it runs at — or, where it cannot be picked, the one word
+ * that says why. Drawn with {@link ModelName} like every other model surface;
+ * the provider is said only where two tiers share a model name.
+ *
+ * A row that cannot be picked is disabled rather than hidden: the table is
+ * the user's own configuration, and the Settings pane is where it is fixed.
+ * The word beside it ("unset", "hidden", "signed out") is enough to say which
+ * pane; a sentence about the fallback ladder is not this row's to carry.
+ */
+function TierRow({
+  row,
+  siblings,
+  selected,
+  onPick,
+}: {
+  row: ComposerTierRow;
+  /** Every model the table names, so a name two tiers share gets its provider. */
+  siblings: readonly NonNullable<ComposerTierRow["model"]>[];
+  selected: boolean;
+  onPick(): void;
+}) {
+  const ready = row.state === "ready";
+  return (
+    <PromptInputCommandItem
+      value={row.tier}
+      disabled={!ready}
+      onSelect={onPick}
+      data-testid={`model-picker-tier-${row.tier}`}
+      data-tier-state={row.state}
+      title={row.hint}
+    >
+      <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} weight="bold" />
+      {/* Three columns: the tier name at a fixed width (five short words), the
+          model taking what is left and truncating, and the level — or the
+          state word in its place — pinned to the right edge where truncation
+          cannot reach it. The level is the fact that tells two rows on the
+          same model apart, so it is the one the name gives way to. */}
+      <span className="w-24 shrink-0 truncate">{row.label}</span>
+      {row.model === null || row.state === "unset" ? (
+        <span className="ml-auto text-muted-foreground">{TIER_STATE_LABEL.unset}</span>
+      ) : (
+        <>
+          <ModelName
+            model={row.model}
+            models={siblings}
+            providerLabel={row.model.providerLabel}
+            muted={row.state !== "ready"}
+            className="min-w-0 flex-1"
+          />
+          <span className="ml-auto shrink-0 text-muted-foreground">
+            {row.state === "ready" ? row.reasoningLevel : TIER_STATE_LABEL[row.state]}
+          </span>
+        </>
+      )}
+    </PromptInputCommandItem>
   );
 }
