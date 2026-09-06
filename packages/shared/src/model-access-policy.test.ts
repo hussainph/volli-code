@@ -105,7 +105,7 @@ describe("tiers as agents name them", () => {
     expect(MODEL_TIER_ROWS.find((row) => row.tier === "fast")).toEqual({
       tier: "fast",
       label: "Fast",
-      hint: "Quick, cheap, bounded side work.",
+      hint: "Quick, low-cost tasks.",
       advanced: true,
     });
     expect(MODEL_TIER_ROWS.find((row) => row.tier === "ticket")?.advanced).toBe(false);
@@ -149,6 +149,19 @@ describe("the visual tier", () => {
       resolvedFrom: "ticket",
       selection: GLOBAL,
     });
+  });
+
+  it("reads a model the catalog does not hold as blind", () => {
+    // A stored default whose row has since left the catalog (provider signed
+    // out, model retired) cannot be checked, so it cannot be inherited by
+    // Visual — the same refusal as a model that is known not to see.
+    expect(sees({ providerId: "gone", modelId: "gone", reasoningLevel: "low" })).toBe(false);
+    const goneTicket = {
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: GLOBAL,
+      ticket: { providerId: "gone", modelId: "gone", reasoningLevel: "low" as const },
+    };
+    expect(resolveModelTier(goneTicket, "visual", sees)).toBeNull();
   });
 
   it("refuses — never skips a rung — when the Ticket default cannot read images", () => {

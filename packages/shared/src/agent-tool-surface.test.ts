@@ -294,6 +294,7 @@ describe("the registry's tool projection (VC-162)", () => {
       "message",
       "title",
       "model",
+      "tier",
       "reasoning",
     ]);
     // `-m`, `--message` and `--project` are the parser's business. A model
