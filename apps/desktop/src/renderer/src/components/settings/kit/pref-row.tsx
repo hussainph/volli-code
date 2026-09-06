@@ -28,10 +28,18 @@ export function PrefRow({
   /** The `(i)`. Preferred over `description` everywhere. */
   hint?: React.ReactNode;
   /**
-   * Prose under the label. **Reserved for trust boundaries** — where the app
-   * takes an irreversible action, which is CLAUDE.md's own carve-out. One use
-   * on both surfaces combined (retention's automatic deletion). If you are
-   * reaching for this to explain a control, you want `hint`.
+   * Prose under the label. Two sanctioned uses, both CLAUDE.md carve-outs:
+   *
+   * 1. **Trust boundaries** — where the app takes an irreversible action
+   *    (retention's automatic deletion).
+   * 2. **A label that names no job** — the model tiers Fast / Deep / Visual /
+   *    Utility (VC-259). "Fast" says nothing about what is fast, and the
+   *    tiers agents delegate to must read at a glance; the owner asked for
+   *    the job line in place rather than behind a glyph. Twelve words, the
+   *    work as a noun phrase, never the inheritance chain.
+   *
+   * If you are reaching for this to explain a control whose label already
+   * names its job, you want `hint`.
    */
   description?: string;
   align?: "center" | "start";

@@ -45,6 +45,14 @@ const SNAPSHOT: ModelAccessSnapshot = {
       reasoningLevels: ["low", "high"],
       acceptsImageInput: true,
     },
+    {
+      providerId: "acme",
+      modelId: "blind",
+      label: "Blind",
+      state: "available",
+      reasoningLevels: ["low", "high"],
+      acceptsImageInput: false,
+    },
   ],
 };
 
@@ -92,43 +100,74 @@ async function renderSettings(defaults: ModelAccessDefaults): Promise<void> {
   });
 }
 
-function advancedButton(): HTMLButtonElement {
-  const button = document.querySelector('[data-testid="advanced-tiers"]');
-  if (!(button instanceof HTMLButtonElement)) throw new Error("Advanced disclosure not found");
-  return button;
-}
-
 function rowText(tier: string): string {
   return document.querySelector(`[data-testid="default-model-${tier}"]`)?.textContent ?? "";
 }
 
-describe("the advanced tiers in Model Access", () => {
-  it("keeps Fast, Deep and Visual behind the Advanced row until it is opened", async () => {
+describe("the model tiers in Model Access", () => {
+  it("draws all six tiers as one tree, the kind-of-work rows under Ticket Sessions", async () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
-    // Board / Ticket / Utility are where they always were.
-    expect(document.querySelector('[data-testid="default-model-global"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="default-model-ticket"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="default-model-utility"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="default-model-fast"]')).toBeNull();
-
-    await act(async () => advancedButton().click());
-
-    expect(document.querySelector('[data-testid="default-model-fast"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="default-model-deep"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="default-model-visual"]')).not.toBeNull();
+    for (const tier of ["global", "ticket", "utility", "fast", "deep", "visual"]) {
+      expect(document.querySelector(`[data-testid="default-model-${tier}"]`)).not.toBeNull();
+    }
+    // No disclosure, no group headings: position carries the ladder.
+    expect(document.querySelector('[data-testid="advanced-tiers"]')).toBeNull();
+    expect(document.querySelector("h3")).toBeNull();
+    const nested = document.querySelector('[data-testid="default-models-under-ticket"]');
+    expect(nested).not.toBeNull();
+    for (const tier of ["fast", "deep", "visual"]) {
+      expect(nested?.querySelector(`[data-testid="default-model-${tier}"]`)).not.toBeNull();
+    }
+    for (const tier of ["global", "ticket", "utility"]) {
+      expect(nested?.querySelector(`[data-testid="default-model-${tier}"]`)).toBeNull();
+    }
+    // Project precedence is the section's `(i)`, not a subtitle under its title.
+    expect(document.querySelector('[data-slot="pref-section-description"]')).toBeNull();
+    expect(document.querySelector('[aria-label="About Default models"]')).not.toBeNull();
   });
 
-  it("says what an unset advanced row uses instead — the Ticket default", async () => {
+  it("names the row an unset row follows, as that row is labelled", async () => {
     await renderSettings({
       ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
     });
-    await act(async () => advancedButton().click());
 
-    expect(rowText("fast")).toContain("Ticket default");
-    expect(rowText("deep")).toContain("Ticket default");
-    expect(rowText("visual")).toContain("Ticket default");
-    // And the primary rows still say what THEY use: the Board row.
-    expect(rowText("ticket")).toContain("Project default");
+    expect(rowText("fast")).toContain("Same as Ticket Sessions");
+    expect(rowText("deep")).toContain("Same as Ticket Sessions");
+    expect(rowText("visual")).toContain("Same as Ticket Sessions");
+    expect(rowText("ticket")).toContain("Same as Board chats");
+    // Utility says what actually happens, not the ladder's last resort.
+    expect(rowText("utility")).toContain("Each chat's own model");
+    // No caption restates what the row resolves to; the row above says it.
+    expect(rowText("deep")).not.toContain("Sonnet");
+    // And no disabled "Reasoning" control is drawn on a row that inherits.
+    expect(
+      document.querySelector('[data-testid="default-model-deep"] [aria-label="Reasoning level"]'),
+    ).toBeNull();
+  });
+
+  it("carries a job line only where the label does not name the job", async () => {
+    await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
+
+    expect(rowText("fast")).toContain("Quick, low-cost tasks.");
+    expect(rowText("deep")).toContain("Complex reasoning, planning, and review.");
+    expect(rowText("visual")).toContain("Images, screenshots, and pages.");
+    expect(rowText("utility")).toContain("Chat names and summaries.");
+    expect(rowText("global")).toBe("Board chatsChoose a model");
+    expect(rowText("ticket")).toBe("Ticket SessionsSame as Board chats");
+    expect(document.querySelector('[aria-label="About Fast"]')).toBeNull();
+  });
+
+  it("says why Visual inherits nothing when the Ticket model cannot read images", async () => {
+    await renderSettings({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
+      ticket: { providerId: "acme", modelId: "blind", reasoningLevel: "low" },
+    });
+
+    expect(
+      document.querySelector('[data-testid="default-model-visual-blocked"]')?.textContent,
+    ).toBe("The Ticket model can’t read images — choose one here.");
+    expect(document.querySelector('[data-testid="default-model-deep-blocked"]')).toBeNull();
   });
 });
