@@ -361,6 +361,7 @@ describe("chatgptAccountId", () => {
   it("reads nothing off anything that is not a token with that claim", () => {
     expect(chatgptAccountId("opaque")).toBeUndefined();
     expect(chatgptAccountId("a.b.c")).toBeUndefined();
+    expect(chatgptAccountId(`h.${Buffer.from("42").toString("base64url")}.s`)).toBeUndefined();
     expect(chatgptAccountId(`h.${Buffer.from("[]").toString("base64url")}.s`)).toBeUndefined();
     expect(chatgptAccountId(codexToken({ sub: "user" }))).toBeUndefined();
     expect(chatgptAccountId(codexToken({ "https://api.openai.com/auth": "x" }))).toBeUndefined();

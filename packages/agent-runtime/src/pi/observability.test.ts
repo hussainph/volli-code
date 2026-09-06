@@ -291,6 +291,135 @@ describe("instrumentStreamFn", () => {
     expect(events[0]).not.toHaveProperty("responseModelId");
   });
 
+  describe("passive usage capture", () => {
+    const ANTHROPIC_HEADERS = {
+      "anthropic-ratelimit-unified-5h-utilization": "0.37",
+      "anthropic-ratelimit-unified-7d-utilization": "0.04",
+    };
+
+    /** An inner that reports the headers the scripted provider answered with. */
+    function responding(headers: Record<string, string> | null): {
+      inner: StreamFn;
+      seen: unknown[];
+    } {
+      const seen: unknown[] = [];
+      const stream = createAssistantMessageEventStream();
+      const inner: StreamFn = ((_model, _context, options) => {
+        seen.push(options);
+        void options?.onResponse?.({ status: 200, headers: headers ?? {} }, model());
+        return stream;
+      }) as StreamFn;
+      return { inner, seen };
+    }
+
+    it("maps the response's usage headers and hands them to the sink", () => {
+      const recorded: [string, unknown][] = [];
+      const { inner } = responding(ANTHROPIC_HEADERS);
+      const wrapped = instrumentStreamFn(inner, {
+        sink: recordingSink().sink,
+        runId: "run-9",
+        now: () => 500,
+        usageLimits: { record: (providerId, update) => void recorded.push([providerId, update]) },
+      });
+
+      wrapped(model(), { messages: [] });
+
+      expect(recorded).toEqual([
+        [
+          "anthropic",
+          {
+            observedAt: 500,
+            windows: [
+              expect.objectContaining({ id: "five_hour", usedPercent: 37 }),
+              expect.objectContaining({ id: "seven_day", usedPercent: 4 }),
+            ],
+          },
+        ],
+      ]);
+    });
+
+    it("still runs a caller's own onResponse, after the capture", () => {
+      const order: string[] = [];
+      const stream = createAssistantMessageEventStream();
+      const inner: StreamFn = ((_model, _context, options) => {
+        void options?.onResponse?.(
+          { status: 200, headers: { "anthropic-ratelimit-unified-5h-utilization": "0.5" } },
+          model(),
+        );
+        return stream;
+      }) as StreamFn;
+      const wrapped = instrumentStreamFn(inner, {
+        sink: recordingSink().sink,
+        runId: "run-9",
+        now: () => 0,
+        usageLimits: { record: () => void order.push("sink") },
+      });
+
+      wrapped(model(), { messages: [] }, {
+        onResponse: () => {
+          order.push("caller");
+        },
+      } as never);
+
+      expect(order).toEqual(["sink", "caller"]);
+    });
+
+    it("records nothing for a provider with no mapper, and nothing when there is no sink", () => {
+      const recorded: unknown[] = [];
+      // Codex headers on an anthropic-shaped request: the provider id decides
+      // which mapper runs, and here no mapper claims them.
+      const codex = responding({ "x-codex-primary-used-percent": "49" });
+      const withSink = instrumentStreamFn(codex.inner, {
+        sink: recordingSink().sink,
+        runId: "run-9",
+        now: () => 0,
+        usageLimits: { record: (_providerId, update) => void recorded.push(update) },
+      });
+      withSink(model(), { messages: [] });
+      expect(recorded).toEqual([]);
+
+      const { inner, seen } = responding(ANTHROPIC_HEADERS);
+      const withoutSink = instrumentStreamFn(inner, {
+        sink: recordingSink().sink,
+        runId: "run-9",
+        now: () => 0,
+      });
+      withoutSink(model(), { messages: [] });
+      // The options reach the provider untouched — no onResponse of ours.
+      expect(seen).toEqual([undefined]);
+    });
+
+    it("costs a throwing sink or unreadable headers nothing beyond the capture", () => {
+      const stream = createAssistantMessageEventStream();
+      let produced = false;
+      const inner: StreamFn = ((_model, _context, options) => {
+        produced = true;
+        void options?.onResponse?.(
+          {
+            status: 200,
+            // A header map that is not one; the reader must not throw past us.
+            headers: null as unknown as Record<string, string>,
+          },
+          model(),
+        );
+        return stream;
+      }) as StreamFn;
+      const wrapped = instrumentStreamFn(inner, {
+        sink: recordingSink().sink,
+        runId: "run-9",
+        now: () => 0,
+        usageLimits: {
+          record: () => {
+            throw new Error("sink bug");
+          },
+        },
+      });
+
+      expect(() => wrapped(model(), { messages: [] })).not.toThrow();
+      expect(produced).toBe(true);
+    });
+  });
+
   it("reports the provider's reasoning-token split when it says one", async () => {
     const { sink, events } = recordingSink();
     const message = settledMessage();

@@ -521,6 +521,13 @@ function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   return entryId;
 }
 
+/**
+ * The platform fetch the usage probe reads provider endpoints with — stated
+ * once here so the runtime itself never chooses a transport (VC-263).
+ */
+const platformUsageFetch: NonNullable<PiRuntimeHostOptions["usageLimits"]>["fetch"] = (url, init) =>
+  globalThis.fetch(url, init);
+
 export interface PiRuntimeHost {
   readonly adapter: NativeHarnessAdapter;
   inspectModelAccess: AgentRuntime["inspectModelAccess"];
@@ -545,7 +552,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
-    usageLimits: options.usageLimits ?? {},
+    usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
   });
 
   return {

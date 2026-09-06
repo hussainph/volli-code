@@ -12,7 +12,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { inspectPiModelAccess, PROBE_TIMEOUT_MS, type UsageLimitsSource } from "./model-access";
 import type { RefreshableCatalogs } from "./model-catalog";
-import { UsageLimitsHolder, UsageProbeSchedule } from "./usage-limits";
+import { UsageLimitsHolder } from "./usage-limits/holder";
+import { UsageProbeSchedule } from "./usage-limits/probe";
 
 // --- fixtures --------------------------------------------------------------
 //

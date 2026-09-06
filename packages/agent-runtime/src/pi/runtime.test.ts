@@ -56,6 +56,8 @@ import {
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { createSessionTools } from "./tools";
 import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
+import { UsageLimitsHolder } from "./usage-limits/holder";
+import type { UsageProbeFetch } from "./usage-limits/probe";
 
 const MODEL_ID = "claude-haiku-4-5";
 const PROVIDER_ID = "anthropic";
@@ -7691,5 +7693,65 @@ describe("completeUtility", () => {
         user: "hello",
       }),
     ).resolves.toMatchObject({ text: "Fix the login flow" });
+  });
+});
+
+/** A fetch no test should ever reach; reaching it fails the assertion below. */
+const unusedFetch: UsageProbeFetch = async () => {
+  throw new Error("no probe should reach the network in this test");
+};
+
+describe("usage limits", () => {
+  it("folds one response's usage headers into the holder the inspection reads", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const holder = new UsageLimitsHolder();
+    const finishing = scriptedStream([(emit) => emit.finish()]);
+    const models = modelsWithStream((model, context, options) => {
+      void options?.onResponse?.(
+        {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0.37",
+            "anthropic-ratelimit-unified-7d-utilization": "0.04",
+          },
+        },
+        model,
+      );
+      return finishing(model, context, options);
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models,
+      usageLimits: { holder, fetch: unusedFetch },
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("hello");
+    await handle.close();
+
+    const held = holder.get(PROVIDER_ID);
+    expect(held?.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+      ["five_hour", 37],
+      ["seven_day", 4],
+    ]);
+  });
+
+  it("builds its own holder and platform fetch when the host opts in with nothing", async () => {
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: fixture().sessionDataDir,
+      // The faux provider resolves an API-key credential, so the read answers
+      // `unsupported` without a request and the platform fetch is never
+      // reached — the opt-in itself is what this exercises.
+      models: modelsWithStream(scriptedStream([])),
+      usageLimits: { fetch: unusedFetch },
+    });
+
+    const access = await runtime.inspectModelAccess({});
+
+    expect(access.providers.find((provider) => provider.id === PROVIDER_ID)?.usageLimits).toEqual({
+      checkedAt: expect.any(Number),
+      windows: [],
+      unavailable: { reason: "unsupported" },
+    });
   });
 });

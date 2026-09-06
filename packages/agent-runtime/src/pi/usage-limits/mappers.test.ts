@@ -2,7 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { anthropicHeadersToUpdate, anthropicUsageFromEndpoint } from "./anthropic";
 import { codexHeadersToUpdate, codexUsageFromEndpoint } from "./codex";
-import { windowShapeForMinutes } from "./windows";
+import { headerUsageUpdate } from "./passive";
+import {
+  epochSecondsToIso,
+  finiteNumber,
+  isoTimestamp,
+  percentOf,
+  secondsFromNowToIso,
+  windowShapeForMinutes,
+} from "./windows";
 
 const NOW = Date.parse("2026-03-01T12:00:00Z");
 const RESET_5H = Date.parse("2026-03-01T14:00:00Z");
@@ -125,6 +133,7 @@ describe("anthropicUsageFromEndpoint", () => {
     five_hour: { utilization: 37, resets_at: "2026-03-01T14:00:00+00:00" },
     seven_day: { utilization: 4, resets_at: "2026-03-05T09:30:00+00:00" },
     seven_day_opus: { utilization: 12, resets_at: null },
+    seven_day_sonnet: { utilization: 3, resets_at: "not a timestamp" },
     seven_day_oauth_apps: null,
     extra_usage: { is_enabled: false, monthly_limit: null },
   };
@@ -154,6 +163,13 @@ describe("anthropicUsageFromEndpoint", () => {
           kind: "weekly",
           label: "Weekly · Opus",
           usedPercent: 12,
+          windowDurationMins: 10_080,
+        },
+        {
+          id: "seven_day_sonnet",
+          kind: "weekly",
+          label: "Weekly · Sonnet",
+          usedPercent: 3,
           windowDurationMins: 10_080,
         },
       ],
@@ -332,6 +348,48 @@ describe("codexUsageFromEndpoint", () => {
         NOW,
       ),
     ).toEqual(failed);
+  });
+});
+
+describe("headerUsageUpdate", () => {
+  it("delegates to the mapper the provider owns and to nothing for anyone else", () => {
+    expect(headerUsageUpdate("openai-codex", CODEX_HEADERS, NOW)?.windows).toHaveLength(2);
+    expect(headerUsageUpdate("anthropic", ANTHROPIC_HEADERS, NOW)?.windows).toHaveLength(2);
+    expect(headerUsageUpdate("openai", ANTHROPIC_HEADERS, NOW)).toBeNull();
+  });
+});
+
+describe("value readers", () => {
+  it("reads a finite number from a number, a numeric string, and nothing else", () => {
+    expect(finiteNumber(37)).toBe(37);
+    expect(finiteNumber(" 0.5 ")).toBe(0.5);
+    expect(finiteNumber(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(finiteNumber(Number.NaN)).toBeUndefined();
+    expect(finiteNumber("")).toBeUndefined();
+    expect(finiteNumber("   ")).toBeUndefined();
+    expect(finiteNumber("nope")).toBeUndefined();
+    expect(finiteNumber(null)).toBeUndefined();
+    expect(finiteNumber(undefined)).toBeUndefined();
+    expect(finiteNumber(true)).toBeUndefined();
+    expect(percentOf("140")).toBe(100);
+    expect(percentOf(null)).toBeUndefined();
+  });
+
+  it("turns epoch seconds into ISO, and refuses what is not a positive number", () => {
+    expect(epochSecondsToIso(Math.floor(RESET_5H / 1000))).toBe(iso(RESET_5H));
+    expect(epochSecondsToIso("0")).toBeUndefined();
+    expect(epochSecondsToIso(-1)).toBeUndefined();
+    expect(epochSecondsToIso(null)).toBeUndefined();
+    expect(secondsFromNowToIso(600, NOW)).toBe(iso(NOW + 600_000));
+    expect(secondsFromNowToIso("0", NOW)).toBeUndefined();
+    expect(secondsFromNowToIso(null, NOW)).toBeUndefined();
+  });
+
+  it("normalizes an ISO timestamp the provider wrote, and drops one that does not parse", () => {
+    expect(isoTimestamp("2026-03-01T14:00:00+00:00")).toBe(iso(RESET_5H));
+    expect(isoTimestamp("tomorrow")).toBeUndefined();
+    expect(isoTimestamp(0)).toBeUndefined();
+    expect(isoTimestamp(null)).toBeUndefined();
   });
 });
 

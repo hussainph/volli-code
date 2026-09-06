@@ -14,13 +14,9 @@ import { contextWindowOf } from "./compaction";
 import type { RefreshableCatalogs } from "./model-catalog";
 import type { PiModelAccess } from "./models";
 import { providerSignInMethods } from "./sign-in";
-import {
-  probeUsageLimits,
-  USAGE_PROBE_PROVIDER_IDS,
-  type UsageLimitsHolder,
-  type UsageProbeFetch,
-  type UsageProbeSchedule,
-} from "./usage-limits";
+import { probeUsageLimits, USAGE_PROBE_PROVIDER_IDS } from "./usage-limits/probe";
+import type { UsageLimitsHolder } from "./usage-limits/holder";
+import type { UsageProbeFetch, UsageProbeSchedule } from "./usage-limits/probe";
 
 export interface InspectPiModelAccessInput {
   refresh?: boolean;

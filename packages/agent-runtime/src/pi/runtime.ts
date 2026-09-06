@@ -92,7 +92,8 @@ import {
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
-import { UsageLimitsHolder, UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits";
+import { UsageLimitsHolder } from "./usage-limits/holder";
+import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { withoutReasoning } from "./reasoning";
 import { createSessionTools } from "./tools";
@@ -210,16 +211,18 @@ export interface PiRuntimeHostOptions {
   observability?: ObservabilitySink;
   /**
    * The subscription usage read (VC-263): where each account's windows are
-   * held, and the fetch its on-demand probe uses. Opt-in — present, even as
-   * `{}`, turns the read on with a fresh holder and the platform fetch; a
-   * host that wants to watch the holder hands one in, and a test hands in a
-   * fetch that never reaches the network. Absent means the read is off, which
-   * is also the safe failure mode for a host that forgot: a page with no bars
-   * rather than a page probing endpoints nobody asked about.
+   * held, and the fetch its on-demand probe uses. Opt-in, and the fetch is
+   * required rather than defaulted: this runtime does not choose its own
+   * transport to a provider endpoint, and a test hands in a fetch that never
+   * reaches the network while main hands in the platform one. The holder is
+   * optional — a fresh one per runtime is right when the host has no opinion.
+   * Absent means the read is off, which is also the safe failure mode for a
+   * host that forgot: a page with no bars rather than a page probing
+   * endpoints nobody asked about.
    */
   usageLimits?: {
     holder?: UsageLimitsHolder;
-    fetch?: UsageProbeFetch;
+    fetch: UsageProbeFetch;
   };
 }
 
@@ -295,7 +298,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           usageLimits: {
             holder: options.usageLimits.holder ?? new UsageLimitsHolder(),
             schedule: new UsageProbeSchedule(),
-            fetch: options.usageLimits.fetch ?? ((url, init) => globalThis.fetch(url, init)),
+            fetch: options.usageLimits.fetch,
           },
         }),
   };

@@ -39,7 +39,7 @@ export function codexHeadersToUpdate(
   observedAt: number,
 ): UsageLimitsUpdate | null {
   const read = headerReader(headers);
-  const windows: UsageWindow[] = [];
+  const built: { minutes: number; window: UsageWindow }[] = [];
   for (const slot of SLOTS) {
     const usedPercent = percentOf(read(`x-codex-${slot}-used-percent`));
     const minutes = finiteNumber(read(`x-codex-${slot}-window-minutes`));
@@ -47,10 +47,10 @@ export function codexHeadersToUpdate(
     const resetsAt =
       epochSecondsToIso(read(`x-codex-${slot}-reset-at`)) ??
       secondsFromNowToIso(read(`x-codex-${slot}-reset-after-seconds`), observedAt);
-    windows.push(codexWindow(minutes, usedPercent, resetsAt));
+    built.push({ minutes, window: codexWindow(minutes, usedPercent, resetsAt) });
   }
-  if (windows.length === 0) return null;
-  return { observedAt, windows: sortWindows(windows) };
+  if (built.length === 0) return null;
+  return { observedAt, windows: sortedWindows(built) };
 }
 
 /**
@@ -66,7 +66,7 @@ export function codexUsageFromEndpoint(body: unknown, checkedAt: number): UsageL
   }
   const rateLimit = (body as { rate_limit?: unknown }).rate_limit;
   if (typeof rateLimit !== "object" || rateLimit === null) return probeFailed(checkedAt);
-  const windows: UsageWindow[] = [];
+  const built: { minutes: number; window: UsageWindow }[] = [];
   for (const slot of SLOTS) {
     const entry = (rateLimit as Record<string, unknown>)[`${slot}_window`];
     if (typeof entry !== "object" || entry === null) continue;
@@ -82,10 +82,10 @@ export function codexUsageFromEndpoint(body: unknown, checkedAt: number): UsageL
     const resetsAt =
       epochSecondsToIso(fields.reset_at) ??
       secondsFromNowToIso(fields.reset_after_seconds, checkedAt);
-    windows.push(codexWindow(seconds / 60, usedPercent, resetsAt));
+    built.push({ minutes: seconds / 60, window: codexWindow(seconds / 60, usedPercent, resetsAt) });
   }
-  if (windows.length === 0) return probeFailed(checkedAt);
-  return { checkedAt, windows: sortWindows(windows) };
+  if (built.length === 0) return probeFailed(checkedAt);
+  return { checkedAt, windows: sortedWindows(built) };
 }
 
 function codexWindow(
@@ -102,11 +102,14 @@ function codexWindow(
   };
 }
 
-/** Shortest window first: the session row above the weekly one, whichever slot carried each. */
-function sortWindows(windows: readonly UsageWindow[]): UsageWindow[] {
-  return windows.toSorted(
-    (left, right) => (left.windowDurationMins ?? 0) - (right.windowDurationMins ?? 0),
-  );
+/**
+ * Shortest window first: the session row above the weekly one, whichever slot
+ * carried each. Sorting on the minutes each window was BUILT from rather than
+ * the field it carries, because the field is optional and a window without a
+ * length has no place in an ordering by length.
+ */
+function sortedWindows(built: readonly { minutes: number; window: UsageWindow }[]): UsageWindow[] {
+  return built.toSorted((left, right) => left.minutes - right.minutes).map((entry) => entry.window);
 }
 
 function probeFailed(checkedAt: number): UsageLimits {

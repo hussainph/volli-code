@@ -198,10 +198,11 @@ export function instrumentStreamFn(
   observability: StreamObservability,
 ): PiStreamFn {
   return (model, context, options) => {
+    const usageLimits = observability.usageLimits;
     const request =
-      observability.usageLimits === undefined
+      usageLimits === undefined
         ? options
-        : withUsageCapture(options, model.provider, observability);
+        : withUsageCapture(options, model.provider, usageLimits, observability.now);
     const produced = inner(model, context, request);
     // Read off the request before the stream settles, and once: the identity is
     // the same whichever way the inner function chose to hand the stream back.
@@ -238,14 +239,14 @@ interface AttemptIdentity {
 function withUsageCapture(
   options: SimpleStreamOptions | undefined,
   providerId: string,
-  observability: StreamObservability,
+  sink: UsageLimitsSink,
+  now: () => number,
 ): SimpleStreamOptions | undefined {
-  const sink = observability.usageLimits;
   const caller = options?.onResponse;
   const capture = (response: ProviderResponse, model: Model<Api>): void | Promise<void> => {
     try {
-      const update = headerUsageUpdate(providerId, response?.headers ?? {}, observability.now());
-      if (update !== null) sink?.record(providerId, update);
+      const update = headerUsageUpdate(providerId, response?.headers ?? {}, now());
+      if (update !== null) sink.record(providerId, update);
     } catch {
       // A lost capture, never a lost response.
     }
