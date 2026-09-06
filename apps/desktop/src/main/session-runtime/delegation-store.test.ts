@@ -524,3 +524,43 @@ describe("Subagent Session ancestry (VC-9)", () => {
     ).toThrow("Only a Subagent Session names a parent");
   });
 });
+
+describe("listUnansweredSubagents — what a relaunch left for recovery (VC-9)", () => {
+  it("names each subagent whose answer never reached its parent, by its operation id", () => {
+    const h = harness();
+    const parentBirth = h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id });
+    h.store.recordBirth(h.root.id, parentBirth);
+    const bear = (id: string, toolCallId: string) => {
+      insertSession(h.db, testSession("project-1", h.ticket.id, { id, title: `Helper ${id}` }));
+      h.db.prepare("UPDATE sessions SET role = 'subagent' WHERE id = ?").run(id);
+      h.store.recordBirth(
+        id,
+        h.store.resolveBirth({
+          role: "subagent",
+          ticketId: h.ticket.id,
+          parentSessionId: h.root.id,
+        }),
+      );
+      landCreateCommand(h.db, id, createCommandFor(h.root.id, toolCallId));
+    };
+    bear("helper-answered", "tc-1");
+    bear("helper-pending", "tc-2");
+    // The answer's durable mark: the parent's ledger holds the answer command.
+    h.db
+      .prepare(
+        `INSERT INTO session_commands (id, session_id, created_at, intent)
+         VALUES (?, ?, 0, '{"kind":"message.submit"}')`,
+      )
+      .run(`${h.root.id}:tc-1:answer`, h.root.id);
+
+    expect(h.store.listUnansweredSubagents()).toEqual([
+      {
+        childSessionId: "helper-pending",
+        parentSessionId: h.root.id,
+        projectId: "project-1",
+        operationId: `${h.root.id}:tc-2`,
+        title: "Helper helper-pending",
+      },
+    ]);
+  });
+});

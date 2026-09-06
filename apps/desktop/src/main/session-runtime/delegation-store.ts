@@ -24,6 +24,7 @@ import {
   isDelegationDepth,
   isNonNegativeInteger,
 } from "./delegation-policy";
+import type { DelegationRef } from "./delegate-session";
 import type {
   DelegationClaimRef,
   SessionGrantBirth,
@@ -359,6 +360,64 @@ export class TicketSessionDelegationStore
          VALUES (?, ?, ?, ?)`,
       )
       .run(sessionId, session.ticket_id, parentSessionId, depth);
+  }
+
+  /**
+   * Every Subagent Session whose answer never reached its parent (VC-9): what
+   * boot recovery reports on.
+   *
+   * "Never reached" is one durable fact. The delegation's operation id is the
+   * child's create command id minus its `:create` suffix — the same derivation
+   * the tool door made — and the answer is delivered under
+   * `<operationId>:answer` in the PARENT's ledger, so a parent without that
+   * command has not heard from this child. No other bookkeeping is needed, and
+   * none is kept: the two ledgers already say everything recovery asks.
+   */
+  listUnansweredSubagents(): readonly DelegationRef[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.id AS child_session_id,
+                d.parent_session_id,
+                s.project_id,
+                s.title,
+                c.id AS create_command_id
+           FROM sessions s
+           JOIN session_delegations d ON d.session_id = s.id
+           JOIN session_commands c
+             ON c.session_id = s.id
+            AND json_extract(c.intent, '$.kind') = 'session.create'
+          WHERE s.role = 'subagent'
+            AND d.parent_session_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+                FROM session_commands a
+               WHERE a.session_id = d.parent_session_id
+                 AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
+            )
+          ORDER BY s.created_at ASC, s.id COLLATE BINARY ASC`,
+      )
+      .all() as Array<{
+      child_session_id: string;
+      parent_session_id: string;
+      project_id: string;
+      title: string | null;
+      create_command_id: string;
+    }>;
+    return rows.flatMap((row) => {
+      // A create command not spelled the way the door spells one is not a
+      // delegation this build can name an answer for; it is left alone rather
+      // than answered under an id nothing would ever match.
+      if (!row.create_command_id.endsWith(":create")) return [];
+      return [
+        {
+          childSessionId: row.child_session_id,
+          parentSessionId: row.parent_session_id,
+          projectId: row.project_id,
+          operationId: row.create_command_id.slice(0, -":create".length),
+          title: row.title ?? "Delegated task",
+        },
+      ];
+    });
   }
 
   /** The Session that delegated this one, or `null` for a root Session. */

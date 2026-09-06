@@ -1188,6 +1188,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
           };
         },
         liveChildren: () => [],
+        recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
       }),
     });
     const call = (

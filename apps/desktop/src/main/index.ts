@@ -1694,6 +1694,9 @@ app.whenReady().then(async () => {
       submitSessionMessage: submitKickoffMessage,
       runtime: sessionRuntime,
       sessionEngine,
+      // The same store `session peek` reads a chat's tail through: a
+      // recovered answer is the child's last message off its own ledger.
+      readArtifact: (reference) => transcriptArtifacts.read(reference),
       onMutation: (change) => broadcastDataChanged(change),
       now: () => Date.now(),
     });
@@ -1852,6 +1855,27 @@ app.whenReady().then(async () => {
       });
     } catch (error) {
       console.error("[volli] failed to recover stale attachments:", errorMessage(error));
+    }
+    // Delegations a relaunch left unanswered (VC-9): every open attachment is
+    // retired above, so a child mid-turn at the relaunch will never complete
+    // and a child that finished before it has its answer in its ledger. Both
+    // are reported to their parent now, the way the lost watcher would have.
+    // After the attachment sweep on purpose — a child still "open" here would
+    // otherwise read as running.
+    if (sessionDelegation !== null) {
+      try {
+        const unanswered = sessionDelegation.listUnansweredSubagents();
+        if (unanswered.length > 0) {
+          const recovered = await delegationsFor()?.recover(unanswered);
+          if (recovered !== undefined) {
+            console.log(
+              `[volli] recovered ${unanswered.length} delegation(s): ${recovered.answered} answered, ${recovered.reported} reported, ${recovered.skipped} skipped`,
+            );
+          }
+        }
+      } catch (error) {
+        console.error("[volli] failed to recover delegations:", errorMessage(error));
+      }
     }
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached

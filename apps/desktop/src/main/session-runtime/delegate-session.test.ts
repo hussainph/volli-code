@@ -149,6 +149,8 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
   const listeners = new Map<string, (emission: SessionStreamEmission) => void | Promise<void>>();
   const subscriptions: string[] = [];
   const projections = new Map<string, SessionProjection>();
+  const ledgers = new Map<string, SessionEvent[]>();
+  const artifacts = new Map<string, string>();
   const unsubscribed: string[] = [];
   const startedIds = new Map<string, string>();
   const ports: DelegateSessionPorts = {
@@ -214,6 +216,7 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
     },
     sessionEngine: {
       listSessions: async () => [...projections.values()],
+      listEvents: async ({ sessionId }) => ledgers.get(sessionId) ?? [],
       submit: async (request) => {
         stops.push({ sessionId: request.sessionId, intent: request.intent });
         const current = projections.get(request.sessionId);
@@ -246,6 +249,18 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
         };
       },
     },
+    readArtifact: async (reference) => {
+      const text = artifacts.get(reference.id);
+      if (text === undefined) throw new Error(`no artifact ${reference.id}`);
+      return {
+        version: 1,
+        threadId: "thread",
+        branchId: "branch",
+        attemptId: "attempt",
+        turnId: "turn-1",
+        message: { id: reference.id, role: "assistant", parts: [{ type: "text", text }] },
+      };
+    },
     now: () => 1_000,
   };
   const delegations = createDelegations(ports);
@@ -272,7 +287,19 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
     listeners,
     subscriptions,
     unsubscribed,
+    ledgers,
+    artifacts,
   };
+}
+
+/** The text delivered into the parent under one answer command id, or null. */
+function deliveredText(commands: SessionRuntimeCommandRequest[], commandId: string): string | null {
+  const found = commands.find((c) => c.commandId === commandId);
+  if (found === undefined) return null;
+  const command = found.command;
+  return command.kind === "message.submit" && command.message.parts[0]?.type === "text"
+    ? command.message.parts[0].text
+    : null;
 }
 
 describe("delegateSessionOperation — the child is a real Session, and the parent keeps working", () => {
@@ -442,6 +469,79 @@ describe("delegateSessionOperation — the child is a real Session, and the pare
       kind: "session.stop",
       by: { kind: "session", sessionId: PARENT },
     });
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+  });
+});
+
+describe("recover — delegations a relaunch left unanswered (VC-9)", () => {
+  const FINISHED = "dddddddd-0000-0000-0000-000000000000";
+  const CUT_SHORT = "eeeeeeee-0000-0000-0000-000000000000";
+  const NEVER_RAN = "ffffffff-0000-0000-0000-000000000000";
+
+  it("delivers a finished child's final message, reports a cut-short one, and leaves an unstarted one alone", async () => {
+    const h = harness();
+    // Finished before the relaunch: two assistant messages, the last is the answer.
+    h.artifacts.set("art-1", "Looking…");
+    h.artifacts.set("art-2", "It is refreshed in auth/refresh.ts, line 42.");
+    h.ledgers.set(FINISHED, [
+      event(FINISHED, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+      event(FINISHED, 5, {
+        kind: "transcript.referenced",
+        attachmentId: "a",
+        turnId: "t1",
+        reference: { id: "art-1", mediaType: "m", digest: "d1" },
+      }),
+      event(FINISHED, 6, {
+        kind: "transcript.referenced",
+        attachmentId: "a",
+        turnId: "t1",
+        reference: { id: "art-2", mediaType: "m", digest: "d2" },
+      }),
+      event(FINISHED, 7, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+    ]);
+    // Mid-turn when the app relaunched: boot retired its attachment, so the
+    // turn never completes and nothing will ever wake a watcher for it.
+    h.ledgers.set(CUT_SHORT, [
+      event(CUT_SHORT, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+    ]);
+    // Created but never attached: the parent was already told no task was
+    // sent, and there is nothing to report until a person retries it.
+    h.ledgers.set(NEVER_RAN, []);
+
+    const recovered = await h.delegations.recover([
+      {
+        childSessionId: FINISHED,
+        parentSessionId: PARENT,
+        projectId: "project-1",
+        operationId: `${PARENT}:tc-1`,
+        title: "Token hunt",
+      },
+      {
+        childSessionId: CUT_SHORT,
+        parentSessionId: PARENT,
+        projectId: "project-1",
+        operationId: `${PARENT}:tc-2`,
+        title: "Flaky test",
+      },
+      {
+        childSessionId: NEVER_RAN,
+        parentSessionId: PARENT,
+        projectId: "project-1",
+        operationId: `${PARENT}:tc-3`,
+        title: "Never",
+      },
+    ]);
+
+    expect(recovered).toEqual({ answered: 1, reported: 1, skipped: 1 });
+    const answer = deliveredText(h.commands, `${PARENT}:tc-1:answer`);
+    expect(answer).toContain(subagentAnswerMarker(FINISHED, "completed"));
+    expect(answer).toContain("It is refreshed in auth/refresh.ts, line 42.");
+    expect(answer).not.toContain("Looking…");
+    const report = deliveredText(h.commands, `${PARENT}:tc-2:answer`);
+    expect(report).toContain(subagentAnswerMarker(CUT_SHORT, "interrupted"));
+    expect(report).toMatch(/relaunch/);
+    expect(deliveredText(h.commands, `${PARENT}:tc-3:answer`)).toBeNull();
+    // Nothing is watched afterwards: recovery reports and lets go.
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
   });
 });

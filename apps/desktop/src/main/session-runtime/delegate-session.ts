@@ -59,10 +59,15 @@
  *
  * Every durable write is keyed on the operation id (the parent plus the
  * runtime's own tool call id), so a replayed call lands one child, one
- * kickoff and one answer. The watcher itself is process memory: after a
- * relaunch the child is a durable Session that finishes or is retired on its
- * own, and its transcript stays readable — the parent can `session peek` it.
- * Re-establishing watchers at boot is a follow-up; nothing here pretends to.
+ * kickoff and one answer. The watcher itself is process memory, and a relaunch
+ * loses it — but not the facts it was waiting on. Boot recovery retires every
+ * open attachment, so a child mid-turn at the relaunch never completes; a
+ * child that finished before it has its `turn.completed` and its last message
+ * in its own ledger. {@link Delegations.recover} reads exactly those facts for
+ * every delegation whose answer never reached its parent (the answer command
+ * id is the durable mark, so "never reached" is one ledger read) and reports
+ * each one the way the watcher would have: the finished child's answer, or the
+ * cut-short child's state. Nothing is re-watched; recovery reports and lets go.
  */
 
 import { shortSessionId } from "@volli/shared";
@@ -71,8 +76,14 @@ import type {
   RuntimeSessionIdentity,
   SessionEvent,
   TicketEventActor,
+  TranscriptReference,
 } from "@volli/shared";
-import type { SessionEngine, SessionRuntime, SessionStreamEmission } from "@volli/session-engine";
+import type {
+  SessionEngine,
+  SessionRuntime,
+  SessionStreamEmission,
+  SessionTranscriptArtifact,
+} from "@volli/session-engine";
 import { isSessionStreamFrame } from "@volli/session-engine";
 
 import type { StartSessionPorts } from "./start-session";
@@ -98,8 +109,17 @@ export interface DelegateSessionPorts {
   submitSessionMessage: NonNullable<StartSessionPorts["submitSessionMessage"]>;
   /** The child's durable stream, and the parent's ledger to answer into. */
   runtime: Pick<SessionRuntime, "command" | "subscribe">;
-  /** What a stop needs (VC-86's operation, reused with the parent as actor). */
-  sessionEngine: Pick<SessionEngine, "listSessions" | "submit">;
+  /**
+   * What a stop needs (VC-86's operation, reused with the parent as actor),
+   * plus the ledger read recovery makes.
+   */
+  sessionEngine: Pick<SessionEngine, "listSessions" | "submit" | "listEvents">;
+  /**
+   * Reads one durable transcript artifact — a finished child's last message,
+   * for recovery. Absent means this composition holds no artifact store, and
+   * a recovered answer says so rather than inventing words.
+   */
+  readArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
   now: () => number;
   /** Injectable for tests; defaults to the platform timer. */
   setTimeout?: (callback: () => void, ms: number) => unknown;
@@ -175,18 +195,32 @@ function titleFromTask(task: string): string {
     : collapsed || "Delegated task";
 }
 
-interface LiveDelegation {
+/** One delegation as the durable record names it — what recovery is handed. */
+export interface DelegationRef {
   operationId: string;
   parentSessionId: string;
   childSessionId: string;
   /** The parent's project, which is the child's by construction of the mint. */
   projectId: string;
   title: string;
+}
+
+interface LiveDelegation extends DelegationRef {
   unsubscribe: () => void;
   timer: unknown;
   /** The latest assistant text seen on the child's stream. */
   answer: string | null;
   settled: boolean;
+}
+
+/** What one boot recovery did, in counts a log line can print. */
+export interface DelegationRecovery {
+  /** Finished children whose answer was delivered. */
+  answered: number;
+  /** Children cut short by the relaunch, reported as interrupted. */
+  reported: number;
+  /** Children that never began a turn; nothing to say until a person retries. */
+  skipped: number;
 }
 
 /** The assistant's words on one stream frame, or `null` for any other frame. */
@@ -227,6 +261,12 @@ export interface Delegations {
   delegate(input: DelegateSessionInput): Promise<DelegateSessionOutcome>;
   /** The children of one parent still being watched, in start order. */
   liveChildren(parentSessionId: string): readonly string[];
+  /**
+   * Report every delegation a relaunch left unanswered, off the children's own
+   * ledgers. Run once at boot, after stale attachments are retired; the answer
+   * command id is durable, so running it twice delivers nothing twice.
+   */
+  recover(unanswered: readonly DelegationRef[]): Promise<DelegationRecovery>;
 }
 
 export function createDelegations(ports: DelegateSessionPorts): Delegations {
@@ -241,25 +281,50 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
   }
 
-  function reportText(entry: LiveDelegation, state: SubagentOutcomeState): string {
+  function reportText(
+    entry: DelegationRef,
+    answer: string | null,
+    state: SubagentOutcomeState,
+    how?: string,
+  ): string {
     const header = subagentAnswerMarker(entry.childSessionId, state);
     const handle = shortSessionId(entry.childSessionId);
     const body =
       state === "completed"
-        ? (entry.answer ??
-          "(The subagent's turn completed without a final message. Its transcript is readable with `volli session peek`.)")
+        ? (answer ??
+          `(The subagent's turn completed without a final message. Its transcript is readable with \`volli session peek ${handle}\`.)`)
         : [
-            {
-              interrupted: `The subagent's turn was interrupted before it answered.`,
-              stopped: `The subagent was stopped before it answered.`,
-              failed: `The subagent's executor failed before it answered.`,
-              "timed-out": `The subagent did not finish within its time bound and was stopped.`,
-            }[state],
-            entry.answer === null
+            how ??
+              {
+                interrupted: `The subagent's turn was interrupted before it answered.`,
+                stopped: `The subagent was stopped before it answered.`,
+                failed: `The subagent's executor failed before it answered.`,
+                "timed-out": `The subagent did not finish within its time bound and was stopped.`,
+              }[state],
+            answer === null
               ? `Its transcript is readable with \`volli session peek ${handle}\`.`
-              : `Its last message before that was:\n\n${entry.answer}`,
+              : `Its last message before that was:\n\n${answer}`,
           ].join(" ");
     return `${header}\n\n${body}`;
+  }
+
+  /**
+   * The one delivery: into the parent's ledger through the same door
+   * supervision steers through. A parent with no live executor still gets the
+   * durable intent — persisted first, delivered when something can read it —
+   * and the command id is the operation's, so a second delivery is one.
+   */
+  async function deliver(entry: DelegationRef, text: string): Promise<void> {
+    const ids = answerIds(entry.operationId);
+    await ports.runtime.command({
+      commandId: ids.commandId,
+      sessionId: entry.parentSessionId,
+      command: {
+        kind: "message.submit",
+        delivery: "steer",
+        message: { id: ids.messageId, role: "user", parts: [{ type: "text", text }] },
+      },
+    });
   }
 
   async function settle(entry: LiveDelegation, state: SubagentOutcomeState): Promise<void> {
@@ -272,23 +337,31 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       parentWatches.get(entry.parentSessionId)?.();
       parentWatches.delete(entry.parentSessionId);
     }
-    const ids = answerIds(entry.operationId);
-    // Into the parent's ledger through the same door supervision steers
-    // through. A parent with no live executor still gets the durable intent:
-    // persisted first, delivered when something can read it.
-    await ports.runtime.command({
-      commandId: ids.commandId,
-      sessionId: entry.parentSessionId,
-      command: {
-        kind: "message.submit",
-        delivery: "steer",
-        message: {
-          id: ids.messageId,
-          role: "user",
-          parts: [{ type: "text", text: reportText(entry, state) }],
-        },
-      },
-    });
+    await deliver(entry, reportText(entry, entry.answer, state));
+  }
+
+  /** A finished child's last assistant message, off its own ledger. */
+  async function recordedAnswer(events: readonly SessionEvent[]): Promise<string | null> {
+    const readArtifact = ports.readArtifact;
+    if (readArtifact === undefined) return null;
+    for (const event of [...events].reverse()) {
+      if (event.payload.kind !== "transcript.referenced") continue;
+      let artifact: SessionTranscriptArtifact;
+      try {
+        artifact = await readArtifact(event.payload.reference);
+      } catch {
+        // A store that cannot answer for one artifact: an older message is a
+        // worse answer than none, so the report says to peek instead.
+        return null;
+      }
+      if (artifact.message.role !== "assistant") continue;
+      const text = artifact.message.parts
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+        .trim();
+      return text.length > 0 ? text : null;
+    }
+    return null;
   }
 
   async function stopChild(entry: LiveDelegation, reason: string): Promise<void> {
@@ -427,6 +500,33 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     },
     liveChildren(parentSessionId) {
       return childrenOf(parentSessionId).map((entry) => entry.childSessionId);
+    },
+    async recover(unanswered) {
+      const recovery: DelegationRecovery = { answered: 0, reported: 0, skipped: 0 };
+      for (const entry of unanswered) {
+        const events = await ports.sessionEngine.listEvents({ sessionId: entry.childSessionId });
+        const kinds = new Set(events.map((event) => event.payload.kind));
+        if (kinds.has("turn.completed")) {
+          await deliver(entry, reportText(entry, await recordedAnswer(events), "completed"));
+          recovery.answered += 1;
+        } else if (kinds.has("turn.started")) {
+          // Mid-turn at the relaunch. Boot retired its attachment, so the
+          // turn will never complete and no watcher could ever wake for it.
+          await deliver(
+            entry,
+            reportText(
+              entry,
+              await recordedAnswer(events),
+              "interrupted",
+              "The subagent was mid-turn when Volli relaunched, and the relaunch ended its turn before it answered.",
+            ),
+          );
+          recovery.reported += 1;
+        } else {
+          recovery.skipped += 1;
+        }
+      }
+      return recovery;
     },
   };
 }
