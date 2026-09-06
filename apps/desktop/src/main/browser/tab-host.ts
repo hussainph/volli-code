@@ -51,6 +51,8 @@ export interface BrowserTabHostDependencies {
   publishClosed: (tabId: string) => void;
   /** Where captured pixels wait for the card that shows them (VC-238). */
   pictures: BrowserPictureStore;
+  /** The clock the interaction window is measured against; production passes none. */
+  now?: () => number;
 }
 
 interface BrowserTabEntry {
@@ -71,6 +73,13 @@ interface BrowserTabEntry {
   consoleTruncated: boolean;
   /** Live agent holds against background throttling; see {@link BrowserTabHost.holdAwake}. */
   wakeLeases: number;
+  /**
+   * When the person last touched this tab's page — a key, a click, a wheel, or
+   * taking focus — or null while nobody ever has. Read by
+   * {@link BrowserTabHost.capturePicture}; see the window there for why a
+   * stamp rather than "is focused right now".
+   */
+  lastInteractionAt: number | null;
 }
 
 /**
@@ -111,6 +120,13 @@ export const BROWSER_MAX_TABS_PER_PROJECT = 32;
 export const BROWSER_MAX_TABS_PER_SESSION = 6;
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
+/**
+ * How long after the person last touched a shown tab the host keeps its camera
+ * shut (VC-238 §5). Five seconds covers the gap between a keystroke and the
+ * agent's next action landing, which is the case that matters: the field they
+ * just filled must not become a frame in the transcript.
+ */
+export const BROWSER_INTERACTION_QUIET_MS = 5_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
 
 /**
@@ -296,8 +312,17 @@ export class BrowserTabHost {
       }
       return count < BROWSER_MAX_TABS_PER_PROJECT;
     }
+    // Headless only. A tab the person previewed or promoted is theirs to close
+    // (§6) and outlives this Session, so counting it here would let a person's
+    // own act — Show — lock the agent out of the allowance the cap exists to
+    // guarantee it. The cap bounds what an agent may hold unseen, nothing else.
     for (const entry of this.tabs.values()) {
-      if (entry.state.ownerSessionId === input.ownerSessionId) count += 1;
+      if (
+        entry.state.ownerSessionId === input.ownerSessionId &&
+        entry.state.presentation === "headless"
+      ) {
+        count += 1;
+      }
     }
     return count < BROWSER_MAX_TABS_PER_SESSION;
   }
@@ -373,6 +398,10 @@ export class BrowserTabHost {
     this.securedSessions.add(isolatedSession);
   }
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
   /** Creates one hidden tab; visibility is a separate renderer-measured act. */
   open(input: BrowserTabCreateOptions): BrowserTabState {
     if (!isAllowedBrowserTarget(input.url)) {
@@ -421,8 +450,18 @@ export class BrowserTabHost {
       console: [],
       consoleTruncated: false,
       wakeLeases: 0,
+      lastInteractionAt: null,
     };
     this.tabs.set(tabId, entry);
+    // Everything that means "the person is using this tab", stamped in one
+    // place: `input-event` covers keys, clicks and the wheel, and `focus`
+    // covers a tab entered by keyboard alone.
+    view.webContents.on("input-event", () => {
+      entry.lastInteractionAt = this.now();
+    });
+    view.webContents.on("focus", () => {
+      entry.lastInteractionAt = this.now();
+    });
     view.webContents.setWindowOpenHandler(({ url }) => {
       // A hostile page can ask indefinitely; the same cap used by every other
       // open door turns excess popups into ordinary denials. A popup inherits
@@ -632,6 +671,11 @@ export class BrowserTabHost {
         }
       }
     }
+    // Detach before publishing: a tab going headless has no surface to draw
+    // on, and main is the one that knows it. The renderer's plane controller
+    // emits its own hide as the pane unmounts, but that arrives after the
+    // state push, and until it did the page would still be over the window.
+    if (presentation === "headless") this.detachEntry(entry);
     if (entry.state.presentation !== presentation) this.publish(entry, { presentation });
     return { ...entry.state };
   }
@@ -695,11 +739,20 @@ export class BrowserTabHost {
    * acted in it (VC-238), and hands back the picture's id — or null when it
    * declined to look.
    *
-   * It declines while the person is interacting with a shown tab: a tab that
-   * is on screen AND holds keyboard focus is one they are typing into, and the
-   * password they type must not become a frame in the transcript. This is the
-   * takeover rule ChatGPT agent and Manus both settled on. A headless tab can
-   * never be focused, and a shown tab nobody is touching still photographs.
+   * It declines while the person is USING a shown tab, and for a window after
+   * they stop: the password they just typed must not become a frame in the
+   * transcript, and the agent's next action often lands a beat after their
+   * last keystroke. This is the takeover rule ChatGPT agent and Manus both
+   * settled on.
+   *
+   * A recency stamp rather than `isFocused()`, deliberately. Instantaneous
+   * focus is both too narrow and too brief: wheel-scrolling or hovering a
+   * shown tab never focuses it, and focus leaves the moment they click Hide,
+   * the chip, or another window — so an act arriving right after they typed
+   * would photograph the filled field. Current focus still counts, for the
+   * tab entered before this host ever saw an event from it. A headless tab is
+   * attached to nothing and can be touched by nobody, so it always
+   * photographs.
    *
    * JPEG through the same `capturePage` door the overlay freeze uses, for the
    * same latency reason; the store bounds how many live frames are kept.
@@ -707,15 +760,23 @@ export class BrowserTabHost {
   async capturePicture(tabId: string): Promise<string | null> {
     const entry = this.requireTab(tabId);
     const contents = entry.view.webContents;
-    if (entry.state.presentation !== "headless" && contents.isFocused()) return null;
+    if (entry.state.presentation !== "headless" && this.isBeingUsed(entry)) return null;
     const image = await contents.capturePage();
     return this.deps.pictures.put({
       tabId,
       generation: entry.state.generation,
       mime: "image/jpeg",
       bytes: image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY),
+      ownerSessionId: entry.state.ownerSessionId,
       persist: false,
     });
+  }
+
+  /** Whether the person has touched this tab inside the quiet window, or holds it now. */
+  private isBeingUsed(entry: BrowserTabEntry): boolean {
+    if (entry.view.webContents.isFocused()) return true;
+    const last = entry.lastInteractionAt;
+    return last !== null && this.now() - last < BROWSER_INTERACTION_QUIET_MS;
   }
 
   /**
@@ -730,6 +791,9 @@ export class BrowserTabHost {
       generation: entry.state.generation,
       mime: "image/png",
       bytes: Buffer.from(base64Png, "base64"),
+      // A picture that outlives this launch is attributable: whose Session
+      // asked for it, so the bytes on disk are never anonymous.
+      ownerSessionId: entry.state.ownerSessionId,
       persist: true,
     });
   }
@@ -747,6 +811,14 @@ export class BrowserTabHost {
    */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
+    // Main owns presentation (§2): a headless tab is "never attached to the
+    // window until the person reveals it", and revealing is `setPresentation`,
+    // not this. Without the guard the rule would rest on renderer discipline,
+    // and one stale pane mounting a headless tab would put an agent's page on
+    // screen with nothing in the UI claiming to have shown it.
+    if (entry.state.presentation === "headless") {
+      throw new Error("A headless Browser Tab has no plane until the person shows it");
+    }
     if (entry.attachedTo !== null) return;
     const window = this.deps.getWindow();
     if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");

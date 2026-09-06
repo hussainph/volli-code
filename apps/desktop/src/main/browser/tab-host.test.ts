@@ -10,6 +10,7 @@ import { BROWSER_START_URL } from "../../browser-start-page";
 import {
   BROWSER_CONSOLE_MAX_CHARS,
   BROWSER_DEFAULT_BOUNDS,
+  BROWSER_INTERACTION_QUIET_MS,
   BROWSER_MAX_TABS_PER_PROJECT,
   BROWSER_MAX_TABS_PER_SESSION,
   BROWSER_TITLE_MAX_CHARS,
@@ -23,7 +24,7 @@ import {
   isAllowedBrowserTarget,
   isAllowedBrowserUrl,
 } from "./tab-host";
-import { BrowserPictureStore } from "./picture-store";
+import { BrowserPictureStore, type BrowserPictureRecord } from "./picture-store";
 
 class FakeSession {
   permissionRequestHandler:
@@ -139,7 +140,9 @@ let sessions: Map<string, FakeSession>;
 let published: unknown[];
 let host: BrowserTabHost;
 let pictures: BrowserPictureStore;
-let persisted: Map<string, { bytes: Uint8Array; mime: string }>;
+let persisted: Map<string, { bytes: Uint8Array; record: BrowserPictureRecord }>;
+/** The host's clock, so the interaction quiet window can be moved deliberately. */
+let clock: number;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -148,18 +151,25 @@ beforeEach(() => {
   sessions = new Map();
   published = [];
   persisted = new Map();
+  clock = 1_000;
   let nextId = 0;
   let nextPicture = 0;
   pictures = new BrowserPictureStore({
     createId: () => `picture-${++nextPicture}`,
     now: () => 1_000,
     persist: {
-      write: (id, bytes, mime) => persisted.set(id, { bytes, mime }),
-      read: (id) => (persisted.get(id) as { bytes: Uint8Array; mime: "image/png" }) ?? null,
+      write: (bytes, record) => persisted.set(record.id, { bytes, record }),
+      read: (id) => {
+        const held = persisted.get(id);
+        return held === undefined ? null : { bytes: held.bytes, mime: held.record.mime };
+      },
+      list: () => [...persisted.values()].map((one) => one.record),
+      remove: (id) => void persisted.delete(id),
     },
   });
   host = new BrowserTabHost({
     pictures,
+    now: () => clock,
     createId: () => `opaque-${++nextId}`,
     createView: (options: WebContentsViewConstructorOptions) => {
       viewOptions.push(options);
@@ -322,6 +332,57 @@ describe("BrowserTabHost security", () => {
         createdBy: "user",
       }),
     ).toThrow(`at most ${BROWSER_MAX_TABS_PER_PROJECT}`);
+  });
+
+  it("gives an agent tab's popup its opener's owner, born headless like it", () => {
+    const opener = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+    expect(views[0]?.webContents.windowOpenHandler?.({ url: "https://popup.example.com" })).toEqual(
+      { action: "deny" },
+    );
+
+    const tabs = host.list({ projectId: "project-1", ticketId: "ticket-1" });
+    expect(tabs).toHaveLength(2);
+    const popup = tabs.find((tab) => tab.tabId !== opener.tabId);
+    expect(popup).toMatchObject({
+      createdBy: "session",
+      ownerSessionId: "session-a",
+      presentation: "headless",
+      url: "https://popup.example.com",
+    });
+  });
+
+  it("caps an agent page's popups at the Session's own allowance, not the project's", () => {
+    host.open({
+      url: "https://example.com/0",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    const handler = views[0]?.webContents.windowOpenHandler;
+    for (let index = 1; index < BROWSER_MAX_TABS_PER_SESSION; index += 1) {
+      handler?.({ url: `https://example.com/popup-${index}` });
+    }
+    expect(views).toHaveLength(BROWSER_MAX_TABS_PER_SESSION);
+
+    expect(handler?.({ url: "https://example.com/excess" })).toEqual({ action: "deny" });
+    expect(views).toHaveLength(BROWSER_MAX_TABS_PER_SESSION);
+    // The person's own allowance is untouched by an agent page at its cap.
+    expect(() =>
+      host.open({
+        url: "https://person.example.com",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        createdBy: "user",
+      }),
+    ).not.toThrow();
   });
 
   it("refuses file, JavaScript, and custom-scheme navigation from both host and page", () => {
@@ -680,6 +741,8 @@ describe("BrowserTabHost native surface", () => {
       ownerSessionId: "session-a",
     });
     const bounds = { x: 12, y: 48, width: 800, height: 600 };
+    // The person showed it: an agent tab has no plane before that (§2).
+    host.setPresentation(second.tabId, "preview");
 
     host.setBounds(first.tabId, bounds);
     host.show(first.tabId);
@@ -997,6 +1060,43 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
       expect.objectContaining({ tabId: first.tabId, presentation: "headless" }),
     );
   });
+
+  it("refuses to attach a headless tab: revealing is the person's act, and main owns the fact", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+    // The renderer's plane controller has no business mounting a tab nothing
+    // showed. If it tries, the host is the one that says no.
+    expect(() => host.show(tab.tabId)).toThrow(
+      "A headless Browser Tab has no plane until the person shows it",
+    );
+    expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
+
+    host.setPresentation(tab.tabId, "preview");
+    expect(() => host.show(tab.tabId)).not.toThrow();
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledTimes(1);
+  });
+
+  it("detaches a shown tab as it goes headless, without waiting for the renderer to say so", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+
+    host.setPresentation(tab.tabId, "headless");
+
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+  });
 });
 
 describe("BrowserTabHost lifecycle (VC-238)", () => {
@@ -1089,7 +1189,47 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
   });
 
-  it("keeps a screenshot the model asked for as a persisted picture", () => {
+  it("declines for a tab in the strip too, not only the pinned preview", async () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "tab");
+    views[0]!.webContents.focused = true;
+
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+    expect(views[0]!.webContents.capturePage).not.toHaveBeenCalled();
+  });
+
+  it("keeps its camera shut for a window after the person's last keystroke, then opens again", async () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+    // Typed, then clicked Hide or another window: focus has already left, and
+    // an instantaneous focus check would photograph the field they just filled.
+    views[0]!.webContents.emit("input-event", { type: "keyDown" });
+    views[0]!.webContents.focused = false;
+
+    clock += BROWSER_INTERACTION_QUIET_MS - 1;
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+
+    clock += 2;
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+  });
+
+  it("counts a wheel or a hover as using the tab, which focus alone never reports", async () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+    views[0]!.webContents.emit("input-event", { type: "mouseWheel" });
+
+    expect(views[0]!.webContents.isFocused()).toBe(false);
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+  });
+
+  it("photographs a headless tab however recently the page was driven, since nobody can touch it", async () => {
+    const tab = agentTab();
+    views[0]!.webContents.emit("input-event", { type: "keyDown" });
+
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+  });
+
+  it("keeps a screenshot the model asked for as a persisted picture, attributed to its Session", () => {
     const tab = agentTab();
     const png = Buffer.from("png-bytes").toString("base64");
 
@@ -1098,9 +1238,29 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     expect(pictureId).toBe("picture-1");
     expect(persisted.get("picture-1")).toEqual({
       bytes: Buffer.from("png-bytes"),
-      mime: "image/png",
+      record: {
+        id: "picture-1",
+        tabId: tab.tabId,
+        generation: 0,
+        capturedAt: 1_000,
+        ownerSessionId: "session-a",
+        mime: "image/png",
+      },
     });
     expect(pictures.dataUrl("picture-1")).toBe(`data:image/png;base64,${png}`);
+  });
+
+  it("leaves a person's own screenshot unowned on disk, since no Session took it", () => {
+    const tab = host.open({
+      url: "https://person.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+
+    host.keepScreenshot(tab.tabId, Buffer.from("x").toString("base64"));
+
+    expect(persisted.get("picture-1")?.record.ownerSessionId).toBeNull();
   });
 
   it("resolves a picture for the renderer, or nothing for an id it never minted", () => {
@@ -1131,6 +1291,24 @@ describe("BrowserTabHost limits (VC-238)", () => {
       `A Session can have at most ${BROWSER_MAX_TABS_PER_SESSION} Browser Tabs open`,
     );
     expect(() => agentTab("session-b", 0)).not.toThrow();
+  });
+
+  it("counts only what the agent holds unseen: a tab the person adopted frees its place", () => {
+    const tabs = [];
+    for (let index = 0; index < BROWSER_MAX_TABS_PER_SESSION; index += 1) {
+      tabs.push(agentTab("session-a", index));
+    }
+    expect(() => agentTab("session-a", 99)).toThrow(BrowserSessionTabLimitError);
+
+    // Show and Open as tab hand a tab to the person (§6): it is theirs to
+    // close and outlives the Session, so charging it to the agent's allowance
+    // would let the person's own act lock the agent out.
+    host.setPresentation(tabs[0]!.tabId, "preview");
+    expect(() => agentTab("session-a", 98)).not.toThrow();
+
+    host.setPresentation(tabs[1]!.tabId, "tab");
+    expect(() => agentTab("session-a", 97)).not.toThrow();
+    expect(() => agentTab("session-a", 96)).toThrow(BrowserSessionTabLimitError);
   });
 
   it("counts agent tabs apart from the person's, so agents at their cap never stop a person opening one", () => {
