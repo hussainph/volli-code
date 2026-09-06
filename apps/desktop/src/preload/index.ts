@@ -169,6 +169,8 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
+  SessionStopInput,
+  SessionStopResult,
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
@@ -571,6 +573,13 @@ const api = {
      */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
+    /**
+     * Stops a Session's work as the person (VC-269): the Activity Island's
+     * armed "Stop subagent". Records the stop with the `user` actor, then
+     * interrupts and releases; the row it moves arrives on `onActivity`.
+     */
+    stop: (input: SessionStopInput): Promise<SessionStopResult> =>
+      invoke("volli:session-stop", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count

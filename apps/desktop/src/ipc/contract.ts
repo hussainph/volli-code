@@ -325,6 +325,17 @@ export interface SessionRenameInput {
 }
 
 /**
+ * A person's stop of a Session's work (VC-269): the Activity Island's armed
+ * "Stop subagent". `reason` is the optional durable why, as the agent tool's
+ * is. One request channel and no push: the row the stop moves already rides
+ * `volli:session-activity`.
+ */
+export interface SessionStopInput {
+  sessionId: string;
+  reason?: string;
+}
+
+/**
  * A retitle main performed on its own (VC-81 auto-titling), pushed so live
  * surfaces can move their labels the same way a renderer rename does.
  */
@@ -646,6 +657,13 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * Stops a Session's work as the person (VC-269): records `session.stop`
+   * with the `user` actor, interrupts the open turn and releases the live
+   * attachment — the agent tool's three acts, by id. The Session stays
+   * openable; a person can reattach it.
+   */
+  "volli:session-stop": { args: [input: SessionStopInput]; result: SessionStopResult };
   /**
    * When Sessions were started, across EVERY project, from `sinceMs` onward
    * (VC-55). Stamps only: the Home empty chat draws a count per day, and
@@ -2683,6 +2701,18 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
+
+/**
+ * What a person's stop did (`session-stop`). `ok` means the stop fact is
+ * durable; the two booleans and `failures` are the runtime acts, reported
+ * rather than hidden — "stopped" with a still-streaming executor is the one
+ * lie the door must not tell (see `supervise-session.ts`).
+ */
+export type SessionStopResult = Result<{
+  interrupted: boolean;
+  released: boolean;
+  failures: string[];
+}>;
 
 /** Session creation stamps in the requested window, ascending — every project's. */
 export type SessionStartsResult = Result<{ startedAt: number[] }>;

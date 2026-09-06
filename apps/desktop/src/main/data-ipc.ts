@@ -21,6 +21,8 @@ import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
+import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type {
   AuthorityPolicyOverride,
   Label,
@@ -72,6 +74,8 @@ import type {
   RetentionTtlSetInput,
   SessionRenameInput,
   SessionRenameResult,
+  SessionStopInput,
+  SessionStopResult,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -428,6 +432,13 @@ export function registerDataIpcHandlers(
      * boot) means the rename succeeds and nothing is refined.
      */
     autoTitle?: (input: AutoTitleRequest) => void;
+    /**
+     * The live Session runtime's command door, for the person's stop
+     * (VC-269): the interrupt and the release a stop performs after its
+     * durable record. Absent (tests, degraded boot) means the stop is refused
+     * with the reason — nothing is running for it to end.
+     */
+    sessionRuntime?: StopSessionByIdPorts["runtime"];
     /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
@@ -1056,6 +1067,39 @@ export function registerDataIpcHandlers(
         });
       }
       return { ok: true };
+    },
+
+    // The person's stop (VC-269): the agent tool's three acts behind a door
+    // the renderer can reach, with `{ kind: "user" }` as the durable actor.
+    // A refusal the operation words (unknown id, a terminal session, an
+    // unrecorded stop) is the error; anything else is a bug and throws.
+    "volli:session-stop": async (input: SessionStopInput): Promise<SessionStopResult> => {
+      const runtime = options.sessionRuntime;
+      if (runtime === undefined) {
+        return {
+          ok: false,
+          error: "Volli's Session runtime is not available this launch, so nothing was stopped.",
+        };
+      }
+      try {
+        const outcome = await stopSessionById(
+          { sessionEngine, runtime },
+          {
+            operationId: randomUUID(),
+            sessionId: input.sessionId,
+            ...(input.reason === undefined ? {} : { reason: input.reason.trim() }),
+          },
+        );
+        return {
+          ok: true,
+          interrupted: outcome.interrupted,
+          released: outcome.released,
+          failures: [...outcome.failures],
+        };
+      } catch (error) {
+        if (error instanceof SuperviseSessionError) return { ok: false, error: error.message };
+        throw error;
+      }
     },
 
     "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {
