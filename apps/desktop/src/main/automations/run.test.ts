@@ -1004,7 +1004,7 @@ describe("createAutomationRunner", () => {
 
   /* ------------------------- the Project as the Target (VC-130) --------- */
 
-  it("opens a PROJECT Session for a Run that names no Ticket", async () => {
+  it("opens a Board Session for a Run that names no Ticket", async () => {
     const h = harness();
     const automation = await savedAutomation(h);
 
@@ -1017,8 +1017,8 @@ describe("createAutomationRunner", () => {
     await h.runner.settled();
 
     if (!outcome.ok) throw new Error("refused");
-    // `ticketId: null` IS the Project Role in the Session layer, so a schedule
-    // Run is a Project Session by construction rather than by a second flag.
+    // `ticketId: null` IS the `project` Role in the Session layer, so a schedule
+    // Run is a Board Session by construction rather than by a second flag.
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({
       projectId: h.projectId,
@@ -1581,7 +1581,7 @@ describe("Run attendance (VC-133)", () => {
   });
 
   it("keeps the Project door's two callers apart", async () => {
-    // Same Automation, same schedule, same Project Session — and a person at
+    // Same Automation, same schedule, same Board Session — and a person at
     // one of the two doors. This is why attendance cannot be derived from the
     // Automation's Trigger.
     const h = harness();

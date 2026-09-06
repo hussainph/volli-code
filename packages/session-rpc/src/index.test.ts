@@ -1025,7 +1025,7 @@ describe("Session tRPC router", () => {
     );
   });
 
-  it("mints Ticket and project Sessions through one create door — ticketId is the Role", async () => {
+  it("mints Ticket and Board Sessions through one create door — ticketId is the Role", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
     const caller = createSessionRouter().createCaller({
@@ -1047,7 +1047,7 @@ describe("Session tRPC router", () => {
       operationId: "operation-2",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
     });
 
     expect(ticket).toEqual({ sessionId: "session-1" });
@@ -1063,7 +1063,7 @@ describe("Session tRPC router", () => {
           operationId: "operation-2",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       ],
     ]);

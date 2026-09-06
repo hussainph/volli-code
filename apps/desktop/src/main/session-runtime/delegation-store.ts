@@ -83,7 +83,7 @@ export class TicketSessionDelegationStore
     }
     if (input.role === "project") {
       if (input.delegation !== undefined) {
-        throw new Error("A Project Session cannot inherit Ticket delegation ancestry");
+        throw new Error("A Board Session cannot inherit Ticket delegation ancestry");
       }
       return { grants: [], delegation: null, parentSessionId: null };
     }

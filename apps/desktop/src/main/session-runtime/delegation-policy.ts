@@ -81,7 +81,7 @@ export interface TicketSessionDelegation {
 export interface SessionGrantBirth {
   /** Canonical Verb Registry keys that feed resolveAgentToolSurface. */
   grants: readonly VerbToolKey[];
-  /** Null for a Project Session; retained even when a child reaches the depth cap. */
+  /** Null for a Board Session; retained even when a child reaches the depth cap. */
   delegation: TicketSessionDelegation | null;
   /**
    * The Session that delegated this one, for a Subagent Session (VC-9).

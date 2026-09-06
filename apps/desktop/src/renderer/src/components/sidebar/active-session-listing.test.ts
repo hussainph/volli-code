@@ -125,7 +125,7 @@ function container(activeSessionId: string | null, tabs: ReturnType<typeof paneT
   return { activeSessionId, tabs };
 }
 
-/** A single-pane PROJECT-SESSION tab: no ticket, filed in the store under the project id. */
+/** A single-pane Board Session tab: no ticket, filed in the store under the project id. */
 function projectSessionTab(sessionId: string, title: string, exitCode: number | null = null) {
   return {
     sessionId,
@@ -921,7 +921,7 @@ describe("buildActiveSessionListing — the project container", () => {
     const chatRow = {
       id: "chat:chat-1",
       ticket: null,
-      title: "Project chat",
+      title: "Board chat",
       source: "Chat",
       activity: "idle",
       activitySource: "reported",
@@ -1000,7 +1000,7 @@ describe("buildActiveSessionListing — the project container", () => {
     const now = 10_000_000;
     const withoutProjectSessions = buildActiveSessionListing({
       tickets: [],
-      // The store's real shape: one flat map, project Sessions keyed by PROJECT id.
+      // The store's real shape: one flat map, Board Sessions keyed by PROJECT id.
       containers: { p1: projectSessionsOf([projectSessionTab("proj-1", "Poke at the repo")]) },
       signalsByTicket: {},
       records: [],
@@ -1037,7 +1037,7 @@ describe("buildActiveSessionListing — the project container", () => {
   // A project container holding the pane is the proof of ticketless birth, so
   // the exemption survives the record being absent from the listing entirely —
   // which is the normal case for a pane that has not ended.
-  it("exempts a project Session row from cleanup even with no durable record to ask", () => {
+  it("exempts a Board Session row from cleanup even with no durable record to ask", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
@@ -1056,7 +1056,7 @@ describe("buildActiveSessionListing — the project container", () => {
     expect(result.previous[0]?.cleaned).toBe(false);
   });
 
-  it("files an exited project Session tab into Previous, still reachable and still exempt", () => {
+  it("files an exited Board Session tab into Previous, still reachable and still exempt", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
@@ -1083,9 +1083,9 @@ describe("buildActiveSessionListing — the project container", () => {
     });
   });
 
-  // The mounted pane wins: a live project Session tab and its own durable record are
+  // The mounted pane wins: a live Board Session tab and its own durable record are
   // one Session, and Previous must not grow a second row for it.
-  it("never doubles a Project Session that also has a durable record", () => {
+  it("never doubles a Board Session that also has a durable record", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
@@ -1112,11 +1112,11 @@ describe("buildActiveSessionListing — the project container", () => {
   });
 
   // The post-relaunch case, with no ticket to borrow a date from: `lastOutputAt`
-  // died with the window, so a project Session tab is datable only through its own
+  // died with the window, so a Board Session tab is datable only through its own
   // record's newest durable fact, and otherwise not at all. Both stay in Active
   // (the module's documented bias), and the one that can be dated sorts above
   // the one that cannot — 0 is "we could not establish this", never `now`.
-  it("dates an unstamped project Session row by its record, and keeps an undatable one anyway", () => {
+  it("dates an unstamped Board Session row by its record, and keeps an undatable one anyway", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [],
@@ -1146,7 +1146,7 @@ describe("buildActiveSessionListing — the project container", () => {
     expect(result.previous).toEqual([]);
   });
 
-  // A Project Session can never be the Needs-Review promotion (it has no
+  // A Board Session can never be the Needs-Review promotion (it has no
   // ticket and no column), so the hook channel is its ONLY route to an
   // attention — and a ticketless row is the one row with no board card to raise
   // the flag instead.
@@ -1173,7 +1173,7 @@ describe("buildActiveSessionListing — the project container", () => {
     expect(result.active[0]?.ticket).toBeNull();
   });
 
-  it("lists a Project Session without letting a bare Doing ticket in beside it", () => {
+  it("lists a Board Session without letting a bare Doing ticket in beside it", () => {
     const now = 10_000_000;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -1188,7 +1188,7 @@ describe("buildActiveSessionListing — the project container", () => {
     });
 
     // The Doing ticket has no Session of its own, so it has no row — and the
-    // project Session row stands for itself, not for the board.
+    // Board Session row stands for itself, not for the board.
     expect(titles(result.active)).toEqual(["Poke at the repo"]);
   });
 });
@@ -1290,7 +1290,7 @@ describe("buildActiveSessionListing — the Previous band", () => {
         chatSession({
           sessionId: "c1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
           activity: "working",
           lastActivityAt: now - 500,
         }),
@@ -1301,7 +1301,7 @@ describe("buildActiveSessionListing — the Previous band", () => {
       now,
     });
 
-    expect(result.active).toMatchObject([{ title: "Project chat", ticket: null }]);
+    expect(result.active).toMatchObject([{ title: "Board chat", ticket: null }]);
     expect(result.previous).toMatchObject([{ title: "Project terminal", ticket: null }]);
   });
 });
@@ -1332,7 +1332,7 @@ describe("buildActiveSessionListing — cleanup", () => {
 
   it("(a) cleans a Session whose ticket has left the board", () => {
     expect(isConcludedBusiness({ ...cleanupFacts, ticket: null })).toBe(true);
-    // A born-Project Session never had a board row to lose.
+    // A born-Board Session never had a board row to lose.
     expect(
       isConcludedBusiness({
         ...cleanupFacts,
@@ -1469,14 +1469,14 @@ describe("buildActiveSessionListing — cleanup", () => {
       tickets: [],
       containers: {},
       signalsByTicket: {},
-      records: [record({ id: "r1", ticketId: null, title: "Ancient project Session", endedAt: 1 })],
+      records: [record({ id: "r1", ticketId: null, title: "Ancient Board Session", endedAt: 1 })],
       lastOutputAt: {},
       parkState: {},
       harness: {},
       now,
     });
 
-    expect(titles(result.previous)).toEqual(["Ancient project Session"]);
+    expect(titles(result.previous)).toEqual(["Ancient Board Session"]);
   });
 
   it("never cleans a Session whose terminal is still attached", () => {
@@ -1627,7 +1627,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
    * neither axis can pass by accidentally agreeing with the other.
    *
    * Stamps descend in declaration order, which is the order `previous` sorts
-   * into: project terminal, ticket terminal, project chat, ticket chat.
+   * into: project terminal, ticket terminal, Board chat, ticket chat.
    */
   const input = {
     tickets: [ticket({ id: "t1", status: "todo" })],
@@ -1642,7 +1642,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
       chatSession({
         sessionId: "c-project",
         ticketId: null,
-        title: "Project chat",
+        title: "Board chat",
         live: false,
         lastActivityAt: now - 2 * ACTIVE_QUIET_WINDOW_MS,
       }),
@@ -1664,7 +1664,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
     expect(titles(buildActiveSessionListing(input).previous)).toEqual([
       "Project shell",
       "Ticket shell",
-      "Project chat",
+      "Board chat",
       "Ticket chat",
     ]);
   });
@@ -1677,7 +1677,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
           filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: false },
         }).previous,
       ),
-    ).toEqual(["Project shell", "Project chat"]);
+    ).toEqual(["Project shell", "Board chat"]);
     expect(
       titles(
         buildActiveSessionListing({
@@ -1700,7 +1700,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
           },
         }).previous,
       ),
-    ).toEqual(["Project chat"]);
+    ).toEqual(["Board chat"]);
   });
 
   it("leaves Active alone, exactly as the kind filter does", () => {
@@ -1711,10 +1711,10 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
       filter: { kinds: null, scopes: new Set(["project" as const]), showCleaned: false },
     });
 
-    // "Project sessions" is a way of reading the archive, never a way of hiding
+    // "Board sessions" is a way of reading the archive, never a way of hiding
     // a ticket's running work.
     expect(titles(result.active)).toEqual(["Live ticket terminal"]);
-    expect(titles(result.previous)).toEqual(["Project shell", "Project chat"]);
+    expect(titles(result.previous)).toEqual(["Project shell", "Board chat"]);
   });
 
   it("keeps an orphaned Ticket Session in ticket scope", () => {
@@ -1725,7 +1725,7 @@ describe("buildActiveSessionListing — the Previous scope filter (VC-196)", () 
 
     // Losing the current ticket reference changes the row identity, not the
     // immutable Session scope recorded when it was created.
-    expect(titles(projectRows.previous)).toEqual(["Project shell", "Project chat"]);
+    expect(titles(projectRows.previous)).toEqual(["Project shell", "Board chat"]);
     expect(
       titles(
         buildActiveSessionListing({

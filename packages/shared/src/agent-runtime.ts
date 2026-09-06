@@ -45,6 +45,17 @@ import type { SessionUsage } from "./session-usage";
 export const SESSION_ROLES = ["project", "ticket", "subagent"] as const;
 export type SessionRole = (typeof SESSION_ROLES)[number];
 
+/**
+ * The glossary word for each Role (CONTEXT.md "Session Role"), for prose a
+ * person or an agent reads. The enum value is a frozen durable field written
+ * into Session history and stays `project`; the word for it is Board.
+ */
+export const SESSION_ROLE_NAMES: Record<SessionRole, string> = {
+  project: "Board Session",
+  ticket: "Ticket Session",
+  subagent: "Subagent Session",
+};
+
 /** Volli's reasoning policy, independent of any provider's type names. */
 export const REASONING_LEVELS = [
   "off",

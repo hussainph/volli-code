@@ -550,7 +550,7 @@ export default function VolliDemo() {
           {/* A div, not <main>: the page that hosts this already has one, and
               two main landmarks is one too many. */}
           <div className="demo-main-surface">
-            {/* Home's tab strip: a permanent Board tab, project chats beside it,
+            {/* Home's tab strip: a permanent Board tab, Board chats beside it,
                 and one control that starts a chat. */}
             <div className="demo-home-tabs" aria-hidden="true">
               <span className="is-active">

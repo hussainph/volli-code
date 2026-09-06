@@ -166,7 +166,7 @@ describe("buildBoardSessionActivity", () => {
     ).toEqual({ t1: "waiting" });
   });
 
-  it("ignores a ticketless chat — a Project Session has no card to light", () => {
+  it("ignores a ticketless chat — a Board Session has no card to light", () => {
     expect(build({ chatSessions: [chat({ ticketId: null })] }).byTicket).toEqual({});
   });
 

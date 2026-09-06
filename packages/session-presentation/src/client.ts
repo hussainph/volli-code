@@ -102,7 +102,7 @@ export function isWorking(slice: ChatSessionSlice): boolean {
  * written before both hold joins the queue instead of being dropped.
  *
  * One rule, whatever the Session was born as. Every structured Session records
- * its model policy durably before anything attaches — a project chat's is taken
+ * its model policy durably before anything attaches — a Board chat's is taken
  * from the app default exactly as a Ticket Session's is — so a projection with
  * no selection on it is not a Session that picks its own model, it is a Session
  * whose model nobody has written down yet.

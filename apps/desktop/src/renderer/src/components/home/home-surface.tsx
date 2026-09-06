@@ -1,5 +1,5 @@
 /**
- * Home: the Board, Project Sessions, Project Files, and Browser Tabs.
+ * Home: the Board, Board Sessions, Project Files, and Browser Tabs.
  *
  * The shape (VC-54, VC-42 phase 3). The nav row used to hold a "Board" page and
  * a "Sessions" page, and the second was the app's most confusing taxonomy — it
@@ -7,7 +7,7 @@
  * visit, and its tabs were easily mistaken for a ticket workspace's. So the
  * Board nav became **Home**, a tabbed environment in exactly the ticket
  * workspace's grammar: a permanent first tab that cannot be closed (the Board,
- * precisely as a ticket's Body tab), with Project Sessions and Files beside it.
+ * precisely as a ticket's Body tab), with Board Sessions and Files beside it.
  *
  * That arrangement is the product argument, made spatial instead of explained.
  * A Home Session is an ORCHESTRATOR: start from a nebulous idea and leave with
@@ -666,7 +666,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   /**
    * Where a file a Home chat names opens (VC-120). The raw tool path is
    * translated FIRST — `resolveChatOpenTarget` — because an orchestrating
-   * Project Session spends its life pointing at ticket worktrees, and the
+   * Board Session spends its life pointing at ticket worktrees, and the
    * untranslated string used to resolve against the main checkout and render
    * raw ENOENT text:
    *

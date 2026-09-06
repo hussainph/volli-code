@@ -306,7 +306,7 @@ describe("triggerLabel for a schedule", () => {
 describe("listingRunTarget", () => {
   it("sends a schedule to the Project and everything else to a Ticket", () => {
     // VC-112's second scope axis: the Trigger decides the Target. A schedule
-    // names the Project, so running one by hand opens the Project Session it
+    // names the Project, so running one by hand opens the Board Session it
     // would have opened rather than asking which Ticket.
     expect(
       listingRunTarget({

@@ -342,7 +342,7 @@ async function startSessionTool(
   const operationId = `${session.sessionId}:${request.toolCallId}`;
   const claimRef = { parentSessionId: session.sessionId, toolCallId: request.toolCallId };
 
-  // Project Sessions retain the existing project-wide control bound. A Ticket
+  // Board Sessions retain the existing project-wide control bound. A Ticket
   // Session only reaches this handler because its frozen birth surface carried
   // a stored `session.start` grant, and that grant's scope is narrower than the
   // generic project lookup above: exactly its attached Ticket.
@@ -715,7 +715,7 @@ async function runAutomationTool(
  * The door's whole job is the same as the start tool's: read the fields,
  * bind the caller, word the answer. Parent, project and Ticket all come from
  * the attachment — a Ticket Session delegates within its own Ticket and a
- * Project Session within its project, and neither can name another. The
+ * Board Session within its project, and neither can name another. The
  * operation id is the caller plus the runtime's tool call id, so a replayed
  * call finds its child rather than minting a second.
  *

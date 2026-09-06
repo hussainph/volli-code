@@ -25,7 +25,7 @@ _Avoid_: ticket worktree, artifact view
 
 **Home**:
 The project-level tabbed workspace, and the app's landing page. Its permanent
-first tab is the Board; the project's own Project Sessions and Project Files
+first tab is the Board; the project's own Board Sessions and Project Files
 open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
 fills the surface and Home's tab strip steps aside, so only one tab strip is
 ever on screen.
@@ -83,24 +83,25 @@ _Avoid_: pane session, split session, harness process, terminal pane, UI tab
 
 **Session Role**:
 The product scope a Session acts within: `project`, `ticket`, or `subagent`.
-Project Sessions orchestrate project work; Ticket Sessions execute with explicit
+Board Sessions orchestrate project work; Ticket Sessions execute with explicit
 Ticket and worktree context; Subagent Sessions perform a bounded delegation and
 remain durable children of the Session that created them. Role determines the
 default context, tool bundle, and authority policy, not a separate Session type,
-and it is stored on the Session rather than read off its Ticket (VC-9). A
-Project Session runs on the Main checkout with no worktree and no board
-involvement, and is recorded in Session history exactly as a Ticket Session is.
-A Subagent Session is started by a parent's `session_delegate` call, shares the
-parent's working directory and inherits its Ticket, holds every coding tool
-and no agent-control verb or `ask_user`, and carries its parent on the Session
-itself (`parentSessionId`, a ledger fact). When its first turn completes a
-notice from Volli — the child's handle, state and title, none of its words —
-is steered into the parent, and the parent reads the answer with
-`volli session answer <handle>`, so the child's prose reaches it as a tool
-result and never as its user; the parent is never parked on it, and stopping
-the parent stops its children. Write-capable children in a shared tree are
-VC-266's question.
-_Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread
+and it is stored on the Session rather than read off its Ticket (VC-9). A Board
+Session runs on the Main checkout with no worktree and no Ticket of its own — it
+sees the whole board, and its lifecycle moves no card — and is recorded in
+Session history exactly as a Ticket Session is. A Subagent Session is started by
+a parent's `session_delegate` call, shares the parent's working directory and
+inherits its Ticket, holds every coding tool and no agent-control verb or
+`ask_user`, and carries its parent on the Session itself (`parentSessionId`, a
+ledger fact). When its first turn completes a notice from Volli — the child's
+handle, state and title, none of its words — is steered into the parent, and the
+parent reads the answer with `volli session answer <handle>`, so the child's
+prose reaches it as a tool result and never as its user; the parent is never
+parked on it, and stopping the parent stops its children. Write-capable children
+in a shared tree are VC-266's question.
+_Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
+Project Session, project chat
 
 **Authority Snapshot**:
 The durable policy one attachment runs under: which actions are
@@ -533,7 +534,7 @@ The ticket-scoped body of source changes relative to its base branch, including 
 _Avoid_: artifact, diff (when referring to the whole body of work)
 
 **Main checkout**:
-The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Project Sessions and worktree-opt-out tickets run here.
+The project folder the user added to Volli — the repo's own working tree, never touched by ticket automation. Board Sessions and worktree-opt-out tickets run here.
 
 **Actor**:
 Who a ticket event is attributed to: `user`, `session`, `automation`, or `unauthenticated`. The app derives this from how the mutation arrived; callers never self-declare it. `unauthenticated` is the honest name for a socket caller Volli could not identify — it is neither the person nor the Session it may have named, and by default it writes nothing at all.
@@ -622,7 +623,7 @@ _resolved_ model and reasoning produced a given Session. A Run owns exactly one
 Session and always starts a fresh one: it never wakes an existing Session, whose
 Authority Snapshot was granted while a person was present and whose context is
 stale by the time a schedule fires. A ticket has at most one Run in flight at a
-time. A Project Session can start one too, through the `automation.run` tool its
+time. A Board Session can start one too, through the `automation.run` tool its
 Role bundle holds; the Run it starts carries the automation Actor and is
 indistinguishable in its record from one a person started by hand. Runs outlive the app — one whose Session died is interrupted, never lost,
 and only a human restarts it. A Session a user opens from the composer belongs

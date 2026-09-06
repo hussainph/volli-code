@@ -3,7 +3,7 @@
  * Sessions (CONTEXT.md's "Session Role": ticketless, main checkout) and
  * ticket-scoped sessions (ticket-detail-mvp decision #19). Every tab carries a
  * {@link SessionScope} discriminator; the always-mounted sessions layer reads
- * it to route each live terminal to its surface (Home for a Project Session, a
+ * it to route each live terminal to its surface (Home for a Board Session, a
  * rect-synced overlay over the ticket plane for ticket sessions). Both scopes
  * get the full split tree, activity tracking, and rename.
  *
@@ -13,7 +13,7 @@
  * asking one renderer instance to paint the same PTY into another canvas.
  *
  * Containers live in `byOwner`, keyed by the scope's OWNER id — a projectId for
- * a Project Session, a ticketId for ticket sessions (distinct UUID spaces, so one flat
+ * a Board Session, a ticketId for ticket sessions (distinct UUID spaces, so one flat
  * map never collides). Cross-cutting, sessionId-addressed actions (markExited,
  * bumpOutput, renameSession) route through the `sessionOwner` index so the
  * per-chunk hot path stays O(1).
@@ -40,7 +40,7 @@ export type TerminalSplitDirection = "vertical" | "horizontal";
 
 /**
  * What a session is scoped to, stamped on every tab. `project` runs at the
- * project's main checkout with no board involvement; `ticket` is ticket-scoped
+ * project's main checkout with no card on the board; `ticket` is ticket-scoped
  * (env-injected PTY in main) and hosts in the ticket detail's tab plane. Both
  * carry `projectId` so a split can re-boot its PTY (cwd + optional ticket env)
  * without another lookup.
@@ -49,7 +49,7 @@ export type SessionScope =
   | { kind: "project"; projectId: string }
   | { kind: "ticket"; projectId: string; ticketId: string };
 
-/** The container key for a scope: projectId for a project Session, ticketId for ticket. */
+/** The container key for a scope: projectId for a Board Session, ticketId for ticket. */
 export function ownerKey(scope: SessionScope): string {
   return scope.kind === "project" ? scope.projectId : scope.ticketId;
 }
@@ -168,7 +168,7 @@ export function sessionActivityState(
 }
 
 interface SessionsState {
-  /** Session containers keyed by owner id (projectId for a project Session, ticketId for ticket). */
+  /** Session containers keyed by owner id (projectId for a Board Session, ticketId for ticket). */
   byOwner: Record<string, SessionContainer>;
   /** sessionId → owning container key; the O(1) routing index for the hot path and rename. */
   sessionOwner: Record<string, string>;

@@ -9,6 +9,7 @@ import {
   HELP_TOPIC_NAMES,
   makeAgentError,
   referenceVerbsFrom,
+  SESSION_ROLE_NAMES,
   verbTier,
 } from "@volli/shared";
 import type {
@@ -126,7 +127,7 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
     "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
     "Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
-    "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
+    "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
     "",
   ].join("\n");
 }
@@ -233,9 +234,10 @@ function runtimeSurfaceLines(runtime: AgentHelpRuntime): string[] {
 function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string | null {
   if (!entry.accessModes.includes("tool") || entry.accessModes.includes("cli")) return null;
   if (runtime.surface !== null) {
+    const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
     return runtime.surface.tools.includes(entry.key)
-      ? `Tool availability: carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`
-      : `Tool availability: not carried by this ${runtime.surface.role} Session's frozen Agent Tool Surface.`;
+      ? `Tool availability: carried by this ${roleName}'s frozen Agent Tool Surface.`
+      : `Tool availability: not carried by this ${roleName}'s frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
     ? "Tool availability: not claimed outside a resolved Session."

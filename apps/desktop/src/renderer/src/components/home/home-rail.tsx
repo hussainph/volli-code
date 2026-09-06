@@ -14,7 +14,7 @@
  *  • **Sessions** — the project's OWN Sessions, and only those. A ticket's
  *    Sessions already live in that ticket's rail, so listing them here would
  *    make Home a second index of the same rows. What has no other home is the
- *    Project Session you closed, which reopens from here.
+ *    Board Session you closed, which reopens from here.
  *  • **Files** — the Main checkout navigator. It opens preview/pinned File tabs
  *    in Home rather than sending the whole app to a separate nav page.
  *  • **Search** — find across the same Main checkout (VC-193). The same page
@@ -420,7 +420,7 @@ function SessionsPage({ projectId }: { projectId: string }) {
 
   return (
     <div className={SECTION}>
-      <SectionHeading as="h3">Project sessions</SectionHeading>
+      <SectionHeading as="h3">Board sessions</SectionHeading>
       {rows.length === 0 ? (
         <p className={EMPTY_INLINE}>No sessions yet</p>
       ) : (
@@ -478,7 +478,7 @@ function homeSessionDragPayload(projectId: string, row: HomeSessionRow): SplitDr
  * Both kinds route through `openHome`, the same seam the sidebar's bands and
  * ⌘K use — a chat is adopted and given a tab first, because the strip cannot
  * bring forward a tab that does not exist yet. Reopening a CLOSED chat is the
- * case this page exists for: a Project Session outlives its tab, and until now
+ * case this page exists for: a Board Session outlives its tab, and until now
  * the only way back to one was the sidebar.
  *
  * Only ever called for a row that IS a door — `HomeSessionRow.reopenable`, which

@@ -62,7 +62,7 @@ import type { VerbToolKey } from "./verb-registry";
  * The verbs each Role holds with no grant (VC-162).
  *
  * `project` carries the agent-control family — start, stop, send (VC-86) —
- * because orchestrating work is what a Project Session is for. `ticket`
+ * because orchestrating work is what a Board Session is for. `ticket`
  * carries execution verbs and none of that family: merge submission is
  * VC-89's, credential-adjacent git is VC-45's, and a ticket executor that
  * needs stop over its own children is a VC-44 grant, never a bundle edit.
@@ -140,7 +140,7 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
  * Which capability tools a Role may be offered at all (VC-9).
  *
  * The bundle map above decides the verb half; this decides the other half, and
- * it exists for one Role. A Project Session and a Ticket Session are bounded
+ * it exists for one Role. A Board Session and a Ticket Session are bounded
  * by nothing but their profile — every coding tool the venue loads and every
  * port the host wired. A Subagent Session is bounded twice more: by this
  * policy, and by its parent's own frozen surface (`within`, below).

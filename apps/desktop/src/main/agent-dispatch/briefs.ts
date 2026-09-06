@@ -74,16 +74,16 @@ export function composeTicketBrief(input: {
 }
 
 /**
- * The Project Brief: what an agent is told when the Session has no Ticket.
+ * The Board Session Brief: what an agent is told when the Session has no Ticket.
  *
- * A ticketless chat has no prose to hand over and no isolated checkout to name,
+ * A Board chat has no prose to hand over and no isolated checkout to name,
  * so the brief says exactly that rather than leaving the agent to infer a
  * missing Ticket from a brief that never mentions one. The `volli` sentence is
  * the Ticket Brief's, verbatim: the board is reachable from here too, and two
  * wordings of one instruction would read as two different rules.
  */
 export function composeProjectBrief(input: { project: Pick<Project, "path"> }): string {
-  return `This is a project-scoped chat Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
+  return `This is a Board Session with no Ticket. Your working directory is the project root at ${input.project.path}.\n\nBoard coordination goes through the bundled \`volli\` CLI. Run \`volli help\` when you need its reference (and the volli skill, when installed, for norms).`;
 }
 
 /**

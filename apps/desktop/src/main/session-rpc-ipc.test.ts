@@ -644,7 +644,7 @@ describe("registerSessionRpcIpcHandlers", () => {
           operationId: "project-create",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       }),
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-2" } });
@@ -665,7 +665,7 @@ describe("registerSessionRpcIpcHandlers", () => {
           operationId: "project-create",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       ],
     ]);

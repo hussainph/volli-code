@@ -235,7 +235,7 @@ describe("autoTitlePrompt", () => {
     );
   });
 
-  it("sends the message alone for a project chat, which is work on no ticket", () => {
+  it("sends the message alone for a Board chat, which is work on no ticket", () => {
     expect(autoTitlePrompt("Fix the parser", null)).not.toContain("<ticket");
     expect(autoTitlePrompt("Fix the parser")).not.toContain("<ticket");
   });

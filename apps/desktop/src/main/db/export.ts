@@ -172,7 +172,7 @@ export interface ExportTicketEvent {
 export interface ExportSession {
   id: string;
   projectId: string;
-  /** `null` for a Project Session; a Subagent Session's is inherited from its parent. */
+  /** `null` for a Board Session; a Subagent Session's is inherited from its parent. */
   ticketId: string | null;
   /** The Role the Session was created under (migration 040). */
   role: string;

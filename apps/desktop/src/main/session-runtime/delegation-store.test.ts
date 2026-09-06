@@ -142,7 +142,7 @@ describe("Ticket Session delegation grants", () => {
     ).toThrow("cannot inherit Ticket delegation ancestry");
   });
 
-  it("gives a Project Session no ancestry and no grant", () => {
+  it("gives a Board Session no ancestry and no grant", () => {
     const h = harness();
 
     const birth = h.store.resolveBirth({ role: "project", ticketId: null });

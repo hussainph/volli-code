@@ -124,7 +124,7 @@ CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
  * existing column is touched:
  *  - `sessions`: a durable trace + resume seed for a terminal session,
  *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
- *    Project Session (no board involvement); `ON DELETE
+ *    Board Session (no card on the board); `ON DELETE
  *    CASCADE` off `project_id` and `ON DELETE SET NULL` off `ticket_id` mean
  *    a session outlives an archived-then-deleted ticket, purely as
  *    project-level history.
@@ -1717,7 +1717,7 @@ CREATE TABLE IF NOT EXISTS session_delegation_extensions (
  * rather than off the live column, because the live column is not the birth
  * fact: `sessions.ticket_id` is `ON DELETE SET NULL`, so a Ticket Session whose
  * Ticket was since deleted reads null today and would be backfilled as a
- * project Session — the exact orphan `SessionProjection.bornTicketless` exists
+ * Board Session — the exact orphan `SessionProjection.bornTicketless` exists
  * to tell apart. The column default is the second rung, for a row with no
  * birth event, which no post-018 lineage has.
  *

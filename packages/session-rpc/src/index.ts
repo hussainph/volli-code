@@ -82,7 +82,7 @@ function isRendererStreamTransient(
 export interface SessionCreateInput {
   operationId: string;
   projectId: string;
-  /** The Role: a Ticket Session when set, a project Session when null. */
+  /** The Role: a Ticket Session when set, a Board Session when null. */
   ticketId: string | null;
   title: string | null;
   /**
@@ -665,12 +665,12 @@ export function createSessionRouter() {
         .input(
           z
             .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the project default"; clearing
+            // Clearing ticket/utility means "use the Board default"; clearing
             // global would leave every purpose resolving to nothing, which is a
             // state the UI never offers and this edge refuses to mint.
             .refine(
               (input) => input.purpose !== "global" || input.selection !== null,
-              "The project default cannot be cleared — choose a model instead",
+              "The Board default cannot be cleared — choose a model instead",
             ),
         )
         .mutation(async ({ ctx, input }) => {

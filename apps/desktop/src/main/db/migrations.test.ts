@@ -2705,11 +2705,11 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
     );
     insertSession.run("s-ticket", "t1", "On the ticket");
     insertCreated.run("e-1", "s-ticket", sessionCreatedPayload("s-ticket", "t1"));
-    insertSession.run("s-project", null, "Project chat");
+    insertSession.run("s-project", null, "Board chat");
     insertCreated.run("e-2", "s-project", sessionCreatedPayload("s-project", null));
     // Born on the Ticket, orphaned since: the live column says null, the
     // birth event says Ticket. A backfill that read the column would turn a
-    // Ticket Session into a project one.
+    // Ticket Session into a Board one.
     insertSession.run("s-orphan", null, "Orphaned");
     insertCreated.run("e-3", "s-orphan", sessionCreatedPayload("s-orphan", "t1"));
 

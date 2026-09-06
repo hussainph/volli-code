@@ -532,7 +532,7 @@ Effects:
 - Does not: No new Session starts, and the stopped Session can be reattached by a person.
 
 Notes:
-- Runs as a named tool in the project Role bundle; the shell never executes it.
+- Runs as a named tool in the Board Session's tool bundle; the shell never executes it.
 - Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.
 - The Session identity survives: its history stays openable, and a person can reattach it.
 
@@ -558,7 +558,7 @@ Effects:
 - Does not: No Ticket moves, no Session stops, and no new Session starts.
 
 Notes:
-- Runs as a named tool in the project Role bundle; the shell never executes it.
+- Runs as a named tool in the Board Session's tool bundle; the shell never executes it.
 - Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.
 - The message arrives marked as supervisor steering from this Session, never as the target's own user.
 
@@ -781,7 +781,7 @@ Verb tier: read
 Usage: volli prompt baseline [options]
 
 Options:
-  --ticket <id>  Price a Ticket Session for this ticket instead of a project chat.
+  --ticket <id>  Price a Ticket Session for this ticket instead of a Board chat.
   --project <p>  Resolve against this project instead of the context ladder.
 
 Example: volli prompt baseline
@@ -927,9 +927,9 @@ The app action Create & start is a composed human action. It creates a Ticket in
 - session.start starts a Session and does not move or create a Ticket.
 - session.done and session.blocked record Session signals and do not move the board.
 
-Tickets, worktrees, and Project Sessions
+Tickets, worktrees, and Board Sessions
 A worktree-scoped Ticket records the intent to use isolation before a checkout exists. Volli materializes or reuses the Ticket worktree when work starts. Ending a Session does not remove the checkout. Archiving a Ticket preserves its worktree; later retention or an explicit app action can remove disposable checkout state while the retained branch remains the source for recreation.
-A Project Session runs on the Main checkout, the project folder the person added to Volli. It has no Ticket worktree and no board effect. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.
+A Board Session runs on the Main checkout, the project folder the person added to Volli. It sees the whole board but has no Ticket of its own, so it has no worktree and its lifecycle moves no card. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.
 
 Board state, Session signals, and human effects
 Ticket state and Session state are separate ledgers. A Ticket comment appears in the Ticket activity feed. A Ticket move changes the board. A Session signal appears on that Session and can raise attention. Each write documents where a person sees the result and the important actions it does not imply.
@@ -1006,7 +1006,7 @@ Changed
 Fixed
 - None in this record.
 Removed
-- session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
+- session.start left the Agent CLI. It is control tier now: the named session_start tool in the Board Session's tool bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
 - ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
 
 VC-85 (after VC-162)
@@ -1023,7 +1023,7 @@ Removed
 VC-162 (after VC-91)
 Added
 - A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.
-- session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
+- session_start as a named tool in the Board Session's tool bundle. A Board Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
 - A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.
 Changed
 - session.start gained the named session_start tool on the Agent Tool Surface beside its Agent CLI door. One registry key, one handler, two doors — its verb tier stayed coordination while the CLI door remained open. VC-163 then closed that door; see the entry above.
@@ -1163,7 +1163,7 @@ volli conflicts before you schedule: it names the active worktrees that touch th
 volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
 No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.
 Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.
-Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
+Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
 
 ============================================================================
 volli help session harness

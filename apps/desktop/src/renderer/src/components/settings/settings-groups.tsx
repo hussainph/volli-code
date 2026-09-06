@@ -169,7 +169,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "sign in",
             "account",
             "accounts",
-            "project chats",
+            "board chats",
             "ticket sessions",
             "utility",
             "default models",

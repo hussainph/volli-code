@@ -76,6 +76,12 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
+import {
+  applyQuietAppPolicy,
+  quietWindowPolicy,
+  revealWindow,
+  sealQuietAppActivation,
+} from "./quiet-windows";
 import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
@@ -325,6 +331,14 @@ protocol.registerSchemesAsPrivileged([
 // stores/projects.ts for the localStorage-origin version of this same split.
 app.setName("Volli Code");
 
+// Packed-app smokes need the real compositor, but not the native app activation
+// that a normal Volli launch owns. This env-only seam is deliberately resolved
+// before the profile lock or any BrowserWindow: packaged binaries honour it too,
+// the app never reaches the Dock/frontmost state, and every later window reads
+// the same frozen policy.
+const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
+applyQuietAppPolicy(app, nativeWindowPolicy);
+
 const isDev = !app.isPackaged;
 const agentSocket = createAgentSocketLifecycle({
   start: startAgentSocket,
@@ -351,8 +365,11 @@ if (ownsAppProfile) {
     const mainWindow = BrowserWindow.getAllWindows()[0];
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+    revealWindow(mainWindow, nativeWindowPolicy);
+    sealQuietAppActivation(app, nativeWindowPolicy);
+    // show() normally gives focus on its own; preserve the explicit focus from
+    // this second-instance path without letting a quiet smoke take it.
+    if (!nativeWindowPolicy.enabled) mainWindow.focus();
   });
 }
 
@@ -487,6 +504,9 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
     minWidth: 940,
     minHeight: 600,
     show: false,
+    // A quiet macOS smoke window must be incapable of becoming key. Playwright
+    // focus emulation still gives its page document focus and CDP input.
+    focusable: nativeWindowPolicy.focusable,
     // Slack/Cursor-style chrome: no title bar. The renderer paints a
     // full-width 36px chrome band (ChromeBar) that owns the drag region
     // (.app-region-drag in globals.css) and the traffic-light whitespace —
@@ -517,6 +537,10 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
       additionalArguments: firstPaintArguments(firstPaint, nativeTheme.shouldUseDarkColors),
       contextIsolation: true,
       nodeIntegration: false,
+      // Smoke windows stay displayed for screenshots/WebGPU but can be fully
+      // covered by the person's work or by another concurrent smoke. Keep the
+      // compositor and timers at foreground pace in that env-only mode.
+      backgroundThrottling: nativeWindowPolicy.backgroundThrottling,
       // Electron 20+ already defaults this on; explicit so it can't silently
       // regress. Safe: the preload only imports `electron` (contextBridge,
       // ipcRenderer) plus type-only @volli/shared imports — no Node builtins.
@@ -526,7 +550,11 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
   clearUnsavedDocumentsOnWindowClosed(mainWindow);
 
   mainWindow.on("ready-to-show", () => {
-    mainWindow.show();
+    revealWindow(mainWindow, nativeWindowPolicy);
+    // Accessory apps may still be activated programmatically. Once the smoke's
+    // one compositor window exists and is visible, prohibit activation for the
+    // rest of this process; the window keeps painting and receiving CDP input.
+    sealQuietAppActivation(app, nativeWindowPolicy);
   });
 
   // Destructive-close gate, window edition (the before-quit gate in pty.ts is
@@ -863,7 +891,7 @@ app.whenReady().then(async () => {
     return { ...report, provenance: outcome.kind, interactiveProvenance };
   };
   // The Pi-backed Agent Runtime is the structured product's one target
-  // executor, for Ticket Sessions and ticketless project chats alike. Model
+  // executor, for Ticket Sessions and ticketless Board chats alike. Model
   // access and selection come from this Pi host.
   // Pi's providers and the credential store behind them, built once here so
   // signing in and running a Session share one collection. Two would be two
@@ -1453,7 +1481,7 @@ app.whenReady().then(async () => {
           // project's own runtime preference first — `projects.session_model`
           // (migration 024, NULL = inherit) — then the app-wide per-purpose
           // record, Role in and purpose out (VC-53): a Ticket Session resolves
-          // the execution default, a project chat the orchestration one —
+          // the execution default, a Board chat the orchestration one —
           // stated by `resolveDefaultModel`, never substituted. One closure so
           // every door — renderer chat, CLI start, an Automation Run — walks
           // the same rungs.
