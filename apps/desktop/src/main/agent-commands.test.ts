@@ -5642,7 +5642,7 @@ describe("model.list", () => {
     {
       tier: "global",
       label: "Board chats",
-      hint: "Board chats, and the base every other tier falls back to.",
+      hint: "Planning and coordination across the board.",
       resolvedFrom: null,
       model: null,
       reasoning: null,
@@ -5650,7 +5650,7 @@ describe("model.list", () => {
     {
       tier: "ticket",
       label: "Ticket Sessions",
-      hint: "Ticket Sessions. Unset, they use the Board default.",
+      hint: "One ticket and its optional worktree.",
       resolvedFrom: null,
       model: null,
       reasoning: null,
@@ -5658,7 +5658,7 @@ describe("model.list", () => {
     {
       tier: "utility",
       label: "Utility",
-      hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
+      hint: "Chat names and summaries.",
       resolvedFrom: null,
       model: null,
       reasoning: null,
@@ -5666,7 +5666,7 @@ describe("model.list", () => {
     {
       tier: "fast",
       label: "Fast",
-      hint: "Quick, cheap, bounded side work.",
+      hint: "Quick, low-cost tasks.",
       resolvedFrom: null,
       model: null,
       reasoning: null,
@@ -5674,7 +5674,7 @@ describe("model.list", () => {
     {
       tier: "deep",
       label: "Deep",
-      hint: "Hard reasoning, planning, judging.",
+      hint: "Complex reasoning, planning, and review.",
       resolvedFrom: null,
       model: null,
       reasoning: null,
@@ -5682,7 +5682,7 @@ describe("model.list", () => {
     {
       tier: "visual",
       label: "Visual",
-      hint: "Reading images, screenshots, and pages.",
+      hint: "Images, screenshots, and pages.",
       resolvedFrom: null,
       model: null,
       reasoning: null,

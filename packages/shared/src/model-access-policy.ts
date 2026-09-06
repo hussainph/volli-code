@@ -18,16 +18,16 @@ import type { ModelSelection } from "./agent-runtime";
  *
  * The three that predate tiers keep their names and their rows:
  *
- * - `global` — Board chats, and the base every other tier falls back to.
- * - `ticket` — Ticket Sessions, the structured coding runs.
- * - `utility` — naming chats and summaries; cost-efficient background work.
+ * - `global` — planning and coordination across the board.
+ * - `ticket` — one ticket and its optional worktree.
+ * - `utility` — chat names and summaries.
  *
- * The three advanced tiers sit behind a disclosure and fall back to `ticket`:
+ * The three kind-of-work tiers fall back to `ticket`:
  *
- * - `fast` — quick, cheap, bounded side work.
- * - `deep` — hard reasoning, planning, judging.
- * - `visual` — reading images, screenshots, and pages; its fallback only
- *   holds when the model it lands on accepts image input.
+ * - `fast` — quick, low-cost tasks.
+ * - `deep` — complex reasoning, planning, and review.
+ * - `visual` — images, screenshots, and pages; its fallback only holds when
+ *   the model it lands on accepts image input.
  *
  * A fixed set on purpose. User-defined tiers are a non-goal until asked for,
  * and every surface that names a tier — Settings, the `session_start` tool,
@@ -64,12 +64,17 @@ export function isAgentModelTier(value: unknown): value is AgentModelTier {
 }
 
 /**
- * One row per tier: the label a Settings row wears, and the one-line job the
- * `(i)` beside it carries. Shared so the tool description, `volli model list`
+ * One row per tier: the label a Settings row wears, and the one-line job its
+ * subtitle carries. Shared so the tool description, `volli model list`
  * and Settings all say the same thing about the same slot.
  *
- * `advanced` rows sit behind the Advanced disclosure in Settings, and are the
- * ones whose fallback is the Ticket default.
+ * The hints are noun phrases — the WORK, not a sentence about the agent —
+ * because they read in three grammars at once: under a Settings label, after a
+ * tier name in a tool description ("fast: Quick, low-cost tasks."), and in a
+ * CLI table cell. A sentence fits one of those and reads oddly in the others.
+ *
+ * `advanced` rows are the kind-of-work tiers, and are the ones whose fallback
+ * is the Ticket default.
  *
  * The `global` label says Board (VC-262): the Session Role word is Board
  * Session, and this row is the one Board chats resolve through.
@@ -84,22 +89,18 @@ export interface ModelTierRow {
 const TIER_ROW: Record<ModelTier, Omit<ModelTierRow, "tier">> = {
   global: {
     label: "Board chats",
-    hint: "Board chats, and the base every other tier falls back to.",
+    hint: "Planning and coordination across the board.",
     advanced: false,
   },
   ticket: {
     label: "Ticket Sessions",
-    hint: "Ticket Sessions. Unset, they use the Board default.",
+    hint: "One ticket and its optional worktree.",
     advanced: false,
   },
-  utility: {
-    label: "Utility",
-    hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
-    advanced: false,
-  },
-  fast: { label: "Fast", hint: "Quick, cheap, bounded side work.", advanced: true },
-  deep: { label: "Deep", hint: "Hard reasoning, planning, judging.", advanced: true },
-  visual: { label: "Visual", hint: "Reading images, screenshots, and pages.", advanced: true },
+  utility: { label: "Utility", hint: "Chat names and summaries.", advanced: false },
+  fast: { label: "Fast", hint: "Quick, low-cost tasks.", advanced: true },
+  deep: { label: "Deep", hint: "Complex reasoning, planning, and review.", advanced: true },
+  visual: { label: "Visual", hint: "Images, screenshots, and pages.", advanced: true },
 };
 
 /** The row for one tier; every tier has one by construction. */
