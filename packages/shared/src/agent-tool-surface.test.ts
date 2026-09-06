@@ -149,6 +149,11 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      // The hold pair rides the same all-or-nothing membership as the six
+      // (VC-239): one port answers them all, so a Subagent that may browse
+      // may also take and give back a tab's hold.
+      "browser_acquire",
+      "browser_release",
     ]);
   });
 

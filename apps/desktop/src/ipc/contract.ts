@@ -1425,6 +1425,19 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 export type BrowserTabCreatedBy = "user" | "session";
 
 /**
+ * Where a Browser Tab is drawn (VC-238). Main owns the value; the renderer asks
+ * to change it through `volli:browser-set-presentation` and never writes it.
+ *
+ * - `headless`: the tab exists with a real viewport, wake hold, console and
+ *   screenshots, but is in no strip, no tab order, and never attached to the
+ *   window. Every Session-created tab is born this way.
+ * - `preview`: pinned live above the composer of the chat that owns it.
+ * - `tab`: an ordinary item in the Home or Ticket strip. A person's own tabs
+ *   are always this and cannot be anything else.
+ */
+export type BrowserTabPresentation = "headless" | "preview" | "tab";
+
+/**
  * Renderer-safe state for one live Browser Tab. Product identity and bounded
  * browser chrome facts cross IPC; Chromium ids, Session partitions, page
  * content, cookies, and history entries never do.
@@ -1436,6 +1449,14 @@ export interface BrowserTabState {
   /** Null for a project-level tab, whether opened by a person or Board Session. */
   ticketId: string | null;
   createdBy: BrowserTabCreatedBy;
+  /**
+   * The Session that opened this tab, or null for a person's tab. Ownership is
+   * who may drive it through the Browser port — sibling Sessions on the same
+   * Ticket never see each other's — and is separate from the storage partition,
+   * which stays per Ticket.
+   */
+  ownerSessionId: string | null;
+  presentation: BrowserTabPresentation;
   url: string;
   title: string;
   loading: boolean;
@@ -1492,6 +1513,27 @@ export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
   bounds: BrowserTabBounds;
 }
 
+/**
+ * A person's request to draw a Session's tab somewhere else (VC-238): hide it,
+ * pin it above the owning chat's composer, or promote it into the strip. Main
+ * refuses it for a person's own tab, which is always in the strip.
+ */
+export interface BrowserTabSetPresentationInput extends BrowserTabIdInput {
+  presentation: BrowserTabPresentation;
+}
+
+/** One picture the host took of a tab, by the id the transcript carries. */
+export interface BrowserPictureInput {
+  pictureId: string;
+}
+
+/**
+ * The picture as an `<img src>`, or null when the host no longer has it: a
+ * live capture the bounded set let go of, or an id this launch never minted.
+ * Null is an answer, not a failure — the card says the picture is gone.
+ */
+export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
+
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
@@ -1542,6 +1584,11 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-set-presentation": {
+    args: [input: BrowserTabSetPresentationInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
   /**
    * The person's three hold controls (VC-239). Explicit, never inferred from
    * input: main cannot tell a person's click in the native view from a

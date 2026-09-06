@@ -69,6 +69,35 @@ export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
   provenance: {},
 };
 
+/**
+ * The Sessions one Session started (VC-183's `session_start`, VC-9's
+ * `delegate`), read off the listing's provenance: a child is a row whose
+ * provenance names `sessionId` as its parent. In listing order, which is the
+ * order the sidebar shows them.
+ */
+export function childSessionIds(
+  rows: ProjectSessionRows | undefined,
+  sessionId: string,
+): ReadonlySet<string> {
+  const children = new Set<string>();
+  if (rows === undefined) return children;
+  for (const chat of rows.chat) {
+    const provenance = rows.provenance[chat.sessionId];
+    if (provenance?.kind === "session" && provenance.parentSessionId === sessionId) {
+      children.add(chat.sessionId);
+    }
+  }
+  return children;
+}
+
+/** A chat Session's title from the listing, or null for one it does not carry. */
+export function sessionTitleOf(
+  rows: ProjectSessionRows | undefined,
+  sessionId: string,
+): string | null {
+  return rows?.chat.find((chat) => chat.sessionId === sessionId)?.title ?? null;
+}
+
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
   return row.kind === "terminal" ? row.record.id : row.record.sessionId;

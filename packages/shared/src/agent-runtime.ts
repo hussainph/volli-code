@@ -570,6 +570,19 @@ export interface RuntimeBrowserTab {
   title: string;
   /** Who opened it. A person's tab and an agent's tab render differently and are audited differently. */
   createdBy: "user" | "session";
+  /**
+   * Which Session opened it, or null for a person's tab (VC-238). The host
+   * shows a Session only its own tabs by default, so this usually names the
+   * caller; it is here so a parent that is shown a child's tabs can tell them
+   * apart from its own.
+   *
+   * Separate from {@link heldBy}, and deliberately: ownership says whose tab
+   * this IS — who may see it, whose attachment end closes it, whose cap it
+   * counts against — while the hold says whose turn it is to write to it right
+   * now. A Session owns its headless tabs permanently and holds one only while
+   * it is driving it; the person owns none and may hold any.
+   */
+  ownerSessionId: string | null;
   /** Who holds it right now, or `null` for a free tab. */
   heldBy: RuntimeBrowserHolder;
 }
@@ -582,6 +595,27 @@ export type RuntimeBrowserHoldOutcome =
 /** Every Browser Tab the host let this Session see. */
 export interface RuntimeBrowserTabList {
   tabs: readonly RuntimeBrowserTab[];
+}
+
+/**
+ * The tab facts every Browser answer carries beside its own payload (VC-238):
+ * enough for the person's transcript card to name the tab, mark who is driving
+ * it, and show that its page did not load — none of which the model's text can
+ * say, and none of which the renderer may infer from a tool name.
+ */
+export interface RuntimeBrowserPage {
+  tabId: string;
+  url: string;
+  title: string;
+  /** Which Session owns the tab, or null for the person's own. */
+  ownerSessionId: string | null;
+  /**
+   * Volli's words for the tab's last load failure or renderer crash, or null
+   * when the page is healthy. A navigation onto a page that fails to load
+   * still answers with a snapshot, so without this the row would wear a
+   * success glyph over a broken page (§9).
+   */
+  error: string | null;
 }
 
 /**
@@ -598,16 +632,30 @@ export interface RuntimeBrowserTabList {
  * provenance envelope a fetched web document gets; nothing below the envelope
  * may treat a line of it as an instruction.
  */
-export interface RuntimeBrowserSnapshot {
-  tabId: string;
-  url: string;
-  title: string;
+export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** The formatted accessibility snapshot, already bounded by the host. */
   snapshotText: string;
   /** Monotonic per-tab counter; refs are valid only against the generation that minted them. */
   generation: number;
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
+  /**
+   * An opaque id for the picture the host took of the page after this call
+   * changed it, for the person's transcript card — never the bytes, which
+   * stay with the host (VC-238). Null when nothing changed (a plain read) or
+   * when the host declined to look because the person was using the tab.
+   */
+  picture: string | null;
+}
+
+/** The answer to one action: the fresh snapshot, plus what the action touched. */
+export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
+  /**
+   * The element acted on, as the last snapshot named it (VC-238): the ref the
+   * model passed and the page's accessible name for it, or null when the name
+   * was empty. Null altogether for page-level actions (press, scroll, wait).
+   */
+  target: { ref: string; name: string | null } | null;
 }
 
 /**
@@ -645,11 +693,11 @@ export interface RuntimeBrowserActRequest {
 }
 
 /** A captured Browser Tab image, bounded by the host before it reaches anyone. */
-export interface RuntimeBrowserScreenshot {
-  tabId: string;
-  url: string;
+export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
   /** PNG bytes, base64. The host owns scale and size bounds. */
   base64Png: string;
+  /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
+  picture: string | null;
   width: number;
   height: number;
 }
@@ -661,9 +709,7 @@ export interface RuntimeBrowserConsoleMessage {
 }
 
 /** A Browser Tab's recent console output and page errors, bounded. */
-export interface RuntimeBrowserConsole {
-  tabId: string;
-  url: string;
+export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
   messages: readonly RuntimeBrowserConsoleMessage[];
   truncated: boolean;
 }
@@ -692,7 +738,7 @@ export interface RuntimeBrowserPort {
   }): Promise<RuntimeBrowserSnapshot>;
   snapshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
   /** Act, then answer with the fresh snapshot the action produced. */
-  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
+  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserActResult>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
   /**

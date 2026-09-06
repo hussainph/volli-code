@@ -16,6 +16,8 @@ import {
   activityDuration,
   isDurableActivity,
   readActivityDescriptor,
+  type ActivityBrowse,
+  type ActivityBrowseAction,
   type ActivityDescriptor,
   type ActivityKind,
 } from "@volli/shared";
@@ -316,6 +318,9 @@ const KIND_PHRASES: Record<ActivityKind, KindPhrase> = {
   "fetch-url": { past: "fetched", present: "fetching", one: "page", many: "pages" },
   plan: { past: "planned", present: "planning", one: "plan", many: "plans" },
   delegate: { past: "delegated", present: "delegating", one: "task", many: "tasks" },
+  // `time`/`times` is the fallback only: a browse bundle counts the PAGES it
+  // touched, and reaches these words only when it knows none. See browsePhrase.
+  browse: { past: "browsed", present: "browsing", one: "time", many: "times" },
   other: { past: "used", present: "using", one: "tool", many: "tools" },
 };
 
@@ -386,11 +391,42 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 function kindPhrase(kind: ActivityKind, parts: readonly DynamicToolUIPart[]): string {
   const phrase = KIND_PHRASES[kind];
   const verb = parts.some(isRowActive) ? phrase.present : phrase.past;
+  if (kind === "browse") return browsePhrase(verb, phrase, parts);
   if (isDurableActivity(kind) && parts.length <= NAMED_SUBJECT_LIMIT) {
     const names = parts.map(subjectName).filter((name): name is string => name !== null);
     if (names.length === parts.length && names.length > 0) return `${verb} ${joinNames(names)}`;
   }
   return `${verb} ${parts.length} ${parts.length === 1 ? phrase.one : phrase.many}`;
+}
+
+/**
+ * A browse bundle names the PAGES it touched, not how many calls it took
+ * (VC-238 §3): ten acts on one sign-in form are one page's worth of work, and
+ * `browsed 10 times` says nothing a person can use. Counting distinct pages is
+ * what makes the header behave like the file kinds' — `read 4 files` counts
+ * four files, not four reads.
+ *
+ * Falls back to counting calls only when no page is known at all, which is a
+ * bundle of `browser_tabs` listings or of calls refused before any tab was in
+ * hand.
+ */
+function browsePhrase(
+  verb: string,
+  phrase: KindPhrase,
+  parts: readonly DynamicToolUIPart[],
+): string {
+  const pages = [...new Set(parts.map(subjectLabel).filter((one): one is string => one !== null))];
+  if (pages.length === 0) {
+    return `${verb} ${parts.length} ${parts.length === 1 ? phrase.one : phrase.many}`;
+  }
+  if (pages.length <= NAMED_SUBJECT_LIMIT) return `${verb} ${joinNames(pages)}`;
+  return `${verb} ${pages.length} pages`;
+}
+
+/** The subject as the presenter set it — whole, since a page is not a path. */
+function subjectLabel(part: DynamicToolUIPart): string | null {
+  const label = activityDescriptor(part).subject.label;
+  return label === null || label.trim().length === 0 ? null : label;
 }
 
 /** Basename only: the phrase is a sentence, and a sentence with a path in it is not. */
@@ -494,6 +530,12 @@ export interface ActivityRow extends ActivityFacts {
    */
   command: string | null;
   errorText: string | null;
+  /**
+   * The browser facet, for a `browse` row's card (VC-238): which tab to look
+   * up live, and which picture to show. Null on every other kind, and on a
+   * browse descriptor that carried no facet.
+   */
+  browse: ActivityBrowse | null;
 }
 
 export interface ActivityContext {
@@ -639,6 +681,8 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     detail: planDetail(context),
   }),
 
+  browse: (context) => browseFacts(context),
+
   other: (context) => ({
     verb: context.descriptor.nativeToolName,
     object: context.descriptor.subject.label,
@@ -696,11 +740,143 @@ function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   return {
     ...facts,
     kind: context.descriptor.kind,
-    status: context.status,
+    status: browseStatus(context),
     nativeToolName: context.descriptor.nativeToolName,
     command,
     errorText: context.errorText,
+    browse: context.descriptor.browse ?? null,
   };
+}
+
+/* ------------------------------------------------------------------- browse */
+
+/**
+ * One verb per browser action, in Volli's words. Element actions take the
+ * element as their object and the page as their meta; page actions take the
+ * page. The card under the row is the UI's, keyed on `ActivityRow.browse`,
+ * so the presenter leaves `detail` empty for every action that has a tab —
+ * except a tab listing, which has no tab and shows its text.
+ */
+const BROWSE_VERBS: Record<ActivityBrowseAction, string> = {
+  open: "Opened",
+  back: "Went back",
+  forward: "Went forward",
+  reload: "Reloaded",
+  click: "Clicked",
+  type: "Typed into",
+  press: "Pressed",
+  select: "Selected in",
+  hover: "Hovered",
+  scroll: "Scrolled",
+  wait: "Waited",
+  read: "Read page",
+  screenshot: "Screenshot",
+  console: "Read console",
+  tabs: "Listed tabs",
+};
+
+/** Actions whose object is an element the page named, quoted as the page's words. */
+const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
+  "click",
+  "type",
+  "select",
+  "hover",
+]);
+
+/** Actions whose object is what the model pressed or which way it scrolled. */
+const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", "scroll"]);
+
+/**
+ * What the row's glyph says (VC-238 §9). The harness calls both of these a
+ * success — a refusal is a result it was handed, and a navigation onto a page
+ * that fails to load still answers with a perfectly good snapshot — so
+ * without this the row would wear a tick over the two outcomes a person most
+ * needs to see. Only for `browse`, and only once the call has settled.
+ */
+function browseStatus(context: ActivityContext): ActivityStatus {
+  const facet = context.descriptor.browse ?? null;
+  if (facet === null || !isSettled(context.status)) return context.status;
+  return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
+}
+
+function browseFacts(context: ActivityContext): ActivityFacts {
+  const facet = context.descriptor.browse ?? null;
+  if (facet === null) {
+    const page = context.descriptor.subject.label;
+    return { verb: "Browsed", object: page, openPath: null, ...NO_META, detail: null };
+  }
+  const facts = browseActionFacts(context, facet);
+  // A refusal outranks whatever the meta would have said: the call did not
+  // happen, and the card carries the rule and Volli's words for it. A page
+  // that did not load is the next-loudest thing the row can say; the card
+  // carries Volli's sentence for that too.
+  if (facet.refusal !== null) return { ...facts, meta: "refused", metaTone: "danger" };
+  if (facet.error !== null) return { ...facts, meta: "did not load", metaTone: "danger" };
+  return facts;
+}
+
+function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
+  const page = context.descriptor.subject.label;
+  const verb = BROWSE_VERBS[facet.action];
+  if (ELEMENT_ACTIONS.has(facet.action)) {
+    return {
+      verb,
+      object: quotedTarget(facet.target),
+      openPath: null,
+      meta: page,
+      metaTone: "muted",
+      detail: null,
+    };
+  }
+  if (PAGE_INPUT_ACTIONS.has(facet.action)) {
+    return {
+      verb,
+      object: facet.target,
+      openPath: null,
+      meta: page,
+      metaTone: "muted",
+      detail: null,
+    };
+  }
+  if (facet.action === "wait") {
+    return { verb, object: null, openPath: null, meta: page, metaTone: "muted", detail: null };
+  }
+  if (facet.action === "console") {
+    const errors = facet.errorCount;
+    return {
+      verb,
+      object: page,
+      openPath: null,
+      meta:
+        errors === null
+          ? null
+          : errors === 0
+            ? "no errors"
+            : `${errors} ${errors === 1 ? "error" : "errors"}`,
+      metaTone: errors !== null && errors > 0 ? "danger" : "muted",
+      detail: null,
+    };
+  }
+  if (facet.action === "tabs") {
+    return { verb, object: null, openPath: null, ...NO_META, detail: outputDetail(context) };
+  }
+  return {
+    verb,
+    object: page,
+    openPath: null,
+    meta: facet.action === "open" ? durationMeta(context) : null,
+    metaTone: "muted",
+    detail: null,
+  };
+}
+
+/**
+ * The page's name for an element, in quotes; a bare ref (`e5`) unquoted, since
+ * it is Volli's handle rather than the page's words.
+ */
+function quotedTarget(target: string | null): string | null {
+  if (target === null) return null;
+  return /^e\d+$/.test(target) ? target : `“${target}”`;
 }
 
 function commandInput(input: unknown): string | null {

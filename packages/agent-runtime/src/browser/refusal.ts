@@ -17,12 +17,45 @@
  * the transcript so a person can find the policy that produced it. A closed
  * union here would make every new host rule a runtime release.
  */
+/**
+ * `RuntimeBrowserPage` restated, so this file stays the one place a refusal is
+ * defined and does not reach into the domain package for a shape a host hands
+ * it. The desktop port builds it from the tab state it already holds.
+ */
+export interface BrowserRefusalPage {
+  tabId: string;
+  url: string;
+  title: string;
+  ownerSessionId: string | null;
+  /** The tab's own load failure, if it had one, in Volli's words. */
+  error: string | null;
+}
+
 export class BrowserRefusal extends Error {
   readonly rule: string;
+  /**
+   * The tab the refused call was aimed at, once a port has resolved one
+   * (VC-238 §3). A refused call never read a page, so this is Volli's own
+   * record of the tab rather than anything the page said — it exists so the
+   * transcript row can say WHERE nothing happened instead of naming a bare
+   * ref. Null for a refusal raised before any tab was in hand: a bad target,
+   * or a cap that stopped the tab being opened at all.
+   */
+  readonly page: BrowserRefusalPage | null;
 
-  constructor(rule: string, reason: string) {
+  constructor(rule: string, reason: string, page: BrowserRefusalPage | null = null) {
     super(reason);
     this.name = "BrowserRefusal";
     this.rule = rule;
+    this.page = page;
+  }
+
+  /**
+   * The same refusal, told against the page it was aimed at. A refusal that
+   * already names one keeps it: the innermost port to hold the tab knows it
+   * best, and an outer frame must not overwrite it with a later state.
+   */
+  onPage(page: BrowserRefusalPage): BrowserRefusal {
+    return this.page === null ? new BrowserRefusal(this.rule, this.message, page) : this;
   }
 }

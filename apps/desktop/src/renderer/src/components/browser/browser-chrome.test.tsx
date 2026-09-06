@@ -37,6 +37,8 @@ function props(overrides: Partial<BrowserChromeProps> = {}): BrowserChromeProps 
       projectId: "project-1",
       ticketId: null,
       createdBy: "user",
+      ownerSessionId: null,
+      presentation: "tab",
       url: "https://volli.dev/docs",
       title: "Volli docs",
       loading: false,

@@ -86,6 +86,7 @@ function descriptor(
     outcome: patch.outcome ?? null,
     startedAt: patch.startedAt ?? 0,
     endedAt: patch.endedAt ?? 2400,
+    ...(patch.browse === undefined ? {} : { browse: patch.browse }),
   };
 }
 
@@ -227,6 +228,26 @@ const KIND_ROWS: Record<ActivityKind, DynamicToolUIPart> = {
       endedAt: 72_000,
     }),
     { output: "The seam is `projectTranscriptMessages` in session-controller.ts." },
+  ),
+  // A browse row opens onto its tab card (VC-238). The lab mounts no card
+  // host, so the card draws the facet's facts alone and offers no actions.
+  browse: tool(
+    descriptor("browse", {
+      nativeToolName: "browser_act",
+      subject: { label: "example.com/sign-in", path: null, lineRange: null },
+      browse: {
+        action: "click",
+        tabId: "tab-fixture",
+        url: "https://example.com/sign-in",
+        title: "Sign in — Example",
+        target: "Sign in",
+        picture: null,
+        errorCount: null,
+        ownerSessionId: "session-fixture",
+        error: null,
+        refusal: null,
+      },
+    }),
   ),
   other: tool(
     descriptor("other", {

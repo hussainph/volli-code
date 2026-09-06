@@ -396,9 +396,10 @@ export interface PiAdapterOptions {
     projectId: string;
     ticketId: string | null;
     /**
-     * Who the port serves (VC-239): the Session and this attachment. A hold on
-     * a Browser Tab is taken in this name and judged against it, so the port
-     * has to know it and the model never gets to say it.
+     * Who the port serves: the Session and this attachment. A hold on a
+     * Browser Tab is taken in this name and judged against it (VC-239), and
+     * the same `sessionId` is the owner every tab the port opens is stamped
+     * with (VC-238). The model never gets to say either.
      */
     sessionId: string;
     attachmentId: string;
