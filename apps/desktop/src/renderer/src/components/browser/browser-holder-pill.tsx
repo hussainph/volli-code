@@ -26,11 +26,10 @@ import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+import type { BrowserTabHolder } from "../../../../ipc/contract";
 
-/** What the pill knows about the holder — the renderer's projection of `heldBy`. */
-export type BrowserHolder =
-  | { kind: "session"; sessionId: string; name: string; color: string }
-  | { kind: "person" };
+/** What the pill knows about the holder: exactly what main pushes as `heldBy`. */
+export type BrowserHolder = BrowserTabHolder;
 
 export interface BrowserHolderPillProps {
   holder: BrowserHolder;

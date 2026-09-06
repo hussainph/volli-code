@@ -39,6 +39,7 @@ describe("HomeTabStrip Browser Tabs", () => {
       tabId: "tab-7",
       title: "Volli docs",
       loading: true,
+      heldBy: null,
     };
 
     const html = draw([HOME_BOARD_TAB, browser], browser.id);
@@ -49,6 +50,25 @@ describe("HomeTabStrip Browser Tabs", () => {
     // The way in is the "+" menu's Browser row now, not a second labelled
     // button on the strip — see `new-session-control.test.tsx`.
     expect(html).not.toContain('aria-label="New Browser Tab"');
+    // A free tab wears no holder dot.
+    expect(html).not.toContain("browser-holder-dot");
+  });
+
+  it("wears the holder's colour dot on a held tab, on screen or not (VC-239)", () => {
+    const held: HomeTabDescriptor = {
+      kind: "browser",
+      id: "browser:tab-8",
+      tabId: "tab-8",
+      title: "Checkout",
+      loading: false,
+      heldBy: { kind: "session", sessionId: "ses-a", name: "Fix checkout form", color: "#d07c00" },
+    };
+    // Not the active tab: the dot is how a person learns a Session is driving
+    // a tab they are not looking at.
+    const html = draw([HOME_BOARD_TAB, held], HOME_BOARD_TAB.id);
+    expect(html).toContain('data-slot="browser-holder-dot"');
+    expect(html).toContain("background-color:#d07c00");
+    expect(html).toContain('title="Held by Fix checkout form"');
   });
 });
 

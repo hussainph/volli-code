@@ -6,6 +6,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { BROWSER_START_URL } from "../../../../browser-start-page";
 import { BrowserChrome, normalizeBrowserAddress, type BrowserChromeProps } from "./browser-chrome";
+import { BrowserHolderPill, type BrowserHolderPillProps } from "./browser-holder-pill";
 
 interface InspectableProps {
   "aria-label"?: string;
@@ -43,6 +44,7 @@ function props(overrides: Partial<BrowserChromeProps> = {}): BrowserChromeProps 
       canGoBack: false,
       canGoForward: true,
       generation: 2,
+      heldBy: null,
     },
     address: " https://example.com/next ",
     error: null,
@@ -145,5 +147,72 @@ describe("BrowserChrome", () => {
     expect(html).toContain('aria-label="Loading"');
     expect(html).toContain("Navigation failed");
     expect(html).toContain('aria-label="Toggle DevTools"');
+  });
+});
+
+describe("BrowserChrome holder pill (VC-239)", () => {
+  const session = {
+    kind: "session" as const,
+    sessionId: "ses-a",
+    name: "Fix checkout form",
+    color: "#d07c00",
+  };
+
+  it("draws nothing for a free tab: the pill is the state", () => {
+    const html = renderToStaticMarkup(<BrowserChrome {...props()} />);
+    expect(html).not.toContain("browser-holder-pill");
+  });
+
+  it("names a holding Session in its colour and offers Take over and Ask to leave", () => {
+    const calls: string[] = [];
+    const html = renderToStaticMarkup(<BrowserChrome {...props({ holder: session })} />);
+    expect(html).toContain('data-holder="session"');
+    expect(html).toContain("Fix checkout form");
+    expect(html).toContain("background-color:#d07c00");
+    expect(html).toContain('aria-label="Take over"');
+    expect(html).toContain('aria-label="Ask to leave"');
+    expect(html).not.toContain('aria-label="Hand back"');
+
+    // The pill is its own component (tested as a function in
+    // browser-holder-pill.test.tsx); here the chrome's share is that its
+    // three handlers reach the pill's three props.
+    const tree = BrowserChrome(
+      props({
+        holder: session,
+        onTakeOver: () => calls.push("take over"),
+        onAskToLeave: () => calls.push("ask to leave"),
+        onHandBack: () => calls.push("hand back"),
+      }),
+    );
+    const pill = findElements(tree, BrowserHolderPill)[0]?.props as
+      | BrowserHolderPillProps
+      | undefined;
+    pill?.onTakeOver();
+    pill?.onAskToLeave();
+    pill?.onHandBack();
+    expect(calls).toEqual(["take over", "ask to leave", "hand back"]);
+  });
+
+  it("says Yours with Hand back while the person holds the tab", () => {
+    let handedBack = 0;
+    const html = renderToStaticMarkup(<BrowserChrome {...props({ holder: { kind: "person" } })} />);
+    expect(html).toContain('data-holder="person"');
+    expect(html).toContain("Yours");
+    expect(html).toContain('aria-label="Hand back"');
+    expect(html).not.toContain('aria-label="Take over"');
+
+    const tree = BrowserChrome(
+      props({ holder: { kind: "person" }, onHandBack: () => (handedBack += 1) }),
+    );
+    (findElements(tree, BrowserHolderPill)[0]?.props as BrowserHolderPillProps).onHandBack();
+    expect(handedBack).toBe(1);
+  });
+
+  it("survives a press with no handler wired", () => {
+    const pill = findElements(BrowserChrome(props({ holder: session })), BrowserHolderPill)[0]
+      ?.props as BrowserHolderPillProps;
+    expect(() => pill.onTakeOver()).not.toThrow();
+    expect(() => pill.onAskToLeave()).not.toThrow();
+    expect(() => pill.onHandBack()).not.toThrow();
   });
 });

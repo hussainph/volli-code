@@ -42,6 +42,7 @@ import { assignSessionColors } from "@volli/shared";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
+import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
 import type { BrowserHolder } from "@renderer/components/browser/browser-holder-pill";
 import {
   SessionCursor,
@@ -164,6 +165,7 @@ function tabState(tab: LabTab): BrowserTabState {
     canGoBack: true,
     canGoForward: false,
     generation: 3,
+    heldBy: null,
   };
 }
 
@@ -757,20 +759,7 @@ export default function SessionCursorScratch() {
                     className="size-3 shrink-0 text-muted-foreground"
                   />
                 }
-                badge={
-                  holder !== null ? (
-                    <span
-                      data-slot="browser-holder-dot"
-                      aria-label={holder.kind === "session" ? `Held by ${holder.name}` : "Yours"}
-                      title={holder.kind === "session" ? `Held by ${holder.name}` : "Yours"}
-                      className="size-2 shrink-0 rounded-full"
-                      style={{
-                        backgroundColor:
-                          holder.kind === "session" ? holder.color : "var(--foreground)",
-                      }}
-                    />
-                  ) : null
-                }
+                badge={<BrowserHolderDot holder={holder} />}
                 onActivate={() => setActiveTabId(tab.id)}
                 onClose={() => undefined}
               />
