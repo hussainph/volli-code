@@ -1,11 +1,41 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  BACKGROUND_CONTEXT,
+  executeShellWithCapture,
+  type ExecutionEnv,
+  type ShellCaptureOptions,
+} from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vite-plus/test";
 import { piExecutionEnv, scopedEnvironment } from "./execution-env";
 
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), "volli-pi-env-"));
+}
+
+/**
+ * What a command printed, and what it exited with.
+ *
+ * Pi 0.85's `Shell.exec` returns neither: the result is an exit code and
+ * truncation metadata, and the text streams out through `capture`/`onUpdate`.
+ * `executeShellWithCapture` is the collector Pi ships for callers that want one
+ * bounded string back, so it is what these tests read the environment through
+ * rather than a shape of Volli's own devising.
+ *
+ * Stdout and stderr arrive merged, which is 0.85's decision and not this file's.
+ * It costs these assertions nothing — every command below prints on stdout
+ * alone, and what they are actually about is which variables the child was
+ * handed.
+ */
+async function ran(
+  env: ExecutionEnv,
+  command: string,
+  options?: ShellCaptureOptions,
+): Promise<{ output: string; exitCode: number | undefined }> {
+  const result = await executeShellWithCapture(env, command, options, BACKGROUND_CONTEXT);
+  if (!result.ok) throw result.error;
+  return { output: result.value.output, exitCode: result.value.exitCode };
 }
 
 /** Restores exactly what the host had, including a name it did not set at all. */
@@ -31,18 +61,14 @@ describe("piExecutionEnv", () => {
       // Unfiltered: a Session's nvm, pyenv and cargo toolchains are on this
       // `PATH` or they are nowhere.
       await expect(
-        env.exec("printenv PATH; printenv HOME; printenv SSH_AUTH_SOCK"),
+        ran(env, "printenv PATH; printenv HOME; printenv SSH_AUTH_SOCK"),
       ).resolves.toEqual({
-        ok: true,
-        value: {
-          stdout: `${process.env.PATH}\n${process.env.HOME}\n/tmp/volli-test-agent.sock\n`,
-          stderr: "",
-          exitCode: 0,
-        },
+        output: `${process.env.PATH}\n${process.env.HOME}\n/tmp/volli-test-agent.sock\n`,
+        exitCode: 0,
       });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -56,14 +82,11 @@ describe("piExecutionEnv", () => {
       // Each `printenv` prints nothing for a variable the child was not given,
       // so anything before `done` is a leak of the host's environment.
       await expect(
-        env.exec("printenv VOLLI_TEST_FAKE_CREDENTIAL; printenv GITHUB_TOKEN; echo done"),
-      ).resolves.toEqual({
-        ok: true,
-        value: { stdout: "done\n", stderr: "", exitCode: 0 },
-      });
+        ran(env, "printenv VOLLI_TEST_FAKE_CREDENTIAL; printenv GITHUB_TOKEN; echo done"),
+      ).resolves.toEqual({ output: "done\n", exitCode: 0 });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -71,13 +94,10 @@ describe("piExecutionEnv", () => {
     const env = await piExecutionEnv(workspace());
     try {
       await expect(
-        env.exec("printenv VOLLI_TEST_FLAG", { env: { VOLLI_TEST_FLAG: "yes" } }),
-      ).resolves.toEqual({
-        ok: true,
-        value: { stdout: "yes\n", stderr: "", exitCode: 0 },
-      });
+        ran(env, "printenv VOLLI_TEST_FLAG", { env: { VOLLI_TEST_FLAG: "yes" } }),
+      ).resolves.toEqual({ output: "yes\n", exitCode: 0 });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -90,12 +110,12 @@ describe("piExecutionEnv", () => {
       identity: { sessionId: "session-uuid-1", ticketDisplayId: "VC-51" },
     });
     try {
-      await expect(env.exec("printenv VOLLI_SESSION; printenv VOLLI_TICKET")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "session-uuid-1\nVC-51\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv VOLLI_SESSION; printenv VOLLI_TICKET")).resolves.toEqual({
+        output: "session-uuid-1\nVC-51\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -111,12 +131,12 @@ describe("piExecutionEnv", () => {
       },
     });
     try {
-      await expect(env.exec("printenv VOLLI_SESSION_TOKEN")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "tok-abc\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv VOLLI_SESSION_TOKEN")).resolves.toEqual({
+        output: "tok-abc\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -128,8 +148,8 @@ describe("piExecutionEnv", () => {
       },
     });
 
-    await env.cleanup();
-    await env.cleanup();
+    await env.cleanup(BACKGROUND_CONTEXT);
+    await env.cleanup(BACKGROUND_CONTEXT);
 
     expect(cleanups).toBe(1);
   });
@@ -139,12 +159,12 @@ describe("piExecutionEnv", () => {
       identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
     });
     try {
-      await expect(env.exec("printenv VOLLI_SESSION_TOKEN; echo done")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "done\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv VOLLI_SESSION_TOKEN; echo done")).resolves.toEqual({
+        output: "done\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -153,12 +173,12 @@ describe("piExecutionEnv", () => {
       identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
     });
     try {
-      await expect(env.exec("printenv VOLLI_TICKET; printenv VOLLI_SESSION")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "session-uuid-1\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv VOLLI_TICKET; printenv VOLLI_SESSION")).resolves.toEqual({
+        output: "session-uuid-1\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -170,14 +190,11 @@ describe("piExecutionEnv", () => {
     const env = await piExecutionEnv(workspace());
     try {
       await expect(
-        env.exec("printenv VOLLI_SESSION; printenv VOLLI_TICKET; echo done"),
-      ).resolves.toEqual({
-        ok: true,
-        value: { stdout: "done\n", stderr: "", exitCode: 0 },
-      });
+        ran(env, "printenv VOLLI_SESSION; printenv VOLLI_TICKET; echo done"),
+      ).resolves.toEqual({ output: "done\n", exitCode: 0 });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -187,13 +204,10 @@ describe("piExecutionEnv", () => {
     });
     try {
       await expect(
-        env.exec("printenv VOLLI_SESSION", { env: { VOLLI_SESSION: "caller-says" } }),
-      ).resolves.toEqual({
-        ok: true,
-        value: { stdout: "caller-says\n", stderr: "", exitCode: 0 },
-      });
+        ran(env, "printenv VOLLI_SESSION", { env: { VOLLI_SESSION: "caller-says" } }),
+      ).resolves.toEqual({ output: "caller-says\n", exitCode: 0 });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -205,12 +219,12 @@ describe("piExecutionEnv", () => {
   it("prepends the given path prefixes onto the sanitized PATH", async () => {
     const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
     try {
-      await expect(env.exec("printenv PATH")).resolves.toEqual({
-        ok: true,
-        value: { stdout: `/volli/bin:${process.env.PATH}\n`, stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv PATH")).resolves.toEqual({
+        output: `/volli/bin:${process.env.PATH}\n`,
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -219,16 +233,12 @@ describe("piExecutionEnv", () => {
       pathPrefixes: ["/volli/bin", "", "/another/bin"],
     });
     try {
-      await expect(env.exec("printenv PATH")).resolves.toEqual({
-        ok: true,
-        value: {
-          stdout: `/volli/bin:/another/bin:${process.env.PATH}\n`,
-          stderr: "",
-          exitCode: 0,
-        },
+      await expect(ran(env, "printenv PATH")).resolves.toEqual({
+        output: `/volli/bin:/another/bin:${process.env.PATH}\n`,
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -237,13 +247,13 @@ describe("piExecutionEnv", () => {
     const restore = hostVariables({ PATH: `/volli/bin:${originalPath}` });
     const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
     try {
-      await expect(env.exec("printenv PATH")).resolves.toEqual({
-        ok: true,
-        value: { stdout: `/volli/bin:${originalPath}\n`, stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv PATH")).resolves.toEqual({
+        output: `/volli/bin:${originalPath}\n`,
+        exitCode: 0,
       });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -254,24 +264,24 @@ describe("piExecutionEnv", () => {
       // default, while the session's prefixes still land in front. Without
       // that, a caller-supplied PATH would hide `<userData>/bin` and `volli`
       // would resolve to another install's shim.
-      await expect(env.exec("printenv PATH", { env: { PATH: "/usr/bin:/bin" } })).resolves.toEqual({
-        ok: true,
-        value: { stdout: "/volli/bin:/usr/bin:/bin\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "printenv PATH", { env: { PATH: "/usr/bin:/bin" } })).resolves.toEqual({
+        output: "/volli/bin:/usr/bin:/bin\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
   it("puts prefixes into a caller-supplied empty PATH", async () => {
     const env = await piExecutionEnv(workspace(), { pathPrefixes: ["/volli/bin"] });
     try {
-      await expect(env.exec("/usr/bin/printenv PATH", { env: { PATH: "" } })).resolves.toEqual({
-        ok: true,
-        value: { stdout: "/volli/bin\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "/usr/bin/printenv PATH", { env: { PATH: "" } })).resolves.toEqual({
+        output: "/volli/bin\n",
+        exitCode: 0,
       });
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -302,13 +312,13 @@ describe("piExecutionEnv", () => {
     try {
       // `env | grep` prints nothing when no name matches, so anything before
       // `done` is telemetry configuration reaching a model's shell.
-      await expect(env.exec("env | grep '^OTEL_' || true; echo done")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "done\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "env | grep '^OTEL_' || true; echo done")).resolves.toEqual({
+        output: "done\n",
+        exitCode: 0,
       });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 
@@ -316,13 +326,13 @@ describe("piExecutionEnv", () => {
     const restore = hostVariables({ PATH: undefined });
     const env = await piExecutionEnv(workspace());
     try {
-      await expect(env.exec("/usr/bin/printenv PATH")).resolves.toEqual({
-        ok: true,
-        value: { stdout: "\n", stderr: "", exitCode: 0 },
+      await expect(ran(env, "/usr/bin/printenv PATH")).resolves.toEqual({
+        output: "\n",
+        exitCode: 0,
       });
     } finally {
       restore();
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
     }
   });
 });

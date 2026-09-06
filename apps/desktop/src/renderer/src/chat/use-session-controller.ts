@@ -31,6 +31,7 @@ import {
   type MessageDelivery,
   type QueuedMessage,
   type TranscriptCompaction,
+  type TranscriptReasoningDrop,
 } from "@volli/session-presentation";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
@@ -39,6 +40,7 @@ const NO_QUEUE: readonly QueuedMessage[] = [];
 const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
+const NO_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
 const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
 
 /**
@@ -92,6 +94,8 @@ export interface SessionView {
    * Session, where the transcript beside it moves every frame.
    */
   compactions: readonly TranscriptCompaction[];
+  /** Every provider recovery notice, anchored beside the Turn it affected. */
+  reasoningDrops: readonly TranscriptReasoningDrop[];
   /** The summary currently being generated, absent once its durable result lands. */
   liveCompaction: LiveTranscriptCompaction | null;
 }
@@ -126,11 +130,10 @@ export interface SessionController {
 }
 
 /**
- * The store this binding writes to. The app has exactly one; the parameter is
- * for a surface that owns its own instance because it owns its own transport —
- * the UI lab, which drives these components over HTTP instead of Session IPC.
- * The registry underneath is shared either way: a client is found by Session id,
- * whichever store it writes back to.
+ * The store this binding writes to. The app has exactly one; the parameter
+ * lets tests own an isolated instance without changing the resident client
+ * registry underneath. A client is found by Session id, whichever store it
+ * writes back to.
  */
 export type ChatSessionsStore = StoreApi<ChatSessionsState>;
 
@@ -138,8 +141,8 @@ export function useSessionController(
   sessionId: string,
   store: ChatSessionsStore = useChatSessionsStore,
 ): SessionController {
-  // Eight subscriptions rather than one, for the reason {@link SessionView}
-  // spells out. Each selector returns a field the store already holds or a
+  // One subscription per field rather than one for the whole slice, for the
+  // reason {@link SessionView} spells out. Each selector returns a field the store already holds or a
   // boolean derived from one, so none of them mints a value: a selector that
   // built an object here would fire on every write and undo the whole exercise.
   const projection = useStore(store, (state) => state.sessions[sessionId]?.projection ?? null);
@@ -170,6 +173,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.compactions ?? NO_COMPACTIONS,
   );
+  const reasoningDrops = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.reasoningDrops ?? NO_REASONING_DROPS,
+  );
   const liveCompaction = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
@@ -187,6 +194,7 @@ export function useSessionController(
       queue,
       promptResources,
       compactions,
+      reasoningDrops,
       liveCompaction,
     }),
     [
@@ -199,6 +207,7 @@ export function useSessionController(
       projection,
       promptResources,
       queue,
+      reasoningDrops,
       sessionError,
       working,
     ],

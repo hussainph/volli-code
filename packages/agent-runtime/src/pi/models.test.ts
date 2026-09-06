@@ -322,7 +322,21 @@ describe("piOwnedModels", () => {
     const sibling = first.models.getModel("opencode-go", "glm-5.3");
     expect(sibling).toBeDefined();
     if (sibling === undefined) return;
-    const added = { ...sibling, id: "glm-5.3-flash", name: "Persisted after restart" };
+    // The id has to be one Pi's own catalog does not carry, or the restore is
+    // entitled to rebase it onto the baseline entry and this asserts nothing.
+    //
+    // It used to be `glm-5.3-flash`, which pi 0.85.0 promoted into the
+    // `opencode-go` baseline — measured: that provider's baseline went from 23
+    // models to 27 across the bump, and `glm-5.3-flash` is one of the four.
+    // The test then failed correctly, because a cached entry whose id IS in the
+    // baseline needs no admission proof: `restoreStoredCatalog` rebases it and
+    // keeps only its facts. Renamed rather than deleted, because what it pins
+    // is still true and still worth pinning (VC-254).
+    const added = {
+      ...sibling,
+      id: "volli-test-absent-from-every-catalog",
+      name: "Persisted after restart",
+    };
     await new PiFileModelsStore(piModelsFilePath({ agentDir })).write("opencode-go", {
       models: [added],
       checkedAt: 1,

@@ -114,6 +114,7 @@ const LIVE_RUNTIME_FRAME_KINDS = new Set([
   "turn.started",
   "turn.completed",
   "turn.interrupted",
+  "context.reasoning_dropped",
   "transcript.referenced",
 ]);
 /**
@@ -484,6 +485,12 @@ function sleepBarrierTiming(activity, observedAt = Date.now()) {
  * The Session RPC deliberately strips the recovery locator and the durable
  * Receipt deliberately omits delivery mode; the JSONL `command-accepted`
  * marker is the existing authoritative observation of queue versus steer.
+ *
+ * Pi 0.85.0 writes TRANSACTIONS rather than one record per line: a commit of a
+ * single write is still a bare object, but a commit of several — an entry plus
+ * the value that advances the branch tip, which is what every append is now —
+ * is a JSON array on one line. So each line is flattened before it is read
+ * (VC-254).
  */
 async function readPiDeliveryMarker(commandId) {
   const paths = await fs.readdir(PI_SESSION_DIR, { recursive: true }).catch(() => []);
@@ -492,14 +499,16 @@ async function readPiDeliveryMarker(commandId) {
     const text = await fs.readFile(join(PI_SESSION_DIR, relativePath), "utf8");
     for (const line of text.split("\n")) {
       if (line.trim().length === 0) continue;
-      const entry = JSON.parse(line);
-      const marker = entry.customType === PI_MARKER_TYPE ? entry.data : null;
-      if (marker?.kind !== "command-accepted" || marker.commandId !== commandId) continue;
-      return {
-        operation: marker.operation ?? null,
-        delivery: marker.delivery ?? null,
-        message: marker.message?.content ?? null,
-      };
+      const parsed = JSON.parse(line);
+      for (const entry of Array.isArray(parsed) ? parsed : [parsed]) {
+        const marker = entry.customType === PI_MARKER_TYPE ? entry.data : null;
+        if (marker?.kind !== "command-accepted" || marker.commandId !== commandId) continue;
+        return {
+          operation: marker.operation ?? null,
+          delivery: marker.delivery ?? null,
+          message: marker.message?.content ?? null,
+        };
+      }
     }
   }
   return null;

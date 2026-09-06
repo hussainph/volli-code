@@ -6,13 +6,11 @@
  * subscriptions acknowledge with an id and then arrive as ordered frames on a
  * single push channel.
  *
- * DELIBERATE DIVERGENCE FROM THE LAB. This link carries values by structured
- * clone; the lab's HTTP link carries them as JSON. Structured clone accepts
- * things JSON silently drops or mangles (Date, Map, undefined in a property
- * position), so a router payload that only ever rides this transport can pass
- * a test here and change shape in the lab. Keep router payloads JSON-safe by
- * convention — the transports are not interchangeable, and only one of them
- * will tell you.
+ * DELIBERATE ELECTRON DETAIL. This link carries values by structured clone;
+ * a future network transport will carry JSON text. Structured clone accepts
+ * things JSON silently drops or mangles (`Date`, `Map`, `undefined` in a
+ * property position), so `@volli/session-rpc` checks every procedure payload
+ * with `SessionRouterJsonSafety` before either transport can expose it.
  */
 import { createTRPCClient, TRPCClientError, type TRPCClient, type TRPCLink } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
@@ -241,6 +239,9 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
 
 /** Creates a Session RPC client over one bridge. */
 export function createSessionRpcClient(bridge: SessionRpcBridge): SessionRpcClient {
+  // tRPC's untransformed client types model JSON damage; the router's
+  // SessionRouterJsonSafety proof makes these raw payload types stable on every
+  // transport, so the Electron client can expose them without that rewrite.
   return createTRPCClient<AppRouter>({
     links: [sessionRpcIpcLink(bridge)],
   }) as unknown as SessionRpcClient;
