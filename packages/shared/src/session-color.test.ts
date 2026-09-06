@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_COLOR_COUNT,
   SESSION_COLORS,
-  assignSessionColors,
   pickSessionColor,
   sessionColor,
   sessionColorInk,
@@ -78,15 +77,32 @@ function collidingPair(): [string, string] {
   }
 }
 
+/** The host's fold: each Session against the colours handed out before it. */
+const arriving = (ids: readonly string[]): Map<string, string> =>
+  ids.reduce((taken, id) => {
+    taken.set(id, pickSessionColor(id, taken.values()));
+    return taken;
+  }, new Map<string, string>());
+
 describe("pickSessionColor", () => {
   it("is the hashed colour when nothing is taken", () => {
     expect(pickSessionColor("ses-alpha", [])).toBe(sessionColor("ses-alpha"));
   });
 
-  it("steps to the next free slot when its own is taken, and agrees with the batch resolver", () => {
+  it("steps to the next free slot round the wheel when its own is taken", () => {
     const [first, second] = collidingPair();
-    const batch = assignSessionColors([first, second]);
-    expect(pickSessionColor(second, [batch.get(first)!])).toBe(batch.get(second));
+    const firstColor = pickSessionColor(first, []);
+    expect(firstColor).toBe(sessionColor(first));
+    expect(pickSessionColor(second, [firstColor])).toBe(
+      SESSION_COLORS[(sessionColorSlot(second) + 1) % SESSION_COLOR_COUNT],
+    );
+  });
+
+  it("gives the hashed colour to whichever of a colliding pair arrives first", () => {
+    const [first, second] = collidingPair();
+    const secondFirst = pickSessionColor(second, []);
+    expect(secondFirst).toBe(sessionColor(second));
+    expect(pickSessionColor(first, [secondFirst])).not.toBe(sessionColor(first));
   });
 
   it("falls back to its own colour once every slot is taken", () => {
@@ -102,45 +118,15 @@ describe("pickSessionColor", () => {
     expect(pickSessionColor(second, [secondColor])).not.toBe(secondColor);
     expect(secondColor).not.toBe(firstColor);
   });
-});
 
-describe("assignSessionColors", () => {
-  it("gives an uncontended Session its own hashed colour", () => {
-    const colours = assignSessionColors(["ses-alpha"]);
-    expect(colours.get("ses-alpha")).toBe(sessionColor("ses-alpha"));
-  });
-
-  it("moves the later of two colliding Sessions to the next slot round the wheel", () => {
-    const [first, second] = collidingPair();
-    const colours = assignSessionColors([first, second]);
-    expect(colours.get(first)).toBe(sessionColor(first));
-    expect(colours.get(second)).toBe(
-      SESSION_COLORS[(sessionColorSlot(second) + 1) % SESSION_COLOR_COUNT],
-    );
-    expect(colours.get(first)).not.toBe(colours.get(second));
-  });
-
-  it("keeps the earlier Session's colour whichever way the pair is listed", () => {
-    const [first, second] = collidingPair();
-    expect(assignSessionColors([second, first]).get(second)).toBe(sessionColor(second));
-    expect(assignSessionColors([second, first]).get(first)).not.toBe(sessionColor(first));
-  });
-
-  it("gives eight concurrent Sessions eight distinct colours", () => {
+  it("gives eight concurrent Sessions eight distinct colours, arriving one at a time", () => {
     const ids = Array.from({ length: SESSION_COLOR_COUNT }, (_, n) => `ses-${n}`);
-    const colours = assignSessionColors(ids);
-    expect(new Set(colours.values()).size).toBe(SESSION_COLOR_COUNT);
+    expect(new Set(arriving(ids).values()).size).toBe(SESSION_COLOR_COUNT);
   });
 
   it("wraps a ninth Session to its hashed slot once the wheel is full", () => {
     const ids = Array.from({ length: SESSION_COLOR_COUNT + 1 }, (_, n) => `ses-${n}`);
     const ninth = ids[SESSION_COLOR_COUNT]!;
-    expect(assignSessionColors(ids).get(ninth)).toBe(sessionColor(ninth));
-  });
-
-  it("answers a repeated id once, with the colour it already has", () => {
-    const colours = assignSessionColors(["ses-alpha", "ses-alpha"]);
-    expect(colours.size).toBe(1);
-    expect(colours.get("ses-alpha")).toBe(sessionColor("ses-alpha"));
+    expect(arriving(ids).get(ninth)).toBe(sessionColor(ninth));
   });
 });

@@ -18,7 +18,10 @@
  *   • `x`/`y` is the tip's target in the plane's pixels. Changing it starts a
  *     glide; `onSettled` fires when the glide LANDS (or at once when there is
  *     nothing to glide), and that is the moment the driver may dispatch the
- *     click. The cursor never lies about where a click went.
+ *     click. The cursor never lies about where a click went. A driver that
+ *     moves the cursor by other means — the overlay, where main moves the
+ *     VIEW and the tip never changes — bumps `settleKey` per state instead,
+ *     so every state it pushes is acknowledged, not only the ones that moved.
  *   • `gesture` names what the Session is doing at the tip: `click` draws the
  *     press ring, `type` parks the label in its typing state, `scroll` nudges.
  *     `pressKey` distinguishes two clicks on one spot.
@@ -64,6 +67,12 @@ export interface SessionCursorProps {
   reducedMotion?: boolean;
   /** The glide to the current `x`/`y` has landed (or there was none). */
   onSettled?: (target: { x: number; y: number }) => void;
+  /**
+   * A state the driver wants acknowledged even though the tip did not move.
+   * Each distinct value reports `onSettled` once more, at once; the overlay
+   * page passes main's push `seq`.
+   */
+  settleKey?: number;
   /** The person's two controls on the hover label. Absent hides them. */
   onTakeOver?: () => void;
   onAskToLeave?: () => void;
@@ -91,6 +100,7 @@ export function SessionCursor({
   handoff = false,
   reducedMotion = false,
   onSettled,
+  settleKey = 0,
   onTakeOver,
   onAskToLeave,
 }: SessionCursorProps) {
@@ -109,14 +119,16 @@ export function SessionCursor({
   // Settle-reporting. Two ways to land: the transform transition ends, or
   // there was no transition to wait for. Both go through one timer-backed
   // path so a transition the compositor skipped (a hidden view, a tab with
-  // no frames) still reports within the glide's own bound.
+  // no frames) still reports within the glide's own bound. `settleKey` is in
+  // the deps on purpose: a push that moved nothing still has to be answered,
+  // or the driver waits out its whole bound for an answer that never comes.
   React.useEffect(() => {
     lastRef.current = { x, y };
     if (!present) return;
     const target = { x, y };
     const timer = window.setTimeout(() => settledRef.current?.(target), glideMs);
     return () => window.clearTimeout(timer);
-  }, [x, y, present, glideMs]);
+  }, [x, y, present, glideMs, settleKey]);
 
   // Hover is tracked here rather than left to `:hover` alone because the
   // ACTIONS ride only the hover label — a pinned or typing chip says who and

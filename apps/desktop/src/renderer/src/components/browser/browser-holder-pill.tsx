@@ -26,13 +26,11 @@ import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { BrowserTabHolder } from "../../../../ipc/contract";
-
-/** What the pill knows about the holder: exactly what main pushes as `heldBy`. */
-export type BrowserHolder = BrowserTabHolder;
+import type { BrowserTabHolder } from "@volli/shared";
 
 export interface BrowserHolderPillProps {
-  holder: BrowserHolder;
+  /** Exactly what main pushes as the tab's `heldBy`. */
+  holder: BrowserTabHolder;
   onTakeOver(): void;
   onAskToLeave(): void;
   onHandBack(): void;

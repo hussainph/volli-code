@@ -300,9 +300,11 @@ export type PiRuntimeContext =
  * The runtime's Browser port plus the one lifecycle door the desktop adapter
  * drives that the runtime never sees: a turn ending (VC-239). A hold on a
  * Browser Tab lasts a turn, and the runtime observation is where the adapter
- * learns a turn is over — so the adapter tells the port, here.
+ * learns a turn is over — so the adapter tells the port, here. Required, not
+ * optional: it is the one door that keeps a hold from outliving its turn, and
+ * a port built without it would keep holds silently.
  */
-export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded?: () => void };
+export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -312,8 +314,12 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded?: () => void }
  * writer, hold tools or not.
  */
 function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
-  const { acquire: _acquire, release: _release, ...six } = port;
-  return six;
+  // A shallow copy is safe here, unlike in `browserHoldPort`, because the
+  // desktop's port is an object literal of closures (`createAgentBrowserPort`)
+  // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
+  // turn ends, so the copy the runtime gets shares every hold with it.
+  const { acquire: _acquire, release: _release, ...withoutPair } = port;
+  return withoutPair;
 }
 
 export interface PiAdapterOptions {
@@ -1487,7 +1493,7 @@ class PiBinding implements BindingHandle {
     // than after: a hold outliving its turn by even the sink's write would be
     // a hold with nobody driving, and the person's pill would say otherwise.
     if (observation.kind === "turn" && observation.state !== "started") {
-      this.#browser?.turnEnded?.();
+      this.#browser?.turnEnded();
     }
     return this.#sink.emit(observation);
   }

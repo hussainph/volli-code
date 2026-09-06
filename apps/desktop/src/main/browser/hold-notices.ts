@@ -15,6 +15,15 @@
  * steer to wake. A delivery that fails is logged and dropped: nobody is
  * waiting on it, the pill already shows the new state, and the Session's next
  * write is refused with the same words either way.
+ *
+ * One known and accepted gap: the hold ends on the turn observation, a few
+ * milliseconds after Pi's own turn end, and the pill lags the state push by
+ * a frame. A press that lands in that window steers a Session whose turn is
+ * already over, and a steer on an idle attachment is submitted as a prompt
+ * (`runtime.ts`, `submitUserMessage`) — one short turn nobody asked for,
+ * reading a line about a tab it no longer holds. Rare enough to accept; the
+ * honest fix, if it ever matters, is a steer-or-drop delivery in the runtime
+ * rather than a guess here about whether the turn is still live.
  */
 
 import type { BrowserHoldEvent } from "./tab-host";

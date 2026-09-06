@@ -1,5 +1,5 @@
 /**
- * Browser Tab ownership and the Session cursor (VC-239) — every surface the
+ * The Tab hold and the Session cursor (VC-239) — every surface the
  * hold shows up on, over a fixture page, with a driver that plays a Session's
  * actions through the cursor so the motion can be judged and each case in the
  * ticket walked by hand.
@@ -41,13 +41,13 @@ import * as React from "react";
 import {
   SESSION_CURSOR_GLIDE_MAX_MS,
   SESSION_CURSOR_LABEL_PIN_MS,
-  assignSessionColors,
+  pickSessionColor,
+  type BrowserTabHolder,
 } from "@volli/shared";
 import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
 
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
-import type { BrowserHolder } from "@renderer/components/browser/browser-holder-pill";
 import {
   SessionCursor,
   type SessionCursorGesture,
@@ -76,7 +76,15 @@ const SESSIONS: readonly LabSession[] = [
   { id: "ses-e04d-a11y", name: "Accessibility audit" },
 ];
 
-const COLORS = assignSessionColors(SESSIONS.map((session) => session.id));
+/**
+ * Colours the way the host hands them out: one Session at a time, each
+ * against the colours already taken, so the three are distinct however their
+ * ids hash. Fixed ids keep the answer the same every load.
+ */
+const COLORS = SESSIONS.reduce((taken, session) => {
+  taken.set(session.id, pickSessionColor(session.id, taken.values()));
+  return taken;
+}, new Map<string, string>());
 
 interface LabTab {
   id: string;
@@ -641,7 +649,7 @@ export default function SessionCursorScratch() {
   const activeTab = TABS.find((tab) => tab.id === activeTabId)!;
   const activeHolder = holders[activeTabId] ?? null;
   const cursor = cursors[activeTabId] ?? CURSOR_AT_REST;
-  const holderOf = (holder: Holder): BrowserHolder | null => {
+  const holderOf = (holder: Holder): BrowserTabHolder | null => {
     if (holder === null) return null;
     if (holder.kind === "person") return { kind: "person" };
     const session = SESSIONS.find((one) => one.id === holder.sessionId);

@@ -12,7 +12,7 @@
  * One component for both strips (Home's and the ticket's), so they cannot
  * disagree on what a held tab looks like.
  */
-import type { BrowserTabHolder } from "../../../../ipc/contract";
+import type { BrowserTabHolder } from "@volli/shared";
 
 export function browserHolderLabel(holder: BrowserTabHolder): string {
   return holder.kind === "session" ? `Held by ${holder.name}` : "Yours";

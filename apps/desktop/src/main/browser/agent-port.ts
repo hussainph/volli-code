@@ -63,6 +63,7 @@ import type { WebContents } from "electron";
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
+  BrowserTabHolder,
   RuntimeBrowserConsole,
   RuntimeBrowserHoldOutcome,
   RuntimeBrowserHolder,
@@ -71,7 +72,7 @@ import type {
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
-import type { BrowserTabHolder, BrowserTabState } from "../../ipc/contract";
+import type { BrowserTabState } from "../../ipc/contract";
 import type {
   BrowserHoldEnd,
   BrowserHoldOutcome,
@@ -237,6 +238,42 @@ export function loadWaiter(
       else if (mode === "possible-navigation") grace = setTimeout(finish, navigationGraceMs);
     });
   };
+}
+
+/**
+ * What the desktop's composition needs of the live host beyond
+ * {@link AgentBrowserHost}: each tab's `webContents` for the CDP wire and the
+ * load waiter, and the wake hold against background throttling (VC-252).
+ */
+export interface DesktopBrowserHost extends AgentBrowserHost {
+  webContentsOf(tabId: string): WebContents;
+  holdAwake(tabId: string): () => void;
+}
+
+/**
+ * The port as the desktop composes it over one host: the app-private
+ * debugger as the CDP wire, the host's own load waiter and wake hold, and
+ * the Session cursor for the tab on screen. ONE factory for every caller —
+ * the adapter's attach path and the smoke's probe alike — so an option added
+ * here reaches both, and the smoke can never drift into testing a port that
+ * is not the one Sessions get.
+ */
+export function desktopBrowserPort(input: {
+  host: DesktopBrowserHost;
+  scope: AgentBrowserPortOptions["scope"];
+  session: BrowserSessionHolder;
+  cursorFor: AgentBrowserPortOptions["cursorFor"];
+}): AgentBrowserPort {
+  const { host } = input;
+  return createAgentBrowserPort({
+    host,
+    scope: input.scope,
+    session: input.session,
+    transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
+    waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
+    holdAwake: (tabId) => host.holdAwake(tabId),
+    cursorFor: input.cursorFor,
+  });
 }
 
 /** The runtime's view of a holder, from the host's: the same record, with "is it me" answered. */

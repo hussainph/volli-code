@@ -27,6 +27,14 @@
  *
  * Reduced motion keeps every state and drops every movement: positions jump,
  * nothing rings or nudges, and only opacity still eases.
+ *
+ * Sizes. The label's type is the `--text-label` rung and its corners the
+ * `--radius-sm` rung, from globals.css. The rest of the geometry — the arrow,
+ * the ring, the hit target and the chip's inner spacing — is a DRAWING at
+ * pointer scale, measured against a 20px chip and a 16px arrow, and is one
+ * of DESIGN.md's recorded exceptions to the 4px ladder: the ladder's steps
+ * are the difference between a chip that reads as a cursor label and one
+ * that reads as a button.
  */
 
 .session-cursor {
@@ -153,11 +161,11 @@
   gap: 5px;
   height: 20px;
   padding: 0 7px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--session-cursor-color);
   color: var(--session-cursor-ink);
   font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 500;
   line-height: 1;
   letter-spacing: 0.005em;
@@ -236,12 +244,12 @@
   margin: 0;
   padding: 0 5px;
   height: 15px;
-  border-radius: 4px;
+  border-radius: calc(var(--radius-sm) / 2);
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background-color 120ms ease;
+  transition: background-color 120ms var(--ease-out);
 }
 
 .session-cursor-action:hover {

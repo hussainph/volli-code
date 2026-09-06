@@ -712,6 +712,7 @@ describe("Pi native adapter attach", () => {
     const scopes: unknown[] = [];
     const listed: unknown[] = [];
     const dispose = vi.fn();
+    const sixToolTurnEnded = vi.fn();
     const { binding, runtime } = await attached({
       resolveRuntimeContext: async () => ({
         ...context,
@@ -750,6 +751,7 @@ describe("Pi native adapter attach", () => {
           console: async () => {
             throw new Error("unused");
           },
+          turnEnded: sixToolTurnEnded,
           dispose,
         };
       },
@@ -772,6 +774,11 @@ describe("Pi native adapter attach", () => {
     // without its hold pair, so the tool array is the one the record promised.
     expect(runtime.spec.browser?.acquire).toBeUndefined();
     expect(runtime.spec.browser?.release).toBeUndefined();
+    // Six tools or eight, a turn's end reaches the SAME port: the copy handed
+    // to the runtime is not the one the adapter tells, so the implicit hold
+    // its writes took still ends with the turn.
+    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+    expect(sixToolTurnEnded).toHaveBeenCalledOnce();
 
     await binding.release("requested");
     expect(dispose).toHaveBeenCalledOnce();

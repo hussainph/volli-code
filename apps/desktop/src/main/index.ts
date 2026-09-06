@@ -281,7 +281,7 @@ import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
-import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
+import { desktopBrowserPort } from "./browser/agent-port";
 import { relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
@@ -1098,20 +1098,14 @@ app.whenReady().then(async () => {
             if (host === null) {
               throw new Error("The Browser host is not ready; retry the attachment.");
             }
-            return createAgentBrowserPort({
+            // The wake hold (VC-252) and the cursor (VC-239) ride the one
+            // desktop composition; see `desktopBrowserPort`.
+            return desktopBrowserPort({
               host,
               scope: { projectId: scope.projectId, ticketId: scope.ticketId },
               // The hold is taken in this name and judged against it (VC-239):
               // the adapter states it from the attachment, never the model.
               session: { sessionId: scope.sessionId, attachmentId: scope.attachmentId },
-              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
-              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
-              // Chromium throttles hidden tabs; the hold keeps a tab this
-              // Session drives at foreground pace across workspace switches
-              // (VC-252), and releases with the attachment.
-              holdAwake: (tabId) => host.holdAwake(tabId),
-              // The Session cursor (VC-239): told where each action lands
-              // before it lands, and drawn only over the on-screen tab.
               cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId),
             });
           },
@@ -2433,22 +2427,20 @@ app.whenReady().then(async () => {
       systemPreferences.getAnimationSettings().prefersReducedMotion,
   });
   cursorOverlayRef = cursorOverlay;
-  // A smoke seam (VC-239), unset in every ordinary launch and undocumented:
-  // `browser-tab-smoke.mjs` starts no Session and takes no model turn, yet has
-  // to prove a hold and a visible cursor. It builds the SAME port the adapter
-  // builds — same host, same CDP wire, same overlay — in a Session's name it
-  // invents, and drives a tab exactly as a Session would. Nothing else reads
-  // this global, and a launch without the variable exposes nothing.
-  if (process.env["VOLLI_BROWSER_PROBE"] === "1") {
+  // A smoke seam (VC-239), unset in every ordinary launch: `browser-tab-smoke.mjs`
+  // starts no Session and takes no model turn, yet has to prove a hold and a
+  // visible cursor. It builds the SAME port the adapter builds — one factory,
+  // `desktopBrowserPort`, so the two cannot drift — in a Session's name it
+  // invents, and drives a tab exactly as a Session would. Gated on the
+  // variable AND on an unpackaged app, like the other dev-only doors: a
+  // shipped build exposes nothing whatever its environment says.
+  if (isDev && process.env["VOLLI_BROWSER_PROBE"] === "1") {
     (globalThis as { volliBrowserProbe?: unknown }).volliBrowserProbe = {
       port: (scope: { projectId: string; ticketId: string | null }, sessionId: string) =>
-        createAgentBrowserPort({
+        desktopBrowserPort({
           host: browserTabs,
           scope,
           session: { sessionId, attachmentId: `${sessionId}:probe` },
-          transportFor: (tabId) => debuggerTransport(browserTabs.webContentsOf(tabId)),
-          waitForLoad: loadWaiter((tabId) => browserTabs.webContentsOf(tabId)),
-          holdAwake: (tabId) => browserTabs.holdAwake(tabId),
           cursorFor: (tabId) => cursorOverlay.driverFor(tabId),
         }),
       heldBy: (tabId: string) => browserTabs.heldBy(tabId),

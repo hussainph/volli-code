@@ -21,21 +21,18 @@
  * Keyed by a stable hash of the Session id, FNV-1a as {@link tagColor} uses,
  * so a Session has the same colour in every surface, launch after launch, with
  * nothing stored. Eight slots and a hash cannot promise two CONCURRENT Sessions
- * different colours, and the ticket requires it, so {@link assignSessionColors}
- * resolves the live set: each Session takes its own slot or the next free one,
- * in the order the caller lists them. The order is the caller's stability
- * guarantee — list Sessions in the order they arrived and a Session keeps its
- * colour for as long as it lives, whoever comes or goes after it.
+ * different colours, and the ticket requires it, so {@link pickSessionColor}
+ * resolves each arrival against the colours already in use: its own slot or
+ * the next free one. Assigning one at a time, as Sessions arrive, is the
+ * host's stability guarantee — a Session keeps its colour for as long as it
+ * holds, whoever comes or goes after it.
  */
+import { PROJECT_COLORS } from "./project-identity";
 import { hueFan } from "./theme/chart-color";
 import { apcaLc } from "./theme/color";
 
-/**
- * The palette's anchor: the ember accent, `PROJECT_COLORS[0]`. Spelled here
- * rather than imported so this module does not take a dependency on the
- * project record's module for one literal.
- */
-const SESSION_COLOR_ANCHOR = "#E8652A";
+/** The palette's anchor: the ember accent, the same hex the first project tile wears. */
+const SESSION_COLOR_ANCHOR: string = PROJECT_COLORS[0];
 
 /**
  * How many distinct Session colours there are. Eight is what a person can tell
@@ -94,23 +91,16 @@ export function sessionColorInk(colorHex: string): "#000000" | "#ffffff" {
 }
 
 /**
- * Colours for a set of concurrent Sessions, distinct while the set fits the
- * palette.
- *
- * Walks the ids in the order given. Each takes its hashed slot if free, else
- * the next free slot round the wheel — the nearest neighbour hue, so a
- * collision costs the least identity. Past eight live Sessions the wheel is
- * full and the ninth wraps to its hashed slot again; that is the palette's
- * honest limit, not something this function papers over. A repeated id takes
- * the colour it already has.
- */
-/**
  * One more Session's colour, given the colours already in use: its own slot
- * if free, else the next free slot round the wheel, else its own slot again
- * once the wheel is full. The incremental form of {@link assignSessionColors}
- * for a host that assigns colours as Sessions ARRIVE and must never revisit
- * one it already handed out — a batch re-resolution could move a live
- * Session's colour when an earlier one leaves.
+ * if free, else the next free slot round the wheel — the nearest neighbour
+ * hue, so a collision costs the least identity — else its own slot again once
+ * the wheel is full. Past eight live Sessions that is the palette's honest
+ * limit, not something this function papers over.
+ *
+ * Incremental on purpose: a host assigns colours as Sessions ARRIVE and must
+ * never revisit one it already handed out, and a batch re-resolution could
+ * move a live Session's colour when an earlier one leaves. Every surface that
+ * needs several — the lab, a test — folds this over its Sessions in order.
  */
 export function pickSessionColor(sessionId: string, taken: Iterable<string>): string {
   const used = new Set(taken);
@@ -120,24 +110,4 @@ export function pickSessionColor(sessionId: string, taken: Iterable<string>): st
     if (!used.has(candidate)) return candidate;
   }
   return SESSION_COLORS[preferred]!;
-}
-
-export function assignSessionColors(sessionIds: readonly string[]): Map<string, string> {
-  const assigned = new Map<string, string>();
-  const taken = new Set<number>();
-  for (const sessionId of sessionIds) {
-    if (assigned.has(sessionId)) continue;
-    const preferred = sessionColorSlot(sessionId);
-    let slot = preferred;
-    for (let step = 0; step < SESSION_COLOR_COUNT; step += 1) {
-      const candidate = (preferred + step) % SESSION_COLOR_COUNT;
-      if (!taken.has(candidate)) {
-        slot = candidate;
-        break;
-      }
-    }
-    taken.add(slot);
-    assigned.set(sessionId, SESSION_COLORS[slot]!);
-  }
-  return assigned;
 }

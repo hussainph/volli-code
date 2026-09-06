@@ -879,9 +879,11 @@ export interface SessionRuntimeSpec {
    * Reach the Browser Tabs the host owns, through the one {@link RuntimeBrowserPort}.
    *
    * Optional on the same terms as {@link webFetch}: absence is what decides
-   * whether the model is offered any browser tool. One port carries all six
-   * names — a Session with somewhere to send a browser action has all of them,
-   * and one with nowhere has none.
+   * whether the model is offered any browser tool. One port carries every
+   * browser name — a Session with somewhere to send a browser action has all
+   * of them, and one with nowhere has none. The one qualification is the hold
+   * pair (VC-239): a port without `acquire`/`release` offers the six that
+   * shipped before them, which is how a Session frozen with six keeps six.
    */
   browser?: RuntimeBrowserPort;
   /**

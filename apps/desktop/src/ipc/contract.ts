@@ -16,6 +16,7 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  BrowserTabHolder,
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
@@ -1422,20 +1423,6 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
  * future grant policy; an arbitrary renderer label could not be trusted.
  */
 export type BrowserTabCreatedBy = "user" | "session";
-
-/**
- * Who holds a Browser Tab — whose turn it is to drive it (VC-239). At most one
- * party at a time: one Session, or the person; `null` is a free tab.
- *
- * A Session's `name` and `color` travel with the hold rather than being looked
- * up by each surface, so the chrome pill, the strip dot and the cursor main
- * paints over the page agree on both with nothing but this record in common.
- * The colour is identity, never state (`@volli/shared`'s `sessionColor`),
- * resolved by main across every live holder so concurrent Sessions differ.
- */
-export type BrowserTabHolder =
-  | { kind: "session"; sessionId: string; name: string; color: string }
-  | { kind: "person" };
 
 /**
  * Renderer-safe state for one live Browser Tab. Product identity and bounded

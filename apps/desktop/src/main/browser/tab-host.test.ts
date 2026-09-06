@@ -858,37 +858,43 @@ describe("BrowserTabHost holds (VC-239)", () => {
     expect(lastHeldBy(second)).toMatchObject({ name: "Session ses-b" });
   });
 
-  it("gives concurrent Sessions different colours and keeps each one's colour while it lives", () => {
-    // Two ids that hash to the same slot, found by search, so this asserts the
-    // collision case rather than hoping for it.
-    const slotOf = (id: string): string => {
-      const probe = new BrowserTabHost({
-        createId: () => "probe",
-        createView: () => new FakeView() as unknown as WebContentsView,
-        fromPartition: () => new FakeSession() as unknown as Session,
-        getWindow: () => null,
-        publishState: () => undefined,
-        publishClosed: () => undefined,
-      });
-      const tabId = probe.open({
-        url: "https://example.com",
-        projectId: "p",
-        ticketId: null,
-        createdBy: "session",
-      }).tabId;
-      const outcome = probe.hold(tabId, { sessionId: id, attachmentId: "x" });
-      return outcome.kind === "held" ? (outcome.tab.heldBy as { color: string }).color : "";
-    };
+  /** A Session's colour alone on a fresh host: its hashed slot's hue. */
+  const soloColor = (id: string): string => {
+    const probe = new BrowserTabHost({
+      createId: () => "probe",
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => null,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+    });
+    const tabId = probe.open({
+      url: "https://example.com",
+      projectId: "p",
+      ticketId: null,
+      createdBy: "session",
+    }).tabId;
+    const outcome = probe.hold(tabId, { sessionId: id, attachmentId: "x" });
+    return outcome.kind === "held" ? (outcome.tab.heldBy as { color: string }).color : "";
+  };
+
+  /**
+   * Two ids that hash to the same slot, found by search, so a test asserts
+   * the collision case rather than hoping for it.
+   */
+  const collidingPair = (): [string, string] => {
     const seen = new Map<string, string>();
-    let colliding: [string, string] | null = null;
-    for (let n = 0; colliding === null; n += 1) {
+    for (let n = 0; ; n += 1) {
       const id = `ses-${n}`;
-      const color = slotOf(id);
+      const color = soloColor(id);
       const earlier = seen.get(color);
-      if (earlier !== undefined) colliding = [earlier, id];
-      else seen.set(color, id);
+      if (earlier !== undefined) return [earlier, id];
+      seen.set(color, id);
     }
-    const [first, second] = colliding;
+  };
+
+  it("gives concurrent Sessions different colours and keeps each one's colour while it lives", () => {
+    const [first, second] = collidingPair();
 
     const one = openTab();
     const two = openTab();
@@ -909,6 +915,40 @@ describe("BrowserTabHost holds (VC-239)", () => {
     const three = openTab();
     host.hold(three, { sessionId: first, attachmentId: "3" });
     expect((lastHeldBy(three) as { color: string }).color).toBe(firstColor);
+  });
+
+  it("keeps a Session's colour while a newer attachment of it still holds, and lets go once none does", () => {
+    // `displaced` arrived second and was stepped off its hashed slot, so a
+    // colour re-picked from nothing would be `first`'s — the collision the
+    // wheel exists to prevent.
+    const [first, displaced] = collidingPair();
+    const theirs = openTab();
+    const one = openTab();
+    const two = openTab();
+    host.hold(theirs, { sessionId: first, attachmentId: "f" });
+    host.hold(one, { sessionId: displaced, attachmentId: "old" });
+    const color = (lastHeldBy(one) as { color: string }).color;
+    expect(color).not.toBe(soloColor(displaced));
+    // The Session re-attaches and holds a second tab before the old
+    // attachment is torn down.
+    host.hold(two, { sessionId: displaced, attachmentId: "new" });
+    expect((lastHeldBy(two) as { color: string }).color).toBe(color);
+
+    host.forgetSession({ sessionId: displaced, attachmentId: "old" });
+    expect(lastHeldBy(one)).toBeNull();
+    // The survivor is republished on its next state push in the colour it
+    // had, not in the one it shares a hash with.
+    views[2]!.webContents.emit("page-title-updated", {}, "Renamed");
+    expect((lastHeldBy(two) as { color: string }).color).toBe(color);
+    expect(host.heldBy(two)).toMatchObject({ kind: "session", color });
+
+    host.forgetSession({ sessionId: displaced, attachmentId: "new" });
+    expect(lastHeldBy(two)).toBeNull();
+    expect(host.heldBy(two)).toBeNull();
+    // Nothing of it holds, so its slot is free for a newcomer.
+    const later = openTab();
+    host.hold(later, { sessionId: "ses-newcomer", attachmentId: "n" });
+    expect(host.heldBy(later)).not.toBeNull();
   });
 
   it("releases only for the holder, and treats anyone else's release as already done", () => {

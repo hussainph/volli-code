@@ -1,7 +1,8 @@
 import { BrowserRefusal } from "@volli/agent-runtime";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { BrowserTabHolder, BrowserTabState } from "../../ipc/contract";
+import type { BrowserTabHolder } from "@volli/shared";
+import type { BrowserTabState } from "../../ipc/contract";
 import {
   createAgentBrowserPort,
   debuggerTransport,

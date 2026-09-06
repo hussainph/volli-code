@@ -11,9 +11,8 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
-import { sessionProvenanceHoverLine } from "@volli/shared";
+import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
-import type { BrowserTabHolder } from "../../../../ipc/contract";
 import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";

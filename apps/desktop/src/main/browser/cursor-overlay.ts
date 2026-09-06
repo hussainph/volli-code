@@ -42,12 +42,14 @@ import {
   SESSION_CURSOR_LABEL_PIN_MS,
   pointDistance,
   sessionCursorGlideMs,
+  type BrowserTabHolder,
+  type BrowserTabSessionHolder,
 } from "@volli/shared";
 
-import type { BrowserTabHolder } from "../../ipc/contract";
 import {
   CURSOR_ASK_TO_LEAVE_CHANNEL,
   CURSOR_SETTLED_CHANNEL,
+  CURSOR_TIP_INSET,
   CURSOR_SIZE_CHANNEL,
   CURSOR_STATE_CHANNEL,
   CURSOR_TAKE_OVER_CHANNEL,
@@ -57,9 +59,6 @@ import {
 } from "../../ipc/cursor-contract";
 import type { TabCursorDriver, TabCursorGesture } from "./cdp-controller";
 import type { BrowserHoldEvent } from "./tab-host";
-
-/** The tip's inset from the view's origin; the overlay page draws the tip there. */
-export const CURSOR_TIP_INSET = 12;
 
 /**
  * The overlay's own in-memory partition: no `persist:`, nothing shared with
@@ -141,9 +140,6 @@ export interface CursorOverlayDependencies {
   wait?: (ms: number) => Promise<void>;
 }
 
-/** A Session holder — the only kind that draws a cursor. */
-type SessionHolder = Extract<BrowserTabHolder, { kind: "session" }>;
-
 interface TabCursorState {
   point: { x: number; y: number } | null;
   gesture: SessionCursorGesture;
@@ -153,7 +149,7 @@ interface TabCursorState {
   /** Exiting: fading (release, turn end) or handing off (takeover). */
   exit: "fade" | "handoff" | null;
   /** The holder last drawn, so an exit keeps the colour of the hold that ended. */
-  lastHolder: SessionHolder | undefined;
+  lastHolder: BrowserTabSessionHolder | undefined;
 }
 
 export interface CursorOverlay {
@@ -223,7 +219,11 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
   };
 
   /** The tab whose cursor may be drawn: on screen, held by a Session, with a point — or exiting. */
-  const drawable = (): { tabId: string; state: TabCursorState; holder: SessionHolder } | null => {
+  const drawable = (): {
+    tabId: string;
+    state: TabCursorState;
+    holder: BrowserTabSessionHolder;
+  } | null => {
     const tabId = deps.host.attachedTabId();
     if (tabId === null) return null;
     const state = states.get(tabId);

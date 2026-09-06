@@ -7,14 +7,18 @@ import type {
   WebContentsViewConstructorOptions,
   WebPreferences,
 } from "electron";
-import { pickSessionColor, shortSessionId, type RuntimeBrowserConsoleMessage } from "@volli/shared";
+import {
+  pickSessionColor,
+  shortSessionId,
+  type BrowserTabHolder,
+  type RuntimeBrowserConsoleMessage,
+} from "@volli/shared";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
 import type {
   BrowserTabBounds,
   BrowserTabCaptureFrame,
   BrowserTabCreatedBy,
-  BrowserTabHolder,
   BrowserTabState,
 } from "../../ipc/contract";
 
@@ -502,11 +506,22 @@ export class BrowserTabHost {
    * An attachment is over: its holds go, and its Session leaves the colour
    * order so the wheel is not blocked by a Session nobody will see again. A
    * later attachment of the same Session arrives as new and may take another
-   * slot — the colour is stable for an attachment's life, which is the life
-   * the cursor is drawn for.
+   * slot — the colour is stable for as long as the Session holds, which is
+   * the life the cursor is drawn for.
+   *
+   * Holds are keyed by attachment and colours by Session, so the two can
+   * disagree for a moment: while one attachment of a Session is torn down
+   * another may already hold a tab. The colour stays until nothing of the
+   * Session holds anything, or a live holder would lose its colour mid-hold
+   * and re-pick one that could collide.
    */
   forgetSession(holder: BrowserSessionHolder): void {
     this.releaseAllHeldBy(holder, "attachment-end");
+    for (const entry of this.tabs.values()) {
+      if (entry.hold?.kind === "session" && entry.hold.holder.sessionId === holder.sessionId) {
+        return;
+      }
+    }
     this.sessionColors.delete(holder.sessionId);
     this.sessionNames.delete(holder.sessionId);
   }

@@ -11,9 +11,18 @@
  * pressed one of the two controls on the label. Every message from the page
  * is checked against the overlay's own `webContents` before it is believed.
  *
- * Type-only, so the three processes that speak it (main, the cursor preload,
- * the overlay page) share one spelling without any of them importing another.
+ * Channel names, one geometry constant and types only — nothing that runs —
+ * so the three processes that speak it (main, the cursor preload, the overlay
+ * page) share one spelling without any of them importing another's code.
  */
+
+/**
+ * The tip's inset from the view's origin, in the view's CSS pixels: room for
+ * the press ring above and left of it. Main places the view so the tip lands
+ * on the target, and the page draws the tip exactly here — one number both
+ * sides must agree on, so it is spelled once.
+ */
+export const CURSOR_TIP_INSET = 12;
 
 /** What the Session is doing at the tip, as the cursor draws it. */
 export type SessionCursorGesture = "click" | "hover" | "type" | "scroll" | null;

@@ -4,10 +4,9 @@ import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 
-import {
-  BrowserHolderPill,
-  type BrowserHolder,
-} from "@renderer/components/browser/browser-holder-pill";
+import type { BrowserTabHolder } from "@volli/shared";
+
+import { BrowserHolderPill } from "@renderer/components/browser/browser-holder-pill";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Spinner } from "@renderer/components/ui/spinner";
@@ -45,7 +44,7 @@ export interface BrowserChromeProps {
    * someone does: the pill beside the address bar IS the state, and the
    * person's Take over / Ask to leave / Hand back live on it.
    */
-  holder?: BrowserHolder | null;
+  holder?: BrowserTabHolder | null;
   onAddressChange(value: string): void;
   onNavigate(url: string): void;
   onBack(): void;

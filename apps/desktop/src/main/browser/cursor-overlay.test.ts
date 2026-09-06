@@ -6,16 +6,16 @@ import {
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { BrowserTabHolder } from "../../ipc/contract";
+import type { BrowserTabHolder } from "@volli/shared";
 import {
   CURSOR_ASK_TO_LEAVE_CHANNEL,
   CURSOR_SETTLED_CHANNEL,
   CURSOR_SIZE_CHANNEL,
   CURSOR_TAKE_OVER_CHANNEL,
+  CURSOR_TIP_INSET,
   type CursorOverlayState,
 } from "../../ipc/cursor-contract";
 import {
-  CURSOR_TIP_INSET,
   createCursorOverlay,
   type CursorOverlayHost,
   type CursorOverlayIpc,
