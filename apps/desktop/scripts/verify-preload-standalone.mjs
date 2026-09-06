@@ -54,19 +54,19 @@ function runtimeChunkDefinitions(source) {
 const PRELOADS = ["preload.cjs", "cursor-preload.cjs"];
 
 export function verifyPreloadStandalone(targetDir) {
-  const present = PRELOADS.filter((name) => existsSync(join(targetDir, name)));
+  const present = PRELOADS.filter((file) => existsSync(join(targetDir, file)));
   if (present.length === 0) throw new Error("verify-preload-standalone: no preload.cjs found");
-  for (const name of present) verifyOnePreload(targetDir, name);
+  for (const file of present) verifyOnePreload(targetDir, file);
 }
 
-function verifyOnePreload(targetDir, name) {
-  const preloadPath = join(targetDir, name);
+function verifyOnePreload(targetDir, file) {
+  const preloadPath = join(targetDir, file);
   const preload = readFileSync(preloadPath, "utf8");
 
   const runtimeRequire = /^require\("\.\/(rolldown-runtime-[\w-]+\.cjs)"\);\s*$/m;
   const match = preload.match(runtimeRequire);
   if (!match) {
-    console.log(`verify-preload-standalone: OK — ${name} requires no runtime chunk.`);
+    console.log(`verify-preload-standalone: OK — ${file} requires no runtime chunk.`);
     return;
   }
 
@@ -79,7 +79,7 @@ function verifyOnePreload(targetDir, name) {
   );
   if (used.length > 0) {
     throw new Error(
-      `verify-preload-standalone: ${name} actually USES runtime-chunk helper(s) ` +
+      `verify-preload-standalone: ${file} actually USES runtime-chunk helper(s) ` +
         `${used.join(", ")} from ${match[1]}. A shared chunk has split out of the sandboxed ` +
         `preload, which cannot require sibling files — make the main and preload entries ` +
         `dependency-disjoint again (see the pack CAUTION in vite.config.ts) instead of stripping.`,
@@ -95,7 +95,7 @@ function verifyOnePreload(targetDir, name) {
     ),
   );
   console.log(
-    `verify-preload-standalone: stripped vestigial require of ${match[1]} from ${name} ` +
+    `verify-preload-standalone: stripped vestigial require of ${match[1]} from ${file} ` +
       `(no helper from it is referenced).`,
   );
 }

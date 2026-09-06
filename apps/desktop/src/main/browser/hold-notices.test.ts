@@ -32,29 +32,29 @@ describe("holdNoticeFor", () => {
   });
 });
 
-describe("relayHoldNotices", () => {
-  function fakeHost(): {
-    emit(event: BrowserHoldEvent): void;
-    listeners: number;
-    host: Parameters<typeof relayHoldNotices>[0];
-  } {
-    const listeners = new Set<(event: BrowserHoldEvent) => void>();
-    return {
-      emit: (event) => {
-        for (const listener of listeners) listener(event);
+function fakeHost(): {
+  emit(event: BrowserHoldEvent): void;
+  listeners: number;
+  host: Parameters<typeof relayHoldNotices>[0];
+} {
+  const listeners = new Set<(event: BrowserHoldEvent) => void>();
+  return {
+    emit: (event) => {
+      for (const listener of listeners) listener(event);
+    },
+    get listeners() {
+      return listeners.size;
+    },
+    host: {
+      onHoldChange: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
       },
-      get listeners() {
-        return listeners.size;
-      },
-      host: {
-        onHoldChange: (listener) => {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-      },
-    };
-  }
+    },
+  };
+}
 
+describe("relayHoldNotices", () => {
   it("steers each notice into the Session it is for, and nothing for silent events", async () => {
     const steered: { sessionId: string; text: string }[] = [];
     const fake = fakeHost();

@@ -204,7 +204,10 @@ describe("BrowserChrome holder pill (VC-239)", () => {
     const tree = BrowserChrome(
       props({ holder: { kind: "person" }, onHandBack: () => (handedBack += 1) }),
     );
-    (findElements(tree, BrowserHolderPill)[0]?.props as BrowserHolderPillProps).onHandBack();
+    const pill = findElements(tree, BrowserHolderPill)[0]?.props as
+      | BrowserHolderPillProps
+      | undefined;
+    pill?.onHandBack();
     expect(handedBack).toBe(1);
   });
 

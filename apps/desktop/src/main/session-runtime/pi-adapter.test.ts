@@ -82,6 +82,11 @@ function attachmentSpec(overrides: Partial<NativeAttachmentSpec> = {}): NativeAt
   };
 }
 
+/** A port method a test never means to reach. */
+const unusedPortMethod = async (): Promise<never> => {
+  throw new Error("unused");
+};
+
 function userMessage(text: string, id = "message-1"): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] };
 }
@@ -774,9 +779,6 @@ describe("Pi native adapter attach", () => {
 
   it("hands a surface frozen with the hold pair the whole port, and ends its holds when the turn does (VC-239)", async () => {
     const turnEnded = vi.fn();
-    const unused = async (): Promise<never> => {
-      throw new Error("unused");
-    };
     const { runtime, sink } = await attached({
       resolveRuntimeContext: async () => ({
         ...context,
@@ -797,11 +799,11 @@ describe("Pi native adapter attach", () => {
       }),
       resolveBrowserPort: () => ({
         tabs: async () => ({ tabs: [] }),
-        navigate: unused,
-        snapshot: unused,
-        act: unused,
-        screenshot: unused,
-        console: unused,
+        navigate: unusedPortMethod,
+        snapshot: unusedPortMethod,
+        act: unusedPortMethod,
+        screenshot: unusedPortMethod,
+        console: unusedPortMethod,
         acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
         release: async (input) => ({ tabId: input.tabId }),
         turnEnded,

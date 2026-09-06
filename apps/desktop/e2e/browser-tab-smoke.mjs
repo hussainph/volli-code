@@ -346,13 +346,13 @@ async function cursorViewOver(app, targetUrl) {
  */
 async function sessionWrite(app, which, targetUrl) {
   return app.evaluate(
-    async (_electron, { which, url, projectId }) => {
+    async (_electron, { port: portName, url, projectId }) => {
       const probe = globalThis.volliBrowserProbe;
       globalThis.volliBrowserProbePorts ??= {
         a: probe.port({ projectId, ticketId: null }, "smoke-session-alpha"),
         b: probe.port({ projectId, ticketId: null }, "smoke-session-beta"),
       };
-      const port = globalThis.volliBrowserProbePorts[which];
+      const port = globalThis.volliBrowserProbePorts[portName];
       const signal = new AbortController().signal;
       try {
         const listing = await port.tabs({ signal });
@@ -379,13 +379,13 @@ async function sessionWrite(app, which, targetUrl) {
         return { rule: error?.rule ?? "error", message: String(error?.message ?? error) };
       }
     },
-    { which, url: targetUrl, projectId: PROJECT.id },
+    { port: which, url: targetUrl, projectId: PROJECT.id },
   );
 }
 
 const endSessionTurn = (app, which) =>
-  app.evaluate((_electron, which) => {
-    globalThis.volliBrowserProbePorts?.[which]?.turnEnded();
+  app.evaluate((_electron, portName) => {
+    globalThis.volliBrowserProbePorts?.[portName]?.turnEnded();
   }, which);
 
 const disposeSessionPorts = (app) =>

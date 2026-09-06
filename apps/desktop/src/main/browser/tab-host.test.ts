@@ -801,7 +801,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
   });
 
   it("names the holder with a placeholder at once and the Session's title when it lands", async () => {
-    let resolveName: (name: string | null) => void = () => undefined;
+    const pending: { resolve: (name: string | null) => void } = { resolve: () => undefined };
     let nextId = 0;
     host = new BrowserTabHost({
       createId: () => `opaque-named-${++nextId}`,
@@ -812,7 +812,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       publishClosed: (tabId) => published.push({ closedTabId: tabId }),
       sessionName: () =>
         new Promise((resolve) => {
-          resolveName = resolve;
+          pending.resolve = resolve;
         }),
     });
     const tabId = openTab();
@@ -820,7 +820,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
     // A hold never waits on a name: the short id stands in.
     expect(lastHeldBy(tabId)).toMatchObject({ kind: "session", name: "Session ses-a" });
 
-    resolveName("Fix checkout form");
+    pending.resolve("Fix checkout form");
     await Promise.resolve();
     await Promise.resolve();
     expect(lastHeldBy(tabId)).toMatchObject({ name: "Fix checkout form" });

@@ -128,7 +128,7 @@ function fakeHost(initial: BrowserTabState[]): {
       releaseHold: (tabId, holder, why = "release") => release(tabId, holder, why),
       releaseAllHeldBy: (holder, why) => {
         const released: string[] = [];
-        for (const [tabId, hold] of [...holds]) {
+        for (const [tabId, hold] of Array.from(holds)) {
           if (hold.kind === "session" && sameHolder(hold.holder, holder)) {
             release(tabId, holder, why);
             released.push(tabId);
@@ -137,17 +137,23 @@ function fakeHost(initial: BrowserTabState[]): {
         return released;
       },
       forgetSession: (holder) => {
-        for (const [tabId, hold] of [...holds]) {
+        for (const [tabId, hold] of Array.from(holds)) {
           if (hold.kind === "session" && sameHolder(hold.holder, holder)) {
             release(tabId, holder, "attachment-end");
           }
         }
         ended.push(`forget:${holder.sessionId}`);
       },
-      list: (scope) =>
-        [...tabs.values()]
-          .filter((one) => one.projectId === scope.projectId)
-          .map((one) => ({ ...structuredClone(one), heldBy: holderView(one.tabId) })),
+      list: (scope) => {
+        const listed: BrowserTabState[] = [];
+        for (const one of tabs.values()) {
+          if (one.projectId !== scope.projectId) continue;
+          const copy = structuredClone(one);
+          copy.heldBy = holderView(one.tabId);
+          listed.push(copy);
+        }
+        return listed;
+      },
       open: (input) => {
         opened.push(input);
         openCount += 1;
@@ -576,18 +582,18 @@ describe("createAgentBrowserPort", () => {
   });
 });
 
-describe("createAgentBrowserPort holds (VC-239)", () => {
-  /** A refusal's rule, or the value if the call did not refuse. */
-  async function ruleOf(call: Promise<unknown>): Promise<string> {
-    try {
-      await call;
-      return "no refusal";
-    } catch (error) {
-      if (error instanceof BrowserRefusal) return error.rule;
-      throw error;
-    }
+/** A refusal's rule, or a word for a call that did not refuse. */
+async function ruleOf(call: Promise<unknown>): Promise<string> {
+  try {
+    await call;
+    return "no refusal";
+  } catch (error) {
+    if (error instanceof BrowserRefusal) return error.rule;
+    throw error;
   }
+}
 
+describe("createAgentBrowserPort holds (VC-239)", () => {
   it("takes a free tab's hold on the first write, in the Session's own name", async () => {
     const harness = portWithHost({ tabs: [state({ tabId: "user-1", createdBy: "user" })] });
     await clickSave(harness.port, "user-1");

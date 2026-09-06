@@ -145,7 +145,7 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
       case "browser_console":
         // Six names, one port, one factory: the binding arms all carry the
         // whole RuntimeBrowserPort, and the factory picks the method the name
-        // stands for. See ./browser-tools.ts for why the grain is six.
+        // stands for. See ./browser-tools.ts for why the grain is per intent.
         return createBrowserTool(binding.tool, binding.port, spec.signal);
       case "browser_acquire":
       case "browser_release":
