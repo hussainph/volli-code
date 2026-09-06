@@ -10,6 +10,7 @@ import {
   UtilityCompletionError,
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
+  type RuntimeShellPort,
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
@@ -165,6 +166,12 @@ const browserPort: RuntimeBrowserPort = {
 const browserHoldPortFixture: RuntimeBrowserPort = { ...browserPort, acquire: port, release: port };
 
 /**
+ * Stands in for a wired background shell port (VC-270). Presence only, like
+ * the two above: the three shell tools ride this one port together.
+ */
+const shellPort: RuntimeShellPort = { start: port, output: port, kill: port };
+
+/**
  * The verb port, which unlike the three above decides no membership — the
  * bundle does. Kept apart because it has a return type the others do not.
  */
@@ -223,6 +230,37 @@ describe("sessionToolIds", () => {
     ]);
   });
 
+  it("offers the three shell tools together exactly when the one shell port is wired (VC-270)", () => {
+    // One port, three names, appended AFTER the hold pair: a Session frozen
+    // before background shells existed keeps its shorter list and its Cache
+    // Prefix, and one born since gets the three on the end.
+    expect(sessionToolIds({ tools: { tools: [] }, shell: shellPort })).toEqual([
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
+    expect(
+      sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture, shell: shellPort }),
+    ).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+      "browser_acquire",
+      "browser_release",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
+    expect(NON_CODING_TOOL_IDS.slice(-3)).toEqual(["shell_start", "shell_output", "shell_kill"]);
+    // The binding carries the port, so the runtime never null-checks one.
+    for (const binding of sessionToolBindings({ tools: { tools: [] }, shell: shellPort })) {
+      expect(binding).toMatchObject({ port: shellPort });
+    }
+  });
+
   it("refuses a port carrying only half of the hold pair", () => {
     // A Session that could take a hold and never give it back is not a
     // smaller surface; it is a build bug, caught where a throw is cheap.
@@ -259,10 +297,11 @@ describe("sessionToolIds", () => {
       webFetch: port,
       webSearch: port,
       browser: browserHoldPortFixture,
+      shell: shellPort,
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
-    expect(everything).toHaveLength(15);
+    expect(everything).toHaveLength(18);
   });
 
   it("puts the Role's verbs last, after every capability tool (VC-162)", () => {

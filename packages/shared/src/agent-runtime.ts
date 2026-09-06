@@ -736,6 +736,97 @@ export function browserHoldPort(
   return port as RuntimeBrowserHoldPort;
 }
 
+/** How a background shell stands: still running, or exited with what it exited with. */
+export type RuntimeShellState = "running" | "exited";
+
+/**
+ * One background shell as the runtime lists it (VC-270): bounded metadata,
+ * never its output. Every shell result restates the Session's live shells in
+ * this shape, so the tool calls that started and read them are the record the
+ * model re-reads for free — there is no per-turn prompt channel for them.
+ */
+export interface RuntimeShellRecord {
+  /** Host-minted opaque id, never a pid: a pid is reused by the OS and a shell id is not. */
+  shellId: string;
+  /** The command as the model gave it. */
+  command: string;
+  /** The model's own label for the shell, or `null` when it gave none. */
+  title: string | null;
+  state: RuntimeShellState;
+  /** Exit code once exited; `null` while running and when the shell died of a signal. */
+  code: number | null;
+  /** The signal that ended it, once exited that way. */
+  signal: string | null;
+  /** Host clock, milliseconds. */
+  startedAt: number;
+  exitedAt: number | null;
+}
+
+/** What starting a shell comes to: its record, and what it printed in the settle window. */
+export interface RuntimeShellStartOutcome {
+  shell: RuntimeShellRecord;
+  pid: number;
+  /** Whatever the command printed before the host stopped waiting — a server's "listening on" line. */
+  output: string;
+  /** Every shell this Session holds after the start, the one just started included. */
+  shells: readonly RuntimeShellRecord[];
+}
+
+/**
+ * What a read comes to. `output` is only what is NEW since the last read of
+ * this shell, unless the caller asked for a `tail`, in which case it is the
+ * last N bytes of everything retained. `truncated` says the host's own bound
+ * dropped bytes before the caller could read them — either the ring buffer's
+ * or the tail cap's.
+ */
+export interface RuntimeShellOutputOutcome {
+  shell: RuntimeShellRecord;
+  output: string;
+  truncated: boolean;
+  shells: readonly RuntimeShellRecord[];
+}
+
+/** What a kill comes to: the shell's record once it has exited. */
+export interface RuntimeShellKillOutcome {
+  shell: RuntimeShellRecord;
+  shells: readonly RuntimeShellRecord[];
+}
+
+/**
+ * The one background shell port (VC-270): everything a Session can do to a
+ * command that runs beside the turn, answered by the host that owns the
+ * process.
+ *
+ * One port for three tools, on {@link RuntimeBrowserPort}'s terms: starting,
+ * reading and killing are one capability with one answerer, so a spec cannot
+ * offer a Session the ability to start a process without the ability to end
+ * it. Every method takes what the model said and a signal, and decides
+ * everything else itself: the per-Session cap, the output bound, whether the
+ * `cwd` is inside the workspace. A refusal is a typed error the tools turn
+ * into text; anything else thrown is a host that could not answer at all.
+ *
+ * Deliberately absent: stdin, a PTY, a restart verb, a filter on reads. A
+ * shell a person types into is the terminal, not this.
+ */
+export interface RuntimeShellPort {
+  start(input: {
+    command: string;
+    /** Defaults to the Session workspace, and must stay inside it. */
+    cwd?: string;
+    title?: string;
+    signal: AbortSignal;
+  }): Promise<RuntimeShellStartOutcome>;
+  output(input: {
+    shellId: string;
+    /** The last N bytes of everything retained, instead of what is new. Bounded by the host. */
+    tail?: number;
+    signal: AbortSignal;
+  }): Promise<RuntimeShellOutputOutcome>;
+  kill(input: { shellId: string; signal: AbortSignal }): Promise<RuntimeShellKillOutcome>;
+  /** Kills every shell this Session started and forgets them; the attachment's end. */
+  dispose?(): void;
+}
+
 /**
  * What the workspace's own package state was when this attachment started —
  * the two {@link SessionEnvReport} facts an agent can act on.
@@ -928,6 +1019,13 @@ export interface SessionRuntimeSpec {
    */
   browser?: RuntimeBrowserPort;
   /**
+   * Run commands beside the turn, through the one {@link RuntimeShellPort}
+   * (VC-270). Optional on {@link browser}'s terms: absence is what decides
+   * whether the model is offered any shell tool, and one port carries all
+   * three names.
+   */
+  shell?: RuntimeShellPort;
+  /**
    * Run one product verb the Session's frozen Agent Tool Surface names, in the
    * host's own process (VC-162).
    *
@@ -994,7 +1092,7 @@ export interface RuntimeVerbResult {
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "callVerb"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "callVerb"
 >;
 
 /**
@@ -1025,6 +1123,10 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // Three arms, one port (VC-270), on the browser arms' terms.
+  | { tool: "shell_start"; port: RuntimeShellPort }
+  | { tool: "shell_output"; port: RuntimeShellPort }
+  | { tool: "shell_kill"; port: RuntimeShellPort }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -1062,6 +1164,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // smaller surface, and it is caught here where the cost is a thrown error
   // rather than a Session that can take a hold it cannot give back.
   const hold = browserHoldPort(browser);
+  const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
@@ -1075,6 +1178,9 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
     browser_acquire: hold === undefined ? null : { tool: "browser_acquire", port: hold },
     browser_release: hold === undefined ? null : { tool: "browser_release", port: hold },
+    shell_start: shell === undefined ? null : { tool: "shell_start", port: shell },
+    shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
+    shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

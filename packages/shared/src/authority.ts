@@ -108,6 +108,16 @@ export const NON_CODING_TOOL_IDS = [
   "browser_acquire",
   /** Giving a hold back before the turn ends. */
   "browser_release",
+  // The three names below are one capability — the background shell port
+  // (VC-270) — split per intent for the browser tools' reason. Appended after
+  // the hold pair and never reordered: a Session frozen before background
+  // shells existed keeps its shorter list and its Cache Prefix.
+  /** Starting a command that runs beside the turn, and reading its first second of output. */
+  "shell_start",
+  /** Reading what a background shell has printed since the last read, or its tail. */
+  "shell_output",
+  /** Ending a background shell. */
+  "shell_kill",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];
