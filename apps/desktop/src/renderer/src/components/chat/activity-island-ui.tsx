@@ -66,6 +66,7 @@ import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleIcon,
+  ProhibitIcon,
   EyeIcon,
   GlobeSimpleIcon,
   type Icon as PhosphorIcon,
@@ -786,6 +787,15 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               leading={
                 state === "done" ? (
                   <CheckCircleIcon weight="fill" className="size-3.5 shrink-0 text-primary" />
+                ) : state === "cancelled" ? (
+                  // A step the model decided against (VC-6). Its own glyph,
+                  // because the two it could have borrowed both lie: an empty
+                  // circle reads as work still to come, and a tick reads as
+                  // work that happened.
+                  <ProhibitIcon
+                    weight="regular"
+                    className="size-3.5 shrink-0 text-muted-foreground/50"
+                  />
                 ) : (
                   <CircleIcon
                     weight={state === "current" ? "bold" : "regular"}
@@ -801,13 +811,21 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
                   className={cn(
                     "min-w-0 truncate text-ui",
                     state === "done" && "text-muted-foreground line-through",
+                    // Struck through like a done step, but dimmed further and
+                    // never emphasised: the strike says "not on the list any
+                    // more", the dimming says it was not finished.
+                    state === "cancelled" && "text-muted-foreground/60 line-through",
                     state === "current" && "font-medium",
                   )}
                 >
                   {step.title}
                 </span>
               }
-              primaryTrailing={<RowState>{state === "current" ? "now" : null}</RowState>}
+              primaryTrailing={
+                <RowState>
+                  {state === "current" ? "now" : state === "cancelled" ? "dropped" : null}
+                </RowState>
+              }
               onActivate={() => actions.jumpStep(step.id)}
             />
           );

@@ -76,6 +76,17 @@ export interface TabSnapshot {
   truncated: boolean;
 }
 
+/**
+ * What one action touched (VC-238): the ref the model named and the accessible
+ * name the last snapshot printed for it, so the transcript can read
+ * `Clicked "Sign in"`. Null for page-level actions — press, scroll, wait —
+ * which have no element. The name is page content; the row falls back to the
+ * ref when the page gave the element none.
+ */
+export interface TabActResult {
+  target: { ref: string; name: string | null } | null;
+}
+
 /** Bounds a caller may narrow but not remove. */
 export interface ControllerLimits {
   maxSnapshotChars?: number;
@@ -160,6 +171,7 @@ export class BrowserTabController {
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
   #refs: ReadonlyMap<string, number> = new Map();
+  #names: ReadonlyMap<string, string> = new Map();
   #snapshotGeneration = -1;
   #nextRef = 1;
 
@@ -268,6 +280,7 @@ export class BrowserTabController {
     if (generation <= this.#generation) return;
     this.#generation = generation;
     this.#refs = new Map();
+    this.#names = new Map();
     this.#snapshotGeneration = -1;
     this.#nextRef = 1;
   }
@@ -279,6 +292,7 @@ export class BrowserTabController {
   dispose(): void {
     this.#disposeTransport?.();
     this.#refs = new Map();
+    this.#names = new Map();
     this.#snapshotGeneration = -1;
   }
 
@@ -293,6 +307,7 @@ export class BrowserTabController {
       refStart: this.#nextRef,
     });
     this.#refs = printed.refs;
+    this.#names = printed.names;
     this.#snapshotGeneration = this.#generation;
     this.#nextRef = printed.nextRef;
     return { text: printed.text, generation: this.#generation, truncated: printed.truncated };
@@ -304,7 +319,7 @@ export class BrowserTabController {
    * must have been minted by the snapshot of that generation. Both refuse
    * before any input is dispatched.
    */
-  async act(request: TabActRequest, signal?: AbortSignal): Promise<void> {
+  async act(request: TabActRequest, signal?: AbortSignal): Promise<TabActResult> {
     signal?.throwIfAborted();
     if (request.generation !== this.#generation || this.#snapshotGeneration !== this.#generation) {
       throw new BrowserRefusal(
@@ -312,6 +327,15 @@ export class BrowserTabController {
         `The tab is at generation ${this.#generation}, and refs from generation ${request.generation} no longer name what the page shows: take a fresh snapshot.`,
       );
     }
+    await this.#perform(request, signal);
+    // Resolved AFTER the action so a refused ref reports nothing; the maps are
+    // untouched by acting, so the name is the one the model was shown.
+    const ref = request.ref;
+    if (ref === undefined || !this.#refs.has(ref)) return { target: null };
+    return { target: { ref, name: this.#names.get(ref) ?? null } };
+  }
+
+  async #perform(request: TabActRequest, signal?: AbortSignal): Promise<void> {
     switch (request.kind) {
       case "click":
         return this.#pointer(this.#resolve(request.ref), "click", signal);

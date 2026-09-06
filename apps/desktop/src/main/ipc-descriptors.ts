@@ -278,6 +278,19 @@ export const BROWSER_IPC: {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-set-presentation": {
+    guard: (args): args is IpcArgs<"volli:browser-set-presentation"> => {
+      if (!isBrowserTabIdArgs(args)) return false;
+      const presentation = (args[0] as Record<string, unknown>)["presentation"];
+      return presentation === "headless" || presentation === "preview" || presentation === "tab";
+    },
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-picture": {
+    guard: (args): args is IpcArgs<"volli:browser-picture"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["pictureId"] === "string",
+    invalidError: "Invalid Browser Tab request",
+  },
   "volli:browser-take-over": {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",

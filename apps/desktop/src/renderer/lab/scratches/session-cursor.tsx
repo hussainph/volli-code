@@ -166,6 +166,10 @@ function tabState(tab: LabTab): BrowserTabState {
     projectId: "prj-voltaic",
     ticketId: "tkt-14",
     createdBy: "session",
+    // A cursor scratch is about a tab a person can see, so the fixture is a
+    // Session's tab the person promoted into the strip (VC-238).
+    ownerSessionId: "session-fixture",
+    presentation: "tab",
     url: tab.url,
     title: tab.label,
     loading: false,

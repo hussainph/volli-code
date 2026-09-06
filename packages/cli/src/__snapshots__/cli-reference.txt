@@ -667,14 +667,18 @@ Options:
 
 Effects:
 - Durable write: Append a completed done signal command and receipt to the current Session ledger.
+- Durable write: Create one attributed Ticket comment holding this Session's final todo list, when it kept one and belongs to a Ticket.
 - Human sees: The done signal and optional reason appear in the Session's durable history.
+- Human sees: The Session's final todo list appears in the Ticket activity feed.
 - Does not: No Ticket moves, the Session identity remains openable, and its worktree is not removed.
+- Does not: No comment is written for a Board Session or for one that kept no todo list.
 
 Example: volli session done --reason "Tests pass"
 
 Notes:
 - Acts on VOLLI_SESSION; needs a Volli session.
 - Records the signal in the session ledger; the board does not move. Use ticket move for that.
+- Leaves this session's last todo list on the ticket as a comment, when it kept one.
 
 ============================================================================
 volli help session blocked
@@ -692,14 +696,18 @@ Options:
 
 Effects:
 - Durable write: Append a completed blocked signal command and receipt to the current Session ledger.
+- Durable write: Create one attributed Ticket comment holding this Session's unfinished todo list, when it kept one and belongs to a Ticket.
 - Human sees: The Session raises attention in the app and shows the optional reason.
+- Human sees: The Session's todo list as it stood appears in the Ticket activity feed.
 - Does not: No Ticket moves, and the Session is not archived or deleted.
+- Does not: No comment is written for a Board Session or for one that kept no todo list.
 
 Example: volli session blocked --reason "Needs credentials"
 
 Notes:
 - Acts on VOLLI_SESSION; needs a Volli session.
 - Raises attention on this session; --reason is the text a person sees.
+- Leaves this session's last todo list on the ticket as a comment, when it kept one.
 
 ============================================================================
 volli help session link
@@ -964,6 +972,18 @@ Bundle identity
   Build id: reference-fixture
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
+
+VC-6 (after VC-185)
+Added
+- todo_write — a named tool for keeping this Session's todo list. Each call REPLACES the whole list, so send every item every time, including the ones already finished. It takes a status per item (pending, in_progress, completed, cancelled), which means work may be finished out of order and a step may be dropped rather than deleted.
+- The tool answers with the whole list rather than an acknowledgement. That is deliberate: compaction drops older tool calls out of what the model sees, and the newest result is the copy of the plan that survives it.
+- A person watching the Session sees the list live, above the composer. It is for them and for the ticket record — not a thinking aid, so a list that is written once and never updated is worse than no list at all.
+Changed
+- session done and session blocked now leave this Session's last todo list on its Ticket as one attributed comment, when it kept a list and belongs to a Ticket. Their registry effects and --dry-run preview say so. Neither verb moves the board; a comment is a record, not a state change.
+Fixed
+- None in this record.
+Removed
+- None in this record.
 
 VC-185 (after VC-178)
 Added

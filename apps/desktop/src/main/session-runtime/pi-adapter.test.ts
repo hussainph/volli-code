@@ -759,7 +759,9 @@ describe("Pi native adapter attach", () => {
 
     // The scope is the adapter's word, from the Session's own context — never
     // a value the model or the port could invent. The Session and attachment
-    // ride with it (VC-239): a hold is taken in that name and judged against it.
+    // ride with it: a hold is taken in that name and judged against it
+    // (VC-239), and the same Session id is the owner every tab the port opens
+    // is stamped with (VC-238).
     expect(scopes).toEqual([
       {
         projectId: "project-1",
@@ -1111,6 +1113,32 @@ describe("Pi native adapter attach", () => {
         request: { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "tc-0" },
       },
     ]);
+  });
+
+  it("names todo_write in the bundle exactly when the frozen surface holds it (VC-6)", async () => {
+    // Membership is the bundle's to state because the tool has no port. It is
+    // read back off the durable record like the verb half, never re-derived:
+    // a Session frozen before VC-6 must keep the tool array it recorded.
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "todo_write"],
+      }),
+    });
+
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      todoWrite: true,
+    });
+  });
+
+  it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
+    // Absent, not `false`: the attachment refuses a derived tool array that
+    // disagrees with the record, so this is the assertion standing between an
+    // older Session and a refused reattachment.
+    const { runtime } = await attached({});
+
+    expect("todoWrite" in runtime.spec.tools).toBe(false);
   });
 
   it("omits the verb half entirely for a Session whose Role carries none", async () => {

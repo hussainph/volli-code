@@ -41,7 +41,7 @@ export {
   type ExtractedDocument,
   type WebExtractLimits,
 } from "./web/extract";
-export { BrowserRefusal } from "./browser/refusal";
+export { BrowserRefusal, type BrowserRefusalPage } from "./browser/refusal";
 export { BROWSER_TOOL_NAMES, type BrowserToolId } from "./pi/browser-tools";
 export { ShellRefusal } from "./shell/refusal";
 export {

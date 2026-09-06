@@ -61,10 +61,31 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
+      "volli:browser-set-presentation",
+      "volli:browser-picture",
       "volli:browser-take-over",
       "volli:browser-hand-back",
       "volli:browser-ask-to-leave",
     ]);
+  });
+
+  it("accepts one of the three presentations for an opaque tab, and nothing the renderer invents (VC-238)", () => {
+    const { guard } = BROWSER_IPC["volli:browser-set-presentation"];
+    for (const presentation of ["headless", "preview", "tab"]) {
+      expect(guard([{ tabId: "opaque-1", presentation }])).toBe(true);
+    }
+    expect(guard([{ tabId: "opaque-1", presentation: "visible" }])).toBe(false);
+    expect(guard([{ tabId: "opaque-1" }])).toBe(false);
+    expect(guard([{ tabId: 1, presentation: "tab" }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one opaque picture id for a picture read", () => {
+    const { guard } = BROWSER_IPC["volli:browser-picture"];
+    expect(guard([{ pictureId: "picture-1" }])).toBe(true);
+    expect(guard([{ pictureId: 1 }])).toBe(false);
+    expect(guard([{}])).toBe(false);
+    expect(guard([])).toBe(false);
   });
 
   it("accepts a scoped HTTP(S)-shaped open request and rejects malformed fields", () => {

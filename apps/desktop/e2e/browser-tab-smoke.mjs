@@ -766,7 +766,15 @@ async function main() {
           const view = await cursorViewOver(app, secondUrl);
           return view !== null && view.cursor.width > 60 ? view.cursor : null;
         },
-        { timeout: 1500 },
+        // What this waits on is a renderer BOOT: the overlay's page is built
+        // lazily by the first draw, and only once it is listening can it be
+        // told to show the label and report the size that proves it. A dev Mac
+        // does that inside the label's own pin and a loaded CI runner takes
+        // seconds, so the old 1.5s bound failed on CI for every branch. The
+        // pin now runs from when the page can first draw (cursor-overlay.ts),
+        // which makes the label certain; this bound only has to outlast a slow
+        // boot.
+        { timeout: 15000 },
       ).catch(() => null);
 
       const beta = await sessionWrite(app, "b", secondUrl);

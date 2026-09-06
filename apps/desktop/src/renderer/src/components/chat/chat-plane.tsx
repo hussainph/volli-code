@@ -139,6 +139,27 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { useShallow } from "zustand/react/shallow";
+
+import type { BrowserTabState } from "../../../../ipc/contract";
+import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { BrowserPreview } from "@renderer/components/browser/browser-preview";
+import {
+  BrowserCardHostContext,
+  type BrowserCardHost,
+} from "@renderer/components/browser/browser-tab-card";
+import { BrowserTabsChip } from "@renderer/components/browser/browser-tabs-chip";
+import {
+  browserTabOwnerLabel,
+  previewedBrowserTab,
+  sessionBrowserTabs,
+  useBrowserTabsStore,
+} from "@renderer/stores/browser-tabs";
+import {
+  childSessionIds,
+  sessionTitleOf,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -211,6 +232,12 @@ export interface ChatPlaneProps {
   /** Project scope for Model Access and file navigation. */
   projectId: string;
   /**
+   * Whether the surface around this chat is on screen. Only the pinned
+   * Browser preview reads it (VC-238): a native view ignores the CSS that
+   * stands the rest of the plane down, so it has to be told. Default true.
+   */
+  visible?: boolean;
+  /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
    * The Session's SCOPE, handed down rather than looked up: both hosts already
@@ -238,8 +265,10 @@ export function ChatPlane({
   onOpenFile,
   onOpenSession,
   store,
+  visible: surfaceVisible = true,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
+  const browser = useChatBrowserTabs(sessionId, projectId);
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
@@ -1029,65 +1058,113 @@ export function ChatPlane({
   // whole window and therefore misses a short top/bottom split.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col [container-type:size]" style={planeStyle}>
-      <FileMentionProvider onOpenFile={onOpenFile}>
-        <Conversation className="min-h-0 bg-background">
-          {/* The bottom padding clears the composer plus the h-16 gradient over
+      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
+        <FileMentionProvider onOpenFile={onOpenFile}>
+          <Conversation className="min-h-0 bg-background">
+            {/* The chat has no header, so the inventory of the tabs its
+                Sessions hold floats at the TRANSCRIPT's top-right corner
+                (VC-238 §8); absent while there is nothing to count.
+
+                Inside the Conversation rather than over the whole plane, and
+                that is load-bearing: the pinned preview sits below the
+                transcript in flow, so a chip positioned against the plane
+                came down over the preview's own header on a short window and
+                swallowed the clicks meant for its Hide button. Bounded to
+                the scroller, the two can never overlap however short the
+                plane gets. */}
+            {browser !== null && browser.tabs.length > 0 ? (
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end px-3 pt-2">
+                <BrowserTabsChip
+                  className="pointer-events-auto bg-background/70 shadow-raised backdrop-blur-md"
+                  tabs={browser.tabs}
+                  api={browser.api}
+                  sessionId={sessionId}
+                  sessionTitle={browser.sessionTitle}
+                />
+              </div>
+            ) : null}
+            {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-          <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-            {messages.length === 0 ? (
-              // Where this Session runs, drawn (VC-55). It replaces the bare
-              // mark that stood here — see `empty/chat-empty-state.tsx` for why
-              // that reversal is deliberate. What blocks TYPING still sits on
-              // the composer, where the typing is.
-              <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-              </ConversationEmptyState>
-            ) : (
-              <ContentColumn className={MESSAGE_GAP}>
-                {rows.map((row) =>
-                  row.kind === "compaction" ? (
-                    <CompactionBoundary
-                      key={`compaction:${row.compaction.sequence}`}
-                      compaction={row.compaction}
-                    />
-                  ) : row.kind === "reasoning-drop" ? (
-                    <ReasoningDropNotice
-                      key={`reasoning-drop:${row.drop.sequence}`}
-                      drop={row.drop}
-                    />
-                  ) : (
-                    <ChatTurn
-                      key={row.messages[0]?.id}
-                      messages={row.messages}
-                      context={turnContext}
-                      live={row.messages === liveTurn}
-                    />
-                  ),
-                )}
-                {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
-              </ContentColumn>
-            )}
-          </ConversationContent>
-          {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+            <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+              {messages.length === 0 ? (
+                // Where this Session runs, drawn (VC-55). It replaces the bare
+                // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                // that reversal is deliberate. What blocks TYPING still sits on
+                // the composer, where the typing is.
+                <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                  <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                </ConversationEmptyState>
+              ) : (
+                <ContentColumn className={MESSAGE_GAP}>
+                  {rows.map((row) =>
+                    row.kind === "compaction" ? (
+                      <CompactionBoundary
+                        key={`compaction:${row.compaction.sequence}`}
+                        compaction={row.compaction}
+                      />
+                    ) : row.kind === "reasoning-drop" ? (
+                      <ReasoningDropNotice
+                        key={`reasoning-drop:${row.drop.sequence}`}
+                        drop={row.drop}
+                      />
+                    ) : (
+                      <ChatTurn
+                        key={row.messages[0]?.id}
+                        messages={row.messages}
+                        context={turnContext}
+                        live={row.messages === liveTurn}
+                      />
+                    ),
+                  )}
+                  {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                  {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
+                </ContentColumn>
+              )}
+            </ConversationContent>
+            {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-            style={{ backgroundImage: COMPOSER_SCRIM }}
-          />
+            <div
+              className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+              style={{ backgroundImage: COMPOSER_SCRIM }}
+            />
 
-          {/* Glass, not a plug: this button only exists while the reader is
+            {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-          {messages.length > 0 ? (
-            <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-          ) : null}
-        </Conversation>
-      </FileMentionProvider>
+            {messages.length > 0 ? (
+              <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+            ) : null}
+          </Conversation>
+        </FileMentionProvider>
+      </BrowserCardHostContext.Provider>
+
+      {/* The tab a person asked to see (VC-238), IN FLOW between the transcript
+          and the composer rather than inside the composer's absolute block: a
+          native view cannot be clipped, so a pane too short for the block would
+          push the pinned page up behind whatever sits above this plane — in a
+          split, another pane's own native view — and its header with it. Here
+          the transcript shrinks to make room, the frame is bounded by the
+          plane's own height, and the composer's measured block still clears
+          the bottom. */}
+      {browser !== null && browser.preview !== null ? (
+        <div
+          className="flex min-h-0 shrink-0 flex-col"
+          style={{ marginBottom: "var(--composer-height)", maxHeight: "45%" }}
+        >
+          <ContentColumn className="flex min-h-0 flex-col">
+            <BrowserPreview
+              tab={browser.preview}
+              api={browser.api}
+              ownerLabel={browser.ownerLabel(browser.preview)}
+              visible={surfaceVisible}
+            />
+          </ContentColumn>
+        </div>
+      ) : null}
 
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the
@@ -1161,6 +1238,52 @@ export function ChatPlane({
       </div>
     </div>
   );
+}
+
+/* ------------------------------------------------------------ browser tabs */
+
+/**
+ * What this chat knows about the Browser Tabs its Sessions hold (VC-238): the
+ * inventory the chip counts, the one tab pinned as its preview, and the host
+ * a row's card needs to act. Null where there is no bridge — the UI lab — so
+ * every browser surface in the chat simply does not exist there.
+ *
+ * Children are read off the project listing's provenance, the same fact the
+ * sidebar's mark draws; a child's tabs count here because a parent that
+ * started a Session is answerable for the tabs it opened.
+ */
+function useChatBrowserTabs(
+  sessionId: string,
+  projectId: string,
+): {
+  api: BrowserApi;
+  tabs: BrowserTabState[];
+  preview: BrowserTabState | null;
+  sessionTitle(sessionId: string): string | null;
+  ownerLabel(tab: BrowserTabState): string;
+  cardHost: BrowserCardHost;
+} | null {
+  const api = typeof window === "undefined" ? undefined : window.api?.browser;
+  const rows = useProjectSessionsStore((state) => state.byProject[projectId]);
+  const children = React.useMemo(() => childSessionIds(rows, sessionId), [rows, sessionId]);
+  const tabs = useBrowserTabsStore(
+    useShallow((state) => sessionBrowserTabs(state.byId, sessionId, children)),
+  );
+  const preview = useBrowserTabsStore((state) => previewedBrowserTab(state.byId, sessionId));
+  const sessionTitle = React.useCallback((id: string) => sessionTitleOf(rows, id), [rows]);
+  const cardHost = React.useMemo(
+    () => (api === undefined ? null : { sessionId, api, sessionTitle }),
+    [api, sessionId, sessionTitle],
+  );
+  if (api === undefined || cardHost === null) return null;
+  return {
+    api,
+    tabs,
+    preview,
+    sessionTitle,
+    ownerLabel: (tab) => browserTabOwnerLabel(tab, sessionId, sessionTitle),
+    cardHost,
+  };
 }
 
 /* ------------------------------------------------------------ model access */

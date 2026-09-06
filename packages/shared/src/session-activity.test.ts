@@ -8,6 +8,7 @@ import {
   isActivityKind,
   isDurableActivity,
   isReadOnlyActivity,
+  readActivityBrowse,
   readActivityDescriptor,
   type ActivityDescriptor,
 } from "./session-activity";
@@ -252,6 +253,9 @@ describe("isReadOnlyActivity", () => {
     ["write-file", false],
     ["plan", false],
     ["delegate", false],
+    // Browsing clicks and types into pages: it acts, so it is a first-class
+    // row rather than one folded under a read count.
+    ["browse", false],
     ["other", false],
   ] as const)("reports %s as %s", (kind, expected) => {
     expect(isReadOnlyActivity(kind)).toBe(expected);
@@ -278,6 +282,7 @@ describe("isDurableActivity", () => {
     ["run-command", false],
     ["plan", false],
     ["delegate", false],
+    ["browse", false],
     ["other", false],
   ] as const)("reports %s as %s", (kind, expected) => {
     expect(isDurableActivity(kind)).toBe(expected);
@@ -291,6 +296,114 @@ describe("isDurableActivity", () => {
     const neither = ACTIVITY_KINDS.filter(
       (kind) => !isReadOnlyActivity(kind) && !isDurableActivity(kind),
     );
-    expect(neither).toEqual(["run-command", "plan", "delegate", "other"]);
+    expect(neither).toEqual(["run-command", "plan", "delegate", "browse", "other"]);
+  });
+});
+
+describe("readActivityDescriptor browse facet (VC-238)", () => {
+  it("reads what a browser action touched: the tab, the page, the target and the picture", () => {
+    expect(
+      readActivityDescriptor(
+        stamped({
+          kind: "browse",
+          nativeToolName: "browser_act",
+          subject: { label: "example.com/sign-in" },
+          browse: {
+            action: "click",
+            tabId: "tab-1",
+            url: "https://example.com/sign-in",
+            title: "Sign in",
+            target: "Sign in",
+            picture: "picture-7",
+            errorCount: null,
+            ownerSessionId: "s1",
+            error: "Could not load page: ERR_CONNECTION_REFUSED",
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "browse",
+      nativeToolName: "browser_act",
+      subject: {
+        label: "example.com/sign-in",
+        path: null,
+        lineRange: null,
+        agentName: null,
+        sessionId: null,
+      },
+      outcome: null,
+      startedAt: null,
+      endedAt: null,
+      browse: {
+        action: "click",
+        tabId: "tab-1",
+        url: "https://example.com/sign-in",
+        title: "Sign in",
+        target: "Sign in",
+        picture: "picture-7",
+        errorCount: null,
+        ownerSessionId: "s1",
+        // Volli's words for the tab's own trouble, so the row's glyph can
+        // disagree with a harness that called the call a success (§9).
+        error: "Could not load page: ERR_CONNECTION_REFUSED",
+        refusal: null,
+      },
+    });
+  });
+
+  it("nulls malformed facet fields, drops a facet with an unknown action, and omits the facet when absent", () => {
+    expect(
+      readActivityDescriptor(
+        stamped({
+          kind: "browse",
+          nativeToolName: "browser_console",
+          browse: { action: "console", tabId: 7, url: "", errorCount: 3, target: [] },
+        }),
+      )?.browse,
+    ).toEqual({
+      action: "console",
+      tabId: null,
+      url: null,
+      title: null,
+      target: null,
+      picture: null,
+      errorCount: 3,
+      ownerSessionId: null,
+      error: null,
+      refusal: null,
+    });
+    expect(
+      readActivityDescriptor(
+        stamped({ kind: "browse", nativeToolName: "x", browse: { action: "teleport" } }),
+      ),
+    ).not.toHaveProperty("browse");
+    expect(
+      readActivityDescriptor(stamped({ kind: "browse", nativeToolName: "x", browse: "click" })),
+    ).not.toHaveProperty("browse");
+    expect(
+      readActivityDescriptor(stamped({ kind: "read-file", nativeToolName: "read" })),
+    ).not.toHaveProperty("browse");
+  });
+
+  it("reads a bare facet the same way, for the adapter that stamps it from a tool's details", () => {
+    expect(readActivityBrowse({ action: "open", url: "https://example.com/" })).toEqual({
+      action: "open",
+      tabId: null,
+      url: "https://example.com/",
+      title: null,
+      target: null,
+      picture: null,
+      errorCount: null,
+      ownerSessionId: null,
+      error: null,
+      refusal: null,
+    });
+    expect(readActivityBrowse(undefined)).toBeNull();
+    expect(readActivityBrowse({ action: "click", refusal: "browser.stale-ref" })?.refusal).toBe(
+      "browser.stale-ref",
+    );
+    // A facet written before this build knew about `error` reads as healthy
+    // rather than failing the whole descriptor: tolerant on read.
+    expect(readActivityBrowse({ action: "click", error: 7 })?.error).toBeNull();
   });
 });

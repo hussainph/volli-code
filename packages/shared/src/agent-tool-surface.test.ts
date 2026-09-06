@@ -78,6 +78,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_console",
       "browser_acquire",
       "browser_release",
+      "todo_write",
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -120,6 +121,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_console",
       "browser_acquire",
       "browser_release",
+      "todo_write",
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -128,7 +130,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     ]);
   });
 
-  it("puts a Subagent Session in a room with every coding tool, no verb, and no way to ask a person (VC-9)", () => {
+  it("puts a Subagent Session in a room with every coding tool, no verb, no way to ask a person, and no todo list (VC-9, VC-6)", () => {
     expect(roleVerbBundle("subagent")).toEqual([]);
     const surface = resolveAgentToolSurface(capabilities({ role: "subagent" }));
     // Powerful where the work is: a subagent edits the tree it was handed.
@@ -142,6 +144,13 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // `askUser` port from being wired at all.
     expect(verbToolsOf(surface)).toEqual([]);
     expect(surface).not.toContain("ask_user");
+    // And no `todo_write` (VC-6), withheld on exactly `ask_user`'s ground: a
+    // todo list is read by a person watching live or by the Ticket comment the
+    // lifecycle signal leaves, and a subagent has neither reader. Withholding
+    // it is a Role decision recorded in `ROLE_CAPABILITY_POLICY`, so deleting
+    // the name there is the whole change when VC-269's peek overlay gives a
+    // child's plan someone to be read by.
+    expect(surface).not.toContain("todo_write");
     expect(surface).toEqual([
       "read",
       "edit",
@@ -155,6 +164,9 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      // The hold pair rides the same all-or-nothing membership as the six
+      // (VC-239): one port answers them all, so a Subagent that may browse
+      // may also take and give back a tab's hold.
       "browser_acquire",
       "browser_release",
       "shell_start",
