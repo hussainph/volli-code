@@ -678,7 +678,7 @@ export class ChatSessionClient {
       // person did type, which is a truer subject than `Chat 3` and is the same
       // name their retry would produce. Synchronous, before the `await`, so no
       // steer can interleave — and so the promise above is never left floating.
-      this.#autoTitle(body, attachments);
+      this.#autoTitle(message, body, attachments);
       const delivered = await deliveryResult;
       // A harness that cannot take a message says so in its receipt rather than
       // by throwing, and that receipt is the failure. It is also proof the
@@ -1027,10 +1027,11 @@ export class ChatSessionClient {
   }
 
   /**
-   * Retitles this Session from the first message it starts delivering, if
-   * nothing has named it yet. A non-null title was explicitly set by a person,
-   * including one that happens to read `Chat 1`, so automatic naming never
-   * replaces it.
+   * Retitles this Session from the first message it starts delivering. A
+   * normal chat must still be untitled; a composed start may instead carry the
+   * exact fallback it seeded at birth. Every other non-null title was explicitly
+   * set by a person, including one that happens to read `Chat 1`, so automatic
+   * naming never replaces it.
    *
    * The rename carries the first user message with it (VC-81), which asks
    * main to derive a sharper title behind this write with one model call.
@@ -1038,9 +1039,15 @@ export class ChatSessionClient {
    * rename during the call wins; an unavailable model or a refusal simply
    * leaves the heuristic name that is already on screen.
    */
-  #autoTitle(body: string, attachments: readonly BlobLinkView[]): void {
+  #autoTitle(message: QueuedMessage, body: string, attachments: readonly BlobLinkView[]): void {
     const title = this.#slice()?.projection?.session.title ?? null;
-    if (!isUntitledChatSession(title)) return;
+    const seededBaseline = message.autoTitleBaseline;
+    // A normal chat has no title. A composed start is the one exception: its
+    // stock kickoff cannot produce a useful local title, so it is born with a
+    // deterministic fallback and carries that exact value on this opening
+    // message. Equality is the guard — if a person renamed before delivery,
+    // the message no longer owns the title and the model gets no call.
+    if (!isUntitledChatSession(title) && title !== seededBaseline) return;
     // `body` can now be empty: a message that is nothing but an attachment is
     // a real message (VC-50), and it has no words to name itself with. The
     // file's label is the only honest subject in that case — "shot.png" says
@@ -1049,7 +1056,7 @@ export class ChatSessionClient {
     // text AND no attachments, and a label is never empty at rest (the
     // `blob_links` CHECK). Returning rather than asserting anyway: a Session's
     // name is not worth a throw if that invariant ever moves.
-    const subject = autoTitleFromMessage(body) ?? attachments[0]?.label;
+    const subject = seededBaseline ?? autoTitleFromMessage(body) ?? attachments[0]?.label;
     /* v8 ignore next -- submit refuses a message with neither text nor attachments */
     if (subject === undefined) return;
     // The model reads the same first user message the heuristic read: the body

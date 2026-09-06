@@ -19,6 +19,8 @@ const TICKET: AutoTitleTicket = {
   body: "Anonymous search is unmetered and one scraper can saturate it.",
 };
 
+const AUTOMATION = { name: "Two-opinion review" };
+
 const UTILITY: ModelSelection = { providerId: "openai", modelId: "luna", reasoningLevel: "off" };
 const SESSION: ModelSelection = {
   providerId: "anthropic",
@@ -87,7 +89,7 @@ describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
     const titles = AUTO_TITLE_SYSTEM_PROMPT.split("\n")
       .filter((line) => line.includes(" -> "))
       .map((line) => line.split(" -> ")[1]);
-    expect(titles).toHaveLength(5);
+    expect(titles).toHaveLength(6);
     for (const title of titles) {
       expect(sanitizeAutoTitle(title)).toBe(title);
     }
@@ -111,6 +113,15 @@ describe("AUTO_TITLE_SYSTEM_PROMPT", () => {
     );
     expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(
       '"start with the redis counter, ignore the rest" -> Redis counter for rate limits',
+    );
+  });
+
+  it("makes a Ticket the distinguishing subject for reusable Automation Instructions", () => {
+    expect(prompt).toContain("automation instructions are different");
+    expect(prompt).toContain("run unchanged on many tickets");
+    expect(prompt).toContain("ticket's concrete subject");
+    expect(AUTO_TITLE_SYSTEM_PROMPT).toContain(
+      'automation "Two-opinion review" Instructions "review this change from two perspectives" + ticket VC-52 "Rate limit the public search endpoint" -> Review search rate limiting',
     );
   });
 });
@@ -191,6 +202,37 @@ describe("autoTitlePrompt", () => {
     });
     expect(prompt).toContain("y".repeat(AUTO_TITLE_MAX_TICKET_CHARS));
     expect(prompt).not.toContain("y".repeat(AUTO_TITLE_MAX_TICKET_CHARS + 1));
+  });
+
+  it("delimits standing Automation Instructions separately from a conversation", () => {
+    expect(autoTitlePrompt("Review this change", TICKET, AUTOMATION)).toBe(
+      [
+        '<ticket id="VC-52">',
+        "Rate limit the public search endpoint",
+        "",
+        "Anonymous search is unmetered and one scraper can saturate it.",
+        "</ticket>",
+        '<automation-instructions name="Two-opinion review">',
+        "Review this change",
+        "</automation-instructions>",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a project Automation identifiable without inventing a Ticket", () => {
+    expect(autoTitlePrompt("Sweep stale branches", null, AUTOMATION)).toBe(
+      [
+        '<automation-instructions name="Two-opinion review">',
+        "Sweep stale branches",
+        "</automation-instructions>",
+      ].join("\n"),
+    );
+  });
+
+  it("escapes a user-authored Automation name inside delimiter metadata", () => {
+    expect(autoTitlePrompt("Review", null, { name: 'A & B <review> "nightly"' })).toContain(
+      'name="A &amp; B &lt;review&gt; &quot;nightly&quot;"',
+    );
   });
 
   it("sends the message alone for a project chat, which is work on no ticket", () => {

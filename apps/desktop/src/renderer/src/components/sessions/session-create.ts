@@ -293,9 +293,9 @@ export interface ChatBoot {
   skills?: readonly string[];
   /**
    * The Session's durable title at birth. Chats normally start `null` and are
-   * named by their first delivered message; a kickoff names itself up front,
-   * because the message it is about to deliver is a stock instruction and
-   * "Begin work on this ticket…" is not what the rail should call it.
+   * named by their first delivered message; a kickoff needs a useful fallback
+   * up front because its stock instruction says nothing about the work. The
+   * kickoff can still mark that fallback as eligible for model refinement.
    */
   title?: string | null;
   /**
@@ -427,6 +427,11 @@ export interface TicketChatStart {
   skills?: readonly string[];
   /** A durable title at birth, for a Session whose first message will not name it well. */
   title?: string | null;
+  /**
+   * Lets the opening message refine that birth title. The title itself is the
+   * guard baseline, so an intervening human rename remains protected.
+   */
+  refineTitle?: true;
   /** The model policy to record; absent leaves the Ticket default. */
   model?: ModelSelection;
   /**
@@ -447,15 +452,16 @@ export interface TicketChatStart {
  *
  * A ticket chat normally starts untitled and silent: its first delivered
  * message names it, and that message is whatever the person types. A KICKOFF
- * (`title` + `message`) is the one caller that arrives with both already
- * decided — see {@link TicketChatStart}.
+ * (`title` + `message` + `refineTitle`) arrives with a durable fallback that
+ * its stock opening message is explicitly allowed to refine — see
+ * {@link TicketChatStart}.
  *
  * Resolves the Session's id, or null when the boot never landed.
  */
 export async function startTicketChat(
   projectId: string,
   ticketId: string,
-  { skills, title, model, message }: TicketChatStart = {},
+  { skills, title, refineTitle, model, message }: TicketChatStart = {},
 ): Promise<string | null> {
   const sessionId = await bootChatSession(ticketScope(projectId, ticketId), {
     skills,
@@ -478,7 +484,11 @@ export async function startTicketChat(
   // whose client was disposed, and an opening turn queued onto it would be
   // words nothing will ever release.
   if (sessionId !== null && message !== undefined) {
-    useChatSessionsStore.getState().enqueue(sessionId, { id: newMessageId(), text: message });
+    useChatSessionsStore.getState().enqueue(sessionId, {
+      id: newMessageId(),
+      text: message,
+      ...(refineTitle === true && typeof title === "string" ? { autoTitleBaseline: title } : {}),
+    });
   }
   return sessionId;
 }
