@@ -48,6 +48,7 @@ import {
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
+import { ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -321,16 +322,22 @@ function RuntimeFields({
             <CpuIcon />
             Project default
           </SelectItem>
+          {/* Model rows are the same drawing as the composer's picker and the
+              Settings rows: the mark, the name, the provider only where the
+              name alone is ambiguous. */}
           {unavailableValue === null || pin === null ? null : (
             <SelectItem value={unavailableValue}>
-              <CpuIcon />
-              {pin.providerId} · {pin.modelId}
+              <ModelName
+                model={{ providerId: pin.providerId, modelId: pin.modelId, label: pin.modelId }}
+                models={models}
+                providerLabel={pin.providerId}
+                alwaysProvider
+              />
             </SelectItem>
           )}
           {models.map((model) => (
             <SelectItem key={model.id} value={model.id}>
-              <CpuIcon />
-              {model.providerLabel} · {model.label}
+              <ModelName model={model} models={models} providerLabel={model.providerLabel} />
             </SelectItem>
           ))}
         </SelectContent>

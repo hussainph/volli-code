@@ -101,6 +101,7 @@ import {
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
+import { ModelMark } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -1324,14 +1325,34 @@ export function ModelPill({
           // full natural width and the effort chip dropped to a second line the
           // moment the two no longer fitted side by side at full size, which
           // measured as a 24px-taller composer at 420px while there was still
-          // room to simply truncate. `basis-22` is the 88px floor (a 56px label
-          // plus this button's own 32px of caret and padding), so the line only
-          // breaks once the NAME has already given everything it has; `grow`
-          // then spends whatever is left on the label, and `max-w-max` stops it
-          // spending more than the name is wide — a ghost button stretched to
-          // the full row is a hover target the size of the footer.
-          className="min-w-0 max-w-max shrink grow basis-22 text-muted-foreground"
+          // room to simply truncate. `basis-27` is the 108px floor (a 56px
+          // label, the 14px mark and its 4px gap, plus this button's own 32px
+          // of caret and padding), so the line only breaks once the NAME has
+          // already given everything it has; `grow` then spends whatever is
+          // left on the label, and `max-w-max` stops it spending more than the
+          // name is wide — a ghost button stretched to the full row is a hover
+          // target the size of the footer.
+          className="min-w-0 max-w-max shrink grow basis-27 text-muted-foreground"
         >
+          {/* The mark leads the name: a family the eye catches before the word
+              is read, and the one thing that survives the label truncating to
+              eight characters. A selection the list no longer holds still gets
+              one, read off its id — the mark is about WHAT the model is, and
+              that is known even when the account that served it is gone. */}
+          <ModelMark
+            model={
+              selectedModel(models, selection) ?? {
+                providerId: selection.providerId,
+                modelId: selection.modelId,
+                label: selection.modelId,
+              }
+            }
+            providerLabel={
+              selectedModel(models, selection)?.providerLabel ??
+              selectionProviderLabel ??
+              selection.providerId
+            }
+          />
           {/* THE GIVE HAS A FLOOR, and 3.5rem is where it is. This is the row's
               elastic member and it should be — a model name is the long value
               and the only one with anything to lose. What it was doing instead
@@ -1398,7 +1419,8 @@ export function ModelPill({
                           className={cn("size-3.5 shrink-0", !selected && "invisible")}
                           weight="bold"
                         />
-                        <span className="min-w-0 flex-1 truncate">{model.label}</span>
+                        <ModelMark model={model} providerLabel={model.providerLabel} />
+                        <span className="min-w-0 flex-1 truncate tabular-nums">{model.label}</span>
                       </PromptInputCommandItem>
                     );
                   })}
