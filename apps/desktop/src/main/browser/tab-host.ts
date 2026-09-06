@@ -490,6 +490,14 @@ export class BrowserTabHost {
         level: "error",
         text: `Browser Tab renderer stopped: ${details.reason}`,
       });
+      // The card and the strip read `error` (VC-238 §9); a crash that only
+      // reached the console would leave a tab looking healthy and blank. Volli's
+      // words, with Chromium's reason as the one fact worth carrying; the next
+      // navigation clears it like any other main-frame failure.
+      this.publish(entry, {
+        error: `The page stopped responding and its renderer exited (${details.reason}).`,
+        loading: false,
+      });
     });
     view.webContents.on("did-navigate", (_event, url) => this.publish(entry, { url }));
     view.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {

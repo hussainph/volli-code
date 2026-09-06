@@ -780,7 +780,9 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         ) : null}
         {paneBrowserTab !== undefined ? (
           // The native view is attached over this cell's own rectangle, and the
-          // main-process host shows any number of tabs at once (tab-host), so
+          // main-process host attaches any number of tabs at once (tab-host,
+          // one attachment per entry since VC-238 — before that it kept ONE
+          // slot and two browser panes in a split fought over it), so
           // one browser per pane composes exactly as files and chats do.
           // `visible` reaches the controller because a native view ignores the
           // CSS `hidden` that stands the rest of this plane down.

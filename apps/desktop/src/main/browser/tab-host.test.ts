@@ -499,6 +499,29 @@ describe("BrowserTabHost state", () => {
     expect(record.truncated).toBe(true);
   });
 
+  it("publishes a crashed page renderer as the tab's error, in Volli's words, until the next navigation", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+    views[0]!.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+
+    expect(published.at(-1)).toMatchObject({
+      tabId: tab.tabId,
+      error: "The page stopped responding and its renderer exited (crashed).",
+      loading: false,
+    });
+    // The console keeps the evidence for the model's next read too.
+    expect(host.consoleOf(tab.tabId).messages.at(-1)?.text).toContain("crashed");
+
+    host.navigate(tab.tabId, "https://example.com/again");
+    expect(published.at(-1)).toMatchObject({ error: null });
+  });
+
   it("does not surface Chromium aborting an older load for a newer navigation", () => {
     host.open({
       url: "https://example.com",

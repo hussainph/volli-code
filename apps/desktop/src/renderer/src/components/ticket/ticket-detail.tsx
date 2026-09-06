@@ -1375,7 +1375,7 @@ export function TicketDetail({
           ) : null}
           {paneBrowserTab !== undefined ? (
             // The native view is attached over this cell's own rectangle, and
-            // the main-process host shows any number of tabs at once
+            // the main-process host attaches any number of tabs at once (VC-238)
             // (tab-host), so one browser per pane composes exactly as files
             // and chats do.
             <BrowserPane
