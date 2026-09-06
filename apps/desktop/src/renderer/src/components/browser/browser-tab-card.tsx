@@ -123,7 +123,9 @@ export function BrowserTabCard({
 
   const title = live !== undefined ? browserTabDisplayTitle(live) : facet.title;
   const url = displayUrl(live?.url ?? facet.url);
-  // The live record while the tab exists; the transcript's own memory after.
+  // The live record while the tab exists; the transcript's own memory after —
+  // which the port stamps into the facet, so a closed agent tab still reads as
+  // the Session's rather than falling back to the person's.
   const owner =
     host === null
       ? null
@@ -235,24 +237,23 @@ export function BrowserTabCard({
   );
 }
 
-/** Live: loading, a load failure, or nothing. Gone: the one fact that outranks the rest. */
+/**
+ * Live: loading, a load failure, or nothing. Gone: that it is gone, and still
+ * whatever went wrong while it was here — the transcript is durable and the
+ * tab is not, so a page that failed to load must not become a clean row the
+ * moment the tab closes (§9).
+ */
 function TabStatus({ live, facet }: { live: BrowserTabState | undefined; facet: ActivityBrowse }) {
   if (live === undefined) {
-    return facet.tabId === null ? null : (
-      <span className="shrink-0 text-muted-foreground">Tab closed</span>
-    );
-  }
-  if (live.error !== null) {
+    if (facet.tabId === null) return null;
     return (
-      <span
-        className="flex min-w-0 shrink-0 items-center gap-1 text-destructive"
-        title={live.error}
-      >
-        <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
-        <span className="max-w-48 truncate">{live.error}</span>
+      <span className="flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground">
+        {facet.error === null ? null : <PageError error={facet.error} />}
+        <span className="shrink-0">Tab closed</span>
       </span>
     );
   }
+  if (live.error !== null) return <PageError error={live.error} />;
   if (live.loading) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
@@ -262,6 +263,16 @@ function TabStatus({ live, facet }: { live: BrowserTabState | undefined; facet: 
     );
   }
   return null;
+}
+
+/** The page's trouble in Volli's words — the host wrote this string, never the page. */
+function PageError({ error }: { error: string }) {
+  return (
+    <span className="flex min-w-0 shrink-0 items-center gap-1 text-destructive" title={error}>
+      <WarningCircleIcon aria-hidden weight="fill" className="size-3.5 shrink-0" />
+      <span className="max-w-48 truncate">{error}</span>
+    </span>
+  );
 }
 
 function Picture({ state }: { state: PictureState }) {

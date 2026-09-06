@@ -244,6 +244,7 @@ const KIND_ROWS: Record<ActivityKind, DynamicToolUIPart> = {
         picture: null,
         errorCount: null,
         ownerSessionId: "session-fixture",
+        error: null,
         refusal: null,
       },
     }),

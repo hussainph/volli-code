@@ -107,7 +107,9 @@ export function mapPiActivity(
           ? readField(rawEvent, "result")
           : null;
     const input = normalizeInput(sourceInput);
-    const output = normalizeActivityValue(withoutImageBytes(sourceOutput));
+    const output = normalizeActivityValue(
+      toolName in BROWSER_TOOL_ACTION ? withoutImageBytes(sourceOutput) : sourceOutput,
+    );
     const startedAt =
       type === "tool_execution_start"
         ? timestampOf(readField(rawContext, "observedAt"))
@@ -251,6 +253,7 @@ function browseFacet(
     picture: null,
     errorCount: null,
     ownerSessionId: null,
+    error: null,
     refusal: null,
   };
 }
@@ -297,10 +300,15 @@ export function displayUrl(url: string | null): string | null {
 }
 
 /**
- * A tool result with its image blocks' bytes removed, before the value bound
- * ever sees them. A screenshot is ~100 KB of base64 against a 32 KB string
- * bound: kept, it would be cut mid-string and shown to nobody; the host holds
- * the real picture and the facet names it.
+ * A BROWSER tool result with its image blocks' bytes removed, before the value
+ * bound ever sees them. A screenshot is ~100 KB of base64 against a 32 KB
+ * string bound: kept, it would be cut mid-string and shown to nobody; the host
+ * holds the real picture and the facet names it.
+ *
+ * Only browser tools, deliberately. This slice built the picture path for
+ * `browser_screenshot` alone, and stripping every tool's image blocks would
+ * silently change what an unrelated tool's activity payload carries with
+ * nothing standing in for the bytes — a loss where here it is a substitution.
  */
 function withoutImageBytes(rawOutput: unknown): unknown {
   const result = recordOf(rawOutput);

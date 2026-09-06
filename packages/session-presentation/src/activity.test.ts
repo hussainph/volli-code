@@ -1113,6 +1113,7 @@ describe("browse presenter", () => {
           picture: null,
           errorCount: null,
           ownerSessionId: "s1",
+          error: null,
           refusal: null,
           ...patch,
         },
@@ -1190,6 +1191,7 @@ describe("browse presenter", () => {
             picture: null,
             errorCount: null,
             ownerSessionId: null,
+            error: null,
             refusal: null,
           },
         },
@@ -1229,6 +1231,8 @@ describe("browse presenter", () => {
       object: "e5",
       meta: "refused",
       metaTone: "danger",
+      // A refusal is a result to the harness; the row says otherwise (§9).
+      status: "failed",
     });
     expect(
       describeActivity(browse("open", { refusal: "browser.session-tab-limit" })),
@@ -1238,11 +1242,61 @@ describe("browse presenter", () => {
     });
   });
 
-  it("counts browsing in the bundle summary like any other kind", () => {
+  it("names the page a browse bundle touched, not how many calls it took (§3)", () => {
+    // Ten acts on one sign-in form are one page's worth of work; `Browsed 10
+    // times` was a header that made you open the bundle to learn anything.
     const rows = bundleOf(
-      segmentMessageParts([browse("open"), browse("click"), browse("click")], "m1"),
+      segmentMessageParts(
+        [browse("open"), ...Array.from({ length: 9 }, () => browse("click"))],
+        "m1",
+      ),
     );
-    expect(summaryText(rows)).toEqual(["Browsed 3 times"]);
+    expect(summaryText(rows)).toEqual(["Browsed example.com/sign-in"]);
+  });
+
+  it("names up to three pages, then counts pages rather than calls", () => {
+    const page = (label: string) => browse("open", {}, label);
+    expect(
+      summaryText(bundleOf(segmentMessageParts([page("a.example"), page("b.example")], "m1"))),
+    ).toEqual(["Browsed a.example and b.example"]);
+    expect(
+      summaryText(
+        bundleOf(
+          segmentMessageParts(
+            [page("a.example"), page("b.example"), page("c.example"), page("d.example")],
+            "m2",
+          ),
+        ),
+      ),
+    ).toEqual(["Browsed 4 pages"]);
+  });
+
+  it("falls back to counting calls only when no page is known at all", () => {
+    const listing = browse("tabs", { url: null }, null);
+    expect(summaryText(bundleOf(segmentMessageParts([listing], "m0")))).toEqual(["Browsed 1 time"]);
+    expect(summaryText(bundleOf(segmentMessageParts([listing, listing], "m1")))).toEqual([
+      "Browsed 2 times",
+    ]);
+  });
+
+  it("fails the row's glyph for a page that would not load, which the harness called a success", () => {
+    const broken = describeActivity(
+      browse("open", { error: "Could not load page: ERR_NAME_NOT_RESOLVED" }),
+    );
+
+    expect(broken).toMatchObject({
+      status: "failed",
+      meta: "did not load",
+      metaTone: "danger",
+    });
+    // A refusal still outranks it: nothing happened at all.
+    expect(
+      describeActivity(
+        browse("click", { refusal: "browser.stale-ref", error: "Could not load page: boom" }),
+      ),
+    ).toMatchObject({ status: "failed", meta: "refused" });
+    // And a healthy page is still a plain success.
+    expect(describeActivity(browse("open")).status).toBe("done");
   });
 });
 

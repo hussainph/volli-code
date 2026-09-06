@@ -427,14 +427,13 @@ export const ToolRow = React.memo(function ToolRow({
   // printed. Other rows only need a disclosure when their presenter has detail.
   const expandable = row.detail !== null || row.command !== null || card !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
-  // A refusal is a result to the harness, so `status` says done; the glyph
-  // says what the person needs to know, which is that nothing happened.
-  const status = row.browse !== null && row.browse.refusal !== null ? "failed" : row.status;
 
   return (
     <div className={cn("group/row not-prose", className)}>
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
-        <RowGlyph kind={row.kind} status={status} />
+        {/* A refused call and a page that would not load are both successes to
+            the harness; `describeActivity` is what makes the glyph disagree. */}
+        <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
         {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />

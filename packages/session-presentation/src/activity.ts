@@ -318,6 +318,8 @@ const KIND_PHRASES: Record<ActivityKind, KindPhrase> = {
   "fetch-url": { past: "fetched", present: "fetching", one: "page", many: "pages" },
   plan: { past: "planned", present: "planning", one: "plan", many: "plans" },
   delegate: { past: "delegated", present: "delegating", one: "task", many: "tasks" },
+  // `time`/`times` is the fallback only: a browse bundle counts the PAGES it
+  // touched, and reaches these words only when it knows none. See browsePhrase.
   browse: { past: "browsed", present: "browsing", one: "time", many: "times" },
   other: { past: "used", present: "using", one: "tool", many: "tools" },
 };
@@ -389,11 +391,42 @@ export function bundleSummary(rows: readonly BundleRow[]): SummarySegment[] {
 function kindPhrase(kind: ActivityKind, parts: readonly DynamicToolUIPart[]): string {
   const phrase = KIND_PHRASES[kind];
   const verb = parts.some(isRowActive) ? phrase.present : phrase.past;
+  if (kind === "browse") return browsePhrase(verb, phrase, parts);
   if (isDurableActivity(kind) && parts.length <= NAMED_SUBJECT_LIMIT) {
     const names = parts.map(subjectName).filter((name): name is string => name !== null);
     if (names.length === parts.length && names.length > 0) return `${verb} ${joinNames(names)}`;
   }
   return `${verb} ${parts.length} ${parts.length === 1 ? phrase.one : phrase.many}`;
+}
+
+/**
+ * A browse bundle names the PAGES it touched, not how many calls it took
+ * (VC-238 §3): ten acts on one sign-in form are one page's worth of work, and
+ * `browsed 10 times` says nothing a person can use. Counting distinct pages is
+ * what makes the header behave like the file kinds' — `read 4 files` counts
+ * four files, not four reads.
+ *
+ * Falls back to counting calls only when no page is known at all, which is a
+ * bundle of `browser_tabs` listings or of calls refused before any tab was in
+ * hand.
+ */
+function browsePhrase(
+  verb: string,
+  phrase: KindPhrase,
+  parts: readonly DynamicToolUIPart[],
+): string {
+  const pages = [...new Set(parts.map(subjectLabel).filter((one): one is string => one !== null))];
+  if (pages.length === 0) {
+    return `${verb} ${parts.length} ${parts.length === 1 ? phrase.one : phrase.many}`;
+  }
+  if (pages.length <= NAMED_SUBJECT_LIMIT) return `${verb} ${joinNames(pages)}`;
+  return `${verb} ${pages.length} pages`;
+}
+
+/** The subject as the presenter set it — whole, since a page is not a path. */
+function subjectLabel(part: DynamicToolUIPart): string | null {
+  const label = activityDescriptor(part).subject.label;
+  return label === null || label.trim().length === 0 ? null : label;
 }
 
 /** Basename only: the phrase is a sentence, and a sentence with a path in it is not. */
@@ -693,7 +726,7 @@ function buildActivityRow(part: DynamicToolUIPart): ActivityRow {
   return {
     ...facts,
     kind: context.descriptor.kind,
-    status: context.status,
+    status: browseStatus(context),
     nativeToolName: context.descriptor.nativeToolName,
     command,
     errorText: context.errorText,
@@ -739,6 +772,19 @@ const ELEMENT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set([
 /** Actions whose object is what the model pressed or which way it scrolled. */
 const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", "scroll"]);
 
+/**
+ * What the row's glyph says (VC-238 §9). The harness calls both of these a
+ * success — a refusal is a result it was handed, and a navigation onto a page
+ * that fails to load still answers with a perfectly good snapshot — so
+ * without this the row would wear a tick over the two outcomes a person most
+ * needs to see. Only for `browse`, and only once the call has settled.
+ */
+function browseStatus(context: ActivityContext): ActivityStatus {
+  const facet = context.descriptor.browse ?? null;
+  if (facet === null || !isSettled(context.status)) return context.status;
+  return facet.refusal !== null || facet.error !== null ? "failed" : context.status;
+}
+
 function browseFacts(context: ActivityContext): ActivityFacts {
   const facet = context.descriptor.browse ?? null;
   if (facet === null) {
@@ -747,8 +793,12 @@ function browseFacts(context: ActivityContext): ActivityFacts {
   }
   const facts = browseActionFacts(context, facet);
   // A refusal outranks whatever the meta would have said: the call did not
-  // happen, and the card carries the rule and Volli's words for it.
-  return facet.refusal === null ? facts : { ...facts, meta: "refused", metaTone: "danger" };
+  // happen, and the card carries the rule and Volli's words for it. A page
+  // that did not load is the next-loudest thing the row can say; the card
+  // carries Volli's sentence for that too.
+  if (facet.refusal !== null) return { ...facts, meta: "refused", metaTone: "danger" };
+  if (facet.error !== null) return { ...facts, meta: "did not load", metaTone: "danger" };
+  return facts;
 }
 
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {

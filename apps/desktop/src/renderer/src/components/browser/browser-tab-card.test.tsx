@@ -67,6 +67,7 @@ function facet(overrides: Partial<ActivityBrowse> = {}): ActivityBrowse {
     picture: null,
     errorCount: null,
     ownerSessionId: "s1",
+    error: null,
     refusal: null,
     ...overrides,
   };
@@ -163,6 +164,25 @@ describe("BrowserTabCard", () => {
     expect(card.api.picture).toHaveBeenCalledWith({ pictureId: "picture-1" });
   });
 
+  it("keeps a gone agent tab the Session's, rather than rendering it as the person's", async () => {
+    // Nothing is in the live store: the facet is the transcript's whole memory
+    // of who was driving. It only reads if the port stamped a real owner.
+    await draw(host(), facet({ ownerSessionId: "s1-child" }));
+
+    expect(text()).toContain("Explore the seam");
+    expect(text()).not.toContain("Driven by you");
+    expect(
+      container?.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
+    ).toBe("session");
+  });
+
+  it("keeps a gone tab's load failure, so a broken page does not read as a clean one", async () => {
+    await draw(host(), facet({ error: "Could not load page: ERR_NAME_NOT_RESOLVED" }));
+
+    expect(text()).toContain("Tab closed");
+    expect(text()).toContain("Could not load page: ERR_NAME_NOT_RESOLVED");
+  });
+
   it("shows loading, a load failure, and a refusal in Volli's words, never the page's", async () => {
     useBrowserTabsStore.getState().receive(tab({ loading: true }));
     await draw(host(), facet());
@@ -218,6 +238,9 @@ describe("BrowserTabCard", () => {
     await draw(host(), facet({ ownerSessionId: null }));
 
     expect(text()).toContain("you");
+    expect(
+      container?.querySelector("[data-browser-tab-mark]")?.getAttribute("data-browser-tab-mark"),
+    ).toBe("user");
     expect(button("Show")).toBeUndefined();
     expect(button("Open as tab")).toBeUndefined();
     expect(button("Close")).toBeDefined();

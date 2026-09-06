@@ -789,6 +789,7 @@ describe("mapPiActivity browser tools (VC-238)", () => {
       picture: null,
       errorCount: null,
       ownerSessionId: null,
+      error: null,
       refusal: null,
     });
     expect(
@@ -932,6 +933,61 @@ describe("mapPiActivity browser tools (VC-238)", () => {
       activityContext({ observedAt: 10 }),
     );
     expect(started.descriptor.subject.label).toBe("not a url");
+  });
+
+  it("carries the host's report of a page that would not load onto the facet", () => {
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "nav-3",
+        toolName: "browser_navigate",
+        result: {
+          content: [{ type: "text", text: "\u2026" }],
+          details: {
+            action: "open",
+            tabId: "tab-9",
+            url: "https://nowhere.example/",
+            title: "",
+            target: null,
+            picture: null,
+            errorCount: null,
+            ownerSessionId: "s1",
+            error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+          },
+        },
+        isError: false,
+      },
+      activityContext({ input: { url: "https://nowhere.example/" }, startedAt: 1, observedAt: 2 }),
+    );
+
+    // The harness calls this a success — it answered with a snapshot. The
+    // facet is what lets the row's glyph disagree (§9).
+    expect(completed.state).toBe("completed");
+    expect(completed.descriptor.browse).toMatchObject({
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+    });
+  });
+
+  it("leaves another tool's image blocks alone: only a browser result has a picture standing in", () => {
+    const pixels = "A".repeat(1_000);
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "mcp-1",
+        toolName: "mcp__figma__render",
+        result: {
+          content: [{ type: "image", data: pixels, mimeType: "image/png" }],
+        },
+        isError: false,
+      },
+      activityContext({ input: {}, startedAt: 10, observedAt: 20 }),
+    );
+
+    // The picture path is the browser's; substituting `[image]` everywhere
+    // would quietly change what an unrelated tool's payload carries, with
+    // nothing standing in for the bytes it dropped.
+    expect(JSON.stringify(completed.output)).toContain("AAAAAAAAAA");
+    expect(completed.descriptor.kind).toBe("other");
   });
 });
 
