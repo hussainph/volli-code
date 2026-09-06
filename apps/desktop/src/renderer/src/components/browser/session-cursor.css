@@ -1,0 +1,305 @@
+/*
+ * The Session cursor (VC-239): the one drawing of "a Session is acting here",
+ * shared by the lab scratch and the main-owned overlay view that paints it
+ * over a Browser Tab.
+ *
+ * Plain CSS rather than Tailwind utilities, on purpose. The overlay page is a
+ * second entry in the renderer build and this is most of what it loads; a
+ * component that reads as a handful of classes here would need the app's
+ * whole utility graph scanned in there. The two tokens it borrows —
+ * `--ease-out` and `--ease-swift` — are the app's own motion tokens from
+ * globals.css, so the cursor moves on the same curves as every overlay.
+ *
+ * Motion, in the order it happens:
+ *
+ *   enter    opacity + scale(0.9 → 1), 150ms ease-out, at the first target.
+ *   glide    transform alone, distance-scaled up to 250ms, ease-out. The click
+ *            is dispatched when the glide LANDS (the component reports it), so
+ *            the drawing never claims a spot the click did not go to.
+ *   press    a ring from the tip, 220ms, a keyframe because a press is a
+ *            discrete event with a start and an end — retargeting would be
+ *            wrong, and a second press on the same spot restarts it on purpose.
+ *   scroll   a 4px nudge along the wheel, 180ms.
+ *   exit     opacity + scale back to 0.9 — the way it came in. A takeover
+ *            hands off instead: the fill drains to the person's plain cursor
+ *            before the fade, so the cursor is seen to change hands rather
+ *            than disappear.
+ *
+ * Reduced motion keeps every state and drops every movement: positions jump,
+ * nothing rings or nudges, and only opacity still eases.
+ */
+
+.session-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* The arrow's tip sits at the element's origin, so translate(x, y) puts the
+   * tip on the target and nothing else has to be offset. */
+  transform: translate(var(--session-cursor-x, 0px), var(--session-cursor-y, 0px));
+  pointer-events: none;
+  will-change: transform;
+  transition: transform var(--session-cursor-glide-ms, 0ms) var(--ease-out);
+  /* Never captures the page's own input; only the label chip is interactive. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.session-cursor-body {
+  position: relative;
+  transform-origin: 2px 2px;
+  transition:
+    opacity 150ms var(--ease-out),
+    scale 150ms var(--ease-out);
+}
+
+.session-cursor[data-present="false"] .session-cursor-body {
+  opacity: 0;
+  scale: 0.9;
+}
+
+.session-cursor[data-present="true"] .session-cursor-body {
+  opacity: 1;
+  scale: 1;
+}
+
+.session-cursor-arrow {
+  display: block;
+  width: 16px;
+  height: 20px;
+  overflow: visible;
+  /* Depth instead of a dark halo. A hairline shadow with no blur separates the
+   * white edge from a white page; the soft one under it lifts the arrow off
+   * whatever the page is. Neither reads as an outline, which is the point —
+   * an outlined arrow is a drawing of a cursor, a shadowed one is a cursor. */
+  filter: drop-shadow(0 0 0.5px rgb(0 0 0 / 0.55)) drop-shadow(0 1px 2px rgb(0 0 0 / 0.3));
+}
+
+/* The white edge is painted UNDER the fill (`paint-order`), so it only ever
+ * shows outside the shape and the colour keeps its full, crisp silhouette. On
+ * a dark page the edge is what reads; on a light page the shadow above is. */
+.session-cursor-arrow .line {
+  fill: var(--session-cursor-color);
+  stroke: #ffffff;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  paint-order: stroke fill;
+  transition: fill 200ms var(--ease-out);
+}
+
+/* Handing off: the colour drains out and a plain arrow is what fades — the
+ * person's cursor, which is what the tab now answers to. */
+.session-cursor[data-handoff="true"] .session-cursor-arrow .line {
+  fill: #ffffff;
+}
+
+/* The press ring, from the tip: thin, and it grows more than it fades so the
+ * eye reads a point being touched rather than a splash. */
+.session-cursor-press {
+  position: absolute;
+  top: -11px;
+  left: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--session-cursor-color);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-cursor-press[data-live="true"] {
+  animation: session-cursor-press 240ms var(--ease-out) both;
+}
+
+@keyframes session-cursor-press {
+  from {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+
+/* The scroll nudge rides the arrow, not the wrapper, so it never fights the
+ * glide's transform on the same element. */
+.session-cursor-body[data-gesture="scroll"] .session-cursor-arrow {
+  animation: session-cursor-nudge 180ms var(--ease-out) both;
+}
+
+@keyframes session-cursor-nudge {
+  0% {
+    transform: translateY(0);
+  }
+  45% {
+    transform: translateY(var(--session-cursor-nudge, 4px));
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/* The label: a small tag in the Session colour, tucked below-right of the
+ * tip the way a collaborator's name rides their cursor. Pinned for a moment
+ * when the hold starts, and back on hover with the two person controls. A
+ * rounded rectangle rather than a pill — it hangs off a point, and a pill
+ * beside a point reads as a second object. */
+.session-cursor-label {
+  position: absolute;
+  top: 17px;
+  left: 13px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: var(--session-cursor-color);
+  color: var(--session-cursor-ink);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.28);
+  opacity: 0;
+  translate: 0 -2px;
+  transition:
+    opacity 150ms var(--ease-out),
+    translate 150ms var(--ease-out);
+  pointer-events: none;
+}
+
+.session-cursor-label[data-visible="true"] {
+  opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+}
+
+/* The hover target exists only where a pointer can hover at all; touch fires
+ * false hovers on tap, and the overlay is never touched. The component tracks
+ * the hover itself (the actions ride it), so this only has to be hittable. */
+@media (hover: hover) and (pointer: fine) {
+  .session-cursor-hit {
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    width: 30px;
+    height: 34px;
+    pointer-events: auto;
+  }
+}
+
+.session-cursor-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-cursor-state {
+  opacity: 0.72;
+}
+
+/* The typing mark: a caret that blinks while text is going in. Constant
+ * motion, and small enough to be a state rather than a show. */
+.session-cursor-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 10px;
+  margin-left: -2px;
+  background: currentColor;
+  animation: session-cursor-caret 1s steps(2, jump-none) infinite;
+}
+
+@keyframes session-cursor-caret {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.session-cursor-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 1px;
+  padding-left: 5px;
+  border-left: 1px solid color-mix(in oklab, var(--session-cursor-ink) 28%, transparent);
+}
+
+.session-cursor-action {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0 5px;
+  height: 15px;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.session-cursor-action:hover {
+  background: color-mix(in oklab, var(--session-cursor-ink) 16%, transparent);
+}
+
+.session-cursor-action:focus-visible {
+  outline: 1.5px solid var(--session-cursor-ink);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-cursor,
+  .session-cursor[data-reduced-motion="true"] {
+    transition: none;
+  }
+}
+
+/* The reduced-motion contract is also reachable by attribute, so the lab can
+ * flip it without touching the OS setting and the overlay can be told by main.
+ * Both spellings drop the same things: the glide, the ring, the nudge, the
+ * scale and rise. Opacity keeps easing — a cursor that pops into being is
+ * more startling than one that fades, and fading moves nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .session-cursor-body {
+    transition: opacity 150ms var(--ease-out);
+  }
+  .session-cursor[data-present="false"] .session-cursor-body {
+    scale: 1;
+  }
+  .session-cursor-press[data-live="true"],
+  .session-cursor-body[data-gesture="scroll"] .session-cursor-arrow,
+  .session-cursor-caret {
+    animation: none;
+  }
+  .session-cursor-label {
+    translate: 0 0;
+    transition: opacity 150ms var(--ease-out);
+  }
+}
+
+.session-cursor[data-reduced-motion="true"] {
+  transition: none;
+}
+.session-cursor[data-reduced-motion="true"] .session-cursor-body {
+  transition: opacity 150ms var(--ease-out);
+}
+.session-cursor[data-reduced-motion="true"][data-present="false"] .session-cursor-body {
+  scale: 1;
+}
+.session-cursor[data-reduced-motion="true"] .session-cursor-press[data-live="true"],
+.session-cursor[data-reduced-motion="true"]
+  .session-cursor-body[data-gesture="scroll"]
+  .session-cursor-arrow,
+.session-cursor[data-reduced-motion="true"] .session-cursor-caret {
+  animation: none;
+}
+.session-cursor[data-reduced-motion="true"] .session-cursor-label {
+  translate: 0 0;
+  transition: opacity 150ms var(--ease-out);
+}

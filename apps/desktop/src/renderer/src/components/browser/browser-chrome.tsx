@@ -4,6 +4,10 @@ import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
 
+import {
+  BrowserHolderPill,
+  type BrowserHolder,
+} from "@renderer/components/browser/browser-holder-pill";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Spinner } from "@renderer/components/ui/spinner";
@@ -36,12 +40,21 @@ export interface BrowserChromeProps {
    */
   addressRef?: React.Ref<HTMLInputElement>;
   error: string | null;
+  /**
+   * Who holds the tab (VC-239), or null for a free tab. Present only while
+   * someone does: the pill beside the address bar IS the state, and the
+   * person's Take over / Ask to leave / Hand back live on it.
+   */
+  holder?: BrowserHolder | null;
   onAddressChange(value: string): void;
   onNavigate(url: string): void;
   onBack(): void;
   onForward(): void;
   onReload(): void;
   onToggleDevTools(): void;
+  onTakeOver?(): void;
+  onAskToLeave?(): void;
+  onHandBack?(): void;
 }
 
 /** Renderer-owned controls for a main-owned Browser Tab native surface. */
@@ -50,16 +63,22 @@ export function BrowserChrome({
   address,
   addressRef,
   error,
+  holder = null,
   onAddressChange,
   onNavigate,
   onBack,
   onForward,
   onReload,
   onToggleDevTools,
+  onTakeOver,
+  onAskToLeave,
+  onHandBack,
 }: BrowserChromeProps) {
   const displayTitle = browserTabDisplayTitle(tab);
   return (
-    <div className="shrink-0 border-b border-border bg-rail">
+    // A named container so the holder pill can shed its button labels by the
+    // chrome's own width (VC-239) rather than the window's.
+    <div className="@container/chrome shrink-0 border-b border-border bg-rail">
       <div className="flex h-9 items-center gap-1 px-2">
         <Button
           type="button"
@@ -102,6 +121,14 @@ export function BrowserChrome({
             spellCheck={false}
           />
         </form>
+        {holder !== null ? (
+          <BrowserHolderPill
+            holder={holder}
+            onTakeOver={() => onTakeOver?.()}
+            onAskToLeave={() => onAskToLeave?.()}
+            onHandBack={() => onHandBack?.()}
+          />
+        ) : null}
         <span className="max-w-48 truncate px-2 text-ui text-muted-foreground" title={displayTitle}>
           {displayTitle}
         </span>

@@ -46,6 +46,7 @@ export * from "./skill";
 export * from "./slash-name";
 export * from "./slash-namespace";
 export * from "./tag-color";
+export * from "./session-color";
 export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
