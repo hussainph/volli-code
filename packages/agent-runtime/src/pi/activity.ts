@@ -385,13 +385,17 @@ function subjectFor(
   if (kind === "delegate") {
     // The helper's name is the title if the parent gave one, else the task's
     // first line; the child's id is a fact only the host has, and it arrives
-    // on the result's `details` once the child exists.
+    // on the result's `details` once the child exists. The same derivation
+    // the host makes for the child's durable title (`delegate-session.ts`,
+    // `titleFromTask`) — runs of whitespace collapsed, capped at the same
+    // width — so the transcript row and the island's chip (VC-269) name one
+    // helper by one name; a test there pins the two together.
     const title = cleanPayloadText(readField(source, "title"));
     const task = cleanPayloadText(readField(source, "task"));
-    const firstLine = task?.split("\n")[0]?.trim() ?? null;
+    const firstLine = task?.split("\n")[0]?.trim().replaceAll(/\s+/gu, " ") ?? null;
     const agentName =
       title ??
-      (firstLine === null
+      (firstLine === null || firstLine.length === 0
         ? null
         : firstLine.length > DELEGATE_LABEL_LIMIT
           ? `${firstLine.slice(0, DELEGATE_LABEL_LIMIT - 1)}…`

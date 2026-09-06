@@ -862,14 +862,17 @@ describe("mapPiActivity", () => {
         outcome: { childCount: 1, summary: "Delegated to subagent Session cccccccc." },
       },
     });
-    // Without a title, the task's first line names the helper.
+    // Without a title, the task's first line names the helper — trimmed and
+    // with runs of whitespace collapsed, exactly as the host derives the
+    // child's durable title (`delegate-session.ts`, `titleFromTask`; its
+    // test pins the same inputs to the same names — VC-269 §4).
     expect(
       mapPiActivity(
         {
           type: "tool_execution_start",
           toolCallId: "call-delegate-2",
           toolName: "session_delegate",
-          args: { task: "  Run the flaky test ten times  \nand report" },
+          args: { task: "  Run   the flaky\ttest ten times  \nand report" },
         },
         activityContext({ observedAt: 700 }),
       ),

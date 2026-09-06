@@ -490,6 +490,36 @@ describe("delegate — the child is a real Session, and the parent keeps working
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
   });
 
+  // VC-269 §4: the transcript row's `agentName` (`pi/activity.ts`) and the
+  // child's durable title — which the island's chip reads — are derived in
+  // two places from the same inputs. These are the same inputs the activity
+  // test uses, pinned to the same names, so the two cannot drift apart.
+  it("titles the child exactly as the transcript row names it", async () => {
+    const h = harness();
+    const named = (toolCallId: string, task: string, title?: string) =>
+      h.delegations.delegate({
+        operationId: `${PARENT}:${toolCallId}`,
+        parent: PARENT_IDENTITY,
+        task,
+        ...(title === undefined ? {} : { title }),
+        actor: { kind: "session", sessionId: PARENT, ticketId: null },
+      });
+
+    await named(
+      "tc-title",
+      "Find where the auth token is refreshed\nReport the file.",
+      "Token hunt",
+    );
+    await named("tc-line", "  Run   the flaky\ttest ten times  \nand report");
+    await named("tc-long", "x".repeat(120));
+
+    expect(h.starts.map((start) => start.title)).toEqual([
+      "Token hunt",
+      "Run the flaky test ten times",
+      `${"x".repeat(79)}…`,
+    ]);
+  });
+
   it("does not cap live children, and replays one tool call as one child, one watcher, one kickoff id", async () => {
     const h = harness();
     for (let index = 0; index < 5; index += 1) {
