@@ -1122,6 +1122,30 @@ export function ChatPlane({
         </FileMentionProvider>
       </BrowserCardHostContext.Provider>
 
+      {/* The tab a person asked to see (VC-238), IN FLOW between the transcript
+          and the composer rather than inside the composer's absolute block: a
+          native view cannot be clipped, so a pane too short for the block would
+          push the pinned page up behind whatever sits above this plane — in a
+          split, another pane's own native view — and its header with it. Here
+          the transcript shrinks to make room, the frame is bounded by the
+          plane's own height, and the composer's measured block still clears
+          the bottom. */}
+      {browser !== null && browser.preview !== null ? (
+        <div
+          className="flex min-h-0 shrink-0 flex-col"
+          style={{ marginBottom: "var(--composer-height)", maxHeight: "45%" }}
+        >
+          <ContentColumn className="flex min-h-0 flex-col">
+            <BrowserPreview
+              tab={browser.preview}
+              api={browser.api}
+              ownerLabel={browser.ownerLabel(browser.preview)}
+              visible={surfaceVisible}
+            />
+          </ContentColumn>
+        </div>
+      ) : null}
+
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the
           transcript ends where the composer begins. */}
@@ -1130,17 +1154,6 @@ export function ChatPlane({
         className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
       >
         <ContentColumn>
-          {/* The tab a person asked to see, pinned here because this block is
-              the one part of the chat that does not scroll (VC-238). Measured
-              with the composer, so the transcript's bottom padding clears it. */}
-          {browser !== null && browser.preview !== null ? (
-            <BrowserPreview
-              tab={browser.preview}
-              api={browser.api}
-              ownerLabel={browser.ownerLabel(browser.preview)}
-              visible={surfaceVisible}
-            />
-          ) : null}
           {/* Above whatever the slot holds, card included. A card answers the
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached

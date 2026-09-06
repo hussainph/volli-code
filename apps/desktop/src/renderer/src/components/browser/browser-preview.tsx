@@ -62,9 +62,9 @@ export function BrowserPreview({
   return (
     <div
       data-browser-preview={tab.tabId}
-      className="pointer-events-auto mb-2 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-raised"
+      className="mb-2 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-raised"
     >
-      <div className="flex h-7 items-center gap-2 border-b border-border/50 px-2 text-ui">
+      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/50 px-2 text-ui">
         <BrowserTabMark driven />
         <span
           className="min-w-0 flex-1 truncate text-foreground"
@@ -106,7 +106,7 @@ export function BrowserPreview({
           <XIcon className="size-3" />
         </Button>
       </div>
-      <div className={`flex min-h-0 flex-col ${BROWSER_PREVIEW_HEIGHT_CLASS}`}>
+      <div className={`flex min-h-0 shrink flex-col ${BROWSER_PREVIEW_HEIGHT_CLASS}`}>
         <BrowserPane
           key={tab.tabId}
           tab={tab}
