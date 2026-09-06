@@ -44,7 +44,13 @@ export {
 export { BrowserRefusal } from "./browser/refusal";
 export { BROWSER_TOOL_NAMES, type BrowserToolId } from "./pi/browser-tools";
 export { ShellRefusal } from "./shell/refusal";
-export { SHELL_MAX_PER_SESSION, SHELL_TOOL_NAMES, type ShellToolId } from "./pi/shell-tools";
+export {
+  createShellTool,
+  SHELL_MAX_PER_SESSION,
+  SHELL_TOOL_NAMES,
+  type ShellToolDetails,
+  type ShellToolId,
+} from "./pi/shell-tools";
 export {
   createSafeWebFetch,
   WEB_FETCH_LIMITS,

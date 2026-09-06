@@ -200,6 +200,7 @@ export default defineConfig(({ mode }) => ({
         // gate can reach the transition rules — a start announced twice, or
         // an exit never announced, is invisible in a screenshot.
         "src/components/chat/island-shells.ts",
+        "src/components/chat/island-shells-model.ts",
         // Which drawing an empty chat may offer, per scope (VC-55). A pure
         // `.ts` beside the views precisely so the gate can reach it: the menu
         // a scope offers IS the identity signal, so a scope quietly gaining an
