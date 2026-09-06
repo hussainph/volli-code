@@ -325,6 +325,11 @@ function ClusterShell({
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const focusOnPin = React.useRef(false);
+  // Whether focus is inside the card, and whether a pointer went elsewhere
+  // while it was — the two facts that decide where focus goes when the card
+  // closes (see `onCloseAutoFocus` below).
+  const focusInCard = React.useRef(false);
+  const interactedOutside = React.useRef(false);
   const latest = React.useRef(coordination);
   latest.current = coordination;
   const pinned = coordination?.pinned === id;
@@ -449,6 +454,35 @@ function ClusterShell({
           // on click — a flicker that could never unpin. The anchor is ours.
           onInteractOutside={(event) => {
             if (anchorRef.current?.contains(event.target as Node)) event.preventDefault();
+            else interactedOutside.current = true;
+          }}
+          // Where focus goes when the card closes. Radix hands it back to the
+          // TRIGGER — and this card has none (see `PopoverAnchor` above), so
+          // its default focused nothing and then suppressed FocusScope's own
+          // fallback: Escape from a keyboard-pinned row dropped focus to the
+          // document body. The anchor is the trigger in every sense but
+          // Radix's, so it takes the focus back — but only when the card HAD
+          // it, and only when no pointer went elsewhere in the meantime: a
+          // glance card closing under a person typing in the composer must
+          // not pull them up to the pill.
+          onFocusCapture={() => {
+            focusInCard.current = true;
+          }}
+          onBlurCapture={(event) => {
+            // A blur whose destination is outside the card means focus left
+            // by its own route. One with NO destination is the card being
+            // removed from under the focused row — which is the case the
+            // close handler has to know about, so it stays true.
+            const to = event.relatedTarget as Node | null;
+            if (to !== null && !event.currentTarget.contains(to)) focusInCard.current = false;
+          }}
+          onCloseAutoFocus={(event) => {
+            const restore = focusInCard.current && !interactedOutside.current;
+            focusInCard.current = false;
+            interactedOutside.current = false;
+            if (!restore) return;
+            event.preventDefault();
+            anchorRef.current?.focus();
           }}
           onMouseEnter={() => coordination.enter(id)}
           onMouseLeave={() => coordination.leave(id)}
@@ -471,10 +505,13 @@ function ClusterShell({
  * The card is where the island stops being a status display and becomes a
  * control surface. Three decisions:
  *
- *  • ROW = VERB. Activating a row does the obvious promotion — tab → Browser
- *    pane, subagent → overlay, shell → output, plan step → jump — on
+ *  • ROW = VERB. Activating a row does the obvious promotion — tab → pinned
+ *    preview above this composer, subagent → overlay, shell → output — on
  *    `ListRow`'s own activatable branch, so hover fill and focus ring come
- *    for free and an inert row cannot lie.
+ *    for free and an inert row cannot lie. The converse holds too: a row with
+ *    nowhere to go draws INERT rather than activatable-and-idle. Two rows are
+ *    inert today — a tab that already is the preview, and every plan step
+ *    (VC-268; see `PlanCard`).
  *  • ACTIONS ARE SIBLINGS of the row target (a button inside a button is not
  *    markup), revealed on row hover by default. Hidden actions keep their
  *    width so hover never shifts the name. The verb also appears as the first
@@ -566,6 +603,18 @@ function CardRow({ reduce, ...row }: { reduce: boolean } & React.ComponentProps<
 function RowState({ children }: { children: string | null }) {
   if (children === null) return null;
   return <span className="shrink-0 text-label text-muted-foreground">· {children}</span>;
+}
+
+/**
+ * Whose subject a row is, in the quiet register beside the state word — a
+ * child Session's title on a tab it opened (VC-268). Nothing for this
+ * Session's own: "this Session" on every row would be the default said aloud.
+ * Truncates on its own so a long child title cannot push the host off the
+ * line it names.
+ */
+function RowOwner({ children }: { children: string | null }) {
+  if (children === null) return null;
+  return <span className="min-w-0 truncate text-label text-muted-foreground/70">· {children}</span>;
 }
 
 function RowActions({ children }: React.PropsWithChildren) {
@@ -679,35 +728,47 @@ function TabsCard({ tabs, reduce }: { tabs: readonly IslandTab[]; reduce: boolea
   return (
     <Card glyph={GlobeSimpleIcon} heading={tabsHeading(tabs)}>
       <CardRows>
-        {tabs.map((tab) => (
-          <CardRow
-            key={tab.id}
-            reduce={reduce}
-            data-island-row={tab.id}
-            leading={<TabChip tab={tab} />}
-            primary={tab.host}
-            primaryTrailing={<RowState>{tabStateWord(tab)}</RowState>}
-            onActivate={() => actions.promoteTab(tab.id)}
-            actions={
-              <RowActions>
-                <ActionButton
-                  label={tab.promoted ? "Focus Browser pane" : "Open in Browser pane"}
-                  onPress={() => actions.promoteTab(tab.id)}
-                >
-                  <ArrowSquareOutIcon />
-                </ActionButton>
-                <ActionButton
-                  label="Close tab"
-                  armedLabel="Click again to close"
-                  destructive
-                  onPress={() => actions.closeTab(tab.id)}
-                >
-                  <XIcon />
-                </ActionButton>
-              </RowActions>
-            }
-          />
-        ))}
+        {tabs.map((tab) => {
+          // The verb pins the tab above THIS composer (VC-238's Show). A tab
+          // that already is the preview has nowhere to go, so its row is inert
+          // and offers only Close; a headless tab and a strip tab can both be
+          // brought here. "Open as tab" is not offered from the island — it
+          // stays on the preview chrome and the transcript card.
+          const showable = tab.surface !== "preview";
+          return (
+            <CardRow
+              key={tab.id}
+              reduce={reduce}
+              data-island-row={tab.id}
+              leading={<TabChip tab={tab} />}
+              primary={tab.host}
+              primaryTrailing={
+                <>
+                  <RowState>{tabStateWord(tab)}</RowState>
+                  <RowOwner>{tab.owner}</RowOwner>
+                </>
+              }
+              onActivate={showable ? () => actions.promoteTab(tab.id) : null}
+              actions={
+                <RowActions>
+                  {showable ? (
+                    <ActionButton label="Show here" onPress={() => actions.promoteTab(tab.id)}>
+                      <ArrowSquareOutIcon />
+                    </ActionButton>
+                  ) : null}
+                  <ActionButton
+                    label="Close tab"
+                    armedLabel="Click again to close"
+                    destructive
+                    onPress={() => actions.closeTab(tab.id)}
+                  >
+                    <XIcon />
+                  </ActionButton>
+                </RowActions>
+              }
+            />
+          );
+        })}
       </CardRows>
     </Card>
   );
@@ -757,8 +818,16 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
   );
 }
 
+/**
+ * READ-ONLY (VC-268). The rows are inert: `jumpStep` was designed against a
+ * sim where each step had a place to jump to, and on main one `todo_write`
+ * writes the whole list with no message behind any one step. A row that drew
+ * activatable and did nothing is the lie the card's own rule forbids, and
+ * anchoring every row to the same message would keep the row activatable
+ * while changing what activation means — a different lie. The verb stays in
+ * the contract; the rows take it back the day plan activity renders per step.
+ */
 function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
-  const actions = useActions();
   return (
     <Card glyph={ListChecksIcon} heading={planHeading(plan)}>
       {/* Progress as a hairline under the header — the header's number says
@@ -826,7 +895,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
                   {state === "current" ? "now" : state === "cancelled" ? "dropped" : null}
                 </RowState>
               }
-              onActivate={() => actions.jumpStep(step.id)}
+              onActivate={null}
             />
           );
         })}
@@ -910,7 +979,15 @@ function TabsCluster({ tabs, feel, reduce }: ClusterProps & { tabs: readonly Isl
           <GlobeSimpleIcon className="block size-3.5 text-muted-foreground" />
           {tabsLoading(tabs) ? <WorkingArc reduce={reduce} inset={3} /> : null}
         </span>
-        <span className="text-label font-medium tabular-nums text-foreground">{tabs.length}</span>
+        {/* The count as an attribute too: the headless smoke asserts it, and
+            a number read back out of a text node is a brittle thing to aim
+            an end-to-end check at. */}
+        <span
+          data-island-count={tabs.length}
+          className="text-label font-medium tabular-nums text-foreground"
+        >
+          {tabs.length}
+        </span>
       </span>
     </ClusterShell>
   );

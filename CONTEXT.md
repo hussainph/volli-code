@@ -227,8 +227,9 @@ its real viewport, wake hold, console and screenshots, but is in no strip, in
 no tab order, and attached to no window. Every Session-created tab is born
 this way; a person's own tabs never are. A headless tab is visible only in the
 chat that owns it — as the **tab card** under the browser row that touched it,
-and in the chat's `N tabs` inventory chip — and it closes with its owner
-Session's attachment or when its Ticket is archived. The model can never
+and in the Activity Island's tabs cluster above the composer (VC-268), whose
+card lists every tab the Session and its children hold — and it closes with
+its owner Session's attachment or when its Ticket is archived. The model can never
 reveal one; the person can.
 _Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it is)
 

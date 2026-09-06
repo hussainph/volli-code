@@ -62,8 +62,27 @@ export interface IslandTab {
   /** What the pill and the card name the tab by. */
   host: string;
   state: "loading" | "ready";
-  /** Promoted to a Browser pane from its card row — the card and the pane are one model. */
+  /**
+   * Somewhere a person can see it — the card and that surface are one model.
+   * One boolean, because that is all the pill asks; WHICH surface is
+   * {@link surface}'s answer, and only the card's caption needs it.
+   */
   promoted: boolean;
+  /**
+   * Where a promoted tab is drawn (VC-268): `preview` is pinned above this
+   * chat's composer, `tab` is out in the workspace strip, `null` is headless.
+   * The two visible places are different answers to "where is it", so the
+   * state word says which rather than printing one word for both.
+   */
+  surface: "preview" | "tab" | null;
+  /**
+   * Whose tab it is, as the card says it: `null` for this Session's own, a
+   * child Session's title otherwise. A parent watching its children's tabs
+   * could not otherwise tell whose is whose — the whole point of the inventory
+   * the island replaced (VC-238 §8). The projection decides the words; this
+   * contract only carries them.
+   */
+  owner: string | null;
 }
 
 /** A subagent Session the Session delegated to. */
@@ -175,14 +194,19 @@ export const EMPTY_ACTIVITY_ISLAND: ActivityIslandModel = {
 
 /**
  * What a card can do. Every row is its obvious promotion (row = verb): a tab
- * opens in the Browser pane, a subagent peeks in an overlay, a shell opens its
- * output, a plan step jumps. The destructive three — close, stop, kill — arm
- * on first press in the UI; by the time one of these is called the person has
- * pressed twice. The wiring ticket implements these against the runtime; the
- * island never learns what they do.
+ * is pinned as this chat's preview, a subagent peeks in an overlay, a shell
+ * opens its output, a plan step jumps. The destructive three — close, stop,
+ * kill — arm on first press in the UI; by the time one of these is called the
+ * person has pressed twice. The wiring ticket implements these against the
+ * runtime; the island never learns what they do.
  */
 export interface ActivityIslandActions {
   closeTab(id: string): void;
+  /**
+   * Pin the tab above this chat's composer — VC-238's Show, the cheap reveal.
+   * "Open as tab" stays where VC-238 put it, on the preview chrome and the
+   * transcript card; the island never promotes straight to the strip.
+   */
   promoteTab(id: string): void;
   peekAgent(id: string): void;
   promoteAgent(id: string): void;
@@ -194,6 +218,13 @@ export interface ActivityIslandActions {
    * projection cannot keep: the list it was read from may already have been
    * re-projected by the time the click lands, and index 3 would then name a
    * different step (docs/BOUNDARIES.md rule 2 — never adjacency as position).
+   *
+   * NOT CALLED BY THE CARD TODAY (VC-268). It was designed against a sim where
+   * each step had a place to jump to; on main one `todo_write` writes the whole
+   * list and a step has no message of its own, so the plan card's rows draw
+   * inert rather than activatable-and-idle. The verb stays in the contract for
+   * the condition that reopens it: per-step targets exist once plan activity
+   * rows render per step in the transcript.
    */
   jumpStep(id: string): void;
 }
@@ -326,10 +357,19 @@ export function tabsHeading(tabs: readonly IslandTab[]): string {
   return `Browser${FLASH_SEPARATOR}${plural(tabs.length, "tab")}`;
 }
 
-/** The state word riding a tab row's name; `null` when there is nothing to say. */
+/**
+ * The state word riding a tab row's name; `null` when there is nothing to say.
+ *
+ * Reads {@link IslandTab.surface}, not `promoted`: the pill's boolean says
+ * "visible somewhere", and a caption that said only that would print the same
+ * word for a preview above this composer and a tab in the strip. In the card's
+ * own caption grammar: `pinned here` / `as a tab`.
+ */
 export function tabStateWord(tab: IslandTab): string | null {
   if (tab.state === "loading") return "loading";
-  return tab.promoted ? "in pane" : null;
+  if (tab.surface === "preview") return "pinned here";
+  if (tab.surface === "tab") return "as a tab";
+  return null;
 }
 
 /* ----------------------------------------------------------------- agents */

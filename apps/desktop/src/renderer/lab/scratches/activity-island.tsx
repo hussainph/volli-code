@@ -176,7 +176,18 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const next = flashed(sim, "Opened", host);
       return {
         ...next,
-        tabs: [...sim.tabs, { id: `tab-${next.seq}`, host, state: "loading", promoted: false }],
+        tabs: [
+          ...sim.tabs,
+          {
+            id: `tab-${next.seq}`,
+            host,
+            state: "loading",
+            promoted: false,
+            surface: null,
+            // Every other tab is a child's, so the owner register gets exercised.
+            owner: sim.tabs.length % 2 === 1 ? "Read the docs" : null,
+          },
+        ],
         seq: next.seq + 1,
       };
     }
@@ -307,9 +318,15 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const tab = sim.tabs.find((candidate) => candidate.id === action.id);
       if (!tab) return sim;
       return {
-        ...flashed(sim, tab.promoted ? "Focused pane" : "Opened in pane", tab.host),
+        // The verb pins one tab as the chat's preview (VC-268): the one that
+        // was pinned goes back to headless, the way main keeps it to one.
+        ...flashed(sim, "Pinned here", tab.host),
         tabs: sim.tabs.map((candidate) =>
-          candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
+          candidate.id === action.id
+            ? { ...candidate, promoted: true, surface: "preview" as const }
+            : candidate.surface === "preview"
+              ? { ...candidate, promoted: false, surface: null }
+              : candidate,
         ),
       };
     }

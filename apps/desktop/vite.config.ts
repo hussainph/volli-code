@@ -144,6 +144,19 @@ export default defineConfig(({ mode }) => ({
         "src/chat/composer-picker.ts",
         "src/chat/rename.ts",
         "src/chat/transport.ts",
+        // The Activity Island's seam and its Browser Tab feed (VC-268), listed
+        // on the same argument as `island-shells.ts` below and DESPITE being
+        // hooks: what gets announced is decided in an effect, not in a shape a
+        // screenshot could show. `use-island-tabs.ts` reconstructs "opened",
+        // "loaded", "failed" and "closed" by diffing a push cache that keeps no
+        // history, and its baseline spans TWO stores that fill from two
+        // independent fetches — a rule with no visible surface at all, whose
+        // first bug was a child's existing tabs announced as new when the
+        // slower fetch landed. `use-activity-island.ts` is where a feed that
+        // returns nothing must still leave the island empty.
+        "src/chat/use-activity-island.ts",
+        "src/chat/use-island-flash.ts",
+        "src/chat/use-island-tabs.ts",
         "src/components/attachments/attachment-model.ts",
         // What the renderer does with the Run door's answer (VC-126/VC-234):
         // which refusal opens Model Access, which toasts, and what success

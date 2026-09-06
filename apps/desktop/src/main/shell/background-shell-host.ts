@@ -30,7 +30,10 @@
  * — stop, done, detach, replace, relaunch, all through the adapter's one
  * release path — and kills every shell the Session started and forgets them.
  * Shells are live resources, not ledger facts: nothing here survives a
- * relaunch, and nothing is written to the database.
+ * relaunch, and nothing is written to the database. The record flips to
+ * `exited` on the child's `close`, not its `exit` — the two are not ordered
+ * against each other, and marking a fast command exited on `exit` alone can
+ * beat its last stdout chunk into the ring.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -287,7 +290,19 @@ export class BackgroundShellHost {
         if (this.shells.has(shellId)) this.deps.publishState(this.stateOf(entry));
         resolve();
       };
-      child.once("exit", settle);
+      // `close`, not `exit`: Node fires `exit` the moment the process itself
+      // is reaped, which is a separate notification path from the stdout/
+      // stderr pipes and is not ordered against them — on some platforms a
+      // fast command's `exit` is observed before its last `data` chunk,
+      // which would mark the record exited while bytes it already wrote are
+      // still in flight. `close` is Node's own guarantee that every stdio
+      // stream has finished emitting before it fires, so a read after
+      // `state === "exited"` never misses output the process produced. This
+      // only waits on OUR pipes, not a lingering process: `& disown` inside
+      // the command orphans a grandchild holding our stdout open, which is
+      // exactly the `&` CONTEXT.md's Background shell entry says to avoid —
+      // an accepted edge, not one this host promises to resolve promptly.
+      child.once("close", settle);
       // A spawn that failed after a pid was handed out (rare) ends the same way.
       child.once("error", () => settle(null, null));
     });

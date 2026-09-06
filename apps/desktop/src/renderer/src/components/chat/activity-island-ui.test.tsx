@@ -34,7 +34,15 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 function tab(over: Partial<IslandTab> = {}): IslandTab {
-  return { id: "t1", host: "github.com", state: "ready", promoted: false, ...over };
+  return {
+    id: "t1",
+    host: "github.com",
+    state: "ready",
+    promoted: false,
+    surface: null,
+    owner: null,
+    ...over,
+  };
 }
 
 function agent(over: Partial<IslandAgent> = {}): IslandAgent {
@@ -341,6 +349,47 @@ describe("the card", () => {
     expect(document.activeElement).toBe(rowIn("tabs", "t1"));
   });
 
+  it("hands focus back to the cluster when Escape closes a keyboard-pinned card (VC-268)", async () => {
+    // The card is anchored, not triggered, so Radix has no trigger to return
+    // focus to: its default close handler focuses nothing and then suppresses
+    // FocusScope's own fallback. Left alone, Escape from a row dropped focus to
+    // the document body — a keyboard user pinned a card, pressed Escape, and
+    // was nowhere.
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    act(() => cluster("tabs").focus());
+    press(cluster("tabs"), "Enter");
+    await settle();
+    expect(document.activeElement).toBe(rowIn("tabs", "t1"));
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).toBe(cluster("tabs"));
+  });
+
+  it("leaves focus where a pointer put it when an outside click closes the card", async () => {
+    // The person clicked something else; the card must not pull focus back to
+    // the pill on its way out.
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    act(() => cluster("tabs").focus());
+    press(cluster("tabs"), "Enter");
+    await settle();
+    expect(document.activeElement).toBe(rowIn("tabs", "t1"));
+
+    act(() => {
+      elsewhere.focus();
+      elsewhere.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    await settle();
+    expect(card("tabs")).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
   it("goes with its cluster when the last subject leaves", async () => {
     await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()], shells: [shell()] });
     click(cluster("tabs"));
@@ -435,9 +484,59 @@ describe("row verbs", () => {
 
     click(rowIn("tabs", "t2"));
     expect(actions.promoteTab).toHaveBeenCalledWith("t2");
-    click(actionIn("tabs", "Open in Browser pane"));
+    click(actionIn("tabs", "Show here"));
     expect(actions.promoteTab).toHaveBeenCalledTimes(2);
     expect(actions.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("draws a tab already pinned here inert, and a strip tab as one that can be shown here (VC-268)", async () => {
+    // The verb pins a tab as this chat's preview. A tab that IS the preview has
+    // nowhere to go, so its row is inert rather than activatable-and-idle;
+    // a strip tab can come back here, so its row keeps the verb.
+    const actions = actionsSpy();
+    await render(
+      {
+        ...EMPTY_ACTIVITY_ISLAND,
+        tabs: [
+          tab({ id: "t1", host: "github.com", promoted: true, surface: "preview" }),
+          tab({ id: "t2", host: "motion.dev", promoted: true, surface: "tab" }),
+        ],
+      },
+      actions,
+    );
+    click(cluster("tabs"));
+
+    const pinned = rowIn("tabs", "t1");
+    expect(pinned.tagName).toBe("DIV");
+    expect(pinned.textContent).toContain("pinned here");
+    click(pinned);
+    expect(actions.promoteTab).not.toHaveBeenCalled();
+    expect(pinned.parentElement?.querySelector('[aria-label="Show here"]')).toBeNull();
+    expect(pinned.parentElement?.querySelector('[aria-label="Close tab"]')).not.toBeNull();
+
+    const strip = rowIn("tabs", "t2");
+    expect(strip.tagName).toBe("BUTTON");
+    expect(strip.textContent).toContain("as a tab");
+    click(strip);
+    expect(actions.promoteTab).toHaveBeenCalledWith("t2");
+  });
+
+  it("names a child Session's tab by its owner, and says nothing for this Session's own", async () => {
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      tabs: [tab(), tab({ id: "t2", host: "motion.dev", owner: "Read the docs" })],
+    });
+    click(cluster("tabs"));
+
+    expect(rowIn("tabs", "t2").textContent).toContain("Read the docs");
+    expect(rowIn("tabs", "t1").textContent).not.toContain("·");
+  });
+
+  it("counts its tabs in an attribute the smoke can read", async () => {
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab(), tab({ id: "t2" })] });
+    expect(
+      cluster("tabs").querySelector("[data-island-count]")?.getAttribute("data-island-count"),
+    ).toBe("2");
   });
 
   it("route each cluster's row to its own verb", async () => {
@@ -458,13 +557,6 @@ describe("row verbs", () => {
     click(actionIn("agents", "Open as tab"));
     expect(actions.promoteAgent).toHaveBeenCalledWith("a1");
 
-    // By step ID, not position: the row the person aimed at, even if the plan
-    // is re-projected in a different order before the click lands.
-    click(cluster("plan"));
-    await settle();
-    click(rowIn("plan", "step-3"));
-    expect(actions.jumpStep).toHaveBeenCalledWith("step-3");
-
     click(cluster("shells"));
     await settle();
     click(rowIn("shells", "s1"));
@@ -472,7 +564,6 @@ describe("row verbs", () => {
   });
 
   it("draws a step per id, so two steps may share a title", async () => {
-    const actions = actionsSpy();
     const repeated: IslandPlan = {
       id: "p2",
       steps: [
@@ -481,12 +572,26 @@ describe("row verbs", () => {
       ],
       done: 0,
     };
-    await render({ ...EMPTY_ACTIVITY_ISLAND, plan: repeated }, actions);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan: repeated });
     click(cluster("plan"));
 
     expect(card("plan")?.querySelectorAll("[data-island-row]")).toHaveLength(2);
-    click(rowIn("plan", "step-b"));
-    expect(actions.jumpStep).toHaveBeenCalledWith("step-b");
+    expect(rowIn("plan", "step-b")).not.toBe(rowIn("plan", "step-a"));
+  });
+
+  it("draws plan steps inert — a step has nowhere to jump to yet (VC-268)", async () => {
+    // One `todo_write` writes the whole list and no step has a message of its
+    // own, so a row that took a click and did nothing would be the lie the
+    // "inert row cannot lie" rule forbids. The rows are `<div>`s: no hover
+    // fill, no focus ring, no verb.
+    const actions = actionsSpy();
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan: PLAN }, actions);
+    click(cluster("plan"));
+
+    const row = rowIn("plan", "step-3");
+    expect(row.tagName).toBe("DIV");
+    click(row);
+    expect(actions.jumpStep).not.toHaveBeenCalled();
   });
 
   it("draws a dropped step dimmed and says so, rather than as one still waiting (VC-6)", async () => {
