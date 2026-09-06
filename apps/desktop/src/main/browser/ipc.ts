@@ -1,10 +1,12 @@
 import type {
   BrowserIpcChannel,
+  BrowserPictureInput,
   BrowserTabIdInput,
   BrowserTabListInput,
   BrowserTabNavigateInput,
   BrowserTabOpenInput,
   BrowserTabSetBoundsInput,
+  BrowserTabSetPresentationInput,
   Result,
 } from "../../ipc/contract";
 import { BROWSER_IPC } from "../ipc-descriptors";
@@ -87,6 +89,18 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       host.toggleDevTools(input.tabId);
       return { ok: true };
     },
+    // Where a Session's tab is drawn is the person's decision and main's fact
+    // (VC-238): the renderer asks, main answers with the tab as it now stands.
+    "volli:browser-set-presentation": (input: BrowserTabSetPresentationInput) => ({
+      ok: true,
+      tab: host.setPresentation(input.tabId, input.presentation),
+    }),
+    // The one read of a picture the transcript names. Pixels only, like
+    // `capture`; a picture the host no longer holds answers null, not an error.
+    "volli:browser-picture": (input: BrowserPictureInput) => ({
+      ok: true,
+      dataUrl: host.pictureOf(input.pictureId),
+    }),
   };
 
   registerGuardedIpcHandlers(BROWSER_IPC, handlers);

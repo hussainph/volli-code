@@ -8,6 +8,7 @@ import {
   isActivityKind,
   isDurableActivity,
   isReadOnlyActivity,
+  readActivityBrowse,
   readActivityDescriptor,
   type ActivityDescriptor,
 } from "./session-activity";
@@ -332,6 +333,7 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
         picture: "picture-7",
         errorCount: null,
         ownerSessionId: "s1",
+        refusal: null,
       },
     });
   });
@@ -354,6 +356,7 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
       picture: null,
       errorCount: 3,
       ownerSessionId: null,
+      refusal: null,
     });
     expect(
       readActivityDescriptor(
@@ -366,5 +369,23 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
     expect(
       readActivityDescriptor(stamped({ kind: "read-file", nativeToolName: "read" })),
     ).not.toHaveProperty("browse");
+  });
+
+  it("reads a bare facet the same way, for the adapter that stamps it from a tool's details", () => {
+    expect(readActivityBrowse({ action: "open", url: "https://example.com/" })).toEqual({
+      action: "open",
+      tabId: null,
+      url: "https://example.com/",
+      title: null,
+      target: null,
+      picture: null,
+      errorCount: null,
+      ownerSessionId: null,
+      refusal: null,
+    });
+    expect(readActivityBrowse(undefined)).toBeNull();
+    expect(
+      readActivityBrowse({ action: "click", refusal: "browser.stale-ref" })?.refusal,
+    ).toBe("browser.stale-ref");
   });
 });

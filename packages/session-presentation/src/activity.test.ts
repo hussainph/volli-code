@@ -1113,6 +1113,7 @@ describe("browse presenter", () => {
           picture: null,
           errorCount: null,
           ownerSessionId: "s1",
+          refusal: null,
           ...patch,
         },
       },
@@ -1189,6 +1190,7 @@ describe("browse presenter", () => {
             picture: null,
             errorCount: null,
             ownerSessionId: null,
+            refusal: null,
           },
         },
       }),
@@ -1212,6 +1214,22 @@ describe("browse presenter", () => {
     );
     expect(bare).toMatchObject({ verb: "Browsed", object: "example.com", browse: null });
     expect(describeActivity(tool("run-command", { input: { command: "ls" } })).browse).toBeNull();
+  });
+
+  it("marks a refused call in the meta, in danger, over whatever it would have said", () => {
+    const refused = describeActivity(
+      browse("click", { target: "e5", refusal: "browser.stale-ref" }),
+    );
+    expect(refused).toMatchObject({
+      verb: "Clicked",
+      object: "e5",
+      meta: "refused",
+      metaTone: "danger",
+    });
+    expect(describeActivity(browse("open", { refusal: "browser.session-tab-limit" }))).toMatchObject({
+      meta: "refused",
+      metaTone: "danger",
+    });
   });
 
   it("counts browsing in the bundle summary like any other kind", () => {

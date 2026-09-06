@@ -72,6 +72,13 @@ export type ActivityBrowse = {
   picture: string | null;
   errorCount: number | null;
   ownerSessionId: string | null;
+  /**
+   * The `browser.*` rule that refused this call, or null when it ran. A
+   * refusal is a result rather than a failure to the harness, so without this
+   * the row would read as a plain success; the card shows the rule and the
+   * tool's own words for it.
+   */
+  refusal: string | null;
 };
 
 /** Reserved namespace on `toolMetadata`. Adapters keep their own payload beside it. */
@@ -231,6 +238,7 @@ function readBrowse(value: unknown): ActivityBrowse | null {
     picture: optionalString(value.picture),
     errorCount: optionalNumber(value.errorCount),
     ownerSessionId: optionalString(value.ownerSessionId),
+    refusal: optionalString(value.refusal),
   };
 }
 

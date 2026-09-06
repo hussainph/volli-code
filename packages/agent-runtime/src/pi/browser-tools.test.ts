@@ -143,12 +143,44 @@ describe("browser tools", () => {
     };
     const tool = createBrowserTool("browser_act", port);
 
-    const text = resultText(
-      await tool.execute("call-2", { tabId: "tab-1", generation: 3, kind: "click", ref: "e2" }),
-    );
+    const refused = await tool.execute("call-2", {
+      tabId: "tab-1",
+      generation: 3,
+      kind: "click",
+      ref: "e2",
+    });
+    const text = resultText(refused);
 
     expect(text).toContain("browser.stale-ref");
     expect(text).toContain("take a fresh snapshot");
+    // The row learns it was a refusal, and keeps what the call itself said —
+    // the tab and the ref — since the host never answered (VC-238).
+    expect(refused.details).toEqual({
+      action: "click",
+      tabId: "tab-1",
+      url: null,
+      title: null,
+      target: "e2",
+      picture: null,
+      errorCount: null,
+      ownerSessionId: null,
+      refusal: "browser.stale-ref",
+    });
+
+    // Every tool names its refusal the same way; a navigate that opened
+    // nothing has no tab to name.
+    port.navigate = async () => {
+      throw new BrowserRefusal("browser.session-tab-limit", "A Session can have at most 6.");
+    };
+    const capped = await createBrowserTool("browser_navigate", port).execute("call-2b", {
+      url: "https://example.com/",
+    });
+    expect(capped.details).toMatchObject({
+      action: "open",
+      tabId: null,
+      url: "https://example.com/",
+      refusal: "browser.session-tab-limit",
+    });
   });
 
   it("returns a screenshot as an image the model can see, beside Volli's provenance, and names the kept picture", async () => {
@@ -179,6 +211,7 @@ describe("browser tools", () => {
       picture: "picture-3",
       errorCount: null,
       ownerSessionId: null,
+      refusal: null,
     });
     // The description stays honest with what ships: the person sees the
     // picture in the transcript card, not in the tool row's raw payload.
@@ -443,6 +476,7 @@ describe("browser tools", () => {
       picture: "picture-9",
       errorCount: null,
       ownerSessionId: null,
+      refusal: null,
     });
   });
 });

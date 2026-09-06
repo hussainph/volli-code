@@ -97,7 +97,11 @@ import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
-import { browserTabDisplayTitle, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import {
+  browserTabDisplayTitle,
+  stripBrowserTabs,
+  useBrowserTabsStore,
+} from "@renderer/stores/browser-tabs";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -213,10 +217,15 @@ export function TicketDetail({
     (state) => state.byProject[projectId]?.ticketTabs?.[ticket.id],
   );
   const browserApi = window.api.browser;
+  // Only what the strip draws (VC-238): a person's tabs and the agent tabs a
+  // person promoted here. A Session's headless and previewed tabs live in
+  // its chat, never in this strip or the tab order.
   const browserTabs = useBrowserTabsStore(
     useShallow((state) =>
-      Object.values(state.byId).filter(
-        (tab) => tab.projectId === projectId && tab.ticketId === ticket.id,
+      stripBrowserTabs(
+        Object.values(state.byId).filter(
+          (tab) => tab.projectId === projectId && tab.ticketId === ticket.id,
+        ),
       ),
     ),
   );
@@ -873,6 +882,7 @@ export function TicketDetail({
       label: browserTabDisplayTitle(tab),
       browserTabId: tab.tabId,
       loading: tab.loading,
+      driven: tab.ownerSessionId !== null,
     })),
   ];
   // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one

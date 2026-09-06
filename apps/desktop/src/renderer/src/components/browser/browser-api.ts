@@ -1,4 +1,6 @@
 import type {
+  BrowserPictureInput,
+  BrowserPictureResult,
   BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
@@ -7,6 +9,7 @@ import type {
   BrowserTabOpenInput,
   BrowserTabResult,
   BrowserTabSetBoundsInput,
+  BrowserTabSetPresentationInput,
   BrowserTabStateEvent,
   Result,
 } from "../../../../ipc/contract";
@@ -30,5 +33,9 @@ export interface BrowserApi {
   show(input: BrowserTabIdInput): Promise<Result>;
   hide(input: BrowserTabIdInput): Promise<Result>;
   toggleDevTools(input: BrowserTabIdInput): Promise<Result>;
+  /** Where a Session's tab is drawn (VC-238); refused for a person's own tab. */
+  setPresentation(input: BrowserTabSetPresentationInput): Promise<BrowserTabResult>;
+  /** One picture the transcript names, as a data URL — or null once the host let it go. */
+  picture(input: BrowserPictureInput): Promise<BrowserPictureResult>;
   onTabState(callback: (event: BrowserTabStateEvent) => void): () => void;
 }

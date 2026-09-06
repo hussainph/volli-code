@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
@@ -60,7 +60,15 @@ export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
   | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
-  | { kind: "browser"; id: string; tabId: string; title: string; loading: boolean }
+  | {
+      kind: "browser";
+      id: string;
+      tabId: string;
+      title: string;
+      loading: boolean;
+      /** A Session owns and may be driving this tab (VC-238). */
+      driven: boolean;
+    }
   | {
       kind: "file";
       id: string;
@@ -284,13 +292,7 @@ function HomeTabList({
               tabStop={tabStop}
               dragId={descriptor.id}
               status={descriptor.loading ? "working" : undefined}
-              leading={
-                <BrowserIcon
-                  aria-hidden
-                  weight="bold"
-                  className="size-3 shrink-0 text-muted-foreground"
-                />
-              }
+              leading={<BrowserTabMark driven={descriptor.driven} />}
               onActivate={() => onSelect(descriptor)}
               onClose={() => onClose(descriptor)}
             />

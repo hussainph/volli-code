@@ -251,6 +251,7 @@ function browseFacet(
     picture: null,
     errorCount: null,
     ownerSessionId: null,
+    refusal: null,
   };
 }
 

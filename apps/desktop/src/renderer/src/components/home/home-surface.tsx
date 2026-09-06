@@ -124,6 +124,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import {
   hydrateBrowserTabs,
+  stripBrowserTabs,
   subscribeBrowserTabs,
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
@@ -157,12 +158,17 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         toastError(`Could not load Browser Tabs: ${errorMessage(reason)}`);
       });
   }, [browserApi, selectedId]);
+  // Only what the strip draws (VC-238): a person's tabs and the agent tabs a
+  // person promoted here. A Session's headless and previewed tabs live in
+  // its chat, never in this strip or the tab order.
   const browserTabs = useBrowserTabsStore(
     useShallow((state) =>
       selectedId === null
         ? []
-        : Object.values(state.byId).filter(
-            (tab) => tab.projectId === selectedId && tab.ticketId === null,
+        : stripBrowserTabs(
+            Object.values(state.byId).filter(
+              (tab) => tab.projectId === selectedId && tab.ticketId === null,
+            ),
           ),
     ),
   );
@@ -248,8 +254,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       // a Session the user closed while the guard was waiting.
       const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
       const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-      const browsers = Object.values(useBrowserTabsStore.getState().byId).filter(
-        (tab) => tab.projectId === selectedId && tab.ticketId === null,
+      const browsers = stripBrowserTabs(
+        Object.values(useBrowserTabsStore.getState().byId).filter(
+          (tab) => tab.projectId === selectedId && tab.ticketId === null,
+        ),
       );
       closeHomeFile(selectedId, relPath, [
         ...sessions.map((tab) => tab.sessionId),
@@ -503,8 +511,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
             const workspace = useWorkspaceStore.getState().byProject[selectedId];
             const files = workspace?.projectFiles.tabs ?? [];
-            const browsers = Object.values(useBrowserTabsStore.getState().byId).filter(
-              (tab) => tab.projectId === selectedId && tab.ticketId === null,
+            const browsers = stripBrowserTabs(
+              Object.values(useBrowserTabsStore.getState().byId).filter(
+                (tab) => tab.projectId === selectedId && tab.ticketId === null,
+              ),
             );
             closeHomeBrowserTab(selectedId, descriptor.id, [
               HOME_BOARD_TAB_ID,

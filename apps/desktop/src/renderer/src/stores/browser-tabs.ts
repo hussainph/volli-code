@@ -59,6 +59,59 @@ export function subscribeBrowserTabs(api: BrowserApi): () => void {
   });
 }
 
+/**
+ * The tabs a workspace strip draws (VC-238): a person's own, and the agent
+ * tabs a person promoted there. Headless and previewed agent tabs are
+ * elsewhere — nowhere, and above the owning chat's composer — and both strips
+ * read this one rule rather than each looking at `createdBy`.
+ */
+export function stripBrowserTabs(tabs: readonly BrowserTabState[]): BrowserTabState[] {
+  return tabs.filter((tab) => tab.presentation === "tab");
+}
+
+/**
+ * Every tab one chat can answer for: its Session's own and its children's, in
+ * whatever presentation, in registry order. The chip counts these; the
+ * inventory lists them; a headless tab is visible nowhere else.
+ */
+export function sessionBrowserTabs(
+  byId: Readonly<Record<string, BrowserTabState>>,
+  sessionId: string,
+  childSessionIds: ReadonlySet<string> = new Set(),
+): BrowserTabState[] {
+  return Object.values(byId).filter(
+    (tab) =>
+      tab.ownerSessionId !== null &&
+      (tab.ownerSessionId === sessionId || childSessionIds.has(tab.ownerSessionId)),
+  );
+}
+
+/** The tab pinned above this chat's composer, or null. Main keeps it to one per Session. */
+export function previewedBrowserTab(
+  byId: Readonly<Record<string, BrowserTabState>>,
+  sessionId: string,
+): BrowserTabState | null {
+  return (
+    Object.values(byId).find(
+      (tab) => tab.ownerSessionId === sessionId && tab.presentation === "preview",
+    ) ?? null
+  );
+}
+
+/**
+ * Who is driving a tab, as the chat says it: `you`, `this Session`, a child
+ * by its title, or `another Session` for an owner this chat cannot name.
+ */
+export function browserTabOwnerLabel(
+  tab: BrowserTabState,
+  sessionId: string,
+  titleOf: (sessionId: string) => string | null,
+): string {
+  if (tab.ownerSessionId === null) return "you";
+  if (tab.ownerSessionId === sessionId) return "this Session";
+  return titleOf(tab.ownerSessionId) ?? "another Session";
+}
+
 /** What a blank tab is called before it has been sent anywhere. */
 export const BROWSER_NEW_TAB_TITLE = "New Tab";
 

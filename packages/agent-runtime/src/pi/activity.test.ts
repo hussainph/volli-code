@@ -789,6 +789,7 @@ describe("mapPiActivity browser tools (VC-238)", () => {
       picture: null,
       errorCount: null,
       ownerSessionId: null,
+      refusal: null,
     });
     expect(facet("browser_act", { tabId: "t", generation: 2, kind: "press", key: "Enter" })).toMatchObject({
       action: "press",

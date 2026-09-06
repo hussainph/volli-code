@@ -1510,6 +1510,27 @@ export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
   bounds: BrowserTabBounds;
 }
 
+/**
+ * A person's request to draw a Session's tab somewhere else (VC-238): hide it,
+ * pin it above the owning chat's composer, or promote it into the strip. Main
+ * refuses it for a person's own tab, which is always in the strip.
+ */
+export interface BrowserTabSetPresentationInput extends BrowserTabIdInput {
+  presentation: BrowserTabPresentation;
+}
+
+/** One picture the host took of a tab, by the id the transcript carries. */
+export interface BrowserPictureInput {
+  pictureId: string;
+}
+
+/**
+ * The picture as an `<img src>`, or null when the host no longer has it: a
+ * live capture the bounded set let go of, or an id this launch never minted.
+ * Null is an answer, not a failure — the card says the picture is gone.
+ */
+export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
+
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
@@ -1560,6 +1581,11 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-set-presentation": {
+    args: [input: BrowserTabSetPresentationInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
 }
 
 /** Every Browser workspace invoke channel, derived from its one contract. */

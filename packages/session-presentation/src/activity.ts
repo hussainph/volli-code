@@ -741,10 +741,18 @@ const PAGE_INPUT_ACTIONS: ReadonlySet<ActivityBrowseAction> = new Set(["press", 
 
 function browseFacts(context: ActivityContext): ActivityFacts {
   const facet = context.descriptor.browse ?? null;
-  const page = context.descriptor.subject.label;
   if (facet === null) {
+    const page = context.descriptor.subject.label;
     return { verb: "Browsed", object: page, openPath: null, ...NO_META, detail: null };
   }
+  const facts = browseActionFacts(context, facet);
+  // A refusal outranks whatever the meta would have said: the call did not
+  // happen, and the card carries the rule and Volli's words for it.
+  return facet.refusal === null ? facts : { ...facts, meta: "refused", metaTone: "danger" };
+}
+
+function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
+  const page = context.descriptor.subject.label;
   const verb = BROWSE_VERBS[facet.action];
   if (ELEMENT_ACTIONS.has(facet.action)) {
     return {
