@@ -134,7 +134,7 @@ export function ticketRowMatch(item: CommandPaletteTicketItem): PaletteRowMatch 
 /** The one context line a session row shows AND matches on — built once so the two cannot drift. */
 export function sessionRowContext(item: CommandPaletteSessionItem): string {
   return item.ticketDisplayId === null
-    ? `${item.projectName} · Project Session`
+    ? `${item.projectName} · Board Session`
     : `${item.ticketDisplayId} · ${item.ticketTitle}`;
 }
 

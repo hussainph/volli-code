@@ -58,7 +58,7 @@ afterEach(() => {
 
 const STARTED_SESSION = "abcdef12-3456-7890-abcd-ef1234567890";
 
-/** The Project Session doing the calling — identity the adapter closed over. */
+/** The Board Session doing the calling — identity the adapter closed over. */
 const CALLER: RuntimeSessionIdentity = {
   role: "project",
   sessionId: "caller-session",
@@ -81,7 +81,7 @@ const TICKET_CALLER: RuntimeSessionIdentity = {
  * The ledger a Ticket caller born with the Role default would meet.
  *
  * `startGrantScope` answers null by default because that is what a genuine
- * Project Session's row says: it was never born with a scoped grant. The one
+ * Board Session's row says: it was never born with a scoped grant. The one
  * test that needs the other answer is the orphaned-Ticket case, and it says so.
  */
 function grantingDelegation(
@@ -651,7 +651,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     projects: () => listProjects(db),
     sessions: () => null,
     // Inert for the automation suite: its callers never reach `session.start`,
-    // and the defaults here are what an ordinary Project Session's rows say.
+    // and the defaults here are what an ordinary Board Session's rows say.
     delegation: grantingDelegation(),
     automations: () =>
       options.host === "absent"

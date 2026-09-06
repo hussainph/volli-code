@@ -826,7 +826,7 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
-    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
     /** Which Automations are switched on on this machine (VC-127). */
@@ -1005,7 +1005,7 @@ const api = {
    * Session's venue is the project's main checkout, and a ticket's may be too.
    */
   venue: {
-    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Project Session. */
+    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Board Session. */
     snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
       invoke("volli:venue-snapshot", { projectId, ticketId }),
   },

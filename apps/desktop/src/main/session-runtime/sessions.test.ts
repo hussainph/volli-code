@@ -91,7 +91,7 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-2",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
     });
 
     expect(asked).toEqual([
@@ -100,7 +100,7 @@ describe("Sessions", () => {
     ]);
   });
 
-  it("create mints a Ticket Session and a project Session through the one door — ticketId is the Role", async () => {
+  it("create mints a Ticket Session and a Board Session through the one door — ticketId is the Role", async () => {
     const ticketsAsked: string[] = [];
     const { commands, sessions: door } = sessions({
       ticketBelongsToProject: (_projectId, ticketId) => {
@@ -119,7 +119,7 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
-      title: "Project chat",
+      title: "Board chat",
     });
 
     // Both are durable and addressable NOW — the attach follows separately,
@@ -319,7 +319,7 @@ describe("Sessions", () => {
       operationId: "operation-project",
       projectId: "project-1",
       ticketId: null,
-      title: "A project chat",
+      title: "A Board chat",
     });
     await door().create({
       operationId: "operation-ticket",
@@ -381,7 +381,7 @@ describe("Sessions", () => {
   });
 
   it("records the app default for any Session that never recorded a model — one rule, no Role read", async () => {
-    // In real data only a project Session born before the model policy can
+    // In real data only a Board Session born before the model policy can
     // reach this branch (every mint above records at birth), but the rule is
     // stated for every Session rather than re-deriving the Role to scope it.
     const { commands, sessions: door } = sessions({ readModelSelection: async () => null });

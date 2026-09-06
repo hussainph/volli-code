@@ -115,7 +115,7 @@ describe("sessionActivityState", () => {
 });
 
 describe("addSession", () => {
-  it("appends a project Session tab with the given title, stamps its scope, and activates it", () => {
+  it("appends a Board Session tab with the given title, stamps its scope, and activates it", () => {
     const store = createSessionsStore();
     store.getState().addSession(P, "s1", shellLaunch("Terminal 1"));
 
@@ -1280,7 +1280,7 @@ describe("announceHarness / subscribeSessionHarness", () => {
     expect(useSessionsStore.getState().harness["s1"]?.startedAt).toBe(9000);
   });
 
-  it("has no record to mirror onto for a Project Session", () => {
+  it("has no record to mirror onto for a Board Session", () => {
     const channel = stubAnnounceChannel();
 
     subscribeSessionHarness();

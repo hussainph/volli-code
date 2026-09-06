@@ -5,7 +5,7 @@
  * this surface used to draw one squircle and nothing else, on the argument that
  * an empty transcript has nothing to say. It has one thing to say, and it is
  * the thing no surface in the app was saying — WHERE this Session runs. A
- * Project Session works in the user's own main checkout; a Ticket Session works
+ * Board Session works in the user's own main checkout; a Ticket Session works
  * in a throwaway worktree. That is "safe to let it run" against "it is editing
  * my working tree".
  *
@@ -41,7 +41,7 @@ export function ChatEmptyState({
   ticketId,
 }: {
   projectId: string;
-  /** `null` for a Project Session — the scope, not a missing value. */
+  /** `null` for a Board Session — the scope, not a missing value. */
   ticketId: string | null;
 }) {
   const scope: ChatScope = ticketId === null ? "project" : "ticket";

@@ -1,7 +1,7 @@
 /**
  * Where focus goes in a tab strip, as arithmetic — no DOM, no React.
  *
- * The three strips (Project Files, ticket detail, project Sessions) each wrote
+ * The three strips (Project Files, ticket detail, Board Sessions) each wrote
  * this out by hand: the same `moveTabFocus` helper, the same four-arm keydown
  * switch, and in two of them the same close-time successor walk. Three copies
  * of "which tab does the keyboard land on" is three places for the roving

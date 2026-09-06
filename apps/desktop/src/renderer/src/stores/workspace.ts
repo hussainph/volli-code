@@ -750,7 +750,7 @@ interface WorkspaceState {
    * its own place with the ticket remembered behind it (VC-54 decision 1), so
    * the sidebar's bands, ⌘K and ⌘T can all put a Session in front without any
    * of them silently throwing a ticket away. Every surface that means "show
-   * this Project Session" routes through here rather than pairing `setNav` with
+   * this Board Session" routes through here rather than pairing `setNav` with
    * `setHomeActiveTab` itself — which would also flash one frame of Home with
    * the OLD tab in front.
    */

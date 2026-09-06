@@ -59,7 +59,7 @@ export const STRUCTURED_ADAPTER_ID = "pi";
 
 /**
  * The refusal, once, for both Roles. Two wordings of one rule would read as two
- * rules — a person meeting it on a project chat and again on a Ticket has no way
+ * rules — a person meeting it on a Board chat and again on a Ticket has no way
  * to tell that the second is the same missing setting as the first. The wording
  * itself lives in `@volli/shared` because the renderer classifies this refusal
  * as a predictable configuration state rather than an error to toast (VC-53):
@@ -171,7 +171,7 @@ function modelBackfillCommandId(sessionId: string): string {
 export interface SessionStartInput {
   operationId: string;
   projectId: string;
-  /** The Role: a Ticket Session when set, a project Session when null. */
+  /** The Role: a Ticket Session when set, a Board Session when null. */
   ticketId: string | null;
   title: string | null;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */
@@ -499,8 +499,8 @@ export function createSessions(options: SessionsOptions): Sessions {
       // reach the branch in real data — every mint above records at birth — so
       // this is the legacy migration duty, stated without a Role read.
       if ((await options.readModelSelection(input.sessionId)) === null) {
-        // The project default, and deliberately so: this door knows a Session
-        // id and no Role, and the project default is the one every Role
+        // The Board default, and deliberately so: this door knows a Session
+        // id and no Role, and the Board default is the one every Role
         // inherits from anyway. It is still written as this Session's own
         // `model.select` before the attachment, so what it resolved to is
         // visible in its history rather than assumed.

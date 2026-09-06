@@ -67,7 +67,7 @@ export function isAutomationRuntimePin(runtime: AutomationRuntime): runtime is M
  * The Trigger also decides the TARGET of the Run it starts, which is why the
  * two arms are not interchangeable: a column Trigger names a Ticket, so its Run
  * opens a Ticket Session; a schedule names the Project, so its Run opens a
- * Project Session (VC-112, "Scope — two axes").
+ * Board Session (VC-112, "Scope — two axes").
  */
 export type AutomationTrigger =
   | { kind: "none" }

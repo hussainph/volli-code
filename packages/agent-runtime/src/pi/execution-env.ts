@@ -31,7 +31,7 @@ import { VOLLI_SESSION_ENV, VOLLI_SESSION_TOKEN_ENV, VOLLI_TICKET_ENV } from "@v
  */
 export interface PiSessionEnvIdentity {
   sessionId: string;
-  /** e.g. `VC-51`; `null` for a ticketless project Session. */
+  /** e.g. `VC-51`; `null` for a ticketless Board Session. */
   ticketDisplayId: string | null;
   /**
    * This attachment's `VOLLI_SESSION_TOKEN` — what turns the id beside it from

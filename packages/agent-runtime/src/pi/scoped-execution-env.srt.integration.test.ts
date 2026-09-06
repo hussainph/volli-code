@@ -180,7 +180,7 @@ describe.skipIf(!enabled)(
     });
 
     /**
-     * A project Session, because only a Main checkout has this hole. In a Ticket
+     * A Board Session, because only a Main checkout has this hole. In a Ticket
      * worktree `.git` is a file pointing into the main repository, so the real
      * hooks and config live outside the workspace and `allowWrite` already
      * refuses them; here `.git/` is a real directory inside the writable root.
@@ -242,7 +242,7 @@ describe.skipIf(!enabled)(
     it("keeps two Session workspaces apart in one process", async () => {
       // The process-global SRT configuration carries no workspace paths at all;
       // each root travels per command. That was invisible while every Session
-      // was a Ticket worktree under the same parent, but a project Session is
+      // was a Ticket worktree under the same parent, but a Board Session is
       // rooted at the Main checkout, so two live roots of different kinds is
       // now an ordinary state and nothing else proves it holds. The preflight
       // is cached per manager, so whichever env prepares first is the one that

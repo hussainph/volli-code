@@ -1000,7 +1000,7 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([undefined]);
   });
 
-  it("starts a ticketless project Session in the project root under the project Role", async () => {
+  it("starts a ticketless Board Session in the project root under the `project` Role", async () => {
     const { runtime } = await attached(
       {
         resolveRuntimeContext: async () => ({
@@ -1011,7 +1011,7 @@ describe("Pi native adapter attach", () => {
           projectId: "project-1",
           ticketId: null,
           rootThreadId: sessionRootThreadId(SESSION_ID),
-          brief: "A project-scoped chat Session.",
+          brief: "A Board Session.",
           model: context.model,
           toolSurface: context.toolSurface,
           promptResources: [],
@@ -1030,7 +1030,7 @@ describe("Pi native adapter attach", () => {
       ticketId: null,
     });
     expect(spec.workspacePath).toBe("/work/volli");
-    expect(spec.brief).toEqual({ text: "A project-scoped chat Session." });
+    expect(spec.brief).toEqual({ text: "A Board Session." });
     expect(spec.model).toEqual(context.model);
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
   });

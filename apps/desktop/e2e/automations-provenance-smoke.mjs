@@ -15,7 +15,7 @@
  *   2. A Session a person opened reads as the resting case, and the rail it
  *      appears in draws no mark and no tooltip for it — the acceptance
  *      criterion "a resting rail gains no persistent visual weight".
- *   3. A ticketless Session (a Project Session) reads the same way, which is
+ *   3. A ticketless Session (a Board Session) reads the same way, which is
  *      the branch that never consults the planner log at all.
  *   4. EVERY surface that draws a Session stays quiet for it, not just the
  *      rail: the Session's own header (the tab strip — `chat-plane.tsx` draws

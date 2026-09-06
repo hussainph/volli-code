@@ -359,7 +359,7 @@ export interface UsageReportInput {
  */
 export interface VenueSnapshotInput {
   projectId: string;
-  /** `null` for a Project Session, which runs in the project's main checkout. */
+  /** `null` for a Board Session, which runs in the project's main checkout. */
   ticketId: string | null;
 }
 
@@ -663,7 +663,7 @@ export interface VolliDataIpcContract {
   /**
    * The venue a Session of this scope runs in, measured (VC-55): the checkout,
    * its branch, the four-state file partition, and the lines moved against the
-   * base. `ticketId: null` is a Project Session, which stands in the project's
+   * base. `ticketId: null` is a Board Session, which stands in the project's
    * main checkout.
    */
   "volli:venue-snapshot": { args: [input: VenueSnapshotInput]; result: VenueSnapshotResult };
@@ -1432,7 +1432,7 @@ export interface BrowserTabState {
   /** Product-owned opaque id — never a positional Chromium tab index. */
   tabId: string;
   projectId: string;
-  /** Null for a project-level tab, whether opened by a person or Project Session. */
+  /** Null for a project-level tab, whether opened by a person or Board Session. */
   ticketId: string | null;
   createdBy: BrowserTabCreatedBy;
   url: string;
@@ -1668,7 +1668,7 @@ export interface AutomationRunInput {
  *
  * Its own input and its own channel rather than a nullable `ticketId` on the
  * one above: the two are different Targets with different Session Roles, and a
- * nullable field on the wire would let a caller ask for a Project Session by
+ * nullable field on the wire would let a caller ask for a Board Session by
  * FORGETTING something. docs/BOUNDARIES.md rule 3 wants the shape to say what
  * it means, so the shape that means "the Project" names a project.
  *
@@ -1883,7 +1883,7 @@ export interface VolliAutomationIpcContract {
     result: AutomationSkipsResult;
   };
   /**
-   * Runs an Automation against the PROJECT: one fresh Project Session, one Run
+   * Runs an Automation against the PROJECT: one fresh Board Session, one Run
    * row naming no Ticket. The schedule's own Target, reachable by hand so a
    * Skipped occurrence is recoverable (VC-112).
    */
@@ -2307,7 +2307,7 @@ export interface SessionsInterruptedEvent {
 export interface HarnessEventNotice {
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a Project Session. */
+  /** The ticket this session drives, or `null` for a Board Session. */
   ticketId: string | null;
   harnessId: HarnessId;
   event: HarnessEvent;
@@ -2355,7 +2355,7 @@ export interface SessionHarnessNotice {
   /** The FULL session id — this addresses live renderer state, not a human reader. */
   sessionId: string;
   projectId: string;
-  /** The ticket this session drives, or `null` for a Project Session. */
+  /** The ticket this session drives, or `null` for a Board Session. */
   ticketId: string | null;
   /** The harness now running there. The session's LAUNCH harness is unchanged. */
   harnessId: HarnessId;
@@ -2422,7 +2422,7 @@ export interface SessionStartedNotice {
  */
 export interface SessionActivityNotice {
   projectId: string;
-  /** The ticket this Session drives, or `null` for a Project Session. */
+  /** The ticket this Session drives, or `null` for a Board Session. */
   ticketId: string | null;
   row: SessionListingRow;
 }

@@ -30,7 +30,7 @@
  *     pure policy say "Volli wasn't running" only when that is true.
  *
  * What it fires is a Run whose Target is the PROJECT (VC-112: a schedule
- * Trigger names the Project), so a schedule opens a Project Session.
+ * Trigger names the Project), so a schedule opens a Board Session.
  */
 import { createHash } from "node:crypto";
 

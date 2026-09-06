@@ -1174,8 +1174,8 @@ export interface SessionProjection {
    * a later fact can change. `sessions.ticket_id` is `ON DELETE SET NULL`
    * (deleting a ticket orphans its sessions into `session.ticketId === null`
    * ones), so `session.ticketId === null && !bornTicketless` is exactly an
-   * orphan: a Project Session and an orphaned one both read `ticketId: null`
-   * today, but only the Project Session was ever meant to.
+   * orphan: a Board Session and an orphaned one both read `ticketId: null`
+   * today, but only the Board Session was ever meant to.
    */
   bornTicketless: boolean;
 }

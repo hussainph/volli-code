@@ -126,7 +126,7 @@ export interface NewSessionLanding {
   projectId: string;
   /**
    * The ticket that owns it, or `null` for one of the project's ticketless
-   * Project Sessions. Not "unknown" — it is the durable fact `projectScope` carries.
+   * Board Sessions. Not "unknown" — it is the durable fact `projectScope` carries.
    */
   ticketId: string | null;
   /** The page to move to (only ever `"home"`), or `null` to stay put. */
@@ -143,7 +143,7 @@ export interface NewSessionLanding {
  * pressing, and the whole value of an accelerator is that you do not. That is a
  * real cost and it is being paid deliberately, because the thing it was
  * protecting turned out not to be the thing people wanted protected. ⌘T does not
- * mean "start a project Session"; it means "start a Session HERE", the way ⌘T
+ * mean "start a Board Session"; it means "start a Session HERE", the way ⌘T
  * in a browser opens a tab in the window you are looking at rather than in some
  * canonical first window. Under that reading the chord has ONE meaning and the
  * owner is simply read off the surface, which is also how every other create

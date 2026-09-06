@@ -336,7 +336,7 @@ describe("renameTerminalSession", () => {
 });
 
 describe("killProjectTicketSessions", () => {
-  it("kills a project's ticket sessions (including ones the board no longer lists) and leaves other projects and Project Sessions alone", () => {
+  it("kills a project's ticket sessions (including ones the board no longer lists) and leaves other projects and Board Sessions alone", () => {
     useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
     useSessionsStore.getState().addSession(ticketScope("p", "t2"), "s2", shellLaunch("Session 1"));
     useSessionsStore.getState().addSession(ticketScope("q", "t3"), "s3", shellLaunch("Session 1"));
@@ -346,7 +346,7 @@ describe("killProjectTicketSessions", () => {
 
     expect(useSessionsStore.getState().byOwner["t1"]).toBeUndefined();
     expect(useSessionsStore.getState().byOwner["t2"]).toBeUndefined();
-    // A ticket under a different project is untouched, as is p's Project Session.
+    // A ticket under a different project is untouched, as is p's Board Session.
     expect(useSessionsStore.getState().byOwner["t3"]?.tabs).toHaveLength(1);
     expect(useSessionsStore.getState().byOwner["p"]?.tabs).toHaveLength(1);
     expect(killMock).toHaveBeenCalledWith("s1");
