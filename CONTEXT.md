@@ -92,9 +92,14 @@ Project Session runs on the Main checkout with no worktree and no board
 involvement, and is recorded in Session history exactly as a Ticket Session is.
 A Subagent Session is started by a parent's `session_delegate` call, shares the
 parent's working directory and inherits its Ticket, holds every coding tool
-and no agent-control verb or `ask_user`, and its last message is delivered back
-into the parent as a marked message when its first turn completes; the parent
-is never parked on it.
+and no agent-control verb or `ask_user`, and carries its parent on the Session
+itself (`parentSessionId`, a ledger fact). When its first turn completes a
+notice from Volli — the child's handle, state and title, none of its words —
+is steered into the parent, and the parent reads the answer with
+`volli session answer <handle>`, so the child's prose reaches it as a tool
+result and never as its user; the parent is never parked on it, and stopping
+the parent stops its children. Write-capable children in a shared tree are
+VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread
 
 **Authority Snapshot**:
