@@ -168,6 +168,12 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // neither has ever had a socket door to shut.
   "session.stop": "control",
   "session.send": "control",
+  // Delegation to a bounded helper (VC-9): control tier for the reason
+  // `session.start` is — it opens agent work and spends a model — and in both
+  // working bundles, because "go look at this and tell me" is what an
+  // executor needs as much as an orchestrator does. The child's own bundle is
+  // what makes that safe, and the child holds none of this family.
+  "session.delegate": "control",
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
@@ -623,6 +629,7 @@ describe("REFERENCE_VERBS", () => {
       "session.start",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
   });
 

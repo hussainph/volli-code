@@ -33,14 +33,17 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
       "session.send",
       "ticket.await",
       "automation.run",
+      "session.delegate",
     ]);
     // The default-bundle property is asserted as absence rather than prose. An
     // injected instruction telling a Ticket Session to start ten Sessions has
     // nothing to call, and a durable birth grant is the explicit exception
-    // (VC-183), never a bundle edit. `ticket.await` is not part of the
-    // agent-control family — waiting controls nobody (VC-85/VC-92).
-    expect(roleVerbBundle("ticket")).toEqual(["ticket.await"]);
-    // VC-9 defines this one; until then an empty bundle is the honest answer.
+    // (VC-183), never a bundle edit. Neither `ticket.await` nor
+    // `session.delegate` is part of the agent-control family — waiting
+    // controls nobody (VC-85/VC-92), and a subagent answers back here and can
+    // act on nothing else (VC-9).
+    expect(roleVerbBundle("ticket")).toEqual(["ticket.await", "session.delegate"]);
+    // A helper's bundle is the whole of its authority: nothing (VC-9).
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
 
@@ -78,6 +81,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "automation.run",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
   });
 
@@ -92,7 +96,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // The await tool is deliberately in this room too (VC-92's ruling on
     // VC-85): blocking is a runtime property, not a privilege, and what may
     // be awaited is policy data judged at call time.
-    expect(verbToolsOf(surface)).toEqual(["ticket.await"]);
+    expect(verbToolsOf(surface)).toEqual(["ticket.await", "session.delegate"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -110,6 +114,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_screenshot",
       "browser_console",
       "ticket.await",
+      "session.delegate",
     ]);
   });
 
@@ -181,6 +186,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "automation.run",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
   });
 
@@ -206,7 +212,39 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "automation.run",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
+  });
+});
+
+describe("session.delegate is the working Roles' verb, and never the helper's (VC-9)", () => {
+  it("is tool-only control tier, so it never reaches the socket", () => {
+    const entry = verbEntry("session.delegate");
+    expect(entry?.accessModes).toEqual(["tool"]);
+    expect(entry?.actor).toBe("role");
+    expect(verbTier(entry!)).toBe("control");
+    expect(entry?.tool?.name).toBe("session_delegate");
+    // Nothing in the schema names a Session, a project or an actor: the host
+    // binds the caller, which is the whole of what makes the door safe.
+    expect(entry?.tool?.input.map((field) => field.name)).toEqual([
+      "task",
+      "title",
+      "model",
+      "reasoning",
+    ]);
+  });
+
+  it("is in both working bundles and absent from the subagent's", () => {
+    expect(roleVerbBundle("project")).toContain("session.delegate");
+    expect(roleVerbBundle("ticket")).toContain("session.delegate");
+    expect(roleVerbBundle("subagent")).not.toContain("session.delegate");
+  });
+
+  it("is appended after session.send, so no frozen surface shifted under it", () => {
+    expect(VERB_TOOL_KEYS.at(-1)).toBe("session.delegate");
+    expect(VERB_TOOL_KEYS.indexOf("session.delegate")).toBe(
+      VERB_TOOL_KEYS.indexOf("session.send") + 1,
+    );
   });
 });
 

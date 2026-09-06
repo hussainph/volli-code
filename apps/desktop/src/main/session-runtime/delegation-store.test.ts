@@ -469,3 +469,58 @@ describe("Ticket Session delegation grants", () => {
     });
   });
 });
+
+describe("Subagent Session ancestry (VC-9)", () => {
+  it("records a subagent's parent link with no grant, one generation below its parent", () => {
+    const h = harness();
+    // The parent is itself a delegated Ticket Session at depth 1, so its
+    // subagent reads as the grandchild it is.
+    const parentBirth = h.store.resolveBirth({
+      role: "ticket",
+      ticketId: h.ticket.id,
+      delegation: {
+        parentSessionId: null,
+        depth: 0,
+        maxDepth: 1,
+        maxChildren: 3,
+        claimToolCallId: null,
+      },
+    });
+    h.store.recordBirth(h.root.id, parentBirth);
+    const child = testSession("project-1", h.ticket.id, { id: "helper-session" });
+    insertSession(h.db, child);
+
+    const birth = h.store.resolveBirth({
+      role: "subagent",
+      ticketId: h.ticket.id,
+      parentSessionId: h.root.id,
+    });
+    h.store.recordBirth(child.id, birth);
+
+    expect(birth).toEqual({ grants: [], delegation: null, parentSessionId: h.root.id });
+    expect(h.store.parentSessionId(child.id)).toBe(h.root.id);
+    expect(h.store.parentSessionId(h.root.id)).toBeNull();
+    expect(
+      h.db
+        .prepare("SELECT parent_session_id, depth FROM session_delegations WHERE session_id = ?")
+        .get(child.id),
+    ).toEqual({ parent_session_id: h.root.id, depth: 1 });
+    // No grant row: the helper's bundle is the whole of its authority.
+    expect(h.store.startGrantScope(child.id)).toBeNull();
+    // Recording the same birth again is one row, not a conflict.
+    expect(() => h.store.recordBirth(child.id, birth)).not.toThrow();
+  });
+
+  it("refuses a subagent with no parent, and a parent on any other Role", () => {
+    const h = harness();
+    expect(() => h.store.resolveBirth({ role: "subagent", ticketId: null })).toThrow(
+      "needs the Session that delegated it",
+    );
+    expect(() =>
+      h.store.resolveBirth({ role: "project", ticketId: null, parentSessionId: h.root.id }),
+    ).toThrow("Only a Subagent Session names a parent");
+    expect(() =>
+      h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id, parentSessionId: h.root.id }),
+    ).toThrow("Only a Subagent Session names a parent");
+  });
+});

@@ -1825,6 +1825,124 @@ export const VERB_REGISTRY = [
     positionalId: "required",
     options: [],
   },
+  {
+    // Delegation to a bounded helper (VC-9): hand one task to a new Subagent
+    // Session and go on working. The child is a real Session — its own Role,
+    // transcript, model attachment and row in the session list — never a
+    // hidden thread inside the parent, and its answer comes back INTO the
+    // parent as a marked message when its first turn completes, so the parent
+    // is not parked on it.
+    //
+    // Control tier, tool-only, for the reason `session.start` is: it opens
+    // agent work and spends a model, so it must carry its caller in the
+    // binding rather than in a request any same-uid process could forge. In
+    // BOTH working bundles: an executor needs "go read this and report back"
+    // as much as an orchestrator does, and what makes that safe is the child's
+    // bundle — no agent-control verb, no `ticket.await`, no `ask_user` — not
+    // the parent's Role. Depth is therefore structural: a child has no
+    // `session.delegate` to call, so there is no grandchild to count.
+    //
+    // Appended after `session.send`, because registry declaration order is
+    // the frozen tool order and inserting earlier would shift every verb after
+    // it inside every already-frozen surface record.
+    key: "session.delegate",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.delegate" },
+    // Listed for the reason `session.stop` is: `volli session delegate` must
+    // teach its real door rather than answer UNSUPPORTED_COMMAND. Its
+    // reference position follows the rest of the Session group.
+    listed: true,
+    referenceOrder: 33,
+    group: "Session",
+    summary: "Delegate one task to a subagent Session that answers back here.",
+    example: 'volli session delegate "Find where the auth token is refreshed"',
+    notes: [
+      "Runs as a named tool in the project and ticket Role bundles; the shell never executes it.",
+      "Returns as soon as the subagent starts; its final message arrives in this Session as a marked message when its first turn completes.",
+      "The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session",
+          operation: "create",
+          summary:
+            "Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.",
+        },
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "When the subagent's first turn completes, append its final message to this Session's ledger as a message marked as the subagent's answer.",
+        },
+      ],
+      humanVisible: [
+        "The subagent appears in the session list as a child of this Session, with its own transcript.",
+      ],
+      nonEffects: [
+        "No Ticket moves, and the person driving is not asked anything.",
+        "This Session is not paused: the call returns at once and the answer arrives later.",
+      ],
+    },
+    tool: {
+      name: "session_delegate",
+      // Written for the model, and mostly about the two facts the schema
+      // cannot carry: that the answer arrives later as a message (so the model
+      // should go on working rather than wait or poll), and that the child
+      // shares the working tree (so two agents editing one file is the
+      // model's own coordination problem to avoid). The last line is the
+      // same one every control-tier tool ends on.
+      description: [
+        "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own and its final message is delivered back into this Session as a message marked as its answer when it finishes.",
+        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll or wait for it.",
+        "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
+        "It cannot start, stop, steer or delegate to other Sessions. At most a few subagents run at once; a refusal names the ones still running.",
+        "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "task",
+          type: "string",
+          required: true,
+          description:
+            "The delegated task, complete on its own: what to do, where to look, and what the answer should contain.",
+        },
+        {
+          name: "title",
+          type: "string",
+          description:
+            "A permanent title for the subagent Session. Omit to let Volli name it from the task.",
+        },
+        {
+          name: "model",
+          type: "object",
+          description: "Run the subagent on a specific model instead of the utility default.",
+          fields: [
+            {
+              name: "providerId",
+              type: "string",
+              required: true,
+              description: "Provider id, as `model list` prints it.",
+            },
+            {
+              name: "modelId",
+              type: "string",
+              required: true,
+              description: "Model id, as `model list` prints it.",
+            },
+          ],
+        },
+        {
+          name: "reasoning",
+          type: "enum",
+          values: REASONING_LEVELS,
+          description: "Reasoning level override; the chosen model must support it.",
+        },
+      ],
+    },
+    options: [],
+  },
 ] as const satisfies readonly VerbEntry[];
 
 type RegistryEntry = (typeof VERB_REGISTRY)[number];

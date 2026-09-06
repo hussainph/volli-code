@@ -204,6 +204,8 @@ import {
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
+import { createDelegations } from "./session-runtime/delegate-session";
+import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
@@ -1672,6 +1674,30 @@ app.whenReady().then(async () => {
             },
           });
         };
+  // The delegation host (VC-9): one per launch, holding the live-subagent
+  // registry, and composed lazily on first use because the Sessions facade it
+  // mints through is built further down this same function.
+  let delegations: Delegations | null = null;
+  const delegationsFor = (): Delegations | null => {
+    if (delegations !== null) return delegations;
+    if (
+      sessions === null ||
+      sessionRuntime === null ||
+      sessionEngine === null ||
+      submitKickoffMessage === undefined
+    ) {
+      return null;
+    }
+    delegations = createDelegations({
+      sessions,
+      submitSessionMessage: submitKickoffMessage,
+      runtime: sessionRuntime,
+      sessionEngine,
+      onMutation: (change) => broadcastDataChanged(change),
+      now: () => Date.now(),
+    });
+    return delegations;
+  };
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
   // rest: the project list grows, and the facade is built further down this
@@ -1707,6 +1733,7 @@ app.whenReady().then(async () => {
             sessionEngine !== null && sessionRuntime !== null
               ? { sessionEngine, runtime: sessionRuntime }
               : null,
+          delegate: delegationsFor,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),

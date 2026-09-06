@@ -124,8 +124,15 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "session.send",
     "ticket.await",
     "automation.run",
+    "session.delegate",
   ]) as readonly VerbToolKey[],
-  ticket: Object.freeze(["ticket.await"]) as readonly VerbToolKey[],
+  // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
+  // needs "go look at this and tell me" as much as an orchestrator does, and
+  // what makes it safe is the CHILD's bundle, not the parent's Role. It is
+  // not the agent-control family — a subagent answers back here and cannot
+  // act on anything else — so VC-92's pairing rule does not pull the rest of
+  // that family in with it.
+  ticket: Object.freeze(["ticket.await", "session.delegate"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });
 
