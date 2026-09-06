@@ -26,6 +26,7 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
+import type { UsageLimits } from "./usage-limits";
 // Type-only: `verb-registry.ts` reads this module's own vocabulary, so a value
 // import here would close a cycle. Nothing below needs one.
 import type { VerbToolKey } from "./verb-registry";
@@ -117,6 +118,13 @@ export interface ModelAccessProvider {
    * Signing out acts on the stored credential and only ever on that.
    */
   hasStoredCredential: boolean;
+  /**
+   * The account's subscription windows, when this provider has a way to read
+   * them (VC-263). Absent for the many providers that report no such thing;
+   * present-but-`unavailable` for an account the runtime knows how to ask
+   * about and could not, or must not, read — see {@link UsageLimits}.
+   */
+  usageLimits?: UsageLimits;
 }
 
 /** One model the runtime knows, qualified by current account availability. */

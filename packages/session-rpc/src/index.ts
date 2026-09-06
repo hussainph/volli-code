@@ -377,6 +377,28 @@ const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
+/**
+ * One account's subscription windows (VC-263). Every field is a number the
+ * runtime already clamped or a label it composed; nothing here is a credential
+ * or a provider's free text. `resetsAt` stays a string because the wire is
+ * JSON and a `Date` would not survive a non-Electron transport.
+ */
+const usageLimitsSchema = z.object({
+  checkedAt: z.number().finite(),
+  windows: z
+    .array(
+      z.object({
+        id: nonEmptyString,
+        kind: z.enum(["session", "weekly", "monthly", "other"]),
+        label: displayLabel,
+        usedPercent: z.number().finite().min(0).max(100),
+        resetsAt: z.string().optional(),
+        windowDurationMins: positiveSafeInteger.optional(),
+      }),
+    )
+    .max(50),
+  unavailable: z.object({ reason: z.enum(["unsupported", "probeFailed"]) }).optional(),
+});
 const modelCatalogRefreshReportSchema = z.object({
   added: nonNegativeSafeInteger,
   removed: nonNegativeSafeInteger,
@@ -416,6 +438,7 @@ const modelAccessSnapshotSchema = z.object({
           }),
         ),
         hasStoredCredential: z.boolean(),
+        usageLimits: usageLimitsSchema.optional(),
       })
       .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),
