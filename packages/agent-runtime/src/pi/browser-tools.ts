@@ -31,6 +31,7 @@ import type {
   NonCodingToolId,
   RuntimeBrowserConsole,
   RuntimeBrowserNavigation,
+  RuntimeBrowserPage,
   RuntimeBrowserPort,
   RuntimeBrowserSnapshot,
   RuntimeBrowserTabList,
@@ -49,7 +50,7 @@ export type BrowserToolDetails = ActivityBrowse;
 
 function details(
   action: ActivityBrowseAction,
-  page: { tabId: string; url?: string | undefined; title?: string | undefined } | null,
+  page: Partial<RuntimeBrowserPage> | null,
   extra: Partial<Pick<ActivityBrowse, "target" | "picture" | "errorCount">> = {},
 ): BrowserToolDetails {
   return {
@@ -60,9 +61,12 @@ function details(
     target: extra.target ?? null,
     picture: extra.picture ?? null,
     errorCount: extra.errorCount ?? null,
-    // The port scopes ownership; a tab this Session can act on is its own or
-    // the person's, and the card learns the owner from the live tab state.
-    ownerSessionId: null,
+    // Every one of these is the PORT's answer, never a guess here: the card
+    // marks a tab a child Session owns, and shows a page that failed to load,
+    // from what the host knows. A row that invented `null` here would render a
+    // gone agent tab as the person's own.
+    ownerSessionId: page?.ownerSessionId ?? null,
+    error: page?.error ?? null,
     refusal: null,
   };
 }
@@ -79,9 +83,33 @@ function asked(
 ): BrowserToolDetails {
   return details(
     action,
-    { tabId: params.tabId, url: params.url },
+    { tabId: params.tabId, ...(params.url === undefined ? {} : { url: params.url }) },
     { target: params.ref ?? params.key ?? params.direction ?? null },
   );
+}
+
+/**
+ * What a refusal knows that the call did not: the page the port had in hand
+ * when it declined. Without it a refused `browser_act` reads `Clicked e5 ·
+ * refused` with no page at all, because the model's own arguments carry only
+ * a ref (§3). The model's stated target still wins for `url` — a navigation
+ * refused for its target must name that target, not the page it stayed on.
+ */
+function refused(said: BrowserToolDetails, error: BrowserRefusal): BrowserToolDetails {
+  const page = error.page;
+  return {
+    ...said,
+    ...(page === null
+      ? {}
+      : {
+          tabId: page.tabId,
+          url: said.url ?? page.url,
+          title: page.title,
+          ownerSessionId: page.ownerSessionId,
+          error: page.error ?? null,
+        }),
+    refusal: error.rule,
+  };
 }
 
 /** The vocabulary's browser half, in the order the surface offers it. */
@@ -232,7 +260,7 @@ async function guarded(
     if (!(error instanceof BrowserRefusal)) throw error;
     return {
       content: [{ type: "text", text: refusalText(error) }],
-      details: { ...said, refusal: error.rule },
+      details: refused(said, error),
     };
   } finally {
     for (const one of live) one.removeEventListener("abort", abandon);

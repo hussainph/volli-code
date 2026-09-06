@@ -31,6 +31,8 @@ function snapshot(overrides: Partial<RuntimeBrowserSnapshot> = {}): RuntimeBrows
     tabId: "tab-1",
     url: "http://localhost:5173/",
     title: "Fixture App",
+    ownerSessionId: "s1",
+    error: null,
     snapshotText: '- button "Save" [ref=e2]',
     generation: 4,
     truncated: false,
@@ -162,6 +164,7 @@ describe("browser tools", () => {
       picture: null,
       errorCount: null,
       ownerSessionId: null,
+      error: null,
       refusal: "browser.stale-ref",
     });
 
@@ -181,12 +184,94 @@ describe("browser tools", () => {
     });
   });
 
+  it("names the page a refused action was aimed at, which the call's own arguments cannot (VC-238)", async () => {
+    const port = unusedPort();
+    port.act = async () => {
+      throw new BrowserRefusal("browser.stale-ref", "Take a fresh snapshot.", {
+        tabId: "tab-1",
+        url: "https://example.com/sign-in",
+        title: "Sign in \u2014 Example",
+        ownerSessionId: "s-child",
+        error: null,
+      });
+    };
+
+    const refused = await createBrowserTool("browser_act", port).execute("call-2c", {
+      tabId: "tab-1",
+      generation: 3,
+      kind: "click",
+      ref: "e2",
+    });
+
+    // `Clicked e2 · refused` with no page was the whole of the row before this.
+    expect(refused.details).toMatchObject({
+      action: "click",
+      tabId: "tab-1",
+      url: "https://example.com/sign-in",
+      title: "Sign in \u2014 Example",
+      target: "e2",
+      ownerSessionId: "s-child",
+      refusal: "browser.stale-ref",
+    });
+  });
+
+  it("keeps the model's own target on a refused navigation, rather than the page it stayed on", async () => {
+    const port = unusedPort();
+    port.navigate = async () => {
+      throw new BrowserRefusal("browser.navigation-policy", "http and https only.", {
+        tabId: "tab-1",
+        url: "https://example.com/current",
+        title: "Current",
+        ownerSessionId: null,
+        error: null,
+      });
+    };
+
+    const refused = await createBrowserTool("browser_navigate", port).execute("call-2d", {
+      tabId: "tab-1",
+      url: "file:///etc/passwd",
+    });
+
+    // A navigation refused FOR its target must name that target; the tab and
+    // its owner still come from the page the port had in hand.
+    expect(refused.details).toMatchObject({
+      action: "open",
+      tabId: "tab-1",
+      url: "file:///etc/passwd",
+      title: "Current",
+      refusal: "browser.navigation-policy",
+    });
+  });
+
+  it("carries the tab's owner and its load failure onto the row, so the card need not guess", async () => {
+    const port = unusedPort();
+    port.navigate = async () =>
+      snapshot({
+        ownerSessionId: "s-child",
+        error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+        picture: "picture-9",
+      });
+
+    const opened = await createBrowserTool("browser_navigate", port).execute("call-2e", {
+      url: "https://nowhere.example/",
+    });
+
+    expect(opened.details).toMatchObject({
+      action: "open",
+      ownerSessionId: "s-child",
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+      picture: "picture-9",
+    });
+  });
+
   it("returns a screenshot as an image the model can see, beside Volli's provenance, and names the kept picture", async () => {
     const port = unusedPort();
     port.screenshot = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
       title: "Fixture App",
+      ownerSessionId: "s-child",
+      error: null,
       base64Png: "aGVsbG8=",
       picture: "picture-3",
       width: 800,
@@ -208,7 +293,10 @@ describe("browser tools", () => {
       target: null,
       picture: "picture-3",
       errorCount: null,
-      ownerSessionId: null,
+      // The PORT's answer, not a guess here: without it the card renders a
+      // child Session's tab as the person's own once the tab is gone.
+      ownerSessionId: "s-child",
+      error: null,
       refusal: null,
     });
     // The description stays honest with what ships: the person sees the
@@ -294,6 +382,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [
         { level: "warn", text: "deprecated call" },
         { level: "error", text: "Uncaught Error: boom" },
@@ -315,6 +406,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [{ level: "log", text: "whole record" }],
       truncated: false,
     });
@@ -324,6 +418,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [],
       truncated: false,
     });
@@ -473,7 +570,8 @@ describe("browser tools", () => {
       target: "Save",
       picture: "picture-9",
       errorCount: null,
-      ownerSessionId: null,
+      ownerSessionId: "s1",
+      error: null,
       refusal: null,
     });
   });

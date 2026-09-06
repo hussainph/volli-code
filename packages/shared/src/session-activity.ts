@@ -73,6 +73,14 @@ export type ActivityBrowse = {
   errorCount: number | null;
   ownerSessionId: string | null;
   /**
+   * The tab's own trouble in Volli's words — a load failure or a crashed page
+   * renderer — or null when the page was healthy (§9). A navigation onto a
+   * page that fails to load still answers with a snapshot, so the harness
+   * calls the tool a success; this is what makes the row's glyph disagree, and
+   * it is what the card keeps once the tab itself is gone.
+   */
+  error: string | null;
+  /**
    * The `browser.*` rule that refused this call, or null when it ran. A
    * refusal is a result rather than a failure to the harness, so without this
    * the row would read as a plain success; the card shows the rule and the
@@ -238,6 +246,7 @@ function readBrowse(value: unknown): ActivityBrowse | null {
     picture: optionalString(value.picture),
     errorCount: optionalNumber(value.errorCount),
     ownerSessionId: optionalString(value.ownerSessionId),
+    error: optionalString(value.error),
     refusal: optionalString(value.refusal),
   };
 }

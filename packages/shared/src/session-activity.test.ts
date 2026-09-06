@@ -314,6 +314,7 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
             picture: "picture-7",
             errorCount: null,
             ownerSessionId: "s1",
+            error: "Could not load page: ERR_CONNECTION_REFUSED",
           },
         }),
       ),
@@ -333,6 +334,9 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
         picture: "picture-7",
         errorCount: null,
         ownerSessionId: "s1",
+        // Volli's words for the tab's own trouble, so the row's glyph can
+        // disagree with a harness that called the call a success (§9).
+        error: "Could not load page: ERR_CONNECTION_REFUSED",
         refusal: null,
       },
     });
@@ -356,6 +360,7 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
       picture: null,
       errorCount: 3,
       ownerSessionId: null,
+      error: null,
       refusal: null,
     });
     expect(
@@ -381,11 +386,15 @@ describe("readActivityDescriptor browse facet (VC-238)", () => {
       picture: null,
       errorCount: null,
       ownerSessionId: null,
+      error: null,
       refusal: null,
     });
     expect(readActivityBrowse(undefined)).toBeNull();
     expect(readActivityBrowse({ action: "click", refusal: "browser.stale-ref" })?.refusal).toBe(
       "browser.stale-ref",
     );
+    // A facet written before this build knew about `error` reads as healthy
+    // rather than failing the whole descriptor: tolerant on read.
+    expect(readActivityBrowse({ action: "click", error: 7 })?.error).toBeNull();
   });
 });

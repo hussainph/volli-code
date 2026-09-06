@@ -59,6 +59,7 @@ import type {
   RuntimeBrowserActResult,
   RuntimeBrowserConsole,
   RuntimeBrowserNavigation,
+  RuntimeBrowserPage,
   RuntimeBrowserPort,
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
@@ -212,6 +213,22 @@ export function loadWaiter(
   };
 }
 
+/**
+ * The tab facts every answer carries (VC-238): what the model's text cannot
+ * say and the renderer may not infer — which tab, whose it is, and whether its
+ * page is broken. One place, so a snapshot, a screenshot, a console read and a
+ * refusal all describe the same tab the same way.
+ */
+function pageOf(tab: BrowserTabState): RuntimeBrowserPage {
+  return {
+    tabId: tab.tabId,
+    url: tab.url,
+    title: tab.title,
+    ownerSessionId: tab.ownerSessionId,
+    error: tab.error,
+  };
+}
+
 export function createAgentBrowserPort(options: AgentBrowserPortOptions): RuntimeBrowserPort {
   const controllers = new Map<string, BrowserTabController>();
   /** One live hold per driven tab; released with the tab's scope or the attachment. */
@@ -225,6 +242,20 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     const release = wakes.get(tabId);
     wakes.delete(tabId);
     release?.();
+  };
+
+  /**
+   * Runs one call against a resolved tab, and tells any refusal inside it
+   * which page it was aimed at. A refusal raised deeper — a stale generation
+   * in the controller, an unknown ref — knows the rule but not the tab, and
+   * without this the transcript row would name a bare `e5` and no page.
+   */
+  const refusalsOn = async <T>(tab: BrowserTabState, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      throw error instanceof BrowserRefusal ? error.onPage(pageOf(tab)) : error;
+    }
   };
 
   const ownedHere = (tab: BrowserTabState): boolean =>
@@ -303,10 +334,13 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     const controller = await controllerFor(tab, signal);
     const printed = await controller.snapshot(signal);
     const picture = await pictureAfterChange(tab.tabId, changed);
+    // Re-read after the capture, and without refusing: a load that failed
+    // while this call waited is the one fact a successful-looking snapshot
+    // would otherwise hide (§9), and a tab that closed in the same gap should
+    // still answer with the page it described rather than become a refusal.
+    const settled = visible().find((candidate) => candidate.tabId === tabId) ?? tab;
     return {
-      tabId: tab.tabId,
-      url: tab.url,
-      title: tab.title,
+      ...pageOf(settled),
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
@@ -396,51 +430,65 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): Runtim
     },
     navigate: async (input) => {
       input.signal.throwIfAborted();
-      const steered = steer(input.tabId, input.navigation);
-      return snapshotOf(steered.tabId, input.signal, steered.waitMode, true);
+      const run = async (): Promise<RuntimeBrowserSnapshot> => {
+        const steered = steer(input.tabId, input.navigation);
+        return snapshotOf(steered.tabId, input.signal, steered.waitMode, true);
+      };
+      // Named quietly rather than resolved: a refused navigation should still
+      // say which tab it was aimed at, but WHICH refusal fires first is
+      // `steer`'s order to keep — the target policy is judged before the host
+      // sees anything, unknown tab or not.
+      const aimed =
+        input.tabId === undefined
+          ? undefined
+          : visible().find((candidate) => candidate.tabId === input.tabId);
+      return aimed === undefined ? run() : refusalsOn(aimed, run);
     },
     snapshot: async (input) => {
-      resolve(input.tabId);
-      return snapshotOf(input.tabId, input.signal);
+      const tab = resolve(input.tabId);
+      return refusalsOn(tab, () => snapshotOf(input.tabId, input.signal));
     },
     act: async (input): Promise<RuntimeBrowserActResult> => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       keepAwake(tab.tabId);
-      const controller = await controllerFor(tab, input.signal);
-      const acted = await controller.act(
-        {
-          generation: input.generation,
-          kind: input.kind,
-          ...(input.ref === undefined ? {} : { ref: input.ref }),
-          ...(input.text === undefined ? {} : { text: input.text }),
-          ...(input.key === undefined ? {} : { key: input.key }),
-          ...(input.direction === undefined ? {} : { direction: input.direction }),
-          ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
-        },
-        input.signal,
-      );
-      const snap = await snapshotOf(input.tabId, input.signal, "possible-navigation", true);
-      return { ...snap, target: acted.target };
+      return refusalsOn(tab, async () => {
+        const controller = await controllerFor(tab, input.signal);
+        const acted = await controller.act(
+          {
+            generation: input.generation,
+            kind: input.kind,
+            ...(input.ref === undefined ? {} : { ref: input.ref }),
+            ...(input.text === undefined ? {} : { text: input.text }),
+            ...(input.key === undefined ? {} : { key: input.key }),
+            ...(input.direction === undefined ? {} : { direction: input.direction }),
+            ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+          },
+          input.signal,
+        );
+        const snap = await snapshotOf(input.tabId, input.signal, "possible-navigation", true);
+        return { ...snap, target: acted.target };
+      });
     },
     screenshot: async (input) => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       keepAwake(tab.tabId);
-      const controller = await controllerFor(tab, input.signal);
-      const shot = await controller.screenshot(input.signal);
-      input.signal.throwIfAborted();
-      // The model's picture is the person's too: kept, not re-captured.
-      const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
-      return { tabId: tab.tabId, url: tab.url, title: tab.title, picture, ...shot };
+      return refusalsOn(tab, async () => {
+        const controller = await controllerFor(tab, input.signal);
+        const shot = await controller.screenshot(input.signal);
+        input.signal.throwIfAborted();
+        // The model's picture is the person's too: kept, not re-captured.
+        const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
+        return { ...pageOf(resolve(tab.tabId)), picture, ...shot };
+      });
     },
     console: async (input) => {
       input.signal.throwIfAborted();
       const tab = resolve(input.tabId);
       const record = options.host.consoleOf(tab.tabId);
       return {
-        tabId: tab.tabId,
-        url: tab.url,
+        ...pageOf(tab),
         messages: record.messages,
         truncated: record.truncated,
       };
