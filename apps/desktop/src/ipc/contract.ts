@@ -16,6 +16,7 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  BrowserTabHolder,
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
@@ -1444,6 +1445,8 @@ export interface BrowserTabState {
   canGoForward: boolean;
   /** Monotonic within this tab; a main-frame navigation advances it. */
   generation: number;
+  /** Who holds the tab right now, or `null` for a free tab (VC-239). */
+  heldBy: BrowserTabHolder | null;
 }
 
 /**
@@ -1539,6 +1542,14 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  /**
+   * The person's three hold controls (VC-239). Explicit, never inferred from
+   * input: main cannot tell a person's click in the native view from a
+   * Session's synthetic one, so only these channels move the hold.
+   */
+  "volli:browser-take-over": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-hand-back": { args: [input: BrowserTabIdInput]; result: BrowserTabResult };
+  "volli:browser-ask-to-leave": { args: [input: BrowserTabIdInput]; result: Result };
 }
 
 /** Every Browser workspace invoke channel, derived from its one contract. */

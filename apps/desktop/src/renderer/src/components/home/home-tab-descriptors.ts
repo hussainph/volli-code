@@ -94,6 +94,7 @@ export function useHomeTabDescriptors({
       tabId: tab.tabId,
       title: browserTabDisplayTitle(tab),
       loading: tab.loading,
+      heldBy: tab.heldBy,
     })),
   ];
 }

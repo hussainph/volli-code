@@ -519,6 +519,19 @@ export interface RuntimeWebSearchResults {
   truncated: boolean;
 }
 
+/**
+ * Who holds a Browser Tab — whose turn it is to drive it (VC-239).
+ *
+ * At most one party at a time: one Session, or the person. `null` is a free
+ * tab. Reads never need a hold; a write takes a free tab's hold, keeps its
+ * own, and is refused on anyone else's. The holder is named in the tab list so
+ * a Session can see contention before it fails on it.
+ */
+export type RuntimeBrowserHolder =
+  | { kind: "session"; sessionId: string; self: boolean }
+  | { kind: "person" }
+  | null;
+
 /** One Browser Tab as the runtime lists it: bounded metadata, never page content. */
 export interface RuntimeBrowserTab {
   /** Product-owned opaque id — never a positional Chromium tab index. */
@@ -527,7 +540,14 @@ export interface RuntimeBrowserTab {
   title: string;
   /** Who opened it. A person's tab and an agent's tab render differently and are audited differently. */
   createdBy: "user" | "session";
+  /** Who holds it right now, or `null` for a free tab. */
+  heldBy: RuntimeBrowserHolder;
 }
+
+/** The answer to taking a hold: yours now (or already), or somebody else's. */
+export type RuntimeBrowserHoldOutcome =
+  | { kind: "held"; tabId: string }
+  | { kind: "refused"; tabId: string; holder: NonNullable<RuntimeBrowserHolder> };
 
 /** Every Browser Tab the host let this Session see. */
 export interface RuntimeBrowserTabList {
@@ -645,8 +665,45 @@ export interface RuntimeBrowserPort {
   act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
+  /**
+   * Take a tab's hold, or learn who has it (VC-239). Optional as a PAIR with
+   * {@link release}: a Session whose frozen surface predates the hold tools is
+   * handed a port without them, and the surface offers `browser_acquire` and
+   * `browser_release` exactly when the port carries both. The writes above
+   * take the hold implicitly either way, so such a Session still works.
+   */
+  acquire?(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
+  /** Give a hold back early. Releasing a tab this Session does not hold is a no-op. */
+  release?(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
   /** Releases host-private debugger/controller resources when an attachment ends. */
   dispose?(): void;
+}
+
+/** A Browser port whose hold pair is present — what the two hold tools bind to. */
+export type RuntimeBrowserHoldPort = RuntimeBrowserPort &
+  Required<Pick<RuntimeBrowserPort, "acquire" | "release">>;
+
+/**
+ * The port narrowed to its hold pair, or `undefined` when it carries neither.
+ * Carrying exactly one is refused loudly: a Session that could take a hold and
+ * not give it back — or the reverse — would be a surface no rule describes.
+ */
+export function browserHoldPort(
+  port: RuntimeBrowserPort | undefined,
+): RuntimeBrowserHoldPort | undefined {
+  if (port === undefined) return undefined;
+  const hasAcquire = port.acquire !== undefined;
+  const hasRelease = port.release !== undefined;
+  if (!hasAcquire && !hasRelease) return undefined;
+  if (!hasAcquire || !hasRelease) {
+    throw new Error(
+      "A Browser port must carry both browser_acquire and browser_release or neither; the hold tools are offered together.",
+    );
+  }
+  // The same object, proven: both methods were just read as present, so the
+  // narrowing is a fact about `port` rather than a copy that could lose a
+  // `this`-bound method.
+  return port as RuntimeBrowserHoldPort;
 }
 
 /**
@@ -833,9 +890,11 @@ export interface SessionRuntimeSpec {
    * Reach the Browser Tabs the host owns, through the one {@link RuntimeBrowserPort}.
    *
    * Optional on the same terms as {@link webFetch}: absence is what decides
-   * whether the model is offered any browser tool. One port carries all six
-   * names — a Session with somewhere to send a browser action has all of them,
-   * and one with nowhere has none.
+   * whether the model is offered any browser tool. One port carries every
+   * browser name — a Session with somewhere to send a browser action has all
+   * of them, and one with nowhere has none. The one qualification is the hold
+   * pair (VC-239): a port without `acquire`/`release` offers the six that
+   * shipped before them, which is how a Session frozen with six keeps six.
    */
   browser?: RuntimeBrowserPort;
   /**
@@ -914,15 +973,18 @@ export type SessionToolBinding =
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
-  // Six arms, one port: each browser tool carries the whole RuntimeBrowserPort,
+  // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
   // because the port is the capability and the names are only the model-facing
   // grain — the runtime switches on the name and calls the method it stands for.
+  // The two hold arms carry the port with its optional pair proven present.
   | { tool: "browser_tabs"; port: RuntimeBrowserPort }
   | { tool: "browser_navigate"; port: RuntimeBrowserPort }
   | { tool: "browser_snapshot"; port: RuntimeBrowserPort }
   | { tool: "browser_act"; port: RuntimeBrowserPort }
   | { tool: "browser_screenshot"; port: RuntimeBrowserPort }
   | { tool: "browser_console"; port: RuntimeBrowserPort }
+  | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
+  | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -955,6 +1017,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // a tool no Session can be offered would be the same landmine VC-3 defused,
   // re-laid one vocabulary entry at a time.
   const browser = spec.browser;
+  // The hold pair is offered together or not at all (VC-239): a port carrying
+  // one of `acquire`/`release` without the other is a build bug, not a
+  // smaller surface, and it is caught here where the cost is a thrown error
+  // rather than a Session that can take a hold it cannot give back.
+  const hold = browserHoldPort(browser);
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
@@ -966,6 +1033,8 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     browser_screenshot:
       browser === undefined ? null : { tool: "browser_screenshot", port: browser },
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
+    browser_acquire: hold === undefined ? null : { tool: "browser_acquire", port: hold },
+    browser_release: hold === undefined ? null : { tool: "browser_release", port: hold },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

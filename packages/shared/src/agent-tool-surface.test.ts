@@ -73,6 +73,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      "browser_acquire",
+      "browser_release",
       "session.start",
       "ticket.await",
       "automation.run",
@@ -109,6 +111,8 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      "browser_acquire",
+      "browser_release",
       "ticket.await",
     ]);
   });

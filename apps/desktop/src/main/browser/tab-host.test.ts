@@ -72,6 +72,10 @@ class FakeWebContents {
     toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
     toJPEG: () => Buffer.from(this.captureBytes),
   }));
+  zoomFactor = 1;
+  getZoomFactor(): number {
+    return this.zoomFactor;
+  }
   isDevToolsOpened(): boolean {
     return this.devToolsOpened;
   }
@@ -737,6 +741,409 @@ describe("BrowserTabHost wakefulness", () => {
     // contents no throttling answer.
     expect(() => release()).not.toThrow();
     expect(contents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+  });
+});
+
+describe("BrowserTabHost holds (VC-239)", () => {
+  const A = { sessionId: "ses-a", attachmentId: "att-a1" };
+  const B = { sessionId: "ses-b", attachmentId: "att-b1" };
+
+  function openTab(): string {
+    return host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+    }).tabId;
+  }
+
+  /** Every hold event the host emitted, in order. */
+  function holdEvents(): unknown[] {
+    const events: unknown[] = [];
+    host.onHoldChange((event) => events.push(event));
+    return events;
+  }
+
+  /** The last `heldBy` published for one tab. */
+  function lastHeldBy(tabId: string): unknown {
+    const states = published.filter(
+      (event): event is { tabId: string; heldBy: unknown } =>
+        typeof event === "object" && event !== null && "tabId" in event && event.tabId === tabId,
+    );
+    return states.at(-1)?.heldBy;
+  }
+
+  it("is free at birth, taken by the first write, kept by its holder, and refused to anyone else", () => {
+    const tabId = openTab();
+    const events = holdEvents();
+    expect(lastHeldBy(tabId)).toBeNull();
+
+    expect(host.hold(tabId, A)).toMatchObject({ kind: "held", tab: { tabId } });
+    expect(lastHeldBy(tabId)).toMatchObject({ kind: "session", sessionId: "ses-a" });
+    expect(host.isHeldBy(tabId, A)).toBe(true);
+    expect(events).toEqual([{ kind: "taken", tabId, holder: A }]);
+
+    // A second write from the same attachment is the same hold, not a second
+    // event — the hold spans the turn, not the call.
+    expect(host.hold(tabId, A)).toMatchObject({ kind: "held" });
+    expect(events).toHaveLength(1);
+
+    // Another Session, and the SAME Session on a later attachment, are both
+    // somebody else: a hold belongs to the attachment that took it.
+    expect(host.hold(tabId, B)).toMatchObject({
+      kind: "refused",
+      holder: { kind: "session", sessionId: "ses-a" },
+    });
+    expect(host.hold(tabId, { sessionId: "ses-a", attachmentId: "att-a2" })).toMatchObject({
+      kind: "refused",
+    });
+    expect(host.isHeldBy(tabId, B)).toBe(false);
+  });
+
+  it("names the holder with a placeholder at once and the Session's title when it lands", async () => {
+    const pending: { resolve: (name: string | null) => void } = { resolve: () => undefined };
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-named-${++nextId}`,
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      sessionName: () =>
+        new Promise((resolve) => {
+          pending.resolve = resolve;
+        }),
+    });
+    const tabId = openTab();
+    host.hold(tabId, A);
+    // A hold never waits on a name: the short id stands in.
+    expect(lastHeldBy(tabId)).toMatchObject({ kind: "session", name: "Session ses-a" });
+
+    pending.resolve("Fix checkout form");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(lastHeldBy(tabId)).toMatchObject({ name: "Fix checkout form" });
+
+    // A second tab held by the same Session wears the learned name at once,
+    // and the name is not asked for again.
+    const second = openTab();
+    host.hold(second, A);
+    expect(lastHeldBy(second)).toMatchObject({ name: "Fix checkout form" });
+  });
+
+  it("keeps the placeholder when the name lookup fails or answers nothing", async () => {
+    const answers = [Promise.reject(new Error("engine down")), Promise.resolve("   ")];
+    let nextId = 0;
+    host = new BrowserTabHost({
+      createId: () => `opaque-unnamed-${++nextId}`,
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => fakeWindow as unknown as BrowserWindow,
+      publishState: (event) => published.push(event),
+      publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+      sessionName: () => answers.shift()!,
+    });
+    const first = openTab();
+    host.hold(first, A);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(lastHeldBy(first)).toMatchObject({ name: "Session ses-a" });
+    // The failed lookup is not cached as a name, so the next Session asks again
+    // — and a blank answer is no name either.
+    const second = openTab();
+    host.hold(second, B);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(lastHeldBy(second)).toMatchObject({ name: "Session ses-b" });
+  });
+
+  /** A Session's colour alone on a fresh host: its hashed slot's hue. */
+  const soloColor = (id: string): string => {
+    const probe = new BrowserTabHost({
+      createId: () => "probe",
+      createView: () => new FakeView() as unknown as WebContentsView,
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => null,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+    });
+    const tabId = probe.open({
+      url: "https://example.com",
+      projectId: "p",
+      ticketId: null,
+      createdBy: "session",
+    }).tabId;
+    const outcome = probe.hold(tabId, { sessionId: id, attachmentId: "x" });
+    return outcome.kind === "held" ? (outcome.tab.heldBy as { color: string }).color : "";
+  };
+
+  /**
+   * Two ids that hash to the same slot, found by search, so a test asserts
+   * the collision case rather than hoping for it.
+   */
+  const collidingPair = (): [string, string] => {
+    const seen = new Map<string, string>();
+    for (let n = 0; ; n += 1) {
+      const id = `ses-${n}`;
+      const color = soloColor(id);
+      const earlier = seen.get(color);
+      if (earlier !== undefined) return [earlier, id];
+      seen.set(color, id);
+    }
+  };
+
+  it("gives concurrent Sessions different colours and keeps each one's colour while it lives", () => {
+    const [first, second] = collidingPair();
+
+    const one = openTab();
+    const two = openTab();
+    host.hold(one, { sessionId: first, attachmentId: "1" });
+    host.hold(two, { sessionId: second, attachmentId: "2" });
+    const firstColor = (lastHeldBy(one) as { color: string }).color;
+    const secondColor = (lastHeldBy(two) as { color: string }).color;
+    expect(firstColor).not.toBe(secondColor);
+
+    // The first Session leaves. The second keeps its colour — republished on
+    // its next state push — rather than sliding into the freed slot.
+    host.forgetSession({ sessionId: first, attachmentId: "1" });
+    views[1]!.webContents.emit("page-title-updated", {}, "Renamed");
+    expect((lastHeldBy(two) as { color: string }).color).toBe(secondColor);
+
+    // A newcomer takes the freed slot, so the wheel is not blocked by a
+    // Session nobody will see again.
+    const three = openTab();
+    host.hold(three, { sessionId: first, attachmentId: "3" });
+    expect((lastHeldBy(three) as { color: string }).color).toBe(firstColor);
+  });
+
+  it("keeps a Session's colour while a newer attachment of it still holds, and lets go once none does", () => {
+    // `displaced` arrived second and was stepped off its hashed slot, so a
+    // colour re-picked from nothing would be `first`'s — the collision the
+    // wheel exists to prevent.
+    const [first, displaced] = collidingPair();
+    const theirs = openTab();
+    const one = openTab();
+    const two = openTab();
+    host.hold(theirs, { sessionId: first, attachmentId: "f" });
+    host.hold(one, { sessionId: displaced, attachmentId: "old" });
+    const color = (lastHeldBy(one) as { color: string }).color;
+    expect(color).not.toBe(soloColor(displaced));
+    // The Session re-attaches and holds a second tab before the old
+    // attachment is torn down.
+    host.hold(two, { sessionId: displaced, attachmentId: "new" });
+    expect((lastHeldBy(two) as { color: string }).color).toBe(color);
+
+    host.forgetSession({ sessionId: displaced, attachmentId: "old" });
+    expect(lastHeldBy(one)).toBeNull();
+    // The survivor is republished on its next state push in the colour it
+    // had, not in the one it shares a hash with.
+    views[2]!.webContents.emit("page-title-updated", {}, "Renamed");
+    expect((lastHeldBy(two) as { color: string }).color).toBe(color);
+    expect(host.heldBy(two)).toMatchObject({ kind: "session", color });
+
+    host.forgetSession({ sessionId: displaced, attachmentId: "new" });
+    expect(lastHeldBy(two)).toBeNull();
+    expect(host.heldBy(two)).toBeNull();
+    // Nothing of it holds, so its slot is free for a newcomer.
+    const later = openTab();
+    host.hold(later, { sessionId: "ses-newcomer", attachmentId: "n" });
+    expect(host.heldBy(later)).not.toBeNull();
+  });
+
+  it("releases only for the holder, and treats anyone else's release as already done", () => {
+    const tabId = openTab();
+    host.hold(tabId, A);
+    const events = holdEvents();
+
+    host.releaseHold(tabId, B);
+    expect(host.isHeldBy(tabId, A)).toBe(true);
+    expect(events).toEqual([]);
+
+    host.releaseHold(tabId, A);
+    expect(lastHeldBy(tabId)).toBeNull();
+    expect(events).toEqual([{ kind: "released", tabId, holder: A, why: "release" }]);
+
+    // Releasing a free tab, or a tab that no longer exists, is the end state
+    // the caller asked for.
+    host.releaseHold(tabId, A);
+    host.releaseHold("missing", A);
+    expect(events).toHaveLength(1);
+
+    // And the tab is free for the next writer.
+    expect(host.hold(tabId, B)).toMatchObject({ kind: "held" });
+  });
+
+  it("ends every hold one attachment has at a turn end, and reports which tabs", () => {
+    const one = openTab();
+    const two = openTab();
+    const theirs = openTab();
+    host.hold(one, A);
+    host.hold(two, A);
+    host.hold(theirs, B);
+    const events = holdEvents();
+
+    expect(host.releaseAllHeldBy(A, "turn-end")).toEqual([one, two]);
+    expect(lastHeldBy(one)).toBeNull();
+    expect(lastHeldBy(two)).toBeNull();
+    expect(host.isHeldBy(theirs, B)).toBe(true);
+    expect(events.map((event) => (event as { why: string }).why)).toEqual(["turn-end", "turn-end"]);
+
+    // The next turn takes the hold again on its first write.
+    expect(host.hold(one, A)).toMatchObject({ kind: "held" });
+  });
+
+  it("lets the person take over, tells who was displaced, refuses the Session until hand-back, then frees it", () => {
+    const tabId = openTab();
+    host.hold(tabId, A);
+    const events = holdEvents();
+
+    expect(host.takeOver(tabId)).toMatchObject({
+      displaced: A,
+      tab: { heldBy: { kind: "person" } },
+    });
+    expect(events).toEqual([
+      { kind: "released", tabId, holder: A, why: "takeover" },
+      { kind: "person-took", tabId, displaced: A },
+    ]);
+    expect(host.isHeldBy(tabId, A)).toBe(false);
+    expect(host.hold(tabId, A)).toEqual({ kind: "refused", holder: { kind: "person" } });
+    expect(host.hold(tabId, B)).toEqual({ kind: "refused", holder: { kind: "person" } });
+
+    // Address bar, back, forward and reload are not a takeover and not a
+    // hand-back: a product navigation leaves the person's hold as it is.
+    host.navigate(tabId, "https://example.com/next");
+    expect(lastHeldBy(tabId)).toEqual({ kind: "person" });
+
+    expect(host.handBack(tabId)).toMatchObject({ heldBy: null });
+    expect(events.at(-1)).toEqual({ kind: "person-handed-back", tabId });
+    expect(host.hold(tabId, A)).toMatchObject({ kind: "held" });
+  });
+
+  it("takes over a free tab with nobody displaced, and hands back a tab the person does not hold as a no-op", () => {
+    const tabId = openTab();
+    const events = holdEvents();
+    expect(host.takeOver(tabId).displaced).toBeNull();
+    expect(events).toEqual([{ kind: "person-took", tabId, displaced: null }]);
+    // Taking over again is the same end state.
+    expect(host.takeOver(tabId).displaced).toBeNull();
+
+    host.handBack(tabId);
+    host.hold(tabId, A);
+    // Hand-back is the person's control: it does not end a Session's hold.
+    host.handBack(tabId);
+    expect(host.isHeldBy(tabId, A)).toBe(true);
+    expect(
+      events.filter((event) => (event as { kind: string }).kind === "person-handed-back"),
+    ).toHaveLength(1);
+  });
+
+  it("relays an ask-to-leave to the holding Session and leaves the hold in place", () => {
+    const tabId = openTab();
+    const events = holdEvents();
+    expect(host.askToLeave(tabId)).toBeNull();
+    expect(events).toEqual([]);
+
+    host.hold(tabId, A);
+    expect(host.askToLeave(tabId)).toEqual(A);
+    expect(events.at(-1)).toEqual({ kind: "ask-to-leave", tabId, holder: A });
+    expect(host.isHeldBy(tabId, A)).toBe(true);
+  });
+
+  it("ends the hold with the tab, whether closed by the product or torn down by Chromium", () => {
+    const closed = openTab();
+    const gone = openTab();
+    host.hold(closed, A);
+    host.hold(gone, A);
+    const events = holdEvents();
+
+    host.close(closed);
+    expect(events).toEqual([{ kind: "released", tabId: closed, holder: A, why: "closed" }]);
+    expect(host.isHeldBy(closed, A)).toBe(false);
+
+    views[1]!.webContents.emit("destroyed");
+    expect(events.at(-1)).toEqual({ kind: "released", tabId: gone, holder: A, why: "closed" });
+    // Nothing is left for a turn end to release.
+    expect(host.releaseAllHeldBy(A, "turn-end")).toEqual([]);
+  });
+
+  it("stops telling a listener that unsubscribed", () => {
+    const tabId = openTab();
+    const events: unknown[] = [];
+    const stop = host.onHoldChange((event) => events.push(event));
+    host.hold(tabId, A);
+    stop();
+    host.releaseHold(tabId, A);
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe("BrowserTabHost plane, for the cursor overlay (VC-239)", () => {
+  function openTab(): string {
+    return host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+    }).tabId;
+  }
+
+  it("names the attached tab and its page rect only while it is on screen, and 1x zoom for a tab that is gone", () => {
+    const one = openTab();
+    const two = openTab();
+    expect(host.attachedTabId()).toBeNull();
+    expect(host.pageBoundsOf(one)).toBeNull();
+
+    host.setBounds(one, { x: 10, y: 20, width: 800, height: 600 });
+    host.show(one);
+    expect(host.attachedTabId()).toBe(one);
+    expect(host.pageBoundsOf(one)).toEqual({ x: 10, y: 20, width: 800, height: 600 });
+    expect(host.pageBoundsOf(two)).toBeNull();
+    views[0]!.webContents.zoomFactor = 1.25;
+    expect(host.zoomFactorOf(one)).toBe(1.25);
+    expect(host.zoomFactorOf("missing")).toBe(1);
+
+    // DevTools takes its share of the plane; the page rect shrinks with it.
+    host.toggleDevTools(one);
+    expect(host.pageBoundsOf(one)?.height).toBeLessThan(600);
+
+    host.hide(one);
+    expect(host.attachedTabId()).toBeNull();
+    expect(host.pageBoundsOf(one)).toBeNull();
+  });
+
+  it("tells a plane listener about every attach, detach and layout, and stops when unsubscribed", () => {
+    const one = openTab();
+    const two = openTab();
+    const seen: (string | null)[] = [];
+    const stop = host.onPlaneChange((tabId) => seen.push(tabId));
+
+    host.show(one);
+    host.setBounds(one, { x: 0, y: 0, width: 640, height: 480 });
+    // A tab that is not on screen laying out is nothing to the overlay.
+    host.setBounds(two, { x: 0, y: 0, width: 640, height: 480 });
+    host.show(two);
+    host.hide(two);
+    expect(seen).toEqual([one, one, two, null]);
+
+    // A close of the on-screen tab detaches it; Chromium tearing it down does too.
+    host.show(one);
+    host.close(one);
+    host.show(two);
+    views[1]!.webContents.emit("destroyed");
+    expect(seen.slice(4)).toEqual([one, null, two, null]);
+
+    stop();
+    host.show(openTab());
+    expect(seen).toHaveLength(8);
+  });
+
+  it("answers the holder for the overlay's label, or null", () => {
+    const one = openTab();
+    expect(host.heldBy(one)).toBeNull();
+    expect(host.heldBy("missing")).toBeNull();
+    host.hold(one, { sessionId: "ses-a", attachmentId: "att-a" });
+    expect(host.heldBy(one)).toMatchObject({ kind: "session", sessionId: "ses-a" });
   });
 });
 

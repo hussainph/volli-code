@@ -10,6 +10,7 @@ import {
   protocol,
   session,
   shell,
+  systemPreferences,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { randomUUID } from "node:crypto";
@@ -272,6 +273,7 @@ import {
   writeUpdateChannel,
 } from "./auto-update";
 import {
+  PACKAGED_RENDERER_CURSOR_URL,
   PACKAGED_RENDERER_ENTRY_URL,
   PACKAGED_RENDERER_HOST,
   PACKAGED_RENDERER_PROTOCOL,
@@ -285,7 +287,13 @@ import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
-import { createAgentBrowserPort, debuggerTransport, loadWaiter } from "./browser/agent-port";
+import { desktopBrowserPort } from "./browser/agent-port";
+import { relayHoldNotices } from "./browser/hold-notices";
+import {
+  CURSOR_OVERLAY_PARTITION,
+  createCursorOverlay,
+  type CursorOverlay,
+} from "./browser/cursor-overlay";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -668,13 +676,21 @@ app.whenReady().then(async () => {
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
-  protocol.handle(PACKAGED_RENDERER_SCHEME, (request) => {
+  const serveRendererAsset = (request: Request): Promise<Response> | Response => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
       return new Response("Not found", { status: 404 });
     }
     return net.fetch(pathToFileURL(assetPath).toString());
-  });
+  };
+  protocol.handle(PACKAGED_RENDERER_SCHEME, serveRendererAsset);
+  // The Session cursor overlay (VC-239) runs under its own partition, and a
+  // partition has its own protocol table: without this line the packaged
+  // overlay page would 404 on the very scheme the app renderer loads from.
+  // Same resolver, same read-only root, no wider reach.
+  session
+    .fromPartition(CURSOR_OVERLAY_PARTITION)
+    .protocol.handle(PACKAGED_RENDERER_SCHEME, serveRendererAsset);
 
   if (isDev) {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
@@ -933,6 +949,8 @@ app.whenReady().then(async () => {
   // attach-time browser-port resolver reads it lazily, long after boot — the
   // same bargain ptyManagerRef strikes with the worktree guards.
   let browserTabsRef: BrowserTabHost | null = null;
+  /** The Session cursor overlay (VC-239), built beside the host below; the port takes its driver lazily. */
+  let cursorOverlayRef: CursorOverlay | null = null;
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -954,14 +972,18 @@ app.whenReady().then(async () => {
                   ...(web.webFetch === undefined ? [] : (["web_fetch"] as const)),
                   ...(web.webSearch === undefined ? [] : (["web_search"] as const)),
                   // The desktop always carries the Browser host, so every new
-                  // Session records all six Browser tools. Recorded surfaces
-                  // from older builds keep their shorter list and rebind it.
+                  // Session records all eight Browser tools. Recorded surfaces
+                  // from older builds keep their shorter list and rebind it —
+                  // a Session born with six is handed a port without the hold
+                  // pair (VC-239) and its writes take the hold implicitly.
                   "browser_tabs",
                   "browser_navigate",
                   "browser_snapshot",
                   "browser_act",
                   "browser_screenshot",
                   "browser_console",
+                  "browser_acquire",
+                  "browser_release",
                 ],
               },
               // The store supplies canonical Registry keys from an immutable
@@ -1104,15 +1126,15 @@ app.whenReady().then(async () => {
             if (host === null) {
               throw new Error("The Browser host is not ready; retry the attachment.");
             }
-            return createAgentBrowserPort({
+            // The wake hold (VC-252) and the cursor (VC-239) ride the one
+            // desktop composition; see `desktopBrowserPort`.
+            return desktopBrowserPort({
               host,
-              scope,
-              transportFor: (tabId) => debuggerTransport(host.webContentsOf(tabId)),
-              waitForLoad: loadWaiter((tabId) => host.webContentsOf(tabId)),
-              // Chromium throttles hidden tabs; the hold keeps a tab this
-              // Session drives at foreground pace across workspace switches
-              // (VC-252), and releases with the attachment.
-              holdAwake: (tabId) => host.holdAwake(tabId),
+              scope: { projectId: scope.projectId, ticketId: scope.ticketId },
+              // The hold is taken in this name and judged against it (VC-239):
+              // the adapter states it from the attachment, never the model.
+              session: { sessionId: scope.sessionId, attachmentId: scope.attachmentId },
+              cursorFor: (tabId) => cursorOverlayRef?.driverFor(tabId),
             });
           },
           // The verb half of the Agent Tool Surface (VC-162). Unlike the web
@@ -2385,9 +2407,97 @@ app.whenReady().then(async () => {
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // The holder's name for the pill and the cursor label (VC-239), from the
+    // Session's own projection. A launch with no runtime has no Sessions to
+    // hold a tab, so the placeholder is never what a person sees.
+    ...(sessionRuntime === null
+      ? {}
+      : {
+          sessionName: async (sessionId: string) =>
+            (await sessionRuntime.projection({ sessionId })).projection.session.title,
+        }),
   });
   browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
+  // The Session cursor overlay (VC-239): one small transparent view over the
+  // on-screen Browser Tab, loading the app's own cursor page under its own
+  // partition and five-verb preload — never the app bridge, and never inside
+  // the page it sits over. Built lazily by the overlay on the first cursor.
+  const cursorPageUrl =
+    isDev && process.env["ELECTRON_RENDERER_URL"]
+      ? new URL("/cursor.html", process.env["ELECTRON_RENDERER_URL"]).toString()
+      : PACKAGED_RENDERER_CURSOR_URL;
+  const cursorOverlay = createCursorOverlay({
+    host: browserTabs,
+    ipc: ipcMain,
+    createView: () => {
+      const view = new WebContentsView({
+        webPreferences: {
+          preload: join(__dirname, "cursor-preload.cjs"),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          transparent: true,
+          session: session.fromPartition(CURSOR_OVERLAY_PARTITION),
+        },
+      });
+      view.setBackgroundColor("#00000000");
+      void view.webContents.loadURL(cursorPageUrl).catch((error: unknown) => {
+        console.error("[volli] could not load the Session cursor page:", errorMessage(error));
+      });
+      return view;
+    },
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // macOS is the one platform Electron reads the setting on; elsewhere the
+    // cursor moves, which is the default a person who never asked expects.
+    prefersReducedMotion: () =>
+      process.platform === "darwin" &&
+      systemPreferences.getAnimationSettings().prefersReducedMotion,
+  });
+  cursorOverlayRef = cursorOverlay;
+  // A smoke seam (VC-239), unset in every ordinary launch: `browser-tab-smoke.mjs`
+  // starts no Session and takes no model turn, yet has to prove a hold and a
+  // visible cursor. It builds the SAME port the adapter builds — one factory,
+  // `desktopBrowserPort`, so the two cannot drift — in a Session's name it
+  // invents, and drives a tab exactly as a Session would. Gated on the
+  // variable AND on an unpackaged app, like the other dev-only doors: a
+  // shipped build exposes nothing whatever its environment says.
+  if (isDev && process.env["VOLLI_BROWSER_PROBE"] === "1") {
+    (globalThis as { volliBrowserProbe?: unknown }).volliBrowserProbe = {
+      port: (scope: { projectId: string; ticketId: string | null }, sessionId: string) =>
+        desktopBrowserPort({
+          host: browserTabs,
+          scope,
+          session: { sessionId, attachmentId: `${sessionId}:probe` },
+          cursorFor: (tabId) => cursorOverlay.driverFor(tabId),
+        }),
+      heldBy: (tabId: string) => browserTabs.heldBy(tabId),
+    };
+  }
+  // Takeover and ask-to-leave reach the holding Session in-band, as one-line
+  // steers into its live turn (VC-239) — the same door supervision uses, so
+  // the Session does not have to learn a takeover by failing on it.
+  if (sessionRuntime !== null) {
+    relayHoldNotices(browserTabs, {
+      steer: async ({ sessionId, text }) => {
+        const commandId = randomUUID();
+        const delivered = await sessionRuntime.command({
+          commandId,
+          sessionId,
+          command: {
+            kind: "message.submit",
+            delivery: "steer",
+            message: { id: `${commandId}:message`, role: "user", parts: [{ type: "text", text }] },
+          },
+        });
+        const status = delivered.receipt?.status;
+        if (status !== "accepted" && status !== "completed") {
+          throw new Error(delivered.receipt?.detail ?? `delivery ${status ?? "unknown"}`);
+        }
+      },
+      log: (message) => console.error(message),
+    });
+  }
   const createOwnedWindow = (): BrowserWindow => {
     const window = createWindow(ptyManager, currentFirstPaint());
     // Browser Tabs are live machine resources, not durable documents. Once the

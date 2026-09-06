@@ -39,6 +39,9 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
+      "volli:browser-take-over",
+      "volli:browser-hand-back",
+      "volli:browser-ask-to-leave",
     ]);
   });
 

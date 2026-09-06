@@ -296,6 +296,32 @@ export type PiRuntimeContext =
   | (PiRuntimeContextFields & { role: "ticket"; ticketId: string })
   | (PiRuntimeContextFields & { role: "project"; ticketId: null });
 
+/**
+ * The runtime's Browser port plus the one lifecycle door the desktop adapter
+ * drives that the runtime never sees: a turn ending (VC-239). A hold on a
+ * Browser Tab lasts a turn, and the runtime observation is where the adapter
+ * learns a turn is over — so the adapter tells the port, here. Required, not
+ * optional: it is the one door that keeps a hold from outliving its turn, and
+ * a port built without it would keep holds silently.
+ */
+export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+
+/**
+ * A Session frozen before the hold tools existed (VC-239) keeps its six: its
+ * port is handed over without `acquire`/`release`, so `sessionToolBindings`
+ * offers the six it recorded and the provider sees the array it was promised.
+ * The six writes still take the hold, because the port does that for every
+ * writer, hold tools or not.
+ */
+function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
+  // A shallow copy is safe here, unlike in `browserHoldPort`, because the
+  // desktop's port is an object literal of closures (`createAgentBrowserPort`)
+  // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
+  // turn ends, so the copy the runtime gets shares every hold with it.
+  const { acquire: _acquire, release: _release, ...withoutPair } = port;
+  return withoutPair;
+}
+
 export interface PiAdapterOptions {
   /**
    * Directory that owns every attachment's Pi recovery sidecar. Main resolves
@@ -362,7 +388,14 @@ export interface PiAdapterOptions {
   resolveBrowserPort?: (scope: {
     projectId: string;
     ticketId: string | null;
-  }) => RuntimeBrowserPort;
+    /**
+     * Who the port serves (VC-239): the Session and this attachment. A hold on
+     * a Browser Tab is taken in this name and judged against it, so the port
+     * has to know it and the model never gets to say it.
+     */
+    sessionId: string;
+    attachmentId: string;
+  }) => DesktopBrowserPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -596,6 +629,8 @@ function piNativeAdapter(
         browser: options.resolveBrowserPort?.({
           projectId: context.projectId,
           ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
         }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
@@ -679,7 +714,7 @@ interface PiBindingOptions {
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
-  browser: RuntimeBrowserPort | undefined;
+  browser: DesktopBrowserPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -693,7 +728,7 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
-  readonly #browser: RuntimeBrowserPort | undefined;
+  readonly #browser: DesktopBrowserPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -794,10 +829,13 @@ class PiBinding implements BindingHandle {
     const wantsAskUser = context.toolSurface.includes("ask_user");
     const wantsWebFetch = context.toolSurface.includes("web_fetch");
     const wantsWebSearch = context.toolSurface.includes("web_search");
-    // One name stands for all six: the browser tools ride one port and one
+    // One name stands for the six: the browser tools ride one port and one
     // binding decision, so a recorded surface holds either every browser name
-    // or none — checking the first is checking the capability.
+    // or none — checking the first is checking the capability. The hold pair
+    // (VC-239) is the one qualification: a surface frozen before it existed
+    // names six, and is handed a port without the pair so it binds six.
     const wantsBrowser = context.toolSurface.includes("browser_tabs");
+    const wantsHoldPair = context.toolSurface.includes("browser_acquire");
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -887,7 +925,9 @@ class PiBinding implements BindingHandle {
       ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
-      ...(wantsBrowser && this.#browser !== undefined ? { browser: this.#browser } : {}),
+      ...(wantsBrowser && this.#browser !== undefined
+        ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
+        : {}),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1448,6 +1488,13 @@ class PiBinding implements BindingHandle {
   #observe(observation: RuntimeObservation): Promise<void> {
     if (this.#released) return Promise.resolve();
     if (observation.kind === "attachment" && this.#handle === null) return Promise.resolve();
+    // A turn over — completed or interrupted — ends every Browser Tab hold
+    // this attachment has (VC-239). Told before the fact is recorded rather
+    // than after: a hold outliving its turn by even the sink's write would be
+    // a hold with nobody driving, and the person's pill would say otherwise.
+    if (observation.kind === "turn" && observation.state !== "started") {
+      this.#browser?.turnEnded();
+    }
     return this.#sink.emit(observation);
   }
 }

@@ -201,7 +201,7 @@ BrowserTabHost — never loaded into the app's own renderer. A tab has a
 product-owned opaque id, a mode-scoped session partition isolated from the app
 renderer and from every other mode, and a per-tab generation that advances on
 navigation. People browse in them; Sessions reach them only through the Browser
-port's six `browser_*` tools, which speak the accessibility-snapshot/ref
+port's eight `browser_*` tools, which speak the accessibility-snapshot/ref
 dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
 remote debugging port ever opens. Everything a page contributes — title,
 snapshot, console, pixels — is untrusted third-party content in the same
@@ -210,6 +210,45 @@ the public web through `web_fetch` and rendering a page a person can also see
 are different capabilities with different policies.
 _Avoid_: webview, BrowserView, preview pane (for the tab itself), browser
 session (when meaning a tab)
+
+**Tab hold**:
+One party's turn to drive a Browser Tab (VC-239): one Session, or the person,
+never both. Reads never need it; a write (`browser_act`, `browser_navigate`)
+takes a free tab's hold, keeps its own, and is refused on anybody else's with
+the holder named. A tab a Session opens is its own from birth;
+`browser_acquire` and `browser_release` take and give one back explicitly. A
+hold ends when the Session releases it, its turn ends, its attachment ends,
+the tab closes, or the person takes over — and by nothing else, so there is
+no stale hold to time out. The person is never locked out: their own input
+into the page is always delivered, and the address bar, back, forward and
+reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
+are the person's explicit controls on the chrome pill and the cursor label;
+the affected Session is told in one in-band line. `heldBy` rides the tab's
+state so every surface — the pill, the tab strip's holder dot, the cursor —
+agrees on who has it.
+_Avoid_: lock, lease (that is the wake hold against throttling), ownership
+(a tab is not owned; it is held for a turn)
+
+**Session cursor**:
+The arrow drawn over a Browser Tab while a Session holds it (VC-239), in that
+Session's identity colour with its name on a small label. Drawn by one
+app-owned transparent `WebContentsView` main places above the page — never
+inside the page, which could read, hide or fake it, and never in the app's
+React tree, which the page composites over. It glides to each target before
+the input goes there and the click is dispatched only once it has landed, so
+it never claims a spot a click did not go to. Only the on-screen tab draws
+one; a hidden tab keeps its cursor's last position and pays no delay. It
+yields with the plane and never appears in a screenshot or a frozen frame.
+_Avoid_: pointer overlay, ghost cursor, agent mouse
+
+**Session colour**:
+An identity colour, never a state colour (VC-239): which Session, not how it
+is doing. Eight hues fanned around the accent at one lightness in
+`@volli/shared`'s `session-color.ts`, keyed by a stable hash of the Session
+id and resolved by main across the Sessions holding tabs so concurrent ones
+differ. Worn by the cursor, the chrome pill and the strip's holder dot, and
+by nothing that means a state — `ui/status-dot.tsx` owns those.
+_Avoid_: status colour, agent colour (for a state), theme accent
 
 **Agent CLI**:
 The bash-composable `volli` verb surface a Session's shell (or a person's

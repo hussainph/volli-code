@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askChoice,
   askOffer,
+  browserHoldPort,
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
@@ -148,7 +149,8 @@ const port = async () => {
  * Stands in for a wired Browser port. Never called, for {@link port}'s reason:
  * membership reads presence, and the six browser tools ride this one port
  * together — a Session with somewhere to send a browser action has all of
- * them, and one with nowhere has none.
+ * them, and one with nowhere has none. This one carries no hold pair, which
+ * is what a Session frozen before VC-239 is handed.
  */
 const browserPort: RuntimeBrowserPort = {
   tabs: port,
@@ -158,6 +160,9 @@ const browserPort: RuntimeBrowserPort = {
   screenshot: port,
   console: port,
 };
+
+/** The same port with its hold pair: what every Session born since VC-239 is handed. */
+const browserHoldPortFixture: RuntimeBrowserPort = { ...browserPort, acquire: port, release: port };
 
 /**
  * The verb port, which unlike the three above decides no membership — the
@@ -188,7 +193,7 @@ describe("sessionToolIds", () => {
     expect(sessionToolIds({ tools: { tools: [] }, webSearch: port })).toEqual(["web_search"]);
   });
 
-  it("offers all six browser tools together exactly when the one Browser port is wired", () => {
+  it("offers the six browser tools together exactly when the one Browser port is wired", () => {
     // One port, six names: listing, navigating, snapshotting, acting, shooting
     // and reading the console are one capability with one answerer, so a spec
     // cannot offer a Session the ability to look without the ability to act —
@@ -201,6 +206,33 @@ describe("sessionToolIds", () => {
       "browser_screenshot",
       "browser_console",
     ]);
+  });
+
+  it("appends the hold pair after the six exactly when the port carries both (VC-239)", () => {
+    // Appended, never interleaved: a Session frozen with six keeps its
+    // positions, and one born with eight gets the two on the end.
+    expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+      "browser_acquire",
+      "browser_release",
+    ]);
+  });
+
+  it("refuses a port carrying only half of the hold pair", () => {
+    // A Session that could take a hold and never give it back is not a
+    // smaller surface; it is a build bug, caught where a throw is cheap.
+    expect(() =>
+      sessionToolIds({ tools: { tools: [] }, browser: { ...browserPort, acquire: port } }),
+    ).toThrow(/both browser_acquire and browser_release/);
+    expect(() =>
+      sessionToolIds({ tools: { tools: [] }, browser: { ...browserPort, release: port } }),
+    ).toThrow(/both browser_acquire and browser_release/);
+    expect(browserHoldPort(undefined)).toBeUndefined();
   });
 
   it("puts the bundle first and the ports in vocabulary order, because the Cache Prefix is computed over it", () => {
@@ -226,11 +258,11 @@ describe("sessionToolIds", () => {
       askUser: port,
       webFetch: port,
       webSearch: port,
-      browser: browserPort,
+      browser: browserHoldPortFixture,
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
-    expect(everything).toHaveLength(13);
+    expect(everything).toHaveLength(15);
   });
 
   it("puts the Role's verbs last, after every capability tool (VC-162)", () => {

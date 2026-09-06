@@ -54,7 +54,7 @@ plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) �
 the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Five recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
+**Six recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
 that is measured rather than chosen. They are commented at their site; do not re-collapse them
 without looking at the surface:
 
@@ -64,6 +64,7 @@ without looking at the surface:
 | `rail-panel-parts.tsx` `RAIL_PANEL_INSET` | `px-3` at narrow | The narrow step must be *smaller* than 16 and still an inset; 8 halves the edge. Collapsed, the variant became a silent no-op |
 | `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` | Optical alignment to the title's cap height, and the 2px that binds a title to its meta line |
 | `board/ticket-card.tsx` | `px-3` | A dense card trades air for content: at `px-4` real titles truncate a word earlier |
+| `browser/session-cursor.css` | chip `gap: 5px` · `padding: 0 7px` · `height: 20px` · action `height: 15px` | The Session cursor's label is a drawing at pointer scale, measured against a 16px arrow, not a control on the layout grid: at the ladder's next step the chip reads as a button beside the arrow rather than a name riding it. Its type and corners still take the `--text-label` and `--radius-sm` rungs |
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
 
 **Responsiveness is the whitespace, not breakpoints:** `<ContentColumn>` is

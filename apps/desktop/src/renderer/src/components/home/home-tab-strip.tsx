@@ -11,8 +11,9 @@ import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { XSquareIcon } from "@phosphor-icons/react/dist/csr/XSquare";
 
-import { sessionProvenanceHoverLine } from "@volli/shared";
+import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
+import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
@@ -60,7 +61,15 @@ export type HomeTabDescriptor =
   | { kind: "board"; id: typeof HOME_BOARD_TAB_ID }
   | { kind: "terminal"; id: string; tab: SessionTab }
   | { kind: "chat"; id: string; sessionId: string; title: string; status: TicketTabStatus }
-  | { kind: "browser"; id: string; tabId: string; title: string; loading: boolean }
+  | {
+      kind: "browser";
+      id: string;
+      tabId: string;
+      title: string;
+      loading: boolean;
+      /** Who holds it (VC-239), for the holder dot. */
+      heldBy: BrowserTabHolder | null;
+    }
   | {
       kind: "file";
       id: string;
@@ -291,6 +300,7 @@ function HomeTabList({
                   className="size-3 shrink-0 text-muted-foreground"
                 />
               }
+              badge={<BrowserHolderDot holder={descriptor.heldBy} />}
               onActivate={() => onSelect(descriptor)}
               onClose={() => onClose(descriptor)}
             />

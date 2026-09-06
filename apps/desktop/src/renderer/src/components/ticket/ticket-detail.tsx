@@ -873,6 +873,7 @@ export function TicketDetail({
       label: browserTabDisplayTitle(tab),
       browserTabId: tab.tabId,
       loading: tab.loading,
+      heldBy: tab.heldBy,
     })),
   ];
   // Compose by kind first, THEN arrange (VC-189): the drag overlay is the one
