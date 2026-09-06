@@ -720,9 +720,9 @@ async function runAutomationTool(
  * call finds its child rather than minting a second.
  *
  * What the answer says is the half the schema cannot: that the call has
- * returned and the model should go on working, and that the child's final
- * message will arrive here as a marked message. A model told only "started"
- * would poll.
+ * returned and the model should go on working, that a notice will arrive here
+ * when the child is done, and which command reads the child's final message.
+ * A model told only "started" would poll.
  */
 async function delegateSessionTool(
   options: AgentToolDoorOptions,
@@ -767,8 +767,8 @@ async function delegateSessionTool(
         `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
         outcome.state === "running"
-          ? "It is attached and working on the task in this Session's working directory. Keep working: its final message will be delivered into this Session as a message marked as its answer when its first turn completes — do not wait or poll for it. `volli session peek` can look in on it meanwhile."
-          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; no answer will arrive until then.",
+          ? `It is attached and working on the task in this Session's working directory. Keep working: when its first turn completes, a notice marked as Volli's will arrive in this Session naming it, and \`volli session answer ${outcome.handle}\` reads its final message — do not wait or poll for it. \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
+          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; no notice will arrive until then.",
       ].join("\n"),
     };
   } catch (error) {

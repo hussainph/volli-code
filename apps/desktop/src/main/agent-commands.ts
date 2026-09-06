@@ -150,6 +150,7 @@ export function createAgentCommandService(
             id: projection.session.id,
             projectId: projection.session.projectId,
             ticketId: projection.session.ticketId,
+            role: projection.session.role,
           };
         }
       }

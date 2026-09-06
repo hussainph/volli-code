@@ -1177,7 +1177,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
         delegate: async (input) => {
           delegated.push(input);
           if (input.task.includes("overflow")) {
-            throw new DelegateSessionError("This Session already has 3 subagents still running.");
+            throw new DelegateSessionError("Volli refused this delegation: still running.");
           }
           return {
             childSessionId: CHILD_SESSION,
@@ -1240,7 +1240,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     expect(h.delegated[0]).toMatchObject({ parent: TICKET_CALLER });
   });
 
-  it("refuses a missing task, a spent cap, and a host without a runtime in words", async () => {
+  it("refuses a missing task, an operation refusal, and a host without a runtime in words", async () => {
     const h = delegateHarness();
 
     expect((await h.call({})).text).toContain("`task` is required");

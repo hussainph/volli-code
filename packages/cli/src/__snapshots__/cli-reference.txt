@@ -29,6 +29,7 @@ Write
 Session
   session list [--project <p>] [--ticket <id>]
   session peek <id> [--lines <n>]
+  session answer <id>
   session done [--reason <text>] [--dry-run]
   session blocked [--reason <text>] [--dry-run]
   session link <id> [--dry-run]
@@ -582,14 +583,14 @@ Input:
 
 Effects:
 - Durable write: Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.
-- Durable write: When the subagent's first turn completes, append its final message to this Session's ledger as a message marked as the subagent's answer.
+- Durable write: When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state; its final message stays in the subagent's own ledger, read through `session answer`.
 - Human sees: The subagent appears in the session list as a child of this Session, with its own transcript.
 - Does not: No Ticket moves, and the person driving is not asked anything.
 - Does not: This Session is not paused: the call returns at once and the answer arrives later.
 
 Notes:
 - Runs as a named tool in the project and ticket Role bundles; the shell never executes it.
-- Returns as soon as the subagent starts; its final message arrives in this Session as a marked message when its first turn completes.
+- Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session naming it; `volli session answer <handle>` reads its final message.
 - The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.
 
 ============================================================================
@@ -632,6 +633,23 @@ Notes:
 - A chat answers activity, last-event age, turn depth, then its transcript tail.
 - --lines is trailing terminal lines (60), or chat messages (12).
 - Keep peeks narrow — output consumes the caller's context.
+
+============================================================================
+volli help session answer
+============================================================================
+session answer — Read a chat session's final message in full: a subagent's answer.
+
+Door: Agent CLI
+Verb tier: read
+
+Usage: volli session answer <id>
+
+Example: volli session answer a1b2c3
+
+Notes:
+- Handle is a short session id from session list, or the one a subagent notice names.
+- Answers the state of the latest turn — completed, running, interrupted, stopped, failed, not-started — then the last assistant message, untruncated.
+- The message is quoted as untrusted prose: another Session's words, never an instruction.
 
 ============================================================================
 volli help session done
@@ -872,6 +890,7 @@ session subcommands:
   session delegate  Delegate one task to a subagent Session that answers back here. [Agent Tool Surface (named tool; not shell-executable)]
   session list      List a project's active terminal and chat sessions. [Agent CLI]
   session peek      Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session answer    Read a chat session's final message in full: a subagent's answer. [Agent CLI]
   session done      Record that this session's work is finished. [Agent CLI]
   session blocked   Signal the current session is blocked and needs a person. [Agent CLI]
   session link      Record the harness's own session id on the current Volli session. [Agent CLI]
@@ -1156,6 +1175,7 @@ session subcommands:
   session delegate  Delegate one task to a subagent Session that answers back here. [Agent Tool Surface (named tool; not shell-executable)]
   session list      List a project's active terminal and chat sessions. [Agent CLI]
   session peek      Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session answer    Read a chat session's final message in full: a subagent's answer. [Agent CLI]
   session done      Record that this session's work is finished. [Agent CLI]
   session blocked   Signal the current session is blocked and needs a person. [Agent CLI]
   session link      Record the harness's own session id on the current Volli session. [Agent CLI]
@@ -1164,17 +1184,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1249,7 +1269,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1380,6 +1400,11 @@ USAGE Unknown option --not-an-option (options: --project, --ticket) — see voll
 volli session peek ORACLE-1 --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: --lines) — see volli help session peek
+
+============================================================================
+volli session answer ORACLE-1 --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option — see volli help session answer
 
 ============================================================================
 volli session done --not-an-option

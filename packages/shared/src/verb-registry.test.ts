@@ -44,6 +44,7 @@ const SOCKET_SURFACE = [
   "cost",
   "session.list",
   "session.peek",
+  "session.answer",
   "session.done",
   "session.blocked",
   "session.link",
@@ -77,6 +78,7 @@ const REFERENCE_SURFACE = [
   "worktree.sync",
   "session.list",
   "session.peek",
+  "session.answer",
   "session.done",
   "session.blocked",
   "session.link",
@@ -131,6 +133,8 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   cost: "read",
   "session.list": "read",
   "session.peek": "read",
+  // The whole of a chat's last message (VC-9): a read, like the peek beside it.
+  "session.answer": "read",
   doctor: "read",
   "prompt.baseline": "read",
   "ticket.create": "coordination",
@@ -347,7 +351,8 @@ describe("verbTier", () => {
     // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(17);
+    // VC-9 adds `session.answer`, a read beside the peek.
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
     expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);

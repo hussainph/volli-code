@@ -15,6 +15,22 @@
 import type { SessionRole, VerbToolKey } from "@volli/shared";
 
 /**
+ * One delegation as the durable record names it (VC-9): the child, its parent,
+ * the operation id every durable write of the delegation is keyed on, and the
+ * title the parent gave it. What the store hands boot recovery, and what the
+ * live registry keeps per child. Data, so the store never imports the
+ * application module it serves.
+ */
+export interface DelegationRef {
+  operationId: string;
+  parentSessionId: string;
+  childSessionId: string;
+  /** The parent's project, which is the child's by construction of the mint. */
+  projectId: string;
+  title: string;
+}
+
+/**
  * The largest delegation chain this build will record.
  *
  * One generation: a root Ticket Session may enlist reviewers, fixers or

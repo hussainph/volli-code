@@ -3,16 +3,30 @@
  * `session_delegate` tool.
  *
  * What is proved here is the shape of the act, not that a Session starts —
- * the start route is the facade's and is tested beside it. Four properties:
+ * the start route is the facade's and is tested beside it. The fakes keep the
+ * two runtime properties the real seams have and the act depends on, because
+ * a fake without them proved the headline for nothing:
  *
- * 1. The call returns at once with a real child Session, and the child's final
- *    message is delivered INTO the parent as a marked message when the child's
- *    first turn completes. The parent is never parked.
- * 2. A child that ends without answering — interrupted, stopped, failed —
- *    still reports back, in words that say so.
- * 3. Live children per parent are capped, and a refusal names the ones
- *    running. Replaying one tool call is one child.
- * 4. Stopping the parent stops its live children.
+ * - `submitSessionMessage` resolves when the TURN it opened ends (the harness
+ *   holds it open until told), so "returns at once" is measured against a
+ *   kickoff that has not come back.
+ * - `subscribe` honours its cursor the way the runtime does: a frame at or
+ *   below `afterSequence` is never delivered, and the ledger is replayed from
+ *   the cursor on subscribe.
+ *
+ * The properties:
+ *
+ * 1. The call returns before the kickoff does, with the watcher already parked.
+ * 2. When the child's first turn completes, a NOTICE — Volli's facts, none of
+ *    the child's words — is steered into the parent, naming the read command.
+ * 3. A child that ends without answering still notifies, in words that say how.
+ * 4. Replaying one tool call is one child, one watcher, one kickoff id.
+ * 5. Stopping the parent stops its live children; a stop already recorded
+ *    before the watch began stops them at once.
+ * 6. A notice waits for a parent that can read it: parked until its next
+ *    attachment, dropped (and logged) for a parent that stopped, and a refused
+ *    receipt is logged rather than swallowed.
+ * 7. Boot recovery folds the child's ledger and notifies the same way.
  */
 
 import { describe, expect, it } from "vite-plus/test";
@@ -26,15 +40,16 @@ import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 
 import {
   createDelegations,
-  DelegateSessionError,
-  MAX_LIVE_SUBAGENTS_PER_PARENT,
-  subagentAnswerMarker,
+  DELEGATION_ID_SUFFIXES,
+  SUBAGENT_WALL_CLOCK_MS,
+  subagentNotice,
 } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import type { SessionStartInput } from "./sessions";
 
 const PARENT = "aaaaaaaa-0000-0000-0000-000000000000";
 const CHILD = "bbbbbbbb-0000-0000-0000-000000000000";
+const CHILD_HANDLE = CHILD.slice(0, 8);
 
 const PARENT_IDENTITY = {
   role: "project" as const,
@@ -50,13 +65,29 @@ const PROVENANCE = {
   venue: { id: "local", kind: "local" as const },
 };
 
+const OPEN_ATTACHMENT = (id: string): SessionProjection["attachments"][number] => ({
+  id: `${id}:attachment`,
+  sessionId: id,
+  adapterId: "pi",
+  venue: { id: "local", kind: "local" },
+  continuity: "fresh",
+  native: null,
+  authority: null,
+  status: "open",
+  openedAt: 1,
+  closedAt: null,
+  outcome: null,
+  failure: null,
+});
+
 function projection(id: string, overrides: Partial<SessionProjection> = {}): SessionProjection {
+  const attachment = OPEN_ATTACHMENT(id);
   return {
     session: {
       id,
       projectId: "project-1",
       ticketId: null,
-      role: "subagent",
+      role: id === PARENT ? "project" : "subagent",
       title: "Helper",
       createdAt: 1,
     },
@@ -64,23 +95,8 @@ function projection(id: string, overrides: Partial<SessionProjection> = {}): Ses
     commands: [],
     receipts: [],
     pendingExecutorStart: null,
-    attachments: [
-      {
-        id: `${id}:attachment`,
-        sessionId: id,
-        adapterId: "pi",
-        venue: { id: "local", kind: "local" },
-        continuity: "fresh",
-        native: null,
-        authority: null,
-        status: "open",
-        openedAt: 1,
-        closedAt: null,
-        outcome: null,
-        failure: null,
-      },
-    ],
-    liveExecutor: null,
+    attachments: [attachment],
+    liveExecutor: attachment,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
@@ -117,42 +133,56 @@ function frame(
   sessionId: string,
   sequence: number,
   payload: SessionEvent["payload"],
-  transcript: {
-    message: { role: "assistant" | "user"; parts: { type: "text"; text: string }[] };
-  } | null = null,
 ): SessionStreamEmission {
   return {
     sessionId,
     sequence,
     event: event(sessionId, sequence, payload),
-    transcript:
-      transcript === null
-        ? null
-        : {
-            version: 1,
-            threadId: "thread",
-            branchId: "branch",
-            attemptId: "attempt",
-            turnId: "turn-1",
-            message: { id: `m-${sequence}`, ...transcript.message },
-          },
+    transcript: null,
   } as SessionStreamEmission;
 }
 
-function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
+type Listener = (emission: SessionStreamEmission) => void | Promise<void>;
+
+interface Subscription {
+  sessionId: string;
+  afterSequence: number;
+  listener: Listener;
+  active: boolean;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } {
+  let resolve!: () => void;
+  let reject!: (e: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function harness(options: { failStops?: boolean } = {}) {
   let children = 0;
-  const nextChild = overrides.nextChild ?? (() => (children++ === 0 ? CHILD : `child-${children}`));
   const starts: SessionStartInput[] = [];
   const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
+  /** Each kickoff's turn, held open until the test ends it. */
+  const kickoffTurns: ReturnType<typeof deferred>[] = [];
   const commands: SessionRuntimeCommandRequest[] = [];
   const stops: { sessionId: string; intent: unknown }[] = [];
-  const listeners = new Map<string, (emission: SessionStreamEmission) => void | Promise<void>>();
-  const subscriptions: string[] = [];
+  const subscriptions: Subscription[] = [];
   const projections = new Map<string, SessionProjection>();
+  /** Durable history per Session, replayed on subscribe from the cursor. */
   const ledgers = new Map<string, SessionEvent[]>();
-  const artifacts = new Map<string, string>();
-  const unsubscribed: string[] = [];
+  const reports: string[] = [];
   const startedIds = new Map<string, string>();
+  const timers: { callback: () => void; ms: number }[] = [];
+  /** What the parent answers a `message.submit` with. */
+  let receiptStatus: "accepted" | "rejected" = "accepted";
+  projections.set(PARENT, projection(PARENT));
+
+  const throughSequence = (sessionId: string) =>
+    (ledgers.get(sessionId) ?? []).reduce((max, e) => Math.max(max, e.sequence), 0);
+
   const ports: DelegateSessionPorts = {
     sessions: {
       start: async (input) => {
@@ -160,7 +190,7 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
         // Replay-safe like the real facade: one operation, one child.
         let sessionId = startedIds.get(input.operationId);
         if (sessionId === undefined) {
-          sessionId = nextChild();
+          sessionId = children++ === 0 ? CHILD : `child-${children}`;
           startedIds.set(input.operationId, sessionId);
           projections.set(
             sessionId,
@@ -168,6 +198,12 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
               session: { ...projection(sessionId).session, title: input.title },
             }),
           );
+          ledgers.set(sessionId, [
+            event(sessionId, 3, {
+              kind: "attachment.opened",
+              attachment: OPEN_ATTACHMENT(sessionId),
+            }),
+          ]);
         }
         return {
           sessionId,
@@ -178,39 +214,69 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
         };
       },
     },
-    submitSessionMessage: async (input) => {
+    submitSessionMessage: (input) => {
       kickoffs.push(input);
+      const turn = deferred();
+      kickoffTurns.push(turn);
+      return turn.promise;
     },
     runtime: {
       command: async (request): Promise<SessionRuntimeCommandResult> => {
         commands.push(request);
-        return {
-          sessionId: "sessionId" in request ? request.sessionId : CHILD,
+        const sessionId = "sessionId" in request ? request.sessionId : CHILD;
+        const base = {
+          sessionId,
           command: {
             id: request.commandId,
-            sessionId: PARENT,
+            sessionId,
             createdAt: 0,
-            intent: { kind: "session.archive" },
+            intent: { kind: "session.archive" as const },
             route: null,
-          },
-          receipt: {
-            id: "r",
-            commandId: request.commandId,
-            status: "accepted",
-            acceptedAt: 0,
-            recordedAt: 0,
-            sequence: 0,
-            result: { kind: "session.signaled", sessionId: PARENT },
           },
           throughSequence: 0,
         };
+        return receiptStatus === "rejected"
+          ? {
+              ...base,
+              receipt: {
+                id: "r",
+                commandId: request.commandId,
+                status: "rejected",
+                code: "no_live_executor",
+                detail: "No live executor can receive this message",
+                recordedAt: 0,
+                sequence: 0,
+              },
+            }
+          : {
+              ...base,
+              receipt: {
+                id: "r",
+                commandId: request.commandId,
+                status: "accepted",
+                acceptedAt: 0,
+                recordedAt: 0,
+                sequence: 0,
+                result: { kind: "session.signaled", sessionId },
+              },
+            };
+      },
+      projection: async ({ sessionId }) => {
+        const found = projections.get(sessionId);
+        if (found === undefined) throw new Error(`no projection for ${sessionId}`);
+        return { projection: found, throughSequence: throughSequence(sessionId) };
       },
       subscribe: async (input, listener) => {
-        subscriptions.push(input.sessionId);
-        listeners.set(input.sessionId, listener);
+        const subscription: Subscription = { ...input, listener, active: true };
+        subscriptions.push(subscription);
+        // The runtime replays the ledger from the cursor before live frames.
+        for (const e of ledgers.get(input.sessionId) ?? []) {
+          if (e.sequence > input.afterSequence && subscription.active) {
+            await listener(frame(input.sessionId, e.sequence, e.payload));
+          }
+        }
         return () => {
-          unsubscribed.push(input.sessionId);
-          listeners.delete(input.sessionId);
+          subscription.active = false;
         };
       },
     },
@@ -218,6 +284,7 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
       listSessions: async () => [...projections.values()],
       listEvents: async ({ sessionId }) => ledgers.get(sessionId) ?? [],
       submit: async (request) => {
+        if (options.failStops === true) throw new Error("engine down");
         stops.push({ sessionId: request.sessionId, intent: request.intent });
         const current = projections.get(request.sessionId);
         if (current !== undefined) {
@@ -249,19 +316,15 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
         };
       },
     },
-    readArtifact: async (reference) => {
-      const text = artifacts.get(reference.id);
-      if (text === undefined) throw new Error(`no artifact ${reference.id}`);
-      return {
-        version: 1,
-        threadId: "thread",
-        branchId: "branch",
-        attemptId: "attempt",
-        turnId: "turn-1",
-        message: { id: reference.id, role: "assistant", parts: [{ type: "text", text }] },
-      };
-    },
     now: () => 1_000,
+    report: (message) => {
+      reports.push(message);
+    },
+    setTimeout: (callback, ms) => {
+      timers.push({ callback, ms });
+      return timers.length;
+    },
+    clearTimeout: () => undefined,
   };
   const delegations = createDelegations(ports);
   const delegate = (toolCallId = "tc-1", task = "Find where the auth token is refreshed") =>
@@ -271,30 +334,53 @@ function harness(overrides: Partial<{ nextChild: () => string }> = {}) {
       task,
       actor: { kind: "session", sessionId: PARENT, ticketId: null },
     });
-  const emit = async (sessionId: string, emission: SessionStreamEmission) => {
-    const listener = listeners.get(sessionId);
-    if (listener === undefined) throw new Error(`nothing subscribed to ${sessionId}`);
-    await listener(emission);
+  /** A live frame, delivered to every active subscriber whose cursor admits it. */
+  const emit = async (sessionId: string, sequence: number, payload: SessionEvent["payload"]) => {
+    ledgers.set(sessionId, [
+      ...(ledgers.get(sessionId) ?? []),
+      event(sessionId, sequence, payload),
+    ]);
+    for (const subscription of subscriptions) {
+      if (
+        subscription.sessionId === sessionId &&
+        subscription.active &&
+        sequence > subscription.afterSequence
+      ) {
+        await subscription.listener(frame(sessionId, sequence, payload));
+      }
+    }
+  };
+  const setParent = (overrides: Partial<SessionProjection>) => {
+    projections.set(PARENT, projection(PARENT, overrides));
   };
   return {
     delegations,
     delegate,
     emit,
+    setParent,
+    setReceipt: (status: "accepted" | "rejected") => {
+      receiptStatus = status;
+    },
     starts,
     kickoffs,
+    kickoffTurns,
     commands,
     stops,
-    listeners,
     subscriptions,
-    unsubscribed,
     ledgers,
-    artifacts,
+    reports,
+    timers,
+    parentCommands: () => commands.filter((c) => "sessionId" in c && c.sessionId === PARENT),
+    activeSubscriptions: (sessionId: string) =>
+      subscriptions.filter((s) => s.sessionId === sessionId && s.active),
   };
 }
 
-/** The text delivered into the parent under one answer command id, or null. */
-function deliveredText(commands: SessionRuntimeCommandRequest[], commandId: string): string | null {
-  const found = commands.find((c) => c.commandId === commandId);
+/** The text steered into the parent under one notice command id, or null. */
+function noticeText(commands: SessionRuntimeCommandRequest[], operationId: string): string | null {
+  const found = commands.find(
+    (c) => c.commandId === `${operationId}${DELEGATION_ID_SUFFIXES.notice}`,
+  );
   if (found === undefined) return null;
   const command = found.command;
   return command.kind === "message.submit" && command.message.parts[0]?.type === "text"
@@ -302,13 +388,24 @@ function deliveredText(commands: SessionRuntimeCommandRequest[], commandId: stri
     : null;
 }
 
-describe("delegateSessionOperation — the child is a real Session, and the parent keeps working", () => {
-  it("starts a Subagent Session with the parent's scope, kicks off the task, and returns at once", async () => {
+async function completeChildTurn(h: ReturnType<typeof harness>, child = CHILD) {
+  await h.emit(child, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" });
+  await h.emit(child, 5, {
+    kind: "transcript.referenced",
+    attachmentId: "a",
+    turnId: "t1",
+    reference: { id: "x", mediaType: "m", digest: "d" },
+  });
+  await h.emit(child, 6, { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
+}
+
+describe("delegate — the child is a real Session, and the parent keeps working", () => {
+  it("returns before the kickoff turn ends, with the watcher parked first", async () => {
     const h = harness();
 
     const result = await h.delegate();
 
-    expect(result).toMatchObject({ childSessionId: CHILD, state: "running" });
+    expect(result).toMatchObject({ childSessionId: CHILD, handle: CHILD_HANDLE, state: "running" });
     expect(h.starts).toEqual([
       expect.objectContaining({
         operationId: `${PARENT}:tc-1`,
@@ -319,156 +416,225 @@ describe("delegateSessionOperation — the child is a real Session, and the pare
         actor: { kind: "session", sessionId: PARENT, ticketId: null },
       }),
     ]);
-    // The task is the kickoff, marked as the parent's delegation so the child
-    // reads it as its instruction and not as a person's message.
+    // The kickoff was sent — marked as the parent's delegation — and its turn
+    // is still open: the call came back anyway.
     expect(h.kickoffs).toHaveLength(1);
-    expect(h.kickoffs[0]).toMatchObject({
-      sessionId: CHILD,
-      commandId: `${PARENT}:tc-1:kickoff`,
-    });
+    expect(h.kickoffs[0]).toMatchObject({ sessionId: CHILD, commandId: `${PARENT}:tc-1:kickoff` });
     expect(h.kickoffs[0]?.text).toContain("Find where the auth token is refreshed");
     expect(h.kickoffs[0]?.text).toContain("Delegated task");
-    // The parent was not parked: nothing was submitted into it yet.
-    expect(h.commands.filter((c) => "sessionId" in c && c.sessionId === PARENT)).toEqual([]);
+    expect(h.kickoffTurns).toHaveLength(1);
+    // The child's stream was subscribed from where the start left it, BEFORE
+    // the kickoff, and the parent's from its current sequence.
+    expect(h.subscriptions.map((s) => [s.sessionId, s.afterSequence])).toEqual([
+      [CHILD, 3],
+      [PARENT, 0],
+    ]);
+    // The parent was not parked: nothing was submitted into it.
+    expect(h.parentCommands()).toEqual([]);
     expect(h.delegations.liveChildren(PARENT)).toEqual([CHILD]);
+    // A kickoff that comes back refused is written down, not dropped.
+    h.kickoffTurns[0]!.reject(new Error("PI_EMPTY_MESSAGE"));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.reports).toEqual([expect.stringContaining("was not delivered: PI_EMPTY_MESSAGE")]);
   });
 
-  it("delivers the child's final message into the parent, marked, when the child's first turn completes", async () => {
+  it("steers a notice — Volli's facts, none of the child's words — into the parent when the child's first turn completes", async () => {
     const h = harness();
     await h.delegate();
 
-    // The child works: an assistant message, then another — the LAST is the answer.
-    await h.emit(CHILD, frame(CHILD, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }));
-    await h.emit(
-      CHILD,
-      frame(
-        CHILD,
-        5,
-        {
-          kind: "transcript.referenced",
-          attachmentId: "a",
-          turnId: "t1",
-          reference: { id: "x", mediaType: "m", digest: "d" },
-        },
-        {
-          message: { role: "assistant", parts: [{ type: "text", text: "Looking…" }] },
-        },
-      ),
-    );
-    await h.emit(
-      CHILD,
-      frame(
-        CHILD,
-        6,
-        {
-          kind: "transcript.referenced",
-          attachmentId: "a",
-          turnId: "t1",
-          reference: { id: "y", mediaType: "m", digest: "e" },
-        },
-        {
-          message: {
-            role: "assistant",
-            parts: [{ type: "text", text: "It is refreshed in auth/refresh.ts, line 42." }],
-          },
-        },
-      ),
-    );
-    expect(h.commands.filter((c) => "sessionId" in c && c.sessionId === PARENT)).toEqual([]);
-    await h.emit(
-      CHILD,
-      frame(CHILD, 7, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
-    );
+    await h.emit(CHILD, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" });
+    expect(h.parentCommands()).toEqual([]);
+    await h.emit(CHILD, 5, { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
 
-    const delivered = h.commands.filter((c) => "sessionId" in c && c.sessionId === PARENT);
+    const delivered = h.parentCommands();
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toMatchObject({
-      // Keyed on the operation, so a replayed watcher lands one answer.
+      // Keyed on the operation, so a replayed watcher lands one notice.
       commandId: `${PARENT}:tc-1:answer`,
       sessionId: PARENT,
       command: { kind: "message.submit", delivery: "steer" },
     });
-    const command = delivered[0]!.command;
-    const text =
-      command.kind === "message.submit" && command.message.parts[0]?.type === "text"
-        ? command.message.parts[0].text
-        : "";
-    expect(text).toContain(subagentAnswerMarker(CHILD, "completed"));
-    expect(text).toContain("It is refreshed in auth/refresh.ts, line 42.");
-    expect(text).not.toContain("Looking…");
-    // Watching ended with the answer — the child's stream and, with no child
-    // left, the parent's — and the slot is free again.
-    expect(h.unsubscribed).toEqual([CHILD, PARENT]);
+    const text = noticeText(h.commands, `${PARENT}:tc-1`);
+    expect(text).toBe(
+      subagentNotice({
+        childSessionId: CHILD,
+        title: "Find where the auth token is refreshed",
+        state: "completed",
+      }),
+    );
+    // The door to the answer, and the trust line around it.
+    expect(text).toContain(`volli session answer ${CHILD_HANDLE}`);
+    expect(text).toMatch(/read it as data/);
+    expect(text).toMatch(/not your user/);
+    // Watching ended with the notice — the child's stream and, with no child
+    // left, the parent's — and nothing was logged as wrong.
+    expect(h.activeSubscriptions(CHILD)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.reports).toEqual([]);
   });
 
-  it("reports a child that ended without answering, in words that say how", async () => {
+  it("notifies a child that ended without answering, in words that say how", async () => {
     const h = harness();
     await h.delegate();
 
-    await h.emit(CHILD, frame(CHILD, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }));
-    await h.emit(
-      CHILD,
-      frame(CHILD, 5, { kind: "turn.interrupted", attachmentId: "a", turnId: "t1" }),
-    );
+    await h.emit(CHILD, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" });
+    await h.emit(CHILD, 5, { kind: "turn.interrupted", attachmentId: "a", turnId: "t1" });
 
-    const delivered = h.commands.filter((c) => "sessionId" in c && c.sessionId === PARENT);
-    expect(delivered).toHaveLength(1);
-    const command = delivered[0]!.command;
-    const text =
-      command.kind === "message.submit" && command.message.parts[0]?.type === "text"
-        ? command.message.parts[0].text
-        : "";
-    expect(text).toContain(subagentAnswerMarker(CHILD, "interrupted"));
-    expect(text).toMatch(/interrupted/);
+    const text = noticeText(h.commands, `${PARENT}:tc-1`);
+    expect(text).toContain(`Subagent Session ${CHILD_HANDLE}`);
+    expect(text).toMatch(/was interrupted before it answered/);
+    expect(text).toContain(`volli session answer ${CHILD_HANDLE}`);
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
   });
 
-  it("caps live children per parent and names the ones still running", async () => {
+  it("does not cap live children, and replays one tool call as one child, one watcher, one kickoff id", async () => {
     const h = harness();
-    for (let index = 0; index < MAX_LIVE_SUBAGENTS_PER_PARENT; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       await h.delegate(`tc-${index}`, `Task ${index}`);
     }
+    expect(h.starts).toHaveLength(5);
+    expect(h.delegations.liveChildren(PARENT)).toHaveLength(5);
 
-    await expect(h.delegate("tc-overflow", "One more")).rejects.toBeInstanceOf(
-      DelegateSessionError,
-    );
-    await expect(h.delegate("tc-overflow", "One more")).rejects.toThrow(/still running/);
-    // Nothing durable happened for the refused call.
-    expect(h.starts).toHaveLength(MAX_LIVE_SUBAGENTS_PER_PARENT);
-  });
-
-  it("replays one tool call as one child, one kickoff, one watcher", async () => {
-    const h = harness();
-
-    const first = await h.delegate("tc-1");
-    const second = await h.delegate("tc-1");
-
-    expect(second.childSessionId).toBe(first.childSessionId);
-    expect(h.kickoffs.map((k) => k.commandId)).toEqual([
-      `${PARENT}:tc-1:kickoff`,
-      `${PARENT}:tc-1:kickoff`,
+    const first = await h.delegate("tc-0", "Task 0");
+    expect(first.childSessionId).toBe(CHILD);
+    expect(h.delegations.liveChildren(PARENT)).toHaveLength(5);
+    expect(h.subscriptions.filter((s) => s.sessionId === CHILD)).toHaveLength(1);
+    // Two submits under ONE command id: the Session Engine deduplicates on it,
+    // which is the whole of the replay story for the kickoff.
+    expect(h.kickoffs.filter((k) => k.sessionId === CHILD).map((k) => k.commandId)).toEqual([
+      `${PARENT}:tc-0:kickoff`,
+      `${PARENT}:tc-0:kickoff`,
     ]);
-    expect(h.delegations.liveChildren(PARENT)).toEqual([CHILD]);
-    expect(h.subscriptions.filter((id) => id === CHILD)).toHaveLength(1);
   });
+});
 
-  it("stops live children when the parent is stopped", async () => {
+describe("delegate — stopping the parent stops the child", () => {
+  it("stops live children on a parent stop recorded after the watch began, and ignores frames the cursor already covers", async () => {
     const h = harness();
+    // The parent has history: the watch must start at its END, not at zero
+    // (a cursor past the end would never be reached) and not at zero either
+    // (replaying the parent's whole life to find a stop is pure cost).
+    h.ledgers.set(PARENT, [
+      event(PARENT, 7, { kind: "turn.started", attachmentId: "p", turnId: "pt" }),
+      event(PARENT, 8, { kind: "turn.completed", attachmentId: "p", turnId: "pt" }),
+    ]);
     await h.delegate("tc-1");
     await h.delegate("tc-2");
+    expect(h.subscriptions.find((s) => s.sessionId === PARENT)?.afterSequence).toBe(8);
 
-    await h.emit(
-      PARENT,
-      frame(PARENT, 9, { kind: "session.stopped", reason: null, by: { kind: "user" } }),
-    );
+    // A frame at or below the cursor is one the runtime would never hand
+    // over; the fake honours that, so nothing happens here.
+    await h.emit(PARENT, 8, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+    expect(h.stops).toEqual([]);
 
-    // Each child received the durable stop naming the parent as the actor.
+    await h.emit(PARENT, 9, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+
+    // Each child received the durable stop naming the parent as the actor,
+    // and each notice was dropped — the parent is stopped — with a log line.
     expect(h.stops.map((s) => s.sessionId).toSorted()).toEqual([CHILD, "child-2"].toSorted());
     expect(h.stops[0]?.intent).toMatchObject({
       kind: "session.stop",
       by: { kind: "session", sessionId: PARENT },
     });
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+  });
+
+  it("stops a child at once when the parent was already stopped before the watch began", async () => {
+    const h = harness();
+    h.setParent({ stopped: { at: 1, reason: null, by: { kind: "user" } } });
+
+    await h.delegate("tc-1");
+
+    expect(h.stops.map((s) => s.sessionId)).toEqual([CHILD]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.reports).toEqual([
+      expect.stringMatching(/parent .* stopped; its notice was not delivered/),
+    ]);
+  });
+
+  it("stops a child that outlives its wall clock and reports it as timed out", async () => {
+    const h = harness();
+    await h.delegate("tc-1");
+    expect(h.timers).toEqual([expect.objectContaining({ ms: SUBAGENT_WALL_CLOCK_MS })]);
+
+    h.timers[0]!.callback();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(h.stops.map((s) => s.sessionId)).toEqual([CHILD]);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(
+      /did not finish within its time bound/,
+    );
+  });
+});
+
+describe("deliver — a notice waits for a parent that can read it", () => {
+  it("parks the notice while the parent has no live executor and steers it at the parent's next attachment", async () => {
+    const h = harness();
+    await h.delegate("tc-1");
+    // The parent's executor went away meanwhile (a relaunch retires every one).
+    h.setParent({ liveExecutor: null, attachments: [] });
+
+    await completeChildTurn(h);
+
+    // Nothing submitted: a submit into a parent with no executor is refused
+    // under the one command id that means "the parent was told".
+    expect(h.parentCommands()).toEqual([]);
+    const parked = h.activeSubscriptions(PARENT);
+    expect(parked).toHaveLength(1);
+    expect(parked[0]?.afterSequence).toBe(0);
+
+    // A turn the parent ran on some other attachment is not the wake.
+    await h.emit(PARENT, 1, { kind: "turn.started", attachmentId: "p", turnId: "pt" });
+    expect(h.parentCommands()).toEqual([]);
+    await h.emit(PARENT, 2, { kind: "attachment.opened", attachment: OPEN_ATTACHMENT(PARENT) });
+
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("drops a parked notice, and says so, when the parent stops before attaching again", async () => {
+    const h = harness();
+    await h.delegate("tc-1");
+    h.setParent({ liveExecutor: null, attachments: [] });
+    await completeChildTurn(h);
+
+    await h.emit(PARENT, 1, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+    expect(h.reports).toEqual([
+      expect.stringMatching(/stopped before subagent .* notice could be delivered/),
+    ]);
+  });
+
+  it("logs a refused receipt rather than swallowing it", async () => {
+    const h = harness();
+    await h.delegate("tc-1");
+    h.setReceipt("rejected");
+
+    await completeChildTurn(h);
+
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(h.reports).toEqual([
+      expect.stringMatching(/was refused by parent .*: no_live_executor/),
+    ]);
+  });
+
+  it("logs a stop the child refused rather than swallowing it", async () => {
+    const h = harness({ failStops: true });
+    await h.delegate("tc-1");
+
+    await h.emit(PARENT, 1, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+
+    expect(h.reports).toEqual(
+      expect.arrayContaining([expect.stringMatching(/could not stop subagent .*: engine down/)]),
+    );
+    // The notice still lands — dropped for a stopped parent, which is logged too.
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
   });
 });
@@ -478,70 +644,54 @@ describe("recover — delegations a relaunch left unanswered (VC-9)", () => {
   const CUT_SHORT = "eeeeeeee-0000-0000-0000-000000000000";
   const NEVER_RAN = "ffffffff-0000-0000-0000-000000000000";
 
-  it("delivers a finished child's final message, reports a cut-short one, and leaves an unstarted one alone", async () => {
+  it("notifies for a finished child and a cut-short one, leaves an unstarted one alone, and parks each notice until the parent attaches", async () => {
     const h = harness();
-    // Finished before the relaunch: two assistant messages, the last is the answer.
-    h.artifacts.set("art-1", "Looking…");
-    h.artifacts.set("art-2", "It is refreshed in auth/refresh.ts, line 42.");
+    // After the boot sweep no parent holds an executor.
+    h.setParent({ liveExecutor: null, attachments: [] });
     h.ledgers.set(FINISHED, [
       event(FINISHED, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
-      event(FINISHED, 5, {
-        kind: "transcript.referenced",
-        attachmentId: "a",
-        turnId: "t1",
-        reference: { id: "art-1", mediaType: "m", digest: "d1" },
-      }),
-      event(FINISHED, 6, {
-        kind: "transcript.referenced",
-        attachmentId: "a",
-        turnId: "t1",
-        reference: { id: "art-2", mediaType: "m", digest: "d2" },
-      }),
-      event(FINISHED, 7, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+      event(FINISHED, 5, { kind: "turn.completed", attachmentId: "a", turnId: "t1" }),
+      event(FINISHED, 6, { kind: "attachment.closed", attachmentId: "a", outcome: "interrupted" }),
     ]);
-    // Mid-turn when the app relaunched: boot retired its attachment, so the
-    // turn never completes and nothing will ever wake a watcher for it.
+    // Mid-turn when the app relaunched: the sweep closed its attachment as
+    // interrupted, so the turn never completes.
     h.ledgers.set(CUT_SHORT, [
       event(CUT_SHORT, 4, { kind: "turn.started", attachmentId: "a", turnId: "t1" }),
+      event(CUT_SHORT, 5, { kind: "attachment.closed", attachmentId: "a", outcome: "interrupted" }),
     ]);
     // Created but never attached: the parent was already told no task was
     // sent, and there is nothing to report until a person retries it.
     h.ledgers.set(NEVER_RAN, []);
+    const ref = (childSessionId: string, toolCallId: string, title: string) => ({
+      childSessionId,
+      parentSessionId: PARENT,
+      projectId: "project-1",
+      operationId: `${PARENT}:${toolCallId}`,
+      title,
+    });
 
     const recovered = await h.delegations.recover([
-      {
-        childSessionId: FINISHED,
-        parentSessionId: PARENT,
-        projectId: "project-1",
-        operationId: `${PARENT}:tc-1`,
-        title: "Token hunt",
-      },
-      {
-        childSessionId: CUT_SHORT,
-        parentSessionId: PARENT,
-        projectId: "project-1",
-        operationId: `${PARENT}:tc-2`,
-        title: "Flaky test",
-      },
-      {
-        childSessionId: NEVER_RAN,
-        parentSessionId: PARENT,
-        projectId: "project-1",
-        operationId: `${PARENT}:tc-3`,
-        title: "Never",
-      },
+      ref(FINISHED, "tc-1", "Token hunt"),
+      ref(CUT_SHORT, "tc-2", "Flaky test"),
+      ref(NEVER_RAN, "tc-3", "Never"),
     ]);
 
     expect(recovered).toEqual({ answered: 1, reported: 1, skipped: 1 });
-    const answer = deliveredText(h.commands, `${PARENT}:tc-1:answer`);
-    expect(answer).toContain(subagentAnswerMarker(FINISHED, "completed"));
-    expect(answer).toContain("It is refreshed in auth/refresh.ts, line 42.");
-    expect(answer).not.toContain("Looking…");
-    const report = deliveredText(h.commands, `${PARENT}:tc-2:answer`);
-    expect(report).toContain(subagentAnswerMarker(CUT_SHORT, "interrupted"));
-    expect(report).toMatch(/relaunch/);
-    expect(deliveredText(h.commands, `${PARENT}:tc-3:answer`)).toBeNull();
+    // Parked, not submitted: two subscriptions on the parent, no command yet.
+    expect(h.parentCommands()).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toHaveLength(2);
+
+    await h.emit(PARENT, 1, { kind: "attachment.opened", attachment: OPEN_ATTACHMENT(PARENT) });
+
+    const answer = noticeText(h.commands, `${PARENT}:tc-1`);
+    expect(answer).toContain(`"Token hunt"`);
+    expect(answer).toMatch(/completed its task/);
+    expect(answer).toContain(`volli session answer ${FINISHED.slice(0, 8)}`);
+    const report = noticeText(h.commands, `${PARENT}:tc-2`);
+    expect(report).toMatch(/mid-turn when Volli relaunched/);
+    expect(noticeText(h.commands, `${PARENT}:tc-3`)).toBeNull();
     // Nothing is watched afterwards: recovery reports and lets go.
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
   });
 });

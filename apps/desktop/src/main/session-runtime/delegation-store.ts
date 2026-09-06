@@ -24,9 +24,9 @@ import {
   isDelegationDepth,
   isNonNegativeInteger,
 } from "./delegation-policy";
-import type { DelegationRef } from "./delegate-session";
 import type {
   DelegationClaimRef,
+  DelegationRef,
   SessionGrantBirth,
   SessionGrantPorts,
   TicketDelegationClaim,

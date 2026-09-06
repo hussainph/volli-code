@@ -1694,9 +1694,6 @@ app.whenReady().then(async () => {
       submitSessionMessage: submitKickoffMessage,
       runtime: sessionRuntime,
       sessionEngine,
-      // The same store `session peek` reads a chat's tail through: a
-      // recovered answer is the child's last message off its own ledger.
-      readArtifact: (reference) => transcriptArtifacts.read(reference),
       onMutation: (change) => broadcastDataChanged(change),
       now: () => Date.now(),
     });
