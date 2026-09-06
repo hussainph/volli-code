@@ -186,7 +186,7 @@ export async function identifyVerb(
           ? {}
           : {
               agentSurface: {
-                role: envSession.ticketId === null ? "project" : "ticket",
+                role: envSession.role,
                 tools: frozenTools,
               },
             }),

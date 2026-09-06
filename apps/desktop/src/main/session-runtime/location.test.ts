@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -39,7 +40,15 @@ function scratch(): string {
 }
 
 function ticketSession(projectId: string, ticketId: string): Session {
-  return { id: "ticket-session", projectId, ticketId, title: null, createdAt: 0 };
+  return {
+    id: "ticket-session",
+    projectId,
+    ticketId,
+    role: "ticket",
+    parentSessionId: null,
+    title: null,
+    createdAt: 0,
+  };
 }
 
 describe("desktop Session location resolver", () => {
@@ -59,6 +68,8 @@ describe("desktop Session location resolver", () => {
         id: "project-session",
         projectId: project.id,
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -68,6 +79,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -97,6 +110,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -106,6 +121,8 @@ describe("desktop Session location resolver", () => {
         id: "missing-project-session",
         projectId: "missing",
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -115,6 +132,8 @@ describe("desktop Session location resolver", () => {
         id: "missing-ticket-session",
         projectId: project.id,
         ticketId: "missing",
+        role: "ticket",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -124,6 +143,8 @@ describe("desktop Session location resolver", () => {
         id: "cross-project-ticket-session",
         projectId: project.id,
         ticketId: foreignTicket.id,
+        role: roleImpliedByTicket(foreignTicket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -145,6 +166,8 @@ describe("desktop Session location resolver", () => {
         id: "project-session",
         projectId: project.id,
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -165,6 +188,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -251,6 +276,8 @@ describe("desktop Session location resolver", () => {
       id: "project-session",
       projectId: project.id,
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: null,
       createdAt: 0,
     };

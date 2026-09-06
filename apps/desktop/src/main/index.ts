@@ -32,9 +32,12 @@ import {
   draftAttachmentHashes,
   makeAgentError,
   memoizedPathExists,
+  modelPurposeForRole,
   resolveAgentToolSurface,
   resolveDefaultModel,
   resolveShell,
+  roleImpliedByTicket,
+  shortSessionId,
   skillPromptResource,
   skillResourcePart,
   skillsIndexResource,
@@ -209,6 +212,8 @@ import {
 } from "./broadcast";
 import { actorSessionTicketDisplay } from "./agent-dispatch/resolution";
 import { createAgentToolDoor } from "./agent-tool-door";
+import { createDelegations } from "./session-runtime/delegate-session";
+import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
@@ -223,6 +228,7 @@ import { worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
+  composeSubagentBrief,
   composeTicketBrief,
   createAgentCommandService,
 } from "./agent-commands";
@@ -954,13 +960,14 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants) => {
+          resolve: (role, grants, within) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
             const web = webPortsFor(webAccess.resolve());
             return resolveAgentToolSurface({
               role,
+              ...(within === undefined ? {} : { within }),
               capabilities: {
                 coding: PI_TOOLS.tools,
                 // The desktop always owns the ask surface, so `ask_user` is a
@@ -998,6 +1005,9 @@ app.whenReady().then(async () => {
               grants,
             });
           },
+          // A parent's own frozen record, read to bound its child (VC-9).
+          recorded: async (sessionId) =>
+            recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
           record: async (sessionId, tools) => {
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
@@ -1051,7 +1061,10 @@ app.whenReady().then(async () => {
 
   let agentToolDoor: AgentToolDoor | null = null;
   const piRuntimeHost =
-    dbHandle.ok && piModelAccess !== null && sessionToolSurface !== null
+    dbHandle.ok &&
+    piModelAccess !== null &&
+    sessionToolSurface !== null &&
+    sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
           models: piModelAccess.models,
@@ -1197,10 +1210,7 @@ app.whenReady().then(async () => {
                   sessionId,
                   input: {
                     kind: "tool-surface",
-                    tools: sessionToolSurface.resolve(
-                      attaching.ticketId === null ? "project" : "ticket",
-                      [],
-                    ),
+                    tools: sessionToolSurface.resolve(attaching.role, []),
                   },
                   provenance,
                 }),
@@ -1230,9 +1240,53 @@ app.whenReady().then(async () => {
               // first attach did, whatever `.agents/skills/` says today.
               promptResources: recordedPromptResources(events),
             };
-            // A ticketless Session is a Role, not a Ticket lookup that failed:
-            // it briefs on the project root it already runs in.
-            if (attaching.ticketId === null) {
+            // The Role is the Session's own statement (VC-9), never read off
+            // the Ticket: a subagent may carry its parent's Ticket, and a
+            // Ticket Session whose Ticket was deleted is still not a project
+            // one. Each Role briefs on what its Role means.
+            //
+            // A subagent's Ticket, when it has one, is read the way any
+            // other Session's is; an orphaned one briefs on the checkout. The
+            // parent is the Session's own ledger fact, never a host table's.
+            const ticket =
+              attaching.ticketId === null
+                ? null
+                : (getTicket(dbHandle.db, attaching.ticketId) ?? null);
+            if (attaching.role === "subagent") {
+              const parentSessionId = attaching.parentSessionId;
+              if (parentSessionId === null) return null;
+              const subagentTicket = ticket && ticket.projectId === project.id ? ticket : null;
+              const parent = await sessionEngine.getSession({ sessionId: parentSessionId });
+              const brief = await sessionEngine.getOrRecordSessionInput({
+                sessionId,
+                input: {
+                  kind: "runtime-brief",
+                  text: composeSubagentBrief({
+                    project,
+                    parent: {
+                      handle: shortSessionId(parentSessionId),
+                      title: parent?.session.title ?? null,
+                    },
+                    ticket: subagentTicket,
+                  }),
+                },
+                provenance,
+              });
+              return {
+                ...shared,
+                role: "subagent",
+                ticketId: subagentTicket?.id ?? null,
+                parentSessionId,
+                brief: briefText(brief),
+                // Where the parent runs: the same predicate `location.ts`
+                // binds the directory on.
+                location: subagentTicket?.usesWorktree ? "worktree" : "main-checkout",
+              };
+            }
+            if (attaching.role === "project" || attaching.ticketId === null) {
+              // A ticketless Session briefs on the project root it already
+              // runs in. A Ticket Session orphaned by a Ticket delete lands
+              // here too, attaching as the only thing it can still be.
               const brief = await sessionEngine.getOrRecordSessionInput({
                 sessionId,
                 input: { kind: "runtime-brief", text: composeProjectBrief({ project }) },
@@ -1246,8 +1300,7 @@ app.whenReady().then(async () => {
                 location: "main-checkout",
               };
             }
-            const ticket = getTicket(dbHandle.db, attaching.ticketId);
-            if (!ticket || ticket.projectId !== project.id) return null;
+            if (ticket === null || ticket.projectId !== project.id) return null;
             const brief = await sessionEngine.getOrRecordSessionInput({
               sessionId,
               input: {
@@ -1463,10 +1516,7 @@ app.whenReady().then(async () => {
             const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
             return (
               project?.sessionModel ??
-              resolveDefaultModel(
-                readModelAccessDefaults(sessionDb),
-                role === "ticket" ? "ticket" : "global",
-              )
+              resolveDefaultModel(readModelAccessDefaults(sessionDb), modelPurposeForRole(role))
             );
           },
           ticketBelongsToProject: (projectId, ticketId) =>
@@ -1533,7 +1583,13 @@ app.whenReady().then(async () => {
             sessionDb !== null
               ? (policy) => writeCompactionPolicy(sessionDb, policy, Date.now())
               : undefined,
-          createSession: sessions?.create,
+          // A person's create door chooses a Ticket or none; the Role is what
+          // that choice implies (VC-9). No renderer input can name a
+          // `subagent` — only the bound delegate tool door mints one.
+          createSession:
+            sessions === null
+              ? undefined
+              : (input) => sessions.create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
           // Every renderer Retry rides this wrapper. A ready attachment is the
           // recovery point for an Automation's durable first-message intent;
           // the runner's fixed Session command id reconciles rather than
@@ -1654,6 +1710,30 @@ app.whenReady().then(async () => {
             },
           });
         };
+  // The delegation host (VC-9): one per launch, holding the live-subagent
+  // registry, and composed lazily on first use because the Sessions facade it
+  // mints through is built further down this same function.
+  let delegations: Delegations | null = null;
+  const delegationsFor = (): Delegations | null => {
+    if (delegations !== null) return delegations;
+    if (
+      sessions === null ||
+      sessionRuntime === null ||
+      sessionEngine === null ||
+      submitKickoffMessage === undefined
+    ) {
+      return null;
+    }
+    delegations = createDelegations({
+      sessions,
+      submitSessionMessage: submitKickoffMessage,
+      runtime: sessionRuntime,
+      sessionEngine,
+      onMutation: (change) => broadcastDataChanged(change),
+      now: () => Date.now(),
+    });
+    return delegations;
+  };
   // Every dependency is read through a closure rather than captured, because
   // this is composed before some of them exist and outlives changes to the
   // rest: the project list grows, and the facade is built further down this
@@ -1689,6 +1769,7 @@ app.whenReady().then(async () => {
             sessionEngine !== null && sessionRuntime !== null
               ? { sessionEngine, runtime: sessionRuntime }
               : null,
+          delegate: delegationsFor,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),
@@ -1806,6 +1887,27 @@ app.whenReady().then(async () => {
       });
     } catch (error) {
       console.error("[volli] failed to recover stale attachments:", errorMessage(error));
+    }
+    // Delegations a relaunch left unanswered (VC-9): every open attachment is
+    // retired above, so a child mid-turn at the relaunch will never complete
+    // and a child that finished before it has its answer in its ledger. Both
+    // are reported to their parent now, the way the lost watcher would have.
+    // After the attachment sweep on purpose — a child still "open" here would
+    // otherwise read as running.
+    if (sessionDelegation !== null) {
+      try {
+        const unanswered = sessionDelegation.listUnansweredSubagents();
+        if (unanswered.length > 0) {
+          const recovered = await delegationsFor()?.recover(unanswered);
+          if (recovered !== undefined) {
+            console.log(
+              `[volli] recovered ${unanswered.length} delegation(s): ${recovered.answered} answered, ${recovered.reported} reported, ${recovered.skipped} skipped`,
+            );
+          }
+        }
+      } catch (error) {
+        console.error("[volli] failed to recover delegations:", errorMessage(error));
+      }
     }
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached

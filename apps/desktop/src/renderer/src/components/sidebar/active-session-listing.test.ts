@@ -105,6 +105,8 @@ function chatSession(
     waitingOn: overrides.waitingOn ?? null,
     lastActivityAt: overrides.lastActivityAt ?? 1,
     bornTicketless: overrides.bornTicketless ?? overrides.ticketId === null,
+    role: (overrides.bornTicketless ?? overrides.ticketId === null) ? "project" : "ticket",
+    parentSessionId: null,
   };
 }
 

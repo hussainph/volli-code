@@ -16,7 +16,15 @@ import { applyRemoteChatTitle, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
-const SESSION = { id: "chat-1", projectId: "p1", ticketId: "t1", title: "Plan", createdAt: 0 };
+const SESSION = {
+  id: "chat-1",
+  projectId: "p1",
+  ticketId: "t1",
+  role: "ticket" as const,
+  parentSessionId: null,
+  title: "Plan",
+  createdAt: 0,
+};
 
 const projection: SessionPresentationProjection = {
   session: SESSION,
@@ -54,6 +62,8 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       waitingOn: null,
       lastActivityAt: 1,
       bornTicketless: false,
+      role: "ticket",
+      parentSessionId: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,

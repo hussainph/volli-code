@@ -59,6 +59,8 @@ import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
 import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
+import { DelegateSessionError } from "./session-runtime/delegate-session";
+import type { Delegations } from "./session-runtime/delegate-session";
 import type {
   TicketSessionDelegation,
   TicketSessionDelegationClaims,
@@ -131,6 +133,11 @@ export interface AgentToolDoorOptions extends Omit<
    * as "no structured runtime this launch" and each tool refuses in words.
    */
   supervise: () => SuperviseSessionPorts | null;
+  /**
+   * The delegation host (VC-9), resolved per call on the same terms: it holds
+   * the process's live subagent registry and is composed after this door.
+   */
+  delegate: () => Delegations | null;
 }
 
 /** A refusal the model reads and can act on. Never a thrown error. */
@@ -703,6 +710,80 @@ async function runAutomationTool(
 }
 
 /**
+ * Hand one task to a new Subagent Session and return at once (VC-9).
+ *
+ * The door's whole job is the same as the start tool's: read the fields,
+ * bind the caller, word the answer. Parent, project and Ticket all come from
+ * the attachment — a Ticket Session delegates within its own Ticket and a
+ * Board Session within its project, and neither can name another. The
+ * operation id is the caller plus the runtime's tool call id, so a replayed
+ * call finds its child rather than minting a second.
+ *
+ * What the answer says is the half the schema cannot: that the call has
+ * returned and the model should go on working, that a notice will arrive here
+ * when the child is done, and which command reads the child's final message.
+ * A model told only "started" would poll.
+ */
+async function delegateSessionTool(
+  options: AgentToolDoorOptions,
+  session: RuntimeSessionIdentity,
+  request: RuntimeVerbCall,
+  // Not withdrawable mid-flight, for the reason a start is not: by the time an
+  // abort could be read the child either durably exists or never did, and the
+  // watch that follows belongs to the process, not to this turn.
+  _signal: AbortSignal,
+): Promise<RuntimeVerbResult> {
+  const delegations = options.delegate();
+  if (delegations === null) {
+    return refusal(
+      "Volli's Session runtime is not available this launch, so nothing was delegated.",
+    );
+  }
+  const task = requiredText(
+    request.input,
+    "task",
+    "the delegated task, complete on its own — what to do, where to look, what the answer should contain.",
+  );
+  if (!task.ok) return refusal(task.text);
+  const title = optionalText(request.input, "title");
+  if (!title.ok) return refusal(title.text);
+  const override = readModelOverride(request.input);
+  if (!override.ok) return refusal(override.text);
+  const modelOverride = startSessionModelOverride(override.model, override.reasoning);
+  try {
+    const outcome = await delegations.delegate({
+      operationId: `${session.sessionId}:${request.toolCallId}`,
+      parent: session,
+      task: task.value,
+      ...(title.value === undefined ? {} : { title: title.value.trim() }),
+      ...(modelOverride === undefined ? {} : { modelOverride }),
+      actor: callerActor(session),
+    });
+    return {
+      // The row's link and name, structured, so the transcript never has to
+      // parse the prose below.
+      details: { sessionId: outcome.childSessionId, title: outcome.title },
+      text: [
+        `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
+        `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
+        outcome.state === "running"
+          ? `It is attached and working on the task in this Session's working directory. Keep working: when its first turn completes, a notice marked as Volli's will arrive in this Session naming it, and \`volli session answer ${outcome.handle}\` reads its final message — do not wait or poll for it. \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
+          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; no notice will arrive until then.",
+      ].join("\n"),
+    };
+  } catch (error) {
+    // A refusal the operation or the facade named is an answer about the
+    // request, so the model gets its words. Anything else is a host that
+    // could not carry out the delegation, and that fails the call.
+    if (error instanceof DelegateSessionError) return refusal(error.message);
+    if (error instanceof StructuredSessionsError) {
+      return refusal(`Volli refused to delegate: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
  * The verb-to-handler binding for this door, total over what a bundle can hold.
  *
  * A `Record` over {@link VerbToolKey} rather than a switch with a default, so
@@ -741,6 +822,7 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
       signal,
     ),
   "automation.run": runAutomationTool,
+  "session.delegate": delegateSessionTool,
 };
 
 /**

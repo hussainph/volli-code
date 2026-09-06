@@ -294,7 +294,14 @@ interface PiRuntimeContextFields {
  */
 export type PiRuntimeContext =
   | (PiRuntimeContextFields & { role: "ticket"; ticketId: string })
-  | (PiRuntimeContextFields & { role: "project"; ticketId: null });
+  | (PiRuntimeContextFields & { role: "project"; ticketId: null })
+  // A subagent's Ticket is its parent's, or none (VC-9); the parent is what
+  // the Role guarantees, exactly as the Ticket is for the Ticket Role.
+  | (PiRuntimeContextFields & {
+      role: "subagent";
+      ticketId: string | null;
+      parentSessionId: string;
+    });
 
 /**
  * The runtime's Browser port plus the one lifecycle door the desktop adapter
@@ -866,7 +873,14 @@ class PiBinding implements BindingHandle {
     const sessionIdentity: RuntimeSessionIdentity =
       context.role === "ticket"
         ? { ...identity, role: "ticket", ticketId: context.ticketId }
-        : { ...identity, role: "project", ticketId: null };
+        : context.role === "project"
+          ? { ...identity, role: "project", ticketId: null }
+          : {
+              ...identity,
+              role: "subagent",
+              ticketId: context.ticketId,
+              parentSessionId: context.parentSessionId,
+            };
     const runtimeSpec: SessionRuntimeSpec = {
       identity: sessionIdentity,
       // The directory the Session Engine PREPARED: for a worktree ticket the

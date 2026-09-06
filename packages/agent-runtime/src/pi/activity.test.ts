@@ -708,6 +708,121 @@ describe("mapPiActivity", () => {
     ).toMatchObject({ summary: "completed normally" });
   });
 
+  it("maps session_delegate to a delegate row naming the child Session (VC-9)", () => {
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-delegate",
+        toolName: "session_delegate",
+        args: {
+          task: "Find where the auth token is refreshed\nReport the file.",
+          title: "Token hunt",
+        },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(started).toMatchObject({
+      descriptor: {
+        kind: "delegate",
+        nativeToolName: "session_delegate",
+        // The title names the helper before the child exists; nothing to open yet.
+        subject: { label: "Token hunt", agentName: "Token hunt", sessionId: null, path: null },
+        outcome: null,
+      },
+    });
+    const ended = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-delegate",
+        toolName: "session_delegate",
+        result: {
+          content: [{ type: "text", text: "Delegated to subagent Session cccccccc." }],
+          // The host's structured facts: the child's id and title, which the
+          // transcript row links to and names.
+          details: { sessionId: "cccccccc-0000-0000-0000-000000000000", title: "Token hunt" },
+        },
+        isError: false,
+      },
+      activityContext({
+        input: { task: "Find where the auth token is refreshed", title: "Token hunt" },
+        startedAt: 700,
+        observedAt: 900,
+      }),
+    );
+    expect(ended).toMatchObject({
+      state: "completed",
+      descriptor: {
+        kind: "delegate",
+        subject: {
+          label: "Token hunt",
+          agentName: "Token hunt",
+          sessionId: "cccccccc-0000-0000-0000-000000000000",
+        },
+        outcome: { childCount: 1, summary: "Delegated to subagent Session cccccccc." },
+      },
+    });
+    // Without a title, the task's first line names the helper.
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-2",
+          toolName: "session_delegate",
+          args: { task: "  Run the flaky test ten times  \nand report" },
+        },
+        activityContext({ observedAt: 700 }),
+      ),
+    ).toMatchObject({
+      descriptor: {
+        subject: {
+          label: "Run the flaky test ten times",
+          agentName: "Run the flaky test ten times",
+        },
+      },
+    });
+    // A long first line is cut to a row's width; a call with no task at all
+    // names nothing rather than inventing a label.
+    const long = "x".repeat(120);
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-3",
+          toolName: "session_delegate",
+          args: { task: long },
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject.agentName,
+    ).toBe(`${"x".repeat(79)}…`);
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-4",
+          toolName: "session_delegate",
+          args: {},
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject,
+    ).toMatchObject({ label: null, agentName: null, sessionId: null });
+    // A refusal opened no child: the outcome counts zero rather than one.
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "call-delegate-5",
+          toolName: "session_delegate",
+          result: { content: [{ type: "text", text: "This Session already has 3 subagents." }] },
+          isError: false,
+        },
+        activityContext({ input: { task: "One more" }, startedAt: 700, observedAt: 800 }),
+      ).descriptor,
+    ).toMatchObject({
+      subject: { agentName: "One more", sessionId: null },
+      outcome: { childCount: 0 },
+    });
+  });
+
   it("uses a path as the subject label for otherwise unknown tools", () => {
     expect(
       mapPiActivity(

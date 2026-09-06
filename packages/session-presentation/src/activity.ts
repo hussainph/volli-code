@@ -469,6 +469,13 @@ export interface ActivityFacts {
   object: string | null;
   /** Non-null when clicking the object should open a workspace artifact. */
   openPath: string | null;
+  /**
+   * Non-null when clicking the object should open a Session — a `delegate`
+   * row's child (VC-9). Beside `openPath` rather than overloading it, because
+   * a Session id is not a path and the surface that opens one is not the
+   * surface that opens the other.
+   */
+  openSessionId?: string | null;
   meta: string | null;
   metaTone: SummaryTone;
   detail: ActivityDetail | null;
@@ -604,18 +611,25 @@ export const ACTIVITY_PRESENTERS: Record<ActivityKind, ActivityParse> = {
     };
   },
 
-  delegate: (context) => ({
-    // The adapter names the subagent through `nativeToolName`, so a delegate row
-    // reads `explore  Find the streaming seam` rather than the harness's
-    // dispatch tool. The subject swaps while running — it is the only object
-    // that does — because the adapter restamps it with the child's last line.
-    verb: context.descriptor.nativeToolName,
-    object: context.descriptor.subject.label,
-    openPath: null,
-    meta: joinMeta([context.descriptor.outcome?.summary ?? null, durationMeta(context)]),
-    metaTone: "muted",
-    detail: outputDetail(context),
-  }),
+  delegate: (context) => {
+    const subject = context.descriptor.subject;
+    // Two stampings share this kind. Volli's own `session_delegate` (VC-9)
+    // fills `agentName` and, once the child exists, `sessionId` — so the row
+    // reads `Delegated  Token hunt` and its object opens the child Session.
+    // A harness that stamps neither names the subagent through
+    // `nativeToolName` instead (`explore  Find the streaming seam`), and its
+    // subject swaps while running as the adapter restamps the child's last line.
+    const named = subject.agentName ?? null;
+    return {
+      verb: named === null ? context.descriptor.nativeToolName : "Delegated",
+      object: named ?? subject.label,
+      openPath: null,
+      openSessionId: subject.sessionId ?? null,
+      meta: joinMeta([context.descriptor.outcome?.summary ?? null, durationMeta(context)]),
+      metaTone: "muted",
+      detail: outputDetail(context),
+    };
+  },
 
   plan: (context) => ({
     verb: "Planned",

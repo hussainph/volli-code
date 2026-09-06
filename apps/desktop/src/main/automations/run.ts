@@ -15,6 +15,7 @@ import {
   errorMessage,
   expandCommandInvocation,
   isAutomationRuntimePin,
+  roleImpliedByTicket,
   sameAutomationRunRequestIdentity,
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
@@ -508,6 +509,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         operationId: plan.sessionOperationId,
         projectId: plan.projectId,
         ticketId: plan.ticketId,
+        // A Run opens a Ticket Session or a project one, and its Ticket says
+        // which — the same two Roles a person's door can choose between.
+        role: roleImpliedByTicket(plan.ticketId),
         // An Unbound Run has no record to take a name from, so its Session
         // wears the one name that IS true of it — the same words its Run row
         // prints, rather than a second spelling of "nothing named this".

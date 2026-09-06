@@ -76,6 +76,7 @@ describe("Ticket Session delegation grants", () => {
         maxChildren: DEFAULT_TICKET_SESSION_DELEGATION.maxChildren,
         claimToolCallId: null,
       },
+      parentSessionId: null,
     });
     expect(h.store.readStartGrant(h.root.id)).toEqual({
       scope: "own-ticket",
@@ -147,7 +148,7 @@ describe("Ticket Session delegation grants", () => {
     const birth = h.store.resolveBirth({ role: "project", ticketId: null });
     h.store.recordBirth(h.root.id, birth);
 
-    expect(birth).toEqual({ grants: [], delegation: null });
+    expect(birth).toEqual({ grants: [], delegation: null, parentSessionId: null });
     expect(h.db.prepare("SELECT COUNT(*) AS count FROM session_delegations").get()).toEqual({
       count: 0,
     });
@@ -183,6 +184,7 @@ describe("Ticket Session delegation grants", () => {
           maxChildren: 2,
           claimToolCallId: null,
         },
+        parentSessionId: null,
       }),
     ).toThrow("already has a different start grant");
   });
@@ -191,7 +193,11 @@ describe("Ticket Session delegation grants", () => {
     const h = harness();
 
     expect(() =>
-      h.store.recordBirth(h.root.id, { grants: ["session.start"], delegation: null }),
+      h.store.recordBirth(h.root.id, {
+        grants: ["session.start"],
+        delegation: null,
+        parentSessionId: null,
+      }),
     ).toThrow("cannot receive a verb grant");
     expect(() =>
       h.store.recordBirth(
@@ -461,5 +467,102 @@ describe("Ticket Session delegation grants", () => {
       ok: false,
       reason: "not-granted",
     });
+  });
+});
+
+describe("Subagent Session ancestry (VC-9)", () => {
+  it("records a subagent's parent link with no grant, one generation below its parent", () => {
+    const h = harness();
+    // The parent is itself a delegated Ticket Session at depth 1, so its
+    // subagent reads as the grandchild it is.
+    const parentBirth = h.store.resolveBirth({
+      role: "ticket",
+      ticketId: h.ticket.id,
+      delegation: {
+        parentSessionId: null,
+        depth: 0,
+        maxDepth: 1,
+        maxChildren: 3,
+        claimToolCallId: null,
+      },
+    });
+    h.store.recordBirth(h.root.id, parentBirth);
+    const child = testSession("project-1", h.ticket.id, { id: "helper-session" });
+    insertSession(h.db, child);
+
+    const birth = h.store.resolveBirth({
+      role: "subagent",
+      ticketId: h.ticket.id,
+      parentSessionId: h.root.id,
+    });
+    h.store.recordBirth(child.id, birth);
+
+    expect(birth).toEqual({ grants: [], delegation: null, parentSessionId: h.root.id });
+    expect(
+      h.db
+        .prepare("SELECT parent_session_id, depth FROM session_delegations WHERE session_id = ?")
+        .get(child.id),
+    ).toEqual({ parent_session_id: h.root.id, depth: 1 });
+    // No grant row: the helper's bundle is the whole of its authority.
+    expect(h.store.startGrantScope(child.id)).toBeNull();
+    // Recording the same birth again is one row, not a conflict.
+    expect(() => h.store.recordBirth(child.id, birth)).not.toThrow();
+  });
+
+  it("refuses a subagent with no parent, and a parent on any other Role", () => {
+    const h = harness();
+    expect(() => h.store.resolveBirth({ role: "subagent", ticketId: null })).toThrow(
+      "needs the Session that delegated it",
+    );
+    expect(() =>
+      h.store.resolveBirth({ role: "project", ticketId: null, parentSessionId: h.root.id }),
+    ).toThrow("Only a Subagent Session names a parent");
+    expect(() =>
+      h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id, parentSessionId: h.root.id }),
+    ).toThrow("Only a Subagent Session names a parent");
+  });
+});
+
+describe("listUnansweredSubagents — what a relaunch left for recovery (VC-9)", () => {
+  it("names each subagent whose answer never reached its parent, by its operation id", () => {
+    const h = harness();
+    const parentBirth = h.store.resolveBirth({ role: "ticket", ticketId: h.ticket.id });
+    h.store.recordBirth(h.root.id, parentBirth);
+    const bear = (id: string, toolCallId: string) => {
+      insertSession(h.db, testSession("project-1", h.ticket.id, { id, title: `Helper ${id}` }));
+      // The parent is the child's own ledger fact (migration 041); the
+      // delegation row beside it is the ancestry the start grant reads.
+      h.db
+        .prepare("UPDATE sessions SET role = 'subagent', parent_session_id = ? WHERE id = ?")
+        .run(h.root.id, id);
+      h.store.recordBirth(
+        id,
+        h.store.resolveBirth({
+          role: "subagent",
+          ticketId: h.ticket.id,
+          parentSessionId: h.root.id,
+        }),
+      );
+      landCreateCommand(h.db, id, createCommandFor(h.root.id, toolCallId));
+    };
+    bear("helper-answered", "tc-1");
+    bear("helper-pending", "tc-2");
+    // The answer's durable mark: the parent's ledger holds the answer command.
+    h.db
+      .prepare(
+        `INSERT INTO session_commands (id, session_id, created_at, intent)
+         VALUES (?, ?, 0, '{"kind":"message.submit"}')`,
+      )
+      .run(`${h.root.id}:tc-1:answer`, h.root.id);
+
+    expect(h.store.listUnansweredSubagents()).toEqual([
+      {
+        childSessionId: "helper-pending",
+        parentSessionId: h.root.id,
+        projectId: "project-1",
+        operationId: `${h.root.id}:tc-2`,
+        title: "Helper helper-pending",
+      },
+    ]);
   });
 });

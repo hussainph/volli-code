@@ -49,6 +49,8 @@ export function chatSessionRecord(
     waitingOn: chatWaitingOn(projection),
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
+    role: projection.session.role,
+    parentSessionId: projection.session.parentSessionId,
   };
 }
 

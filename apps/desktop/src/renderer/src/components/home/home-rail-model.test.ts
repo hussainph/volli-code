@@ -63,6 +63,8 @@ function chat(over: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     waitingOn: null,
     lastActivityAt: 10,
     bornTicketless: true,
+    role: "project",
+    parentSessionId: null,
     ...over,
   };
 }
