@@ -391,9 +391,27 @@ export function agentsHeading(agents: readonly IslandAgent[]): string {
   return `Subagents${FLASH_SEPARATOR}${agentsDone(agents)}/${agents.length} done`;
 }
 
-/** `72%` while working, the state otherwise; `· tab` once promoted. */
+/**
+ * Whether a working agent's `progress` is a measure at all (VC-269). Today
+ * no feed has one: there is no honest account of how far through a turn an
+ * agent is, so the subagent feed leaves `progress` at 0 and the arc orbits
+ * on its own. Zero is therefore "unmeasured", not "none done" — a row that
+ * printed `0%` for the whole of a turn would be reporting a number nobody
+ * took. The field stays so a later bound (a max-turns budget) is a
+ * projection change and not a contract change.
+ */
+export function agentProgressMeasured(agent: IslandAgent): boolean {
+  return agent.state === "working" && agent.progress > 0;
+}
+
+/** `72%` while working and measured, `working` unmeasured, the state otherwise; `· tab` once promoted. */
 export function agentStateWord(agent: IslandAgent): string {
-  const base = agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state;
+  const base =
+    agent.state !== "working"
+      ? agent.state
+      : agentProgressMeasured(agent)
+        ? `${Math.round(agent.progress * 100)}%`
+        : "working";
   return agent.promoted ? `${base}${FLASH_SEPARATOR}tab` : base;
 }
 
@@ -550,8 +568,14 @@ export function summaryLine(model: ActivityIslandModel): string {
   if (model.tabs.length > 0) parts.push(plural(model.tabs.length, "tab"));
   const working = model.agents.filter((agent) => agent.state === "working");
   if (working.length > 0) {
+    // The same rule as `agentStateWord`: a mean of unmeasured zeros is not a
+    // percentage, so the line counts the workers instead.
     const mean = working.reduce((sum, agent) => sum + agent.progress, 0) / working.length;
-    parts.push(`agents ${Math.round(mean * 100)}%`);
+    parts.push(
+      working.some(agentProgressMeasured)
+        ? `agents ${Math.round(mean * 100)}%`
+        : `agents ${working.length} working`,
+    );
   } else if (model.agents.length > 0) {
     parts.push(`agents ${agentsDone(model.agents)}/${model.agents.length}`);
   }
