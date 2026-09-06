@@ -114,9 +114,11 @@ import { _electron } from "playwright-core";
 import {
   clickMonaco,
   isMonacoEditable,
+  launchEnvFor,
   makeGitRepo,
   readDocumentLine,
   readMonacoState,
+  smokeExecutableFor,
   startTerminalSession,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
@@ -272,18 +274,11 @@ async function readFileSafe(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
-  // Agent shells export ELECTRON_RUN_AS_NODE=1, which makes Electron run as
-  // plain Node. Match scripts/start-electron.mjs and strip it at launch.
-  const env = {
-    ...process.env,
-    VOLLI_DB_PATH: dbPath,
-    VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME,
-  };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const environment = launchEnvFor(dbPath, { VOLLI_WORKTREE_HOME_DIR: WORKTREE_HOME });
   return _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, USER_DATA_DIR, { environment }),
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env,
+    env: environment,
   });
 }
 

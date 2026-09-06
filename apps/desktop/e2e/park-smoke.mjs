@@ -27,6 +27,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -151,16 +153,13 @@ async function main() {
   ];
 
   const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-db-"));
-  const env = {
-    ...process.env,
-    VOLLI_DB_PATH: join(dbDir, "volli.db"),
+  const env = launchEnvFor(join(dbDir, "volli.db"), {
     VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
     VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
     VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
-    // The nc/timer sessions run foreground work; without this, teardown's
-    // app.close() would hang forever on the busy-session quit confirm.
-    VOLLI_SKIP_CLOSE_CONFIRM: "1",
-  };
+    // launchEnvFor also skips the busy-session quit confirm: these nc/timer
+    // sessions run foreground work and app.close() cannot answer a native modal.
+  });
   for (const key of Object.keys(env)) {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }
@@ -171,7 +170,7 @@ async function main() {
   // context or browser has been closed", which reads like a crash in the app.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-profile-"));
   const app = await _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, profileDir, { environment: env }),
     args: [APP_DIR, `--user-data-dir=${profileDir}`],
     env,
   });

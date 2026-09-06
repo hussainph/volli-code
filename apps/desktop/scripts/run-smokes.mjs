@@ -152,27 +152,26 @@ const BOOT_TIER = new Set([
 ]);
 
 /**
- * Probes that must run ALONE, with nothing else on the machine.
+ * Probes that must not overlap another smoke process.
  *
- * Not flakiness, and not fixable by lowering `--jobs`: these drive real mouse
- * and focus events at a live window, and a second Electron app on the same
- * desktop steals focus or intercepts the pointer. Measured on terminal-smoke:
- * 3 checks fail at --jobs 4, 1 check fails at --jobs 2, all pass at --jobs 1.
- * The observable signature is Playwright reporting `<html class="dark">…</html>
- * intercepts pointer events`, or a click timing out on a visible control.
+ * VC-219 removed the native-window cause: every smoke now receives synthetic
+ * Playwright input through Chromium's event pipeline while its click-through,
+ * non-key renderer runs with background throttling disabled. Re-tested after
+ * that change, concurrently pairing terminal-smoke with split-view-smoke five
+ * times: split-view passed 5/5 (including the tab drag), so it returned to the
+ * ordinary pool; terminal passed only 2/5. In every terminal failure check 1's
+ * first shell probe stayed null, and dependent checks inherited that missing
+ * shell state; one run also failed to acquire its GPU backend. That points at
+ * first-canvas/WebGPU readiness under concurrent GPU+PTY startup, not another
+ * window intercepting CDP input. A dropped first command cannot be waited back.
  *
- * They are run last, one at a time, after the concurrent pass finishes.
+ * The retained probe runs last after the concurrent pass finishes.
  */
 const SERIAL = new Set([
-  // Clicks and wheels a canvas and asserts the SGR mouse reports that reach
-  // the PTY — the most focus-dependent probe in the suite.
+  // Clicks and wheels a WebGPU canvas and asserts the SGR mouse reports that
+  // reach its PTY; its first terminal command is not reliable under concurrent
+  // GPU+PTY startup (2/5 paired runs after throttling was disabled).
   "terminal-smoke.mjs",
-  // Drags a tab across the window with real pointer events and asserts which
-  // drop zone lit up on the way (VC-202). Same failure mode as the probe above:
-  // a second Electron window on the same desktop intercepts the pointer
-  // mid-drag, and the drag cannot be waited out — it has already been released
-  // somewhere else.
-  "split-view-smoke.mjs",
 ]);
 
 /**
@@ -272,6 +271,10 @@ function runOne(name) {
     // (`smoke:docs-shots` in package.json does the same with `env -u`.)
     const childEnv = { ...process.env };
     delete childEnv.ELECTRON_RUN_AS_NODE;
+    // The shared launcher also defaults this for its Electron child, but the
+    // probe process must carry it too: app-launch tests can spawn a second app
+    // generation through the generated CLI rather than through smoke-kit.
+    childEnv.VOLLI_QUIET_WINDOWS ??= "1";
     const child = spawn(process.execPath, [join(E2E_DIR, name)], {
       cwd: REPO_ROOT,
       stdio: ["ignore", "pipe", "pipe"],

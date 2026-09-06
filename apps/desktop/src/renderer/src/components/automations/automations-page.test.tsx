@@ -496,7 +496,8 @@ describe("run history", () => {
 
 /**
  * The lane view (VC-132). Its DRAG is proven where a drag can be proven — the
- * Lab rig, the pure model beside it, and the page smoke driving a real pointer;
+ * Lab rig, the pure model beside it, and the page smoke driving Playwright
+ * pointer input through the browser event pipeline;
  * what a unit test can hold is what the lanes SAY: one lane per column, the
  * digit each row answers to, the pin, and the two-ranks-one-record property the
  * whole feature turns on.

@@ -62,9 +62,11 @@ import { _electron } from "playwright-core";
 import {
   clickMonaco,
   isMonacoEditable,
+  launchEnvFor,
   readDocumentLine,
   readMonacoState,
   readMonacoText,
+  smokeExecutableFor,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
@@ -175,10 +177,11 @@ async function pathExists(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
+  const environment = launchEnvFor(dbPath);
   return _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, USER_DATA_DIR, { environment }),
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: dbPath, VOLLI_SKIP_CLOSE_CONFIRM: "1" },
+    env: environment,
   });
 }
 

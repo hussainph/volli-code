@@ -27,6 +27,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -189,13 +191,9 @@ async function main() {
 
   const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-db-"));
   // Strip Claude Code session vars so the nested `claude` instances boot clean.
-  // Skip the busy-session quit confirm: the idle claudes count as foreground
-  // work, and teardown's app.close() can't answer a native modal.
-  const env = {
-    ...process.env,
-    VOLLI_DB_PATH: join(dbDir, "volli.db"),
-    VOLLI_SKIP_CLOSE_CONFIRM: "1",
-  };
+  // launchEnvFor also skips the busy-session quit confirm: the idle claudes
+  // count as foreground work, and app.close() cannot answer a native modal.
+  const env = launchEnvFor(join(dbDir, "volli.db"));
   for (const key of Object.keys(env)) {
     if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
   }
@@ -206,7 +204,7 @@ async function main() {
   // context or browser has been closed", which reads like a crash in the app.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-profile-"));
   const app = await _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, profileDir, { environment: env }),
     args: [APP_DIR, `--user-data-dir=${profileDir}`],
     env,
   });

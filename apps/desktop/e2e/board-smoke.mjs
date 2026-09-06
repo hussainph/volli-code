@@ -55,7 +55,7 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
-import { waitUntil } from "./lib/smoke-kit.mjs";
+import { launchEnvFor, smokeExecutableFor, waitUntil } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
@@ -138,10 +138,11 @@ async function attempt(n, label, fn) {
  * `firstWindow()` themselves.
  */
 function launch(dbPath) {
+  const environment = launchEnvFor(dbPath);
   return _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, USER_DATA_DIR, { environment }),
     args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: dbPath },
+    env: environment,
   });
 }
 

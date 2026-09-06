@@ -27,6 +27,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -294,14 +296,11 @@ async function main() {
   // window. That surfaces only as "Target page, context or browser has been
   // closed" from launch() — which reads like a crash in the app under test.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-terminal-smoke-profile-"));
-  // Agent shells export ELECTRON_RUN_AS_NODE=1, which makes Electron run as
-  // plain Node. Same strip as scripts/start-electron.mjs.
-  const env = { ...process.env, VOLLI_DB_PATH: join(dbDir, "volli.db") };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const environment = launchEnvFor(join(dbDir, "volli.db"));
   const app = await _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, profileDir, { environment }),
     args: [APP_DIR, `--user-data-dir=${profileDir}`],
-    env,
+    env: environment,
   });
   let backendReport = { webgpu: false, webgl2: false, navigatorGpu: false };
 

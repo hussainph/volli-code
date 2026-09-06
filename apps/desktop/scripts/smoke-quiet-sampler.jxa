@@ -1,0 +1,96 @@
+// macOS JXA sampler for smoke-quiet-check.mjs. No Accessibility or Screen
+// Recording permission is needed: NSWorkspace owns app activation policy and
+// frontmost-app identity, while NSEvent exposes the host cursor position.
+ObjC.import("AppKit");
+
+function run(argv) {
+  const [stopPath, intervalText, ...candidateExecutablePaths] = argv;
+  const intervalSeconds = Number(intervalText);
+  const workspace = $.NSWorkspace.sharedWorkspace;
+  const files = $.NSFileManager.defaultManager;
+  const normalize = (path) =>
+    $(path).stringByStandardizingPath.stringByResolvingSymlinksInPath.js;
+  const candidateList = candidateExecutablePaths.map(normalize);
+  const candidates = new Set(candidateList);
+  const candidateNames = new Set(candidateList.map((path) => path.split("/").pop()));
+  const baselinePids = new Set(
+    workspace.runningApplications.js.map((application) => application.processIdentifier),
+  );
+  const executablePath = (application) => {
+    const url = application.executableURL;
+    if (url.isNil()) return null;
+    return normalize(url.path.js);
+  };
+  const isNewSmokeApp = (application) => {
+    if (baselinePids.has(application.processIdentifier)) return false;
+    const path = executablePath(application);
+    return (
+      candidates.has(path) ||
+      (path !== null &&
+        path.includes("/.volli-quiet-app/") &&
+        candidateNames.has(path.split("/").pop()))
+    );
+  };
+
+  const start = $.NSEvent.mouseLocation;
+  let samples = 0;
+  let frontmostSamples = 0;
+  let regularPolicySamples = 0;
+  let firstFrontmost = null;
+  let firstRegular = null;
+  let maxDistanceFromStart = 0;
+
+  console.log("READY");
+  while (!files.fileExistsAtPath(stopPath)) {
+    // Pump the Cocoa run loop so NSWorkspace's frontmost/running app state is
+    // current; delay()/sleep alone leaves its cached application objects stale.
+    $.NSRunLoop.currentRunLoop.runUntilDate(
+      $.NSDate.dateWithTimeIntervalSinceNow(intervalSeconds),
+    );
+    samples += 1;
+
+    const frontmost = workspace.frontmostApplication;
+    if (!frontmost.isNil() && isNewSmokeApp(frontmost)) {
+      frontmostSamples += 1;
+      if (firstFrontmost === null) {
+        firstFrontmost =
+          `${frontmost.localizedName.js} (${frontmost.processIdentifier}) — ` +
+          executablePath(frontmost);
+      }
+    }
+
+    const regularSmokeApp = workspace.runningApplications.js.find(
+      (application) =>
+        isNewSmokeApp(application) &&
+        application.activationPolicy === $.NSApplicationActivationPolicyRegular,
+    );
+    if (regularSmokeApp !== undefined) {
+      regularPolicySamples += 1;
+      if (firstRegular === null) {
+        firstRegular =
+          `${regularSmokeApp.localizedName.js} (${regularSmokeApp.processIdentifier}) — ` +
+          executablePath(regularSmokeApp);
+      }
+    }
+
+    const cursor = $.NSEvent.mouseLocation;
+    maxDistanceFromStart = Math.max(
+      maxDistanceFromStart,
+      Math.hypot(cursor.x - start.x, cursor.y - start.y),
+    );
+  }
+
+  const end = $.NSEvent.mouseLocation;
+  return JSON.stringify({
+    samples,
+    frontmostSamples,
+    regularPolicySamples,
+    firstFrontmost,
+    firstRegular,
+    cursor: {
+      start: [start.x, start.y],
+      end: [end.x, end.y],
+      maxDistanceFromStart,
+    },
+  });
+}

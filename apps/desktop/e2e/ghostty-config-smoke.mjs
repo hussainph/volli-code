@@ -30,6 +30,8 @@ import { fileURLToPath } from "node:url";
 
 import { _electron } from "playwright-core";
 
+import { launchEnvFor, smokeExecutableFor } from "./lib/smoke-kit.mjs";
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const APP_DIR = join(REPO, "apps", "desktop");
 const ELECTRON = join(
@@ -232,15 +234,14 @@ async function main() {
   const userDataDir = join(home, "user-data");
   await fs.mkdir(userDataDir, { recursive: true });
 
+  const environment = launchEnvFor(join(home, "volli.db"), {
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+  });
   const app = await _electron.launch({
-    executablePath: ELECTRON,
+    executablePath: smokeExecutableFor(ELECTRON, userDataDir, { environment }),
     args: [APP_DIR, `--user-data-dir=${userDataDir}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      XDG_CONFIG_HOME: join(home, ".config"),
-      VOLLI_DB_PATH: join(home, "volli.db"),
-    },
+    env: environment,
   });
 
   try {

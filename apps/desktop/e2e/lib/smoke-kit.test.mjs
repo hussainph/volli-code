@@ -11,9 +11,97 @@ import {
   createDeadline,
   createRunner,
   evidenceDir,
+  launchEnvFor,
+  quietAppExecutablePlan,
+  smokeExecutableFor,
   sleep,
   summarizeTurnFrames,
 } from "./smoke-kit.mjs";
+
+test("quietAppExecutablePlan places an LSUIElement shadow app inside the isolated profile", () => {
+  assert.deepEqual(
+    quietAppExecutablePlan(
+      "/Applications/Electron.app/Contents/MacOS/Electron",
+      "/tmp/volli-smoke/user-data",
+    ),
+    {
+      sourceBundle: "/Applications/Electron.app",
+      destinationRoot: "/tmp/volli-smoke/user-data/.volli-quiet-app",
+      destinationBundle: "/tmp/volli-smoke/user-data/.volli-quiet-app/Electron.app",
+      destinationExecutable:
+        "/tmp/volli-smoke/user-data/.volli-quiet-app/Electron.app/Contents/MacOS/Electron",
+      destinationInfoPlist:
+        "/tmp/volli-smoke/user-data/.volli-quiet-app/Electron.app/Contents/Info.plist",
+    },
+  );
+});
+
+test("smokeExecutableFor leaves the signed app untouched in watch mode", () => {
+  assert.equal(
+    smokeExecutableFor(
+      "/Applications/Electron.app/Contents/MacOS/Electron",
+      "/tmp/volli-smoke/user-data",
+      {
+        environment: { VOLLI_QUIET_WINDOWS: "0" },
+        platform: "darwin",
+        prepareQuietApp() {
+          throw new Error("watch mode must not clone the app");
+        },
+      },
+    ),
+    "/Applications/Electron.app/Contents/MacOS/Electron",
+  );
+});
+
+test("smokeExecutableFor prepares the LSUIElement shadow in quiet mode", () => {
+  let prepared = null;
+  const executable = smokeExecutableFor(
+    "/Applications/Electron.app/Contents/MacOS/Electron",
+    "/tmp/volli-smoke/user-data",
+    {
+      environment: { VOLLI_QUIET_WINDOWS: "1" },
+      platform: "darwin",
+      prepareQuietApp(plan) {
+        prepared = plan;
+        return plan.destinationExecutable;
+      },
+    },
+  );
+
+  assert.deepEqual(
+    { executable, prepared },
+    {
+      executable:
+        "/tmp/volli-smoke/user-data/.volli-quiet-app/Electron.app/Contents/MacOS/Electron",
+      prepared: quietAppExecutablePlan(
+        "/Applications/Electron.app/Contents/MacOS/Electron",
+        "/tmp/volli-smoke/user-data",
+      ),
+    },
+  );
+});
+
+test("launchEnvFor makes smoke windows quiet by default", () => {
+  const previous = process.env.VOLLI_QUIET_WINDOWS;
+  delete process.env.VOLLI_QUIET_WINDOWS;
+  try {
+    assert.equal(launchEnvFor("/tmp/volli-test.db").VOLLI_QUIET_WINDOWS, "1");
+  } finally {
+    if (previous === undefined) delete process.env.VOLLI_QUIET_WINDOWS;
+    else process.env.VOLLI_QUIET_WINDOWS = previous;
+  }
+});
+
+test("launchEnvFor honours an ambient request to watch the smoke window", () => {
+  const previous = process.env.VOLLI_QUIET_WINDOWS;
+  process.env.VOLLI_QUIET_WINDOWS = "0";
+  try {
+    assert.equal(launchEnvFor("/tmp/volli-test.db").VOLLI_QUIET_WINDOWS, "0");
+  } finally {
+    if (previous === undefined) delete process.env.VOLLI_QUIET_WINDOWS;
+    else process.env.VOLLI_QUIET_WINDOWS = previous;
+  }
+});
 
 test("evidenceDir honours an explicit dir and creates nothing itself", async () => {
   const named = join(os.tmpdir(), "volli-evidence-dir-test-not-created");
