@@ -22,6 +22,7 @@
  */
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/dist/csr/ArrowsInLineVertical";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import * as React from "react";
@@ -30,6 +31,8 @@ import {
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isModelHidden,
+  MODEL_TIER_ROWS,
+  modelTierFallback,
   withModelVisibility,
   type CompactionPolicy,
   type HiddenModelRef,
@@ -55,6 +58,11 @@ import {
 } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@renderer/components/ui/collapsible";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -68,11 +76,14 @@ import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * The rows of the Default models section, in resolution order.
+ * The rows of the Default models section, in resolution order — the shared
+ * tier list (`MODEL_TIER_ROWS`, VC-259) wearing this pane's hint rule.
  *
  * `hint` is the `(i)` a row carries when its purpose is not obvious from its
  * two-word label (VC-81 asked for one on the utility row): what the slot is
- * FOR, so a person picking a model for it knows what the bill is for.
+ * FOR, so a person picking a model for it knows what the bill is for. The
+ * Board and Ticket rows say what they are in their label and carry none; the
+ * three advanced tiers carry the one-line job the shared list gives them.
  *
  * The Utility hint also names what happens when the slot is EMPTY, and that
  * half is not optional. Leaving it unset does not switch background work off;
@@ -87,18 +98,28 @@ export const PURPOSE_ROWS: readonly {
   purpose: ModelPurpose;
   label: string;
   hint?: string;
-}[] = [
-  { purpose: "global", label: "Project chats" },
-  { purpose: "ticket", label: "Ticket Sessions" },
-  {
-    purpose: "utility",
-    label: "Utility",
-    hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
-  },
-];
+  advanced: boolean;
+}[] = MODEL_TIER_ROWS.map((row) =>
+  row.tier === "global" || row.tier === "ticket"
+    ? { purpose: row.tier, label: row.label, advanced: row.advanced }
+    : { purpose: row.tier, label: row.label, hint: row.hint, advanced: row.advanced },
+);
 
-/** The Select value that says "no explicit choice — resolve the project default". */
-const INHERIT_VALUE = "__project-default__";
+/** The Select value that says "no explicit choice — resolve through the fallback tier". */
+const INHERIT_VALUE = "__inherit__";
+
+/**
+ * What an unset row reads as: the rung it resolves through, stated as a value.
+ *
+ * Ticket and Utility inherit the Board row; the advanced three inherit the
+ * Ticket row (`modelTierFallback`). Board itself has no fallback and no
+ * inherit option — clearing it would leave every tier resolving to nothing.
+ */
+function inheritLabel(purpose: ModelPurpose): string | null {
+  const fallback = modelTierFallback(purpose);
+  if (fallback === null) return null;
+  return fallback === "global" ? "Project default" : "Ticket default";
+}
 
 export function ModelAccessSettings({
   autoSignInProviderId,
@@ -254,7 +275,7 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label, hint }) => (
+        {PURPOSE_ROWS.filter((row) => !row.advanced).map(({ purpose, label, hint }) => (
           <DefaultModelRow
             key={purpose}
             purpose={purpose}
@@ -268,6 +289,22 @@ export function ModelAccessSettings({
             onSave={(selection) => void saveDefault(purpose, selection)}
           />
         ))}
+        <AdvancedTiers>
+          {PURPOSE_ROWS.filter((row) => row.advanced).map(({ purpose, label, hint }) => (
+            <DefaultModelRow
+              key={purpose}
+              purpose={purpose}
+              label={label}
+              hint={hint}
+              selection={defaults[purpose]}
+              models={models}
+              offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
+              providers={providers}
+              disabled={loading || saving}
+              onSave={(selection) => void saveDefault(purpose, selection)}
+            />
+          ))}
+        </AdvancedTiers>
       </PrefSection>
       <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
@@ -296,6 +333,43 @@ export function ModelAccessSettings({
         onChanged={() => load(true)}
       />
     </>
+  );
+}
+
+/**
+ * The disclosure the three advanced tiers sit behind (VC-259).
+ *
+ * A row-shaped trigger — same hairline, same label column — so closed it
+ * reads as one more row of the section rather than a control parked under it,
+ * and open it simply continues the list. Closed by default: most profiles
+ * never set these, and an unset Fast row that says "Ticket default" is true
+ * but not something to scroll past on every visit.
+ */
+function AdvancedTiers({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          data-testid="advanced-tiers"
+          className="group flex w-full items-center gap-1 border-t border-border/50 py-4 text-left text-sm font-medium last:pb-0"
+        >
+          <CaretRightIcon
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ease-out group-data-[state=open]:rotate-90"
+            weight="bold"
+          />
+          Advanced
+        </button>
+      </CollapsibleTrigger>
+      {/* The first row inside keeps its hairline: `first:border-t-0` on a
+          PrefRow is for a row directly under the section header, and here the
+          thing above it is the Advanced row. */}
+      <CollapsibleContent className="[&>*:first-child]:border-t [&>*:first-child]:pt-4">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -413,7 +487,8 @@ function DefaultModelRow({
   disabled: boolean;
   onSave(selection: ModelSelection | null): void;
 }) {
-  const inheritable = purpose !== "global";
+  const inherit = inheritLabel(purpose);
+  const inheritable = inherit !== null;
   const selectedModel = modelFor(models, selection);
   // A stored default whose provider is signed out reads as unset, because that
   // is what it is: it names no model this profile can run.
@@ -453,7 +528,7 @@ function DefaultModelRow({
           <SelectValue placeholder="Choose a model" />
         </SelectTrigger>
         <SelectContent>
-          {inheritable ? <SelectItem value={INHERIT_VALUE}>Project default</SelectItem> : null}
+          {inherit !== null ? <SelectItem value={INHERIT_VALUE}>{inherit}</SelectItem> : null}
           {offerable.map((model) => (
             <SelectItem key={modelKey(model)} value={modelKey(model)}>
               {modelOptionLabel(model, providers)}
