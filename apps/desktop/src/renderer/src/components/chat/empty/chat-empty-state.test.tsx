@@ -85,6 +85,26 @@ describe("VenueChips", () => {
     expect(markup).toContain("Worktree");
     expect(markup).not.toContain("HEAD");
   });
+
+  it("puts the untruncated value one focus away, not only one hover", () => {
+    // VC-288. The chip caps at `max-w-48` and truncates, which is right — a
+    // caption wider than the drawing above it is what made the two read as
+    // thrown together. What was wrong is where the whole value lived: a
+    // tooltip on a `<span>`, which a pointer can reach and a keyboard cannot.
+    const markup = draw(<VenueChips venue={venue()} />);
+    const chips = markup.split("<button").slice(1);
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) {
+      // A real button: in the tab order, and therefore a trigger Radix opens
+      // on focus as well as on hover.
+      expect(chip).toContain('type="button"');
+      expect(chip).not.toContain("disabled");
+    }
+    // And the full value is the control's own name, so nothing has to be
+    // opened at all to hear it.
+    expect(markup).toContain('aria-label="Worktree · /worktrees/volli-code-abc/VC-81"');
+    expect(markup).toContain('aria-label="Branch · volli/VC-81-auto-title"');
+  });
 });
 
 /**

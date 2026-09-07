@@ -361,10 +361,20 @@ export function ModelName({
 }) {
   const providerLabel = providerLabelProp ?? providerLabelOf(providers, model.providerId);
   const sayProvider = alwaysProvider || needsProvider(models, model);
+  // The run this row would truncate, kept whole as the element's `title`
+  // (VC-288). Every surface that draws this is a fixed-width list or table
+  // rather than a pane, so the truncation here is a column boundary and not a
+  // zoom level — but a name clipped to `Claude Son…` is still a name nobody
+  // asked to have shortened. The pill that names the SELECTED model has the
+  // keyboard's own reveal (`composer-ui.tsx`, `modelIdentityLabel`); this is
+  // the pointer's, for the rows around it.
+  const full = [model.label, sayProvider ? providerLabel : null, trailing ?? null]
+    .filter((term) => term !== null)
+    .join(" · ");
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
       <ModelMark model={model} providerLabel={providerLabel} by={by} />
-      <span className={cn("truncate tabular-nums", muted && "text-muted-foreground")}>
+      <span title={full} className={cn("truncate tabular-nums", muted && "text-muted-foreground")}>
         {model.label}
         {sayProvider ? (
           <span className="text-muted-foreground in-data-[slot=select-item]:hidden">

@@ -212,6 +212,15 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
  * contract the empty chat cannot keep — a drawing can be absent, but a card
  * that is about the venue and says nothing about it is a card that has gone
  * quiet on the one thing it exists for.
+ *
+ * BOTH VALUES TRUNCATE, AND BOTH HAVE A WAY OUT OF IT (VC-288). A rail is
+ * narrow by construction and a worktree path is not, so `venuePathTail` shows
+ * the tail and the row clips what is left — that part is right. What was wrong
+ * is where the whole value lived: the path's was on a tooltip hung off a `<p>`,
+ * which a pointer can ask for and a keyboard cannot, and the BRANCH had no
+ * reveal at all. This is the rail a reader checks to see which tree they are
+ * about to change something in; "hover to find out" is the wrong last word on
+ * that question. Both are {@link VenueValue} now.
  */
 function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
   if (venue === undefined || venue.status === "loading") {
@@ -227,21 +236,26 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
   const loose = venueLooseCount(venue.venue.files);
   return (
     <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <p className="truncate text-left font-mono text-ui text-foreground">
-            {venuePathTail(venue.venue.path)}
-          </p>
-        </TooltipTrigger>
-        <TooltipContent side="left" className="font-mono">
-          {venueKindLabel(venue.venue)} · {venue.venue.path}
-        </TooltipContent>
-      </Tooltip>
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
-          <GitBranchIcon weight="bold" className="size-3 shrink-0" />
-          <span className="truncate">{venue.venue.branch ?? "detached"}</span>
+      <VenueValue term={venueKindLabel(venue.venue)} full={venue.venue.path}>
+        <span className="min-w-0 truncate text-foreground">
+          {venuePathTail(venue.venue.path)}
         </span>
+      </VenueValue>
+      <div className="flex items-center justify-between gap-2">
+        {/* A detached HEAD has no branch to reveal — `detached` IS the whole
+            value — so it stays the plain row it was rather than becoming a
+            focus stop that opens a tooltip repeating the word under it. */}
+        {venue.venue.branch === null ? (
+          <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
+            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+            <span className="truncate">detached</span>
+          </span>
+        ) : (
+          <VenueValue term="Branch" full={venue.venue.branch}>
+            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+            <span className="min-w-0 truncate">{venue.venue.branch}</span>
+          </VenueValue>
+        )}
         {/* Silent at zero: a clean tree has nothing to report, and "0 loose"
             is a number where there is no news. */}
         {loose === 0 ? null : (
@@ -259,6 +273,47 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One truncating venue value, and the reveal that is the rest of it.
+ *
+ * A button that goes nowhere: the reveal is the whole act, so there is nothing
+ * for a press to do that focus has not already done. It is a button anyway,
+ * because that is what puts it in the tab order — and being in the tab order is
+ * what makes Radix open the tooltip on focus as well as on hover. The whole
+ * value rides the accessible name too, so a screen reader never has to open
+ * anything.
+ *
+ * `text-left` because a button centres its content and these are values in a
+ * column; `cursor-default` because a pointer should not be promised a
+ * destination this control does not have.
+ */
+function VenueValue({
+  term,
+  full,
+  children,
+}: {
+  term: string;
+  full: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${term} · ${full}`}
+          className="flex min-w-0 cursor-default items-center gap-1 rounded-sm text-left font-mono text-ui text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="font-mono">
+        {term} · {full}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

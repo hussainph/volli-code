@@ -1387,6 +1387,45 @@ export function modelPillLabel(
 }
 
 /**
+ * The whole of what this Session will send to: `Fast · sonnet-4.5 · Anthropic`.
+ *
+ * {@link modelPillLabel} is the pill's *drawing* and answers a different
+ * question — what is the shortest thing that still tells this model from its
+ * neighbours — which is why it says the provider only where the name alone
+ * would be ambiguous, and why the label it returns is then capped at 56px and
+ * truncated. Both of those are right for a chip on a row that has to survive a
+ * 313px composer.
+ *
+ * What they left unanswered is this one (VC-288): at 150% zoom in a split the
+ * pill draws eight characters, and the tier, the provider and the rest of the
+ * name were unreachable without opening the list and changing the selection to
+ * find out what it had been. So the identity is composed once, in full, and
+ * spent in the three places a truncated pill cannot reach — the accessible
+ * name, the pointer's `title`, and the line the open list stands on.
+ *
+ * The provider is ALWAYS said here, ambiguity or not. "Which model" is what the
+ * pill answers; "which account is about to be billed for it" is what this one
+ * does, and a name that happens to be unique among today's signed-in providers
+ * is not an answer to that.
+ */
+export function modelIdentityLabel(
+  models: readonly ComposerModel[],
+  selection: ComposerModelSelection,
+  said: {
+    /** The tier the selection resolved from, as its label (VC-259). */
+    tier?: string | null;
+    /** The Session's provider as the catalog names it, for a model no longer listed. */
+    providerLabel?: string;
+  } = {},
+): string {
+  const model = selectedModel(models, selection);
+  const name = model?.label ?? selection.modelId;
+  if (!name) return "Model";
+  const provider = model?.providerLabel ?? said.providerLabel ?? selection.providerId;
+  return [said.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
+}
+
+/**
  * Which list the pill opens on, remembered per profile (VC-259).
  *
  * Read once from Model Access on mount and written through on every change;
@@ -1508,6 +1547,13 @@ export function ModelPill({
     }
     return result;
   }, []);
+  // Composed once and spent three times — the pill's name, its `title`, and the
+  // line the open list leads with — so a reveal can never disagree with the
+  // control it was opened from.
+  const identity = modelIdentityLabel(models, selection, {
+    tier: selectionTier,
+    providerLabel: selectionProviderLabel,
+  });
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -1517,6 +1563,16 @@ export function ModelPill({
           size="xs"
           variant="ghost"
           disabled={disabled || models.length === 0}
+          // THE NAME IS THE WHOLE FACT, EVEN WHERE THE DRAWING IS EIGHT
+          // CHARACTERS (VC-288). The label below truncates by design; what
+          // must not truncate with it is the answer to "what am I sending
+          // to". `aria-label` is that answer for anything reading the control
+          // rather than looking at it, and `title` is the pointer's half.
+          // Neither is the reveal on its own — a `title` is unreachable from a
+          // keyboard, and a name is not readable — which is why the list this
+          // pill opens leads with the same string, in ink, one press away.
+          aria-label={`Model: ${identity}`}
+          title={identity}
           // `shrink` against `Button`'s own `shrink-0`: this is the row's give.
           //
           // AND THE BASIS IS WHAT ORDERS THE GIVE AGAINST THE WRAP. In a
@@ -1596,6 +1652,41 @@ export function ModelPill({
         side="top"
         className={cn("p-0", tiers === undefined ? "w-72" : "w-88")}
       >
+        {/* WHAT IS SELECTED, SAID IN FULL (VC-288) — and the keyboard's reveal
+            for a pill that draws eight characters of it. The pill is a focus
+            stop, Enter opens this, Escape closes it, and nothing about the
+            selection has moved: reading is not choosing.
+
+            It wraps rather than truncates. A reveal that truncates is the thing
+            it was opened to escape, and a popover has a width of its own to
+            spend — two lines of a long name here cost nothing, where the same
+            two lines in the composer row would move the box someone is typing
+            in. Outside the command root, so cmdk's arrow keys still land on the
+            first ROW rather than on a line that is not a choice.
+
+            The same string the pill's accessible name carries, from the same
+            function, so the two cannot drift into saying different things about
+            one selection. */}
+        <div
+          data-testid="model-pill-identity"
+          className="flex items-start gap-2 border-b px-2 py-1.5 text-ui text-muted-foreground"
+        >
+          <ModelMark
+            model={
+              selectedModel(models, selection) ?? {
+                providerId: selection.providerId,
+                modelId: selection.modelId,
+                label: selection.modelId,
+              }
+            }
+            providerLabel={
+              selectedModel(models, selection)?.providerLabel ??
+              selectionProviderLabel ??
+              selection.providerId
+            }
+          />
+          <span className="min-w-0 break-words">{identity}</span>
+        </div>
         <PromptInputCommand>
           {/* Inside the command root, so arrow keys reach the list from the
               toggle too; the search field keeps focus in the All view through

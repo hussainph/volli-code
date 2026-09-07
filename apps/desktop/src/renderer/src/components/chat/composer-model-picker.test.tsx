@@ -224,6 +224,7 @@ async function renderPill(input: {
   view: ModelPickerView;
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
+  selectionTier?: string | null;
   onChange?: (next: ComposerModelSelection) => void;
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
@@ -239,6 +240,7 @@ async function renderPill(input: {
           models={models}
           tiers={input.withTiers === false ? undefined : tiers}
           selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
+          selectionTier={input.selectionTier ?? null}
           disabled={false}
           onChange={input.onChange ?? (() => undefined)}
           open
@@ -317,5 +319,38 @@ describe("the model pill's Defaults view", () => {
     });
     expect(document.querySelector('[data-testid="model-picker-view"]')).toBeNull();
     expect(document.querySelector('[data-slot="command-input"]')).not.toBeNull();
+  });
+});
+
+/**
+ * The pill draws eight characters of a model name at a narrow pane and is right
+ * to (VC-288): it is the elastic member of a row that has to survive a 313px
+ * composer. What it cannot be is the ONLY place the fact exists — the tier, the
+ * provider and the rest of the name were unreachable without changing the
+ * selection to find out what it had been.
+ */
+describe("reading the whole selected model without changing it", () => {
+  it("leads the open list with the tier, the model and the provider, in full", async () => {
+    await renderPill({
+      view: "all",
+      defaults: { ...EMPTY_MODEL_ACCESS_DEFAULTS, fast: HAIKU },
+      selectionTier: "Fast",
+    });
+    const identity = document.querySelector('[data-testid="model-pill-identity"]');
+    expect(identity?.textContent).toContain("Fast · Claude Sonnet · Anthropic");
+    // Wrapping, not an ellipsis: a reveal that truncates is the thing it was
+    // opened to escape, and a popover has a width of its own to spend.
+    expect(identity?.innerHTML).not.toContain("truncate");
+  });
+
+  it("says the same words the pill itself carries as its name", async () => {
+    // One string, one function (`modelIdentityLabel`): a reveal that composed
+    // its own could drift into describing a different selection than the
+    // control it was opened from.
+    await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS, selectionTier: "Fast" });
+    const pill = document.querySelector('[data-slot="popover-trigger"]');
+    const identity = document.querySelector('[data-testid="model-pill-identity"]');
+    expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
+    expect(identity?.textContent).toContain(pill?.getAttribute("title") ?? "");
   });
 });
