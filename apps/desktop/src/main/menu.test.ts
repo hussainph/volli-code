@@ -8,7 +8,7 @@
  * file in the document it writes. A person who believed that sentence would
  * discover the gap only while trying to recover.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   DATA_EXPORT_CONTENTS,
@@ -47,20 +47,20 @@ function fileSubmenu(): MenuItemShape[] {
   return file.submenu;
 }
 
+// Imported once, statically, after the hoisted mock above: `menu.ts` pulls in
+// the export document builder and its schema, which is seconds of module
+// loading on a busy runner — time that must not be charged to whichever test
+// happens to run first.
+import { exportDatabase, registerAppMenu } from "./menu";
+
 beforeEach(() => {
   menuTemplates.length = 0;
   showSaveDialog.mockReset();
   showErrorBox.mockReset();
 });
 
-afterEach(() => {
-  vi.resetModules();
-});
-
 describe("File menu", () => {
-  it("names the action as a data export, never as a database backup", async () => {
-    const { registerAppMenu } = await import("./menu");
-
+  it("names the action as a data export, never as a database backup", () => {
     registerAppMenu({ ok: false, error: "closed" });
 
     const labels = fileSubmenu().map((item) => item.label ?? "");
@@ -84,7 +84,6 @@ describe("export disclosure", () => {
   });
 
   it("puts the disclosure in the save dialog itself, before any file is written", async () => {
-    const { exportDatabase } = await import("./menu");
     showSaveDialog.mockResolvedValue({ canceled: true, filePath: undefined });
 
     await exportDatabase({ ok: true, db: {} as never });
@@ -96,8 +95,6 @@ describe("export disclosure", () => {
   });
 
   it("still refuses a degraded database before showing anything", async () => {
-    const { exportDatabase } = await import("./menu");
-
     await exportDatabase({ ok: false, error: "The database could not be opened." });
 
     expect(showSaveDialog).not.toHaveBeenCalled();
