@@ -9,7 +9,9 @@
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { volliRuntimePaths } from "../agent-runtime";
 import { blobsRoot } from "../blob-store";
+import { browserPicturesRoot } from "../browser/picture-disk";
 import { openTestDb } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
@@ -204,6 +206,31 @@ describe("profile file decisions", () => {
     expect(byArea.get("pi-sessions")?.decision).toBe("exclude");
     expect(byArea.get("volli.db.backup-v*")?.decision).toBe("exclude");
     expect(byArea.get("volli.db")?.decision).toBe("rebuild");
+  });
+
+  it("decides every runtime area the app materialises under the profile root", () => {
+    // Bound to the functions that mint the paths, as the included areas are:
+    // a runtime directory that moves or appears takes its declaration with it.
+    const runtime = volliRuntimePaths({
+      userDataPath: "",
+      appPath: "",
+      mainProcessDir: "",
+      resourcesPath: "",
+      isPackaged: true,
+    });
+    const byArea = new Map(PROFILE_FILE_DECISIONS.map((entry) => [entry.area, entry]));
+    const topLevel = (path: string): string => stripLeadingSlash(path).split("/")[0] ?? "";
+
+    for (const path of [
+      runtime.binDir,
+      runtime.socketPath,
+      runtime.harnessRoot,
+      runtime.zdotDir,
+      browserPicturesRoot(""),
+    ]) {
+      const area = topLevel(path);
+      expect(byArea.get(area)?.decision, `${area} needs a profile-file decision`).toBe("exclude");
+    }
   });
 });
 

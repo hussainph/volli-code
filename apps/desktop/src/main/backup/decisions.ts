@@ -418,6 +418,22 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     reason: "The installed `volli` CLI shim — a machine-local install, re-created on demand.",
   },
   {
+    area: "volli.sock",
+    decision: "exclude",
+    reason: "The CLI's Unix socket — a handle to the running app, not data.",
+  },
+  {
+    area: "harness",
+    decision: "exclude",
+    reason:
+      "Harness manifests and wrappers materialised for THIS machine's trusted binaries; re-registered with the trust decision, never restored.",
+  },
+  {
+    area: "shell",
+    decision: "exclude",
+    reason: "The generated ZDOTDIR shim for terminal companions; re-created at launch.",
+  },
+  {
     area: "pi-sessions",
     decision: "exclude",
     reason: "Agent runtime scratch for live sessions; a runtime handle, not durable history.",
