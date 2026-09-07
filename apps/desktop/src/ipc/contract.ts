@@ -27,6 +27,7 @@ import type {
   ColumnArming,
   ColumnAutomationOrder,
   BlobLinkView,
+  NamedBlobLink,
   Canvas,
   ChangeSetSnapshot,
   CreateTerminalSessionRequest,
@@ -289,6 +290,21 @@ export interface BlobAttachInput {
 export interface BlobListInput {
   ticketId?: string;
   sessionId?: string;
+}
+
+/**
+ * The attachments materialized into one Session's checkout — BOTH owners at
+ * once, unlike {@link BlobListInput} (VC-273).
+ *
+ * Markdown that names `.volli/attachments/spec.png` is naming a file on disk,
+ * and what is on disk is the Session's links and its Ticket's together, in one
+ * order, under names a collision rule derives from that order. Asking for the
+ * two halves separately and concatenating them would re-derive different names
+ * the moment two attachments shared a basename, so this is one query.
+ */
+export interface BlobMaterializedInput {
+  ticketId?: string | undefined;
+  sessionId?: string | undefined;
 }
 
 export interface BlobLinkIdInput {
@@ -647,6 +663,11 @@ export interface VolliDataIpcContract {
   "volli:blob-attach": { args: [input: BlobAttachInput]; result: BlobAttachResult };
   /** A Ticket's or a Session's attachments, chronological. */
   "volli:blob-list": { args: [input: BlobListInput]; result: BlobLinksResult };
+  /** Both owners' attachments in materialize order, for resolving image paths. */
+  "volli:blob-materialized": {
+    args: [input: BlobMaterializedInput];
+    result: BlobMaterializedResult;
+  };
   /** Detaches one attachment. Leaves the bytes for collection. */
   "volli:blob-remove": { args: [input: BlobLinkIdInput]; result: Result };
   /** Attaches Blobs that were imported before their Ticket existed. */
@@ -2611,6 +2632,13 @@ export type BlobAttachResult = Result<{
 }>;
 
 export type BlobLinksResult = Result<{ blobs: BlobLinkView[] }>;
+
+/**
+ * The links behind a Session's materialized `.volli/attachments/` directory, in
+ * the order the names are derived from. Pair with `materializedBlobNames` (or
+ * `attachmentHashesByName`) to learn what each file on disk is called.
+ */
+export type BlobMaterializedResult = Result<{ links: NamedBlobLink[] }>;
 
 export type PickFolderResult =
   | { canceled: true }

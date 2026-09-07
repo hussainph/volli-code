@@ -94,7 +94,10 @@ import {
   type TakenQueued,
 } from "@volli/session-presentation";
 import type { BlobLinkView } from "@volli/shared";
-import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
+import {
+  AttachmentStrip,
+  AttachmentThumbRow,
+} from "@renderer/components/attachments/attachment-strip";
 import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import {
@@ -467,6 +470,11 @@ export const SessionComposer = React.memo(function SessionComposer({
                 aria-label={`Queued message: ${entry.text}`}
                 className="flex min-w-0 items-center gap-1 text-ui"
               >
+                {/* The files ride the queued row through hold, queue and steer
+                    (VC-137) but were never drawn, so a queued message with
+                    three screenshots looked exactly like one with none
+                    (VC-273). */}
+                <AttachmentThumbRow attachments={entry.attachments ?? []} />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
                 <span className="flex shrink-0 items-center gap-1">
                   {working ? (

@@ -90,6 +90,45 @@ describe("the queued message row", () => {
     expect(html).not.toContain('aria-label="Edit queued message"');
   });
 
+  it("draws the files a queued message is carrying (VC-273)", () => {
+    // The attachments already rode the row through hold, queue and steer
+    // (VC-137); the row simply never drew them, so a queued message with a
+    // screenshot was indistinguishable from one with none.
+    const html = renderToStaticMarkup(
+      <SessionComposer
+        {...composerProps({
+          queued: [
+            {
+              id: "m1",
+              text: "look at this",
+              attachments: [
+                {
+                  linkId: "link-1",
+                  blobHash: "ab".repeat(32),
+                  label: "shot.png",
+                  originalName: "shot.png",
+                  mime: "image/png",
+                  sizeBytes: 2048,
+                },
+              ],
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(html).toContain(`src="volli-blob:${"ab".repeat(32)}"`);
+    expect(html).toContain('aria-label="1 attachment"');
+    // Still a queued row, with its text and its controls.
+    expect(html).toContain("look at this");
+    expect(html).toContain('aria-label="Remove queued message: look at this"');
+  });
+
+  it("draws a queued message with no files exactly as before", () => {
+    const html = renderComposer();
+    expect(html).not.toContain('attachment"');
+  });
+
   it("names every repeated queue control with the message it acts on", () => {
     const html = renderToStaticMarkup(
       <SessionComposer

@@ -653,6 +653,18 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid attachment owner",
   },
+  "volli:blob-materialized": {
+    guard: (args): args is IpcArgs<"volli:blob-materialized"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        isOptionalString(input, "ticketId") &&
+        isOptionalString(input, "sessionId")
+      );
+    },
+    invalidError: "Invalid attachment owner",
+  },
   "volli:blob-remove": {
     guard: (args): args is IpcArgs<"volli:blob-remove"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["linkId"] === "string",

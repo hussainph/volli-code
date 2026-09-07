@@ -17,7 +17,12 @@ import {
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
 import { attachBlob } from "./blob-attach";
-import { createBlobLink, deleteBlobLink, listLinkViews } from "./db/blobs-repo";
+import {
+  createBlobLink,
+  deleteBlobLink,
+  listLinkViews,
+  listMaterializableLinks,
+} from "./db/blobs-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
@@ -41,6 +46,8 @@ import type {
   BlobLinkIdInput,
   BlobLinksResult,
   BlobListInput,
+  BlobMaterializedInput,
+  BlobMaterializedResult,
   BootstrapPayload,
   BootstrapResult,
   CommentCreateInput,
@@ -950,6 +957,20 @@ export function registerDataIpcHandlers(
         return { ok: true, blobs: listLinkViews(db, { sessionId: input.sessionId }) };
       }
       return { ok: false, error: "Attachments belong to a ticket or a session" };
+    },
+
+    "volli:blob-materialized": (input: BlobMaterializedInput): BlobMaterializedResult => {
+      if (input.ticketId === undefined && input.sessionId === undefined) {
+        return { ok: false, error: "Attachments belong to a ticket or a session" };
+      }
+      // The SAME query `blob-materialize.ts` copies from, deliberately: the
+      // renderer is resolving names that must match the files on disk, and a
+      // second derivation would eventually disagree with the first exactly
+      // where it matters — two attachments sharing a basename.
+      return {
+        ok: true,
+        links: listMaterializableLinks(db, input.sessionId ?? null, input.ticketId ?? null),
+      };
     },
 
     "volli:blob-remove": (input: BlobLinkIdInput): Result => {

@@ -13,6 +13,7 @@
  * materialized into has been pruned.
  */
 import * as React from "react";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { blobUrl, type BlobLinkView } from "@volli/shared";
 
@@ -81,6 +82,72 @@ export function AttachmentThumb({
         </Button>
       )}
     </div>
+  );
+}
+
+/**
+ * The compact thumbnail row a QUEUED message shows (VC-273).
+ *
+ * A queued row is one line inside the composer, beside Steer, Remove and an
+ * actions menu, so it cannot host the 64px tiles the composer strip uses. It
+ * still has to show the files: a message waiting to be sent that draws only its
+ * text reads as a message whose attachments were dropped, and the person has no
+ * way to tell the difference until it lands in the transcript.
+ *
+ * Capped, with a `+N` overflow, because the row's text is the thing being
+ * identified and an unbounded strip would crowd it out.
+ */
+export function AttachmentThumbRow({
+  attachments,
+  max = 3,
+  className,
+}: {
+  attachments: readonly BlobLinkView[];
+  max?: number;
+  className?: string;
+}): React.ReactElement | null {
+  if (attachments.length === 0) return null;
+  const shown = attachments.slice(0, max);
+  const overflow = attachments.length - shown.length;
+  return (
+    <span
+      className={cn("flex shrink-0 items-center gap-1", className)}
+      // One label for the group: a queued row is already read out with its
+      // text, and per-thumb labels would make every attachment a stop.
+      aria-label={`${attachments.length} attachment${attachments.length === 1 ? "" : "s"}`}
+    >
+      {shown.map((attachment) =>
+        thumbKind(attachment.mime) === "image" ? (
+          <img
+            key={attachment.linkId ?? attachment.blobHash}
+            src={blobUrl(attachment.blobHash)}
+            alt={attachment.label}
+            title={attachment.label}
+            className="size-4 rounded-sm border border-border/70 object-cover"
+            draggable={false}
+          />
+        ) : (
+          // A glyph, not the type label the 64px tile shows: three letters in a
+          // 16px box needs a font size below the smallest rung, and `PDF` set
+          // at 7px is not legible enough to be worth having. The name is on the
+          // tooltip, where it is readable.
+          <span
+            key={attachment.linkId ?? attachment.blobHash}
+            title={`${attachment.label} · ${fileTypeLabel(attachment.originalName, attachment.mime)}`}
+            className="flex size-4 items-center justify-center rounded-sm border border-border/70 bg-muted/40 text-muted-foreground"
+          >
+            {/* `bold` because this is drawn at 10px: below 12px regular lays
+                down less ink than the label beside it, and coverage is
+                scale-invariant, so no `size-*` could fix it (AGENTS.md). */}
+            <FileIcon weight="bold" className="size-2.5" />
+          </span>
+        ),
+      )}
+      {/* `text-label` is the rung below `text-ui` and the only one there is —
+          docs/DESIGN.md bans arbitrary sizes, and a two-character count is
+          exactly the badge treatment that rung is for. */}
+      {overflow > 0 ? <span className="text-label text-muted-foreground">+{overflow}</span> : null}
+    </span>
   );
 }
 

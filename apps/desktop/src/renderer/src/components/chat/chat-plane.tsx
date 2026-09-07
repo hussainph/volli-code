@@ -54,6 +54,11 @@ import {
   ConversationScrollButton,
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
+import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
+import {
+  attachmentsRevision,
+  useMaterializedAttachments,
+} from "@renderer/hooks/use-materialized-attachments";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
@@ -509,6 +514,12 @@ export function ChatPlane({
     onError: (message) => toast.error(message),
     onChange: (next) => setDraftAttachments(sessionId, next),
   });
+  // Re-fetched whenever the strip changes, so a screenshot attached mid-session
+  // is resolvable by the very next turn that mentions its path.
+  const materializedAttachments = useMaterializedAttachments(
+    { sessionId, ...(ticketId === null ? {} : { ticketId }) },
+    attachmentsRevision(attachments),
+  );
   // Read at submit rather than closed over, so `send` keeps its identity while
   // the strip changes underneath it.
   const attachmentsRef = React.useRef(attachments);
@@ -1102,63 +1113,70 @@ export function ChatPlane({
     >
       <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
         <FileMentionProvider onOpenFile={onOpenFile}>
-          <Conversation className="min-h-0 bg-background">
-            {/* The bottom padding clears the composer plus the h-16 gradient over
+          {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
+              against (VC-273) — the agent writes the path the brief handed it,
+              and this is what turns that back into the Blob it names. */}
+          <MarkdownAttachmentsProvider attachments={materializedAttachments}>
+            <Conversation className="min-h-0 bg-background">
+              {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-            <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-              {messages.length === 0 ? (
-                // Where this Session runs, drawn (VC-55). It replaces the bare
-                // mark that stood here — see `empty/chat-empty-state.tsx` for why
-                // that reversal is deliberate. What blocks TYPING still sits on
-                // the composer, where the typing is.
-                <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                  <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-                </ConversationEmptyState>
-              ) : (
-                <ContentColumn className={MESSAGE_GAP}>
-                  {rows.map((row) =>
-                    row.kind === "compaction" ? (
-                      <CompactionBoundary
-                        key={`compaction:${row.compaction.sequence}`}
-                        compaction={row.compaction}
-                      />
-                    ) : row.kind === "reasoning-drop" ? (
-                      <ReasoningDropNotice
-                        key={`reasoning-drop:${row.drop.sequence}`}
-                        drop={row.drop}
-                      />
-                    ) : (
-                      <ChatTurn
-                        key={row.messages[0]?.id}
-                        messages={row.messages}
-                        context={turnContext}
-                        live={row.messages === liveTurn}
-                      />
-                    ),
-                  )}
-                  {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                  {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
-                </ContentColumn>
-              )}
-            </ConversationContent>
-            {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+              <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+                {messages.length === 0 ? (
+                  // Where this Session runs, drawn (VC-55). It replaces the bare
+                  // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                  // that reversal is deliberate. What blocks TYPING still sits on
+                  // the composer, where the typing is.
+                  <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                    <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                  </ConversationEmptyState>
+                ) : (
+                  <ContentColumn className={MESSAGE_GAP}>
+                    {rows.map((row) =>
+                      row.kind === "compaction" ? (
+                        <CompactionBoundary
+                          key={`compaction:${row.compaction.sequence}`}
+                          compaction={row.compaction}
+                        />
+                      ) : row.kind === "reasoning-drop" ? (
+                        <ReasoningDropNotice
+                          key={`reasoning-drop:${row.drop.sequence}`}
+                          drop={row.drop}
+                        />
+                      ) : (
+                        <ChatTurn
+                          key={row.messages[0]?.id}
+                          messages={row.messages}
+                          context={turnContext}
+                          live={row.messages === liveTurn}
+                        />
+                      ),
+                    )}
+                    {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                    {working ? (
+                      <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
+                    ) : null}
+                  </ContentColumn>
+                )}
+              </ConversationContent>
+              {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-            <div
-              className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-              style={{ backgroundImage: COMPOSER_SCRIM }}
-            />
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+                style={{ backgroundImage: COMPOSER_SCRIM }}
+              />
 
-            {/* Glass, not a plug: this button only exists while the reader is
+              {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-            {messages.length > 0 ? (
-              <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-            ) : null}
-          </Conversation>
+              {messages.length > 0 ? (
+                <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+              ) : null}
+            </Conversation>
+          </MarkdownAttachmentsProvider>
         </FileMentionProvider>
       </BrowserCardHostContext.Provider>
 
