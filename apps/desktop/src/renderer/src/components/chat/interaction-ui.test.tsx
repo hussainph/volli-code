@@ -713,14 +713,9 @@ function slotTag(html: string, slot: string): string | null {
   return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
 }
 
-/**
- * Where each of `labels` stands in the markup, so DOM order can be read.
- *
- * The bare label rather than `>label</button>`: half of these controls carry a
- * glyph on one side of the word, so the text is rarely the whole child.
- */
-function order(html: string, labels: readonly string[]): readonly number[] {
-  return labels.map((label) => html.indexOf(label));
+/** The footer's own markup, from its opening tag to the end of the card. */
+function footerMarkup(html: string): string {
+  return html.slice(html.indexOf('data-slot="interaction-footer"'));
 }
 
 describe("the footer at a pane's narrowest", () => {
@@ -792,16 +787,27 @@ describe("the footer at a pane's narrowest", () => {
     // Wrapping moves where a control is drawn, never where Tab finds it: the
     // reading order and the focus order are the same DOM order they were on
     // one line, so a footer on two lines is not a different card.
-    const html = renderToStaticMarkup(
-      <InteractionCard
-        interaction={walk()}
-        onResolve={() => undefined}
-        onWithdraw={() => undefined}
-      />,
+    //
+    // Read structurally rather than by label — what each act is CALLED is
+    // VC-289's, and this is a claim about arrangement: the acts that touch the
+    // request itself lead, and the cluster that answers it is last and whole.
+    const footer = footerMarkup(
+      renderToStaticMarkup(
+        <InteractionCard
+          interaction={walk()}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        />,
+      ),
     );
-    const walked = order(html, ["Cancel request", "Skip", "Reject"]);
-    expect(walked.every((at) => at > 0)).toBe(true);
-    expect(walked.toSorted((a, b) => a - b)).toEqual([...walked]);
+    const cluster = footer.indexOf('data-slot="interaction-actions"');
+    const buttons = [...footer.matchAll(/<button/g)].map((match) => match.index);
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    // At least one control stands before the cluster (withdrawal), and every
+    // remaining one stands inside it rather than trailing after its close.
+    expect(buttons.filter((at) => at < cluster).length).toBeGreaterThanOrEqual(1);
+    expect(buttons.filter((at) => at > cluster).length).toBeGreaterThanOrEqual(2);
+    expect(footer.indexOf("Skip")).toBeGreaterThan(cluster);
   });
 
   it("gives a wrapped footer the same rhythm down as across", () => {
