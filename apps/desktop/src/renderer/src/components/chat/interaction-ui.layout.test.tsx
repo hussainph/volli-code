@@ -120,6 +120,11 @@ function reachable(button: HTMLButtonElement): boolean {
   return !button.disabled && document.activeElement === button;
 }
 
+/** That focus would be VISIBLE on it — `ui/button.tsx`'s ring, in its classes. */
+function ringed(button: HTMLButtonElement): boolean {
+  return button.className.includes("focus-visible:ring-2");
+}
+
 describe("the footer once a press has been refused", () => {
   it("keeps every action reachable beside the notice the refusal added", () => {
     mount(
@@ -182,4 +187,65 @@ describe("the footer once a press has been refused", () => {
     expect(actions?.className).toContain("flex-wrap");
     expect(actions?.className).not.toContain("shrink-0");
   });
+});
+
+/**
+ * THE ACCEPTANCE WIDTHS, AND WHAT THIS ENVIRONMENT CAN HONESTLY SAY ABOUT THEM
+ * (VC-288 review).
+ *
+ * The acceptance names three pane widths and four zoom levels, and the second
+ * list collapses into the first: browser zoom scales the CSS pixel, so a 480px
+ * pane at 150% zoom IS a 320 CSS-px pane, which is why the requirement is
+ * written in CSS px at all. These three widths are that matrix.
+ *
+ * WHAT IS ASSERTED HERE: at each width, every action the card offers is in the
+ * document, inside the footer, able to take focus, able to SHOW that focus, and
+ * standing in a row whose classes permit the break that keeps it inside the
+ * card. Also that the break is between controls and never inside one.
+ *
+ * WHAT IS NOT, and cannot be: jsdom performs no layout and applies no
+ * stylesheet. Every box here is 0×0, `getComputedStyle` knows nothing of a
+ * Tailwind class, and so "does this overflow at 320px" is not a question this
+ * environment can be asked — an assertion on `scrollWidth` would be an
+ * assertion about numbers the test itself invented. The layout contract is
+ * therefore asserted as the classes that decide it, and the pixels belong to a
+ * real engine: `apps/desktop/e2e` drives the app.
+ */
+describe("the footer at the acceptance widths", () => {
+  for (const width of [320, 480, 720]) {
+    it(`keeps every action reachable and focus-visible at ${width}px`, () => {
+      if (container !== null) container.style.width = `${width}px`;
+      mount(
+        <InteractionCard
+          interaction={ask(WALK)}
+          onResolve={() => Promise.resolve(true)}
+          onWithdraw={() => undefined}
+        />,
+      );
+
+      const buttons = footerButtons();
+      // Withdraw, minimise, Skip and the control that advances: the row that
+      // could not be drawn on one line at any of these widths.
+      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      for (const button of buttons) {
+        expect(reachable(button)).toBe(true);
+        expect(ringed(button)).toBe(true);
+      }
+
+      // The row may become two rows, and the cluster inside it may become two
+      // — the two classes that stand between this footer and the card's own
+      // `overflow-hidden`.
+      const actions = footer().querySelector<HTMLElement>('[data-slot="interaction-actions"]');
+      expect(footer().className).toContain("flex-wrap");
+      expect(actions?.className).toContain("flex-wrap");
+      expect(actions?.className).not.toContain("shrink-0");
+
+      // And the break stays BETWEEN controls: `ui/button.tsx`'s global
+      // `whitespace-nowrap` is what keeps `Send answer` from hyphenating, and
+      // this footer's fix was deliberately local so that rule could stand.
+      for (const button of buttons) {
+        expect(button.className).toContain("whitespace-nowrap");
+      }
+    });
+  }
 });
