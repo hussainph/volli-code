@@ -2,8 +2,8 @@
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
  * (`TerminalEngine`/renderer `stores/sessions.ts`). `ticketId: null` means a
- * Project Session (CONTEXT.md's "Project Session") — main
- * checkout, no worktree, no board involvement, still recorded.
+ * Board Session (CONTEXT.md's "Board Session") — main
+ * checkout, no worktree, no card on the board, still recorded.
  * `harnessSessionId` is reserved for the harness's own resume UUID
  * (claude/codex `--resume` seed) — filled in later by hooks/the volli CLI,
  * starts `null`.
@@ -38,8 +38,10 @@
  * they were never the surface that dropped chat Sessions.
  */
 
+import type { SessionRole } from "./agent-runtime";
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
+import type { SessionTurnOutcome } from "./session-ledger";
 import type { SessionProvenance } from "./session-provenance";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
@@ -75,7 +77,7 @@ export function isSessionPlacement(value: unknown): value is SessionPlacement {
 export interface SessionRecord {
   id: string;
   projectId: string;
-  /** `null` means a Project Session — no ticket, no board involvement. */
+  /** `null` means a Board Session — no ticket, no card on the board. */
   ticketId: string | null;
   /**
    * What the session was LAUNCHED with — durable history, never overwritten.
@@ -128,7 +130,7 @@ export interface SessionRecord {
    * Whether this Session was ticketless AT BIRTH, never later orphaned into
    * it: `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a ticket
    * leaves `ticketId: null` behind too. `ticketId === null && !bornTicketless`
-   * is exactly that orphan case — a Project Session earns the sidebar's
+   * is exactly that orphan case — a Board Session earns the sidebar's
    * cleanup exemption; an orphan should not silently inherit it.
    */
   bornTicketless: boolean;
@@ -160,7 +162,7 @@ export interface ChatSessionRecord {
   sessionId: string;
   title: string;
   projectId: string;
-  /** `null` means a Project Session — no ticket, no board involvement. */
+  /** `null` means a Board Session — no ticket, no card on the board. */
   ticketId: string | null;
   /** Epoch milliseconds. */
   createdAt: number;
@@ -184,6 +186,17 @@ export interface ChatSessionRecord {
    * navigator row exists to save them.
    */
   waitingOn: ChatWaitingReason | null;
+  /**
+   * How the latest turn ended, or `null` while one is open or before any has
+   * started (VC-269) — {@link SessionProjection.lastTurnOutcome}, carried
+   * verbatim. It is what tells an `idle` row that finished from an `idle` row
+   * that broke: `activity` alone reads both as the same quiet, and the one
+   * surface that must not (a parent's subagent cluster) would otherwise draw
+   * a crashed helper as done. Independent of `activity`'s precedence — a
+   * `stopped` row keeps the outcome of whatever turn it had — so a reader
+   * that cares about the stop reads `activity` first, as the island does.
+   */
+  outcome: SessionTurnOutcome | null;
   /** Epoch milliseconds of the newest fact in this Session — a listing's recency sort key. */
   lastActivityAt: number;
   /**
@@ -191,6 +204,14 @@ export interface ChatSessionRecord {
    * it — see {@link SessionRecord.bornTicketless}, the terminal-row sibling.
    */
   bornTicketless: boolean;
+  /**
+   * The Role the Session was created under (VC-9). A listing names a helper
+   * another Session started as one, rather than as a chat indistinguishable
+   * from the chat that started it.
+   */
+  role: SessionRole;
+  /** The Session that delegated this one (VC-9); a listing names it beside a helper. */
+  parentSessionId: string | null;
 }
 
 /**
@@ -297,7 +318,7 @@ export interface CreateSessionInput {
   /** Opaque UUID supplied by the caller — kept out of this function so it stays pure/deterministic. */
   id: string;
   projectId: string;
-  /** Defaults to `null` (Project Session). */
+  /** Defaults to `null` (Board Session). */
   ticketId?: string | null;
   harnessId: HarnessId;
   launchKind: SessionLaunchKind;

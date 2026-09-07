@@ -29,6 +29,7 @@ import type {
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionRole,
   SessionEnvRepair,
   SessionEnvReport,
   TicketEventActor,
@@ -273,6 +274,8 @@ export interface EnvSessionIdentity {
   id: string;
   projectId: string;
   ticketId: string | null;
+  /** The Session's own stated Role (VC-9), never read off `ticketId`. */
+  role: SessionRole;
 }
 
 /**

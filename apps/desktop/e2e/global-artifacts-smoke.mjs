@@ -50,10 +50,7 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { _electron } from "playwright-core";
+import { join } from "node:path";
 
 // This probe predates smoke-kit and keeps its own launch/harness scaffolding,
 // but the Monaco readers are shared: how THIS build is interrogated (input
@@ -62,31 +59,19 @@ import { _electron } from "playwright-core";
 import {
   clickMonaco,
   isMonacoEditable,
+  launch as launchSmokeApp,
   readDocumentLine,
   readMonacoState,
   readMonacoText,
   typeIntoMonaco,
 } from "./lib/smoke-kit.mjs";
 
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
-
 const ownsScratch = process.env.VOLLI_SMOKE_DIR === undefined;
 const SCRATCH =
   process.env.VOLLI_SMOKE_DIR ??
   (await fs.mkdtemp(join(os.tmpdir(), "volli-global-artifacts-smoke-")));
 const USER_DATA_DIR = join(SCRATCH, "user-data");
-const DB_PATH = join(SCRATCH, "volli.db");
+const DB_PATH = join(USER_DATA_DIR, "volli.db");
 await fs.mkdir(USER_DATA_DIR, { recursive: true });
 
 // A real, writable project directory (realpath'd so the seeded path matches
@@ -175,11 +160,7 @@ async function pathExists(path) {
 // ---- launch ----------------------------------------------------------------
 
 function launch(dbPath) {
-  return _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${USER_DATA_DIR}`],
-    env: { ...process.env, VOLLI_DB_PATH: dbPath, VOLLI_SKIP_CLOSE_CONFIRM: "1" },
-  });
+  return launchSmokeApp({ dbPath, userDataDir: USER_DATA_DIR });
 }
 
 // ---- DOM helpers -----------------------------------------------------------

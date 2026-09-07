@@ -94,6 +94,10 @@ export function useHomeTabDescriptors({
       tabId: tab.tabId,
       title: browserTabDisplayTitle(tab),
       loading: tab.loading,
+      // A Session's tab a person promoted here keeps its owner (VC-238): the
+      // strip marks it so the person knows an agent may still be driving it.
+      driven: tab.ownerSessionId !== null,
+      heldBy: tab.heldBy,
     })),
   ];
 }

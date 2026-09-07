@@ -13,6 +13,11 @@ import { join } from "node:path";
 import { createServer } from "node:net";
 import { promisify } from "node:util";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import {
+  BACKGROUND_CONTEXT,
+  executeShellWithCapture,
+  type ShellCaptureResult,
+} from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 
@@ -23,17 +28,35 @@ const hookName = "BASH_ENV";
 /** Host-side git, deliberately outside the sandbox this test is about. */
 const git = (cwd: string, ...args: string[]) => promisify(execFile)("git", args, { cwd });
 
-function outputOf(result: Awaited<ReturnType<ScopedExecutionEnv["exec"]>>): string {
-  return result.ok ? `${result.value.stdout}\n${result.value.stderr}` : result.error.message;
+/**
+ * One contained command, and everything it printed.
+ *
+ * Pi 0.85's `Shell.exec` returns an exit code and truncation metadata and no
+ * text at all, so what this gate needs — "did the secret appear anywhere in the
+ * output" — comes from `executeShellWithCapture`, the collector Pi ships for
+ * callers that want one bounded string. Stdout and stderr arrive merged, which
+ * suits the question exactly: a denial that printed the secret on either stream
+ * is the same failure.
+ */
+async function ran(
+  env: ScopedExecutionEnv,
+  command: string,
+  options?: { timeout?: number },
+): Promise<ShellCaptureResult> {
+  const result = await executeShellWithCapture(
+    env,
+    command,
+    { ...options, returnExecutionErrors: true },
+    BACKGROUND_CONTEXT,
+  );
+  if (!result.ok) throw result.error;
+  return result.value;
 }
 
-function expectDenied(
-  result: Awaited<ReturnType<ScopedExecutionEnv["exec"]>>,
-  secret: string,
-): void {
-  expect(result.ok).toBe(true);
-  if (result.ok) expect(result.value.exitCode).not.toBe(0);
-  expect(outputOf(result)).not.toContain(secret);
+function expectDenied(result: ShellCaptureResult, secret: string): void {
+  expect(result.executionError).toBeUndefined();
+  expect(result.exitCode).not.toBe(0);
+  expect(result.output).not.toContain(secret);
 }
 
 describe.skipIf(!enabled)(
@@ -87,47 +110,43 @@ describe.skipIf(!enabled)(
           value: undefined,
         });
 
-        const pwd = await env.exec("pwd");
-        expect(pwd).toEqual({
-          ok: true,
-          value: expect.objectContaining({ stdout: `${env.cwd}\n`, exitCode: 0 }),
+        await expect(ran(env, "pwd")).resolves.toMatchObject({
+          output: `${env.cwd}\n`,
+          exitCode: 0,
         });
         await expect(
-          env.exec("printf inside > created-by-contained-shell.txt"),
-        ).resolves.toMatchObject({
-          ok: true,
-          value: { exitCode: 0 },
-        });
+          ran(env, "printf inside > created-by-contained-shell.txt"),
+        ).resolves.toMatchObject({ exitCode: 0 });
         await expect(
           readFile(join(worktree, "created-by-contained-shell.txt"), "utf8"),
         ).resolves.toBe("inside");
 
         // The ambient process is intentionally poisoned. The wrapped child must
         // receive neither credentials nor a non-interactive-shell hook.
-        const environment = await env.exec(`test -z "\${${credentialName}-}"`);
-        expect(environment).toMatchObject({ ok: true, value: { exitCode: 0 } });
-        expect(outputOf(environment)).not.toContain(credential);
+        const environment = await ran(env, `test -z "\${${credentialName}-}"`);
+        expect(environment).toMatchObject({ exitCode: 0 });
+        expect(environment.output).not.toContain(credential);
         expect(existsSync(hookMarker)).toBe(false);
 
-        expectDenied(await env.exec("/bin/cat ../outside-secret.txt"), secret);
-        expectDenied(await env.exec("printf overwrite > ../outside-secret.txt"), secret);
+        expectDenied(await ran(env, "/bin/cat ../outside-secret.txt"), secret);
+        expectDenied(await ran(env, "printf overwrite > ../outside-secret.txt"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
 
-        expectDenied(await env.exec("/bin/cat outside-link"), secret);
-        expectDenied(await env.exec("printf overwrite > outside-link"), secret);
+        expectDenied(await ran(env, "/bin/cat outside-link"), secret);
+        expectDenied(await ran(env, "printf overwrite > outside-link"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
 
         // `..` is an independent shell capability check, not merely the
         // TypeScript file-API guard that rejects parent-relative paths.
-        expectDenied(await env.exec("/bin/cat ../outside-secret.txt"), secret);
-        expectDenied(await env.exec("printf traversal > ../outside-secret.txt"), secret);
+        expectDenied(await ran(env, "/bin/cat ../outside-secret.txt"), secret);
+        expectDenied(await ran(env, "printf traversal > ../outside-secret.txt"), secret);
         expect(await readFile(outside, "utf8")).toBe(secret);
 
         // SRT's default Claude compatibility locations remain denied so an
         // agent cannot escape through its own scratch directories.
         for (const marker of scratchMarkers) {
-          const scratchWrite = await env.exec(`printf denied > ${JSON.stringify(marker)}`);
-          expect(scratchWrite.ok && scratchWrite.value.exitCode === 0).toBe(false);
+          const scratchWrite = await ran(env, `printf denied > ${JSON.stringify(marker)}`);
+          expect(scratchWrite.exitCode === 0).toBe(false);
           expect(existsSync(marker)).toBe(false);
         }
 
@@ -145,10 +164,10 @@ describe.skipIf(!enabled)(
           expect(address).not.toBeNull();
           expect(typeof address).toBe("object");
           const port = typeof address === "object" && address ? address.port : 0;
-          const network = await env.exec(`printf probe > /dev/tcp/127.0.0.1/${port}`, {
+          const network = await ran(env, `printf probe > /dev/tcp/127.0.0.1/${port}`, {
             timeout: 2,
           });
-          expect(network.ok && network.value.exitCode === 0).toBe(false);
+          expect(network.exitCode === 0).toBe(false);
           expect(received).toBe(false);
         } finally {
           await new Promise<void>((resolve, reject) =>
@@ -156,12 +175,12 @@ describe.skipIf(!enabled)(
           );
         }
       } finally {
-        await env.cleanup();
+        await env.cleanup(BACKGROUND_CONTEXT);
       }
     });
 
     /**
-     * A project Session, because only a Main checkout has this hole. In a Ticket
+     * A Board Session, because only a Main checkout has this hole. In a Ticket
      * worktree `.git` is a file pointing into the main repository, so the real
      * hooks and config live outside the workspace and `allowWrite` already
      * refuses them; here `.git/` is a real directory inside the writable root.
@@ -201,8 +220,8 @@ describe.skipIf(!enabled)(
           ".git/modules/sub/hooks/pre-commit",
           ".git/modules/sub/config",
         ]) {
-          const copied = await env.exec(`cp evil.sh ${destination}`);
-          expect(copied.ok && copied.value.exitCode === 0, destination).toBe(false);
+          const copied = await ran(env, `cp evil.sh ${destination}`);
+          expect(copied.exitCode === 0, destination).toBe(false);
           // `.git/config` already exists, so the proof is that it was not
           // overwritten; the hooks must not have been created at all.
           const landed = join(checkout, destination);
@@ -213,17 +232,17 @@ describe.skipIf(!enabled)(
         // The denial is four patterns, not the repository: committing writes the
         // index, refs, and objects, and a Session that cannot do that is broken.
         await expect(
-          env.exec("git add evil.sh && git commit --quiet -m contained"),
-        ).resolves.toMatchObject({ ok: true, value: { exitCode: 0 } });
+          ran(env, "git add evil.sh && git commit --quiet -m contained"),
+        ).resolves.toMatchObject({ exitCode: 0 });
       } finally {
-        await env.cleanup();
+        await env.cleanup(BACKGROUND_CONTEXT);
       }
     });
 
     it("keeps two Session workspaces apart in one process", async () => {
       // The process-global SRT configuration carries no workspace paths at all;
       // each root travels per command. That was invisible while every Session
-      // was a Ticket worktree under the same parent, but a project Session is
+      // was a Ticket worktree under the same parent, but a Board Session is
       // rooted at the Main checkout, so two live roots of different kinds is
       // now an ordinary state and nothing else proves it holds. The preflight
       // is cached per manager, so whichever env prepares first is the one that
@@ -256,35 +275,35 @@ describe.skipIf(!enabled)(
           value: undefined,
         });
 
-        expectDenied(await envB.exec(`/bin/cat ${JSON.stringify(fileInA)}`), secretA);
-        await expect(envB.exec("pwd")).resolves.toEqual({
-          ok: true,
-          value: expect.objectContaining({ stdout: `${envB.cwd}\n`, exitCode: 0 }),
+        expectDenied(await ran(envB, `/bin/cat ${JSON.stringify(fileInA)}`), secretA);
+        await expect(ran(envB, "pwd")).resolves.toMatchObject({
+          output: `${envB.cwd}\n`,
+          exitCode: 0,
         });
         expect(await readFile(fileInA, "utf8")).toBe(secretA);
 
         // The same in the other direction, including for the env that installed
         // the boundary: preparing it buys no reach into a root it does not own.
-        expectDenied(await envA.exec(`/bin/cat ${JSON.stringify(fileInB)}`), secretB);
-        await expect(envA.exec("pwd")).resolves.toEqual({
-          ok: true,
-          value: expect.objectContaining({ stdout: `${envA.cwd}\n`, exitCode: 0 }),
+        expectDenied(await ran(envA, `/bin/cat ${JSON.stringify(fileInB)}`), secretB);
+        await expect(ran(envA, "pwd")).resolves.toMatchObject({
+          output: `${envA.cwd}\n`,
+          exitCode: 0,
         });
         expect(await readFile(fileInB, "utf8")).toBe(secretB);
 
         // Each still owns its own root, so the denial above is containment and
         // not a boundary that simply refuses everything.
-        await expect(envA.exec("/bin/cat secret.txt")).resolves.toMatchObject({
-          ok: true,
-          value: { stdout: secretA, exitCode: 0 },
+        await expect(ran(envA, "/bin/cat secret.txt")).resolves.toMatchObject({
+          output: secretA,
+          exitCode: 0,
         });
-        await expect(envB.exec("/bin/cat secret.txt")).resolves.toMatchObject({
-          ok: true,
-          value: { stdout: secretB, exitCode: 0 },
+        await expect(ran(envB, "/bin/cat secret.txt")).resolves.toMatchObject({
+          output: secretB,
+          exitCode: 0,
         });
       } finally {
-        await envA.cleanup();
-        await envB.cleanup();
+        await envA.cleanup(BACKGROUND_CONTEXT);
+        await envB.cleanup(BACKGROUND_CONTEXT);
       }
     });
   },

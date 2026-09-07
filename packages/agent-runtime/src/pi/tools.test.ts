@@ -2,10 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { BACKGROUND_CONTEXT, type AgentToolResult } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import {
   NON_CODING_TOOL_IDS,
+  TODO_STATUSES,
   type RuntimeAskUserRequest,
   type RuntimeWebDocument,
   type RuntimeWebSearchResults,
@@ -18,6 +19,7 @@ import {
   ASK_USER_TOOL_NAME,
   createAskUserTool,
   createSessionTools,
+  createTodoWriteTool,
   createVerbTool,
   createWebFetchTool,
   createWebSearchTool,
@@ -106,7 +108,73 @@ describe("read tool", () => {
       );
       expect(text).toContain("recompressed as JPEG");
     } finally {
-      await env.cleanup();
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Pi 0.85 removed `signal` from a harness tool's `execute` outright:
+   * cancellation now rides a chord `Context` that arrives as the last argument.
+   * The `Agent` Volli drives has no context to hand down, so `bindContext` wraps
+   * the run's signal onto an empty one — and if it ever stopped doing that, a
+   * cancelled turn would keep reading files with nothing left to stop it, which
+   * is silent rather than loud. This is the assertion that makes it loud.
+   */
+  it("carries a cancelled turn into a Pi file tool, which now reads it off the context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-read-cancel-"));
+    const env = new NodeExecutionEnv({ cwd: root });
+    try {
+      await writeFile(join(root, "note.txt"), "the note\n");
+      const [read] = createSessionTools({ tools: { tools: ["read"] } }, env);
+
+      const live = await read!.execute(
+        "call-2",
+        { path: "note.txt" },
+        new AbortController().signal,
+      );
+      expect(resultText(live as AgentToolResult<undefined>)).toContain("the note");
+
+      await expect(
+        read!.execute("call-3", { path: "note.txt" }, AbortSignal.abort()),
+      ).rejects.toThrow();
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("execute tool", () => {
+  /**
+   * 0.85 made a harness tool's `onUpdate` required, where the `Agent`'s is
+   * optional. The adapter therefore always hands Pi a callback and forwards
+   * only what the caller asked for — including nothing, when a run supplied no
+   * callback at all. What it deliberately drops is the harness's second
+   * argument, its request to checkpoint the partial result durably: the
+   * `Agent`'s callback has no parameter for it and Volli has no per-tool
+   * durable checkpoint to write it to.
+   */
+  it("forwards a Pi tool's progress to the Agent's update callback, and runs without one", async () => {
+    const root = await mkdtemp(join(tmpdir(), "volli-execute-"));
+    const env = new NodeExecutionEnv({ cwd: root });
+    try {
+      const [execute] = createSessionTools({ tools: { tools: ["execute"] } }, env);
+      const updates: AgentToolResult<unknown>[] = [];
+
+      const withCallback = await execute!.execute(
+        "call-1",
+        { command: "printf hello" },
+        undefined,
+        (partial) => updates.push(partial),
+      );
+      expect(resultText(withCallback as AgentToolResult<undefined>)).toContain("hello");
+      expect(updates.length).toBeGreaterThan(0);
+
+      const withoutCallback = await execute!.execute("call-2", { command: "printf hello" });
+      expect(resultText(withoutCallback as AgentToolResult<undefined>)).toContain("hello");
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -1055,5 +1123,85 @@ describe("createVerbTool", () => {
     );
     await aborted.execute("tc-2", { ticket: "VC-1" });
     expect(signals[1]?.aborted).toBe(true);
+  });
+});
+
+describe("createTodoWriteTool", () => {
+  it("answers a call with the whole list, so a compacted context still holds the plan", async () => {
+    // The reason the result is not "ok": every earlier todo_write call drops
+    // out of what the provider sees when the context is compacted, so the
+    // newest call's RESULT is the only copy of the list left in view.
+    const tool = createTodoWriteTool();
+    const result = await tool.execute(
+      "call-1",
+      {
+        todos: [
+          { content: "Read the ticket", status: "completed" },
+          { content: "Write the tool", status: "in_progress" },
+          { content: "Wire the island", status: "pending" },
+        ],
+      },
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe(
+      [
+        "The todo list is now:",
+        "- [x] Read the ticket",
+        "- [ ] Write the tool (in progress)",
+        "- [ ] Wire the island",
+      ].join("\n"),
+    );
+  });
+
+  it("says so when the model clears the list, rather than answering with nothing", async () => {
+    const result = await createTodoWriteTool().execute(
+      "call-2",
+      { todos: [] },
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("answers a payload the schema should have stopped, instead of throwing on it", async () => {
+    // The schema is a REQUEST to a provider, not a guarantee from one, so the
+    // arguments are parsed rather than trusted. A call that arrives with no
+    // `todos` at all lands on the same empty answer a deliberate clear does —
+    // the alternative is a tool that throws inside a turn over a payload the
+    // model cannot see it sent wrong.
+    const result = await createTodoWriteTool().execute(
+      "call-3",
+      {} as Parameters<ReturnType<typeof createTodoWriteTool>["execute"]>[1],
+      new AbortController().signal,
+    );
+
+    expect(resultText(result)).toBe("The todo list is now empty.");
+  });
+
+  it("offers exactly the statuses the rest of the app understands (VC-6)", () => {
+    // The schema's status tuple is written out by hand, because TypeBox reads
+    // the static type off a TUPLE and a `.map` over the vocabulary would leave
+    // every call site with `never`. This is what stops the hand-written tuple
+    // drifting: a status added to `TODO_STATUSES` and not to the schema would
+    // otherwise leave the model unable to send a state Volli can read, and one
+    // removed would have it sending a state the provider refuses.
+    const status = createTodoWriteTool().parameters.properties.todos.items.properties.status;
+
+    expect(status.anyOf.map((member) => member.const)).toEqual([...TODO_STATUSES]);
+  });
+
+  it("is offered exactly when the bundle names it, and reaches no environment", () => {
+    // No `env` argument at all: the tool has no file, no command and no port,
+    // which is why it can be built from a bundle flag alone.
+    const names = createSessionTools(
+      { tools: { tools: ["read"], todoWrite: true } },
+      null as never,
+    ).map((tool) => tool.name);
+
+    expect(names).toEqual(["read", "todo_write"]);
+    expect(
+      createSessionTools({ tools: { tools: ["read"] } }, null as never).map((tool) => tool.name),
+    ).toEqual(["read"]);
   });
 });

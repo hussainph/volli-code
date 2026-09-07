@@ -161,17 +161,13 @@ async function main() {
     const projectId = byName[PROJECT.name]?.id;
     if (!projectId) throw new Error("seeded project missing after import");
 
-    // === 0. Precondition: a Ticket default that is NOT the project default ===
+    // === 0. Precondition: a Ticket default that is NOT the Board default ===
     let ticketModel = null;
-    await attempt(
-      0,
-      "Model Access: distinct project and Ticket defaults are recorded",
-      async () => {
-        await seedDefaultModel(page, GLOBAL_MODEL, "global");
-        ticketModel = await seedDefaultModel(page, TICKET_MODEL, "ticket");
-        return { ok: true, detail: `ticket=${ticketModel.providerId}/${ticketModel.modelId}` };
-      },
-    );
+    await attempt(0, "Model Access: distinct Board and Ticket defaults are recorded", async () => {
+      await seedDefaultModel(page, GLOBAL_MODEL, "global");
+      ticketModel = await seedDefaultModel(page, TICKET_MODEL, "ticket");
+      return { ok: true, detail: `ticket=${ticketModel.providerId}/${ticketModel.modelId}` };
+    });
 
     // === 1. The composer offers a model + effort, and no terminal anywhere ====
     await attempt(

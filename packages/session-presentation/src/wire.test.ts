@@ -124,9 +124,9 @@ describe("chatSessionFrame", () => {
   });
 
   it("keeps the envelope of a kind this build does not know, folding nothing from it", () => {
-    // The writer was newer than the reader — live on the lab HTTP transport
-    // and on any replay. The sequence must still advance the fold's cursor,
-    // so the frame survives with a null event rather than vanishing.
+    // The writer was newer than the reader — from a future host or on any
+    // replay. The sequence must still advance the fold's cursor, so the frame
+    // survives with a null event rather than vanishing.
     const newer = wireEvent({ payload: { kind: "capabilities.retired" } });
     expect(chatSessionFrame(wireFrame({ event: newer }))).toEqual({
       sessionId: "session-1",

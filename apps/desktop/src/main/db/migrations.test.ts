@@ -224,6 +224,8 @@ describe("migrate — fresh install", () => {
       "ticket_id",
       "title",
       "created_at",
+      "role",
+      "parent_session_id",
     ]);
     expect(columnNames(db, "tickets")).toEqual(
       expect.arrayContaining(["worktree_path", "branch", "base_branch"]),
@@ -877,6 +879,8 @@ describe("migrate — 015 to 018 upgrade path (terminal reset)", () => {
       "ticket_id",
       "title",
       "created_at",
+      "role",
+      "parent_session_id",
     ]);
     db.close();
   });
@@ -2633,6 +2637,97 @@ describe("migrate — 039, the delegation-extensions reconciler (VC-204)", () =>
     // Re-offering 039 is a no-op rather than a duplicate-object error.
     db.pragma("user_version = 38");
     expect(() => migrate(db, dbPath)).not.toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+/** A pre-VC-9 `session.created` payload: no `role`, the birth Ticket in the row. */
+function sessionCreatedPayload(id: string, ticketId: string | null): string {
+  return JSON.stringify({
+    kind: "session.created",
+    session: { id, projectId: "p1", ticketId, title: null, createdAt: 1 },
+  });
+}
+
+describe("migrate — 041, sessions.parent_session_id as ledger data (VC-9)", () => {
+  it("backfills a subagent's parent from the delegation row it was first recorded in, and leaves roots null", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 40)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 40");
+    seedTicket(db);
+    const insertSession = db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at) VALUES (?, 'p1', ?, ?, ?, 1)",
+    );
+    insertSession.run("s-parent", "t1", "ticket", "Parent");
+    insertSession.run("s-helper", "t1", "subagent", "Helper");
+    insertSession.run("s-root", null, "project", "Chat");
+    db.prepare(
+      "INSERT INTO session_delegations (session_id, ticket_id, parent_session_id, depth) VALUES ('s-helper', 't1', 's-parent', 1)",
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT id, parent_session_id FROM sessions ORDER BY id").all()).toEqual([
+      { id: "s-helper", parent_session_id: "s-parent" },
+      { id: "s-parent", parent_session_id: null },
+      { id: "s-root", parent_session_id: null },
+    ]);
+    // A second offer of the version converges rather than failing on the column.
+    expect(() => MIGRATIONS.at(-1)?.apply?.(db)).not.toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+describe("migrate — 040, sessions.role as data (VC-9)", () => {
+  it("backfills each Session's Role from its birth event, so an orphaned Ticket Session stays a Ticket Session", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 39)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 39");
+    seedTicket(db);
+    const insertSession = db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, 'p1', ?, ?, 1)",
+    );
+    const insertCreated = db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       VALUES (?, ?, 2, 1, 1, '{"source":{"kind":"user","id":"u","detail":null},"venue":{"id":"local","kind":"local"}}', NULL, NULL, ?)`,
+    );
+    insertSession.run("s-ticket", "t1", "On the ticket");
+    insertCreated.run("e-1", "s-ticket", sessionCreatedPayload("s-ticket", "t1"));
+    insertSession.run("s-project", null, "Board chat");
+    insertCreated.run("e-2", "s-project", sessionCreatedPayload("s-project", null));
+    // Born on the Ticket, orphaned since: the live column says null, the
+    // birth event says Ticket. A backfill that read the column would turn a
+    // Ticket Session into a Board one.
+    insertSession.run("s-orphan", null, "Orphaned");
+    insertCreated.run("e-3", "s-orphan", sessionCreatedPayload("s-orphan", "t1"));
+
+    migrate(db, dbPath);
+
+    expect(db.prepare("SELECT id, role FROM sessions ORDER BY id").all()).toEqual([
+      { id: "s-orphan", role: "ticket" },
+      { id: "s-project", role: "project" },
+      { id: "s-ticket", role: "ticket" },
+    ]);
+    // Only a Role this build knows may be stored.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at) VALUES ('s-x', 'p1', NULL, 'agent', NULL, 1)",
+        )
+        .run(),
+    ).toThrow();
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

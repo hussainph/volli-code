@@ -3,7 +3,13 @@
  * A Session belongs to Volli; adapters and UI surfaces only attach to it.
  */
 
-import type { CompactionReason, ModelSelection, PromptResource } from "./agent-runtime";
+import type {
+  CompactionReason,
+  ModelSelection,
+  PromptResource,
+  ReasoningDropCause,
+  SessionRole,
+} from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
@@ -13,6 +19,23 @@ export interface Session {
   id: string;
   projectId: string;
   ticketId: string | null;
+  /**
+   * The Role this Session was created under (VC-9). Data, never derived:
+   * before this field `ticketId !== null` WAS the Role, which stopped being
+   * true the moment a Subagent Session could inherit its parent's Ticket
+   * without being a Ticket Session. {@link roleImpliedByTicket} is the one
+   * read-side fallback, for rows and events written before the field existed.
+   */
+  role: SessionRole;
+  /**
+   * The Session that delegated this one (VC-9): set exactly for a `subagent`,
+   * null for the two root Roles. On the Session and on its `session.create`
+   * intent, not in a host table, because it is the fact the `subagent` Role
+   * MEANS and a host rebuilding from events must be able to reconstruct it
+   * (docs/BOUNDARIES.md). Read-tolerant: absent on every record written
+   * before the field existed, all of which were root Sessions.
+   */
+  parentSessionId: string | null;
   title: string | null;
   /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
   createdAt: number;
@@ -462,6 +485,21 @@ export type SessionStopActor =
   | { kind: "user" }
   | { kind: "watchdog" };
 
+/**
+ * How a Session's latest turn ended (VC-269).
+ *
+ * The ledger's own two turn-end facts plus the one the attachment adds:
+ * `completed` and `interrupted` are `turn.completed` / `turn.interrupted`
+ * verbatim, and `failed` is a turn that was still open when its attachment
+ * failed or closed as failed — the executor ended, not the turn. The
+ * vocabulary is shared with the Session Engine's answer fold
+ * (`session-answer.ts`, `SessionAnswerState`), which is these three words
+ * plus the states a projection already carries elsewhere (`turnActive`,
+ * `stopped`); a test there pins that {@link projectSession} and the fold
+ * never read the same history two ways.
+ */
+export type SessionTurnOutcome = "completed" | "interrupted" | "failed";
+
 export type SessionEventPayload =
   | { kind: "command.recorded"; command: SessionCommand }
   | { kind: "session.created"; session: Session }
@@ -529,6 +567,16 @@ export type SessionEventPayload =
       reason: CompactionReason;
       /** Sanitized executor diagnostic; never raw provider text. */
       detail: string;
+    }
+  | {
+      /** A provider recovered a request by removing earlier reasoning. */
+      kind: "context.reasoning_dropped";
+      attachmentId: string;
+      turnId: string;
+      count: number;
+      causes: readonly ReasoningDropCause[];
+      /** Structural positions only; never conversation content. */
+      paths: readonly string[];
     }
   | {
       kind: "transcript.referenced";
@@ -683,6 +731,7 @@ type ObservedSessionEventKind =
   | "turn.interrupted"
   | "context.compacted"
   | "context.compaction_failed"
+  | "context.reasoning_dropped"
   | "transcript.referenced"
   | "attention.raised"
   | "attention.cleared"
@@ -805,6 +854,15 @@ export function observationPayload(
         reason: observation.reason,
         detail: observation.detail,
       };
+    case "context.reasoning_dropped":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        turnId: observation.turnId,
+        count: observation.count,
+        causes: observation.causes,
+        paths: observation.paths,
+      };
     case "transcript.referenced":
       return {
         kind: observation.kind,
@@ -863,8 +921,34 @@ export function observationPayload(
   }
 }
 
+/**
+ * The Role a "Ticket or not" choice implies: the two Roles a person's door can
+ * state, and the read-side fallback for records written before `Session.role`
+ * existed (VC-9).
+ *
+ * Two callers, one rule. A person starting a chat chooses a Ticket or none and
+ * nothing else, so the renderer's create route and the CLI's start door state
+ * their Role through this. And every pre-VC-9 Session was one of these two, so
+ * the codec reads a record lacking the field through the same function. It is
+ * never consulted for a Session that states its Role: a Subagent Session may
+ * carry its parent's Ticket and is not a Ticket Session, which is the case this
+ * function exists to be kept away from.
+ */
+export function roleImpliedByTicket(
+  ticketId: string | null,
+): Extract<SessionRole, "ticket" | "project"> {
+  return ticketId === null ? "project" : "ticket";
+}
+
 export type SessionCommandIntent =
-  | { kind: "session.create"; projectId: string; ticketId: string | null; title: string | null }
+  | {
+      kind: "session.create";
+      projectId: string;
+      ticketId: string | null;
+      role: SessionRole;
+      parentSessionId: string | null;
+      title: string | null;
+    }
   | { kind: "session.archive" }
   | { kind: "session.retitle"; title: string | null }
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
@@ -1120,6 +1204,16 @@ export interface SessionProjection {
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   turnActive: boolean;
   /**
+   * How the most recent turn ended, or `null` while one is open or before
+   * any has started (VC-269). The durable half of "the agent finished" vs
+   * "the agent broke": `turnActive` alone leaves a completed turn and one an
+   * executor crash cut short indistinguishable, and a listing that drew both
+   * as done would hand a parent a bad answer as a good one. Reset by
+   * `turn.started`, so it is always about the LATEST turn and never a stale
+   * verdict on an earlier one.
+   */
+  lastTurnOutcome: SessionTurnOutcome | null;
+  /**
    * How many calls this Session's authority has refused, over its whole life.
    *
    * Projected rather than counted in the runtime because the per-Session half of
@@ -1149,8 +1243,8 @@ export interface SessionProjection {
    * a later fact can change. `sessions.ticket_id` is `ON DELETE SET NULL`
    * (deleting a ticket orphans its sessions into `session.ticketId === null`
    * ones), so `session.ticketId === null && !bornTicketless` is exactly an
-   * orphan: a Project Session and an orphaned one both read `ticketId: null`
-   * today, but only the Project Session was ever meant to.
+   * orphan: a Board Session and an orphaned one both read `ticketId: null`
+   * today, but only the Board Session was ever meant to.
    */
   bornTicketless: boolean;
 }
@@ -1176,6 +1270,7 @@ export function projectSession(
   let stopped: SessionProjection["stopped"] = null;
   let modelSelection: ModelSelection | null = null;
   let turnActive = false;
+  let lastTurnOutcome: SessionTurnOutcome | null = null;
   let authorityDenials = 0;
   const usage: SessionUsage[] = [];
   let lastActivityAt = session.createdAt;
@@ -1277,6 +1372,10 @@ export function projectSession(
           outcome: "failed",
           failure: event.payload.failure,
         });
+        // A turn still open when its executor failed is a failed turn; one
+        // that had already ended keeps its own outcome (the process ending is
+        // not the turn losing what it said — `foldSessionAnswerState` agrees).
+        if (turnActive) lastTurnOutcome = "failed";
         turnActive = false;
         if (event.commandId) pendingExecutorStarts.delete(event.commandId);
         break;
@@ -1290,6 +1389,13 @@ export function projectSession(
             closedAt: event.occurredAt,
             outcome: event.payload.outcome,
           });
+        }
+        // A close mid-turn ended a turn that had not completed, whatever the
+        // close calls itself: the relaunch sweep and a crash both land here.
+        // Only a close that says `failed` is a failure; the rest are the turn
+        // being cut short.
+        if (turnActive) {
+          lastTurnOutcome = event.payload.outcome === "failed" ? "failed" : "interrupted";
         }
         turnActive = false;
         break;
@@ -1340,13 +1446,19 @@ export function projectSession(
       // running any more.
       case "turn.started":
         turnActive = true;
+        // The outcome is about the latest turn, and this one has none yet.
+        lastTurnOutcome = null;
         // A turn can have been admitted before a supervisor recorded its stop.
         // Only a fresh attachment is an explicit resumption, so this turn must
         // not erase the stop while the supervisor is still releasing it.
         break;
       case "turn.completed":
+        turnActive = false;
+        lastTurnOutcome = "completed";
+        break;
       case "turn.interrupted":
         turnActive = false;
+        lastTurnOutcome = "interrupted";
         break;
       // `session.created` carries the Session row as it was at birth — the
       // one immutable read of `ticketId` a later ticket deletion (`ON DELETE
@@ -1370,6 +1482,7 @@ export function projectSession(
       // Session is no more or less active for having compacted.
       case "context.compacted":
       case "context.compaction_failed":
+      case "context.reasoning_dropped":
       case "run.started":
       case "run.completed":
       case "transcript.referenced":
@@ -1411,6 +1524,7 @@ export function projectSession(
     stopped,
     modelSelection,
     turnActive,
+    lastTurnOutcome,
     authorityDenials,
     usage: usage.length === 0 ? EMPTY_SESSION_USAGE_SUMMARY : summarizeSessionUsage(usage),
     lastActivityAt,

@@ -1,6 +1,6 @@
 /**
- * RED-phase acceptance smoke for the Linear-style New-ticket composer — the
- * *creation* half (kickoff/agent-launch lives in composer-kickoff-smoke.mjs).
+ * Acceptance smoke for the Linear-style New-ticket composer — the *creation*
+ * half (kickoff/agent-launch lives in composer-kickoff-smoke.mjs).
  *
  * The composer being built (see the ui/ticket-creation-fix spec) replaces the
  * primitive New-ticket dialog with:
@@ -30,10 +30,8 @@
  * This file drives the REAL built app through Playwright against a scratch
  * SQLite DB + isolated profile (shared machinery in ./lib/smoke-kit.mjs) and
  * asserts the create flows: open, breadcrumb, project retarget, plain Create,
- * Create-more, ⌘+Enter, "c" hotkey, Escape. It is written BEFORE the composer
- * exists, so most checks are EXPECTED TO FAIL now — cleanly, by reporting the
- * missing composer UI, never by crashing. A few primitive-dialog checks (a
- * dialog opens via the header button / "c" hotkey / Escape closes) pass today.
+ * Create-more, ⌘+Enter, "c" hotkey, Escape, and screenshot drag-and-drop without
+ * leaving Monaco's dotted drop caret behind.
  *
  *   Run:
  *     pnpm run build                                  # dist/ + dist-electron/
@@ -412,6 +410,64 @@ async function main() {
         detail: `open=${openCount} closedAfter=${closedCount}`,
       };
     });
+
+    // === 10. A file drop leaves only the attachment, not Monaco's caret ======
+    await attempt(
+      10,
+      "Dragging a screenshot over the description attaches it without leaving Monaco's dotted drop caret on each line",
+      async () => {
+        const opened = await openComposerViaHeader(page);
+        if (!opened) {
+          await closeAnyDialog(page);
+          return { ok: false, detail: "composer did not open (data-testid missing)" };
+        }
+        await typeIntoMonaco(composer(page), "one short line\ntwo short line\nthree short line");
+
+        // A real OS file drag is not available through Playwright. Dispatch the
+        // same browser dragover → drop pair with a File-backed DataTransfer at
+        // the Monaco target. Before VC-261, Monaco saw dragover and staged its
+        // `.dnd-target`, while the composer's capture handler consumed drop so
+        // Monaco never received the event that clears that decoration.
+        await composer(page)
+          .locator(".view-lines")
+          .evaluate((target) => {
+            const transfer = new DataTransfer();
+            transfer.items.add(
+              new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", {
+                type: "image/png",
+              }),
+            );
+            const rect = target.getBoundingClientRect();
+            const init = {
+              bubbles: true,
+              cancelable: true,
+              dataTransfer: transfer,
+              clientX: rect.left + Math.min(120, rect.width / 2),
+              clientY: rect.top + Math.min(55, rect.height / 2),
+            };
+            target.dispatchEvent(new DragEvent("dragover", init));
+            target.dispatchEvent(new DragEvent("drop", init));
+          });
+
+        const attached = await waitUntil(
+          "dropped screenshot to attach",
+          async () =>
+            (await composer(page).getByRole("list", { name: "Attachments" }).count()) === 1,
+          { timeout: 4000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+        // Monaco renders decorations after the event frame. Waiting a frame is
+        // essential: the stale target was not present synchronously after drop.
+        await sleep(100);
+        const dottedTargets = await composer(page).locator(".dnd-target").count();
+        await closeAnyDialog(page);
+        return {
+          ok: attached && dottedTargets === 0,
+          detail: `attached=${attached} dottedTargets=${dottedTargets}`,
+        };
+      },
+    );
   } finally {
     await app.close();
   }

@@ -381,7 +381,7 @@ describe("automation IPC", () => {
           automationId: input.automationId,
           automationName: "Review",
           // A schedule Run names no Ticket: its Target is the Project, so the
-          // Session it opens is a Project Session.
+          // Session it opens is a Board Session.
           ticketId: null,
           sessionId: "session-project-1",
           model: PIN,
@@ -1504,7 +1504,7 @@ describe("automation IPC", () => {
           automationId: input.automationId,
           automationName: "Nightly sweep",
           // No Ticket: a schedule Run's Target is the Project, so the Session
-          // it opens is a Project Session.
+          // it opens is a Board Session.
           ticketId: null,
           sessionId: "session-project-1",
           model: PIN,
@@ -1535,7 +1535,7 @@ describe("automation IPC", () => {
     });
 
     // The Target is named rather than implied, so a request that forgot it is
-    // refused at the door instead of quietly becoming a Project Session.
+    // refused at the door instead of quietly becoming a Board Session.
     expect(
       await call<Result>("volli:automation-run-for-project", {
         commandId: randomUUID(),

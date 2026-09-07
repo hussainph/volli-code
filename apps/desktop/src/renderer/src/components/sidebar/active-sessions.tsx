@@ -195,7 +195,7 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   );
   // The project's OWN container. The store files every container in one
   // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
-  // id for Project Sessions — and the listing model walks the map by ticket, so
+  // id for Board Sessions — and the listing model walks the map by ticket, so
   // this one has to be handed over on its own key or its live tabs are invisible.
   const projectContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one

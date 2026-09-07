@@ -35,8 +35,13 @@
  * this table exists to make impossible.
  */
 
-import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
-import type { ModelSelection, PromptResource } from "./agent-runtime";
+import {
+  COMPACTION_REASONS,
+  REASONING_DROP_CAUSES,
+  REASONING_LEVELS,
+  SESSION_ROLES,
+} from "./agent-runtime";
+import type { ModelSelection, PromptResource, SessionRole } from "./agent-runtime";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import { JUDGMENT_MODES } from "./authority-config";
@@ -45,6 +50,7 @@ import {
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
+  roleImpliedByTicket,
 } from "./session-ledger";
 import { COST_BASES, SESSION_USAGE_CAUSES } from "./session-usage";
 import type { SessionUsage } from "./session-usage";
@@ -323,6 +329,21 @@ const codecs = {
     // `detail` was sanitized at the runtime boundary, like every other
     // diagnostic that reaches a person.
     scrub: (payload) => payload,
+  },
+  "context.reasoning_dropped": {
+    decode: (record, context) => ({
+      kind: "context.reasoning_dropped",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      turnId: readString(record.turnId, `${context}.turnId`),
+      count: readPositiveInteger(record.count, `${context}.count`),
+      causes: readArray(record.causes, `${context}.causes`, (cause, itemContext) =>
+        enumValue(cause, REASONING_DROP_CAUSES, itemContext),
+      ),
+      paths: readArray(record.paths, `${context}.paths`, readString),
+    }),
+    // Structural paths stay host-side for diagnostics. A client needs the fact
+    // and cause to draw the notice, not provider request coordinates.
+    scrub: ({ paths: _paths, ...payload }) => payload,
   },
   "transcript.referenced": {
     decode: (record, context) => ({
@@ -603,8 +624,8 @@ function scrubbedNativeReference(): RendererSessionNativeReference {
  *
  * The two failure arms are deliberately distinct, mirroring the ledger's read
  * rule: an `unknown-kind` is an expected consequence of a writer newer than
- * this build (live on the lab HTTP transport, and on any replay) and the
- * caller keeps the envelope while folding nothing; `malformed` is corruption
+ * this build (from a future host, or on any replay) and the caller keeps the
+ * envelope while folding nothing; `malformed` is corruption
  * of a known kind and the caller surfaces it.
  */
 export type RendererSessionEventParse =
@@ -824,13 +845,17 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
   const row = asRecord(value, context);
   const kind = readString(row.kind, `${context}.kind`);
   switch (kind) {
-    case "session.create":
+    case "session.create": {
+      const ticketId = readNullableString(row.ticketId, `${context}.ticketId`);
       return {
         kind,
         projectId: readString(row.projectId, `${context}.projectId`),
-        ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
+        ticketId,
+        role: readSessionRole(row.role, ticketId, `${context}.role`),
+        parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
         title: readNullableString(row.title, `${context}.title`),
       };
+    }
     case "session.archive":
       return { kind };
     case "session.retitle":
@@ -989,15 +1014,39 @@ export function encodeSessionJson(value: unknown): string {
 
 function decodeSessionValue(value: unknown, context: string): Session {
   const row = asRecord(value, context);
+  const ticketId = readNullableString(row.ticketId, `${context}.ticketId`);
   const session: Session = {
     id: readString(row.id, `${context}.id`),
     projectId: readString(row.projectId, `${context}.projectId`),
-    ticketId: readNullableString(row.ticketId, `${context}.ticketId`),
+    ticketId,
+    role: readSessionRole(row.role, ticketId, `${context}.role`),
+    parentSessionId: readParentSessionId(row.parentSessionId, `${context}.parentSessionId`),
     title: readNullableString(row.title, `${context}.title`),
     createdAt: readInteger(row.createdAt, `${context}.createdAt`),
   };
   assertSession(session, context);
   return session;
+}
+
+/**
+ * The Role off a stored Session or create intent (VC-9). Tolerant on read for
+ * exactly one shape — the field absent, which every record written before it
+ * existed is — and strict for every other: a present value that is not a Role
+ * this build knows is corruption inside a known kind, and fails loudly.
+ */
+function readSessionRole(value: unknown, ticketId: string | null, context: string): SessionRole {
+  if (value === undefined) return roleImpliedByTicket(ticketId);
+  return enumValue(value, SESSION_ROLES, context);
+}
+
+/**
+ * The parent link (VC-9), tolerant for the one shape every earlier record
+ * has — the field absent, which was always a root Session — and strict for
+ * every other: a present value that is not a string or null is corruption.
+ */
+function readParentSessionId(value: unknown, context: string): string | null {
+  if (value === undefined) return null;
+  return readNullableString(value, context);
 }
 
 function assertCommandShape(value: SessionCommand, context: string): void {
@@ -1423,6 +1472,21 @@ function readInteger(value: unknown, context: string): number {
     throw new Error(`${context} must be an integer`);
   }
   return value;
+}
+
+function readPositiveInteger(value: unknown, context: string): number {
+  const integer = readInteger(value, context);
+  if (integer <= 0) throw new Error(`${context} must be positive`);
+  return integer;
+}
+
+function readArray<T>(
+  value: unknown,
+  context: string,
+  readItem: (item: unknown, context: string) => T,
+): T[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((item, index) => readItem(item, `${context}[${index}]`));
 }
 
 function readNullableInteger(value: unknown, context: string): number | null {

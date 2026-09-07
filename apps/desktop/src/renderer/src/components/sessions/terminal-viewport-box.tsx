@@ -11,7 +11,7 @@ import {
  * anchor without either of them ever unmounting the terminal between them.
  *
  * Lifted out of `ticket-terminal-host.tsx` (where it was `TicketTerminalBox`)
- * when split view made both surfaces need it: Home's project Sessions used to
+ * when split view made both surfaces need it: Home's Board Sessions used to
  * be `absolute inset-0` over the whole plane, which is only correct while a
  * surface has exactly one plane. Now every terminal on either surface is
  * positioned over the anchor its pane published, through this one component.

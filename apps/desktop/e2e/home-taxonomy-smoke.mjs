@@ -19,7 +19,7 @@
  *      showing, and NO auto-opened Session anywhere (VC-54 scope 2).
  *   2. The Sessions nav item is gone, and Files retired with it (VC-122): the
  *      nav is Home / Configure, nothing else.
- *   3. "+ New Session" opens a Project Session tab beside the Board, and the
+ *   3. "+ New Session" opens a Board Session tab beside the Board, and the
  *      Board tab is not closable.
  *   3a. The Home rail's Files page lists and live-watches the Main checkout;
  *       click/double-click preview and pin a Home File tab, whose close returns
@@ -103,7 +103,7 @@ async function startTerminalTab(page) {
   await page.getByRole("button", { name: "Other things to open", exact: true }).first().click();
   await page.getByRole("menuitem", { name: /^Terminal/ }).click();
   await waitUntil(
-    "a Project Session terminal tab to appear",
+    "a Board Session terminal tab to appear",
     async () => (await strip(page).getByRole("tab").count()) > before,
     { timeout: 20000 },
   );
@@ -171,7 +171,7 @@ try {
 
   await attempt(
     3,
-    "+ New Session opens a Project Session tab; the Board tab cannot be closed",
+    "+ New Session opens a Board Session tab; the Board tab cannot be closed",
     async () => {
       await startTerminalTab(page);
       const labels = await stripTabLabels(page);

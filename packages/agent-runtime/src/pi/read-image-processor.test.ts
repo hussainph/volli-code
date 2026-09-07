@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import sharp from "sharp";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -44,7 +45,7 @@ describe("read image processor", () => {
     const source = await png(4, 3);
 
     const result = resultImage(
-      await processReadImage(source, "image/png", { autoResizeImages: false }),
+      await processReadImage(source, "image/png", { autoResizeImages: false }, BACKGROUND_CONTEXT),
     );
 
     expect(result).toEqual({
@@ -59,7 +60,7 @@ describe("read image processor", () => {
     const source = await png(MAX_READ_IMAGE_EDGE_PX + 401, 1_200);
 
     const result = resultImage(
-      await processReadImage(source, "image/png", { autoResizeImages: true }),
+      await processReadImage(source, "image/png", { autoResizeImages: true }, BACKGROUND_CONTEXT),
     );
     const output = await sharp(Buffer.from(result.data, "base64")).metadata();
 
@@ -85,7 +86,7 @@ describe("read image processor", () => {
     );
 
     const result = resultImage(
-      await processReadImage(source, "image/png", { autoResizeImages: true }),
+      await processReadImage(source, "image/png", { autoResizeImages: true }, BACKGROUND_CONTEXT),
     );
     const output = await sharp(Buffer.from(result.data, "base64")).metadata();
 
@@ -105,7 +106,7 @@ describe("read image processor", () => {
     expect(source.byteLength).toBeLessThan(MAX_READ_IMAGE_BASE64_BYTES);
 
     const result = resultImage(
-      await processReadImage(source, "image/png", { autoResizeImages: true }),
+      await processReadImage(source, "image/png", { autoResizeImages: true }, BACKGROUND_CONTEXT),
     );
     const output = await sharp(Buffer.from(result.data, "base64")).metadata();
 
@@ -118,7 +119,7 @@ describe("read image processor", () => {
 
   it("omits a BMP that the image codec cannot convert instead of sending its unsupported mime type", async () => {
     await expect(
-      processReadImage(tinyBmp(), "image/bmp", { autoResizeImages: true }),
+      processReadImage(tinyBmp(), "image/bmp", { autoResizeImages: true }, BACKGROUND_CONTEXT),
     ).resolves.toEqual({
       ok: false,
       message: "[Image omitted: could not make a provider-safe copy.]",
@@ -129,7 +130,7 @@ describe("read image processor", () => {
     const processor = createReadImageProcessor({ maxBase64Bytes: 64, maxEdgePx: 2 });
 
     await expect(
-      processor(await png(5, 5), "image/png", { autoResizeImages: true }),
+      processor(await png(5, 5), "image/png", { autoResizeImages: true }, BACKGROUND_CONTEXT),
     ).resolves.toEqual({
       ok: false,
       message: "[Image omitted: could not make a provider-safe copy.]",
@@ -138,9 +139,12 @@ describe("read image processor", () => {
 
   it("omits malformed image bytes instead of returning an unsafe tool result", async () => {
     await expect(
-      processReadImage(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), "image/png", {
-        autoResizeImages: true,
-      }),
+      processReadImage(
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+        "image/png",
+        { autoResizeImages: true },
+        BACKGROUND_CONTEXT,
+      ),
     ).resolves.toEqual({
       ok: false,
       message: "[Image omitted: could not make a provider-safe copy.]",

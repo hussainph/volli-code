@@ -82,9 +82,9 @@ describe("commandPaletteFilter", () => {
       "Alpha",
     ]);
     const sessionScore = commandPaletteFilter(
-      "session Session Alpha · Project Session Alpha",
+      "session Session Alpha · Board Session Alpha",
       "session",
-      ["Session", "Alpha · Project Session", "Alpha"],
+      ["Session", "Alpha · Board Session", "Alpha"],
     );
     expect(ticketScore).toBeGreaterThan(sessionScore);
     expect(commandPaletteFilter("ticket VC-1 Auth Alpha", "session", [])).toBe(0);
@@ -154,8 +154,8 @@ describe("row match text", () => {
     });
   });
 
-  it("gives a ticket session its ticket context and a project session its project", () => {
-    expect(sessionRowContext(sessionItem())).toBe("Alpha · Project Session");
+  it("gives a ticket session its ticket context and a Board Session its project", () => {
+    expect(sessionRowContext(sessionItem())).toBe("Alpha · Board Session");
     expect(
       sessionRowContext(sessionItem({ ticketDisplayId: "ALP-1", ticketTitle: "Fix auth" })),
     ).toBe("ALP-1 · Fix auth");
@@ -163,8 +163,8 @@ describe("row match text", () => {
 
   it("builds a session row's value and keywords from the same context line", () => {
     expect(sessionRowMatch(sessionItem())).toEqual({
-      value: "session Plan the migration Alpha · Project Session Alpha",
-      keywords: ["Plan the migration", "Alpha · Project Session", "Alpha"],
+      value: "session Plan the migration Alpha · Board Session Alpha",
+      keywords: ["Plan the migration", "Alpha · Board Session", "Alpha"],
     });
   });
 

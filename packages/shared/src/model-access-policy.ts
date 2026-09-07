@@ -9,12 +9,12 @@
  * two policies wearing one name.
  */
 
-import type { ModelSelection } from "./agent-runtime";
+import type { ModelSelection, SessionRole } from "./agent-runtime";
 
 /**
  * The three jobs a default model is configured for.
  *
- * - `global` — orchestration: Home/project chats, and the base every other
+ * - `global` — orchestration: Board chats opened from Home, and the base every other
  *   purpose falls back to when it has no explicit choice of its own.
  * - `ticket` — execution: Ticket Sessions, the structured coding runs.
  * - `utility` — cost-efficient background work.
@@ -39,7 +39,7 @@ export const EMPTY_MODEL_ACCESS_DEFAULTS: ModelAccessDefaults = {
  * The default a purpose resolves to, or null when nothing is configured for it.
  *
  * `ticket` and `utility` fall back to `global` BY DEFINITION, not silently: an
- * unset ticket default *means* "use the project default", which is what the
+ * unset ticket default *means* "use the Board default", which is what the
  * settings row says when it is unset. What never happens is a model the user
  * configured nowhere — a fully unset profile resolves null, and the caller
  * refuses rather than substitutes (the DEFAULT_MODEL_REQUIRED invariant).
@@ -50,6 +50,23 @@ export function resolveDefaultModel(
 ): ModelSelection | null {
   return purpose === "global" ? defaults.global : (defaults[purpose] ?? defaults.global);
 }
+
+/**
+ * Which purpose's default a Role reads (VC-53, VC-9): orchestration for a
+ * Board Session, execution for a Ticket Session, and the cost-efficient
+ * `utility` rung for a Subagent Session — a bounded delegation is exactly the
+ * background work that purpose was named for. Total over {@link SessionRole},
+ * so the next Role is a decision here rather than a silent `global`.
+ */
+export function modelPurposeForRole(role: SessionRole): ModelPurpose {
+  return MODEL_PURPOSE_FOR_ROLE[role];
+}
+
+const MODEL_PURPOSE_FOR_ROLE: Readonly<Record<SessionRole, ModelPurpose>> = Object.freeze({
+  project: "global",
+  ticket: "ticket",
+  subagent: "utility",
+});
 
 /**
  * The refusal every structured Session start states when no default resolves.

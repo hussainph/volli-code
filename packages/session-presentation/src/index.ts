@@ -20,6 +20,7 @@
  * apps/desktop's chat/transport.ts and stores/chat-sessions.ts.
  */
 export * from "./activity";
+export * from "./activity-island";
 export * from "./client";
 export * from "./compaction-boundary";
 export * from "./composer-effort";
@@ -29,8 +30,10 @@ export * from "./interaction";
 export * from "./markdown-source";
 export * from "./message-projection";
 export * from "./registry";
+export * from "./reasoning-drop-notice";
 export * from "./session-model";
 export * from "./session-slice";
 export * from "./surface-store";
 export * from "./transcript";
+export * from "./transcript-rows";
 export * from "./wire";

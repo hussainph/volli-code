@@ -6,6 +6,7 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isDefaultModelRequired,
   isModelHidden,
+  modelPurposeForRole,
   resolveDefaultModel,
   visibleModels,
   withModelVisibility,
@@ -39,6 +40,14 @@ describe("resolveDefaultModel", () => {
   it("resolves null — never a substitute — when nothing is configured", () => {
     expect(resolveDefaultModel(EMPTY_MODEL_ACCESS_DEFAULTS, "global")).toBeNull();
     expect(resolveDefaultModel(EMPTY_MODEL_ACCESS_DEFAULTS, "ticket")).toBeNull();
+  });
+});
+
+describe("modelPurposeForRole", () => {
+  it("reads a Subagent Session off the utility rung — cost-efficient background work (VC-9)", () => {
+    expect(modelPurposeForRole("project")).toBe("global");
+    expect(modelPurposeForRole("ticket")).toBe("ticket");
+    expect(modelPurposeForRole("subagent")).toBe("utility");
   });
 });
 

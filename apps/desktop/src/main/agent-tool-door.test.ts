@@ -36,6 +36,7 @@ import { createAutomationRunner } from "./automations/run";
 import { SqliteAutomationLedger } from "./automations/sqlite-ledger";
 import {
   getAutomation,
+  getAutomationRun,
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForTicket,
@@ -44,6 +45,7 @@ import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { insertProject, listProjects } from "./db/projects-repo";
 import { getTicket, insertTicket } from "./db/tickets-repo";
+import { DelegateSessionError } from "./session-runtime/delegate-session";
 import type { TicketSessionDelegationClaims } from "./session-runtime/delegation-policy";
 import type { SessionStartInput } from "./session-runtime/sessions";
 import { StructuredSessionsError } from "./session-runtime/sessions";
@@ -57,7 +59,7 @@ afterEach(() => {
 
 const STARTED_SESSION = "abcdef12-3456-7890-abcd-ef1234567890";
 
-/** The Project Session doing the calling — identity the adapter closed over. */
+/** The Board Session doing the calling — identity the adapter closed over. */
 const CALLER: RuntimeSessionIdentity = {
   role: "project",
   sessionId: "caller-session",
@@ -80,7 +82,7 @@ const TICKET_CALLER: RuntimeSessionIdentity = {
  * The ledger a Ticket caller born with the Role default would meet.
  *
  * `startGrantScope` answers null by default because that is what a genuine
- * Project Session's row says: it was never born with a scoped grant. The one
+ * Board Session's row says: it was never born with a scoped grant. The one
  * test that needs the other answer is the orphaned-Ticket case, and it says so.
  */
 function grantingDelegation(
@@ -203,6 +205,7 @@ function harness(
     // operations; this suite proves only the door — identity binding, wording,
     // and the no-runtime refusal (which is what `null` exercises).
     supervise: () => null,
+    delegate: () => null,
   });
   const call = (
     input: Record<string, unknown>,
@@ -613,6 +616,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
   const runner = createAutomationRunner({
     engine,
     findAutomation: (automationId) => getAutomation(db, automationId),
+    findRun: (runId) => getAutomationRun(db, runId),
     findTicket: (ticketId) => {
       const found = getTicket(db, ticketId);
       return found === undefined ? undefined : { id: found.id, projectId: found.projectId };
@@ -649,7 +653,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     projects: () => listProjects(db),
     sessions: () => null,
     // Inert for the automation suite: its callers never reach `session.start`,
-    // and the defaults here are what an ordinary Project Session's rows say.
+    // and the defaults here are what an ordinary Board Session's rows say.
     delegation: grantingDelegation(),
     automations: () =>
       options.host === "absent"
@@ -668,6 +672,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     // Supervision's ports are inert here for the same reason `sessions` is:
     // this suite drives `automation.run` alone.
     supervise: () => null,
+    delegate: () => null,
   });
 
   async function save(input: {
@@ -1001,6 +1006,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       subscribeTicketWake: () => () => undefined,
+      delegate: () => null,
       supervise: () =>
         ({
           sessionEngine: {
@@ -1040,6 +1046,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
                 stopped: null,
                 modelSelection: null,
                 turnActive: true,
+                lastTurnOutcome: null,
                 authorityDenials: 0,
                 usage: {
                   inputTokens: 0,
@@ -1140,5 +1147,116 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       new AbortController().signal,
     );
     expect(stop.text).toContain("not available this launch");
+  });
+});
+
+describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
+  const CHILD_SESSION = "cccccccc-0000-0000-0000-000000000000";
+
+  function delegateHarness() {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", name: "Volli", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const delegated: unknown[] = [];
+    const db = ctx.db;
+    const door = createAgentToolDoor({
+      db,
+      projects: () => listProjects(db),
+      sessions: () => null,
+      delegation: grantingDelegation(),
+      automations: () => null,
+      actorTicketDisplay: () => null,
+      now: () => 1_000,
+      authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+      subscribeTicketWake: () => () => undefined,
+      supervise: () => null,
+      // The operation is proved in `delegate-session.test.ts`; this suite
+      // proves the door — identity binding, wording, and the refusals.
+      delegate: () => ({
+        delegate: async (input) => {
+          delegated.push(input);
+          if (input.task.includes("overflow")) {
+            throw new DelegateSessionError("Volli refused this delegation: still running.");
+          }
+          return {
+            childSessionId: CHILD_SESSION,
+            handle: CHILD_SESSION.slice(0, 8),
+            title: input.title ?? "Delegated task",
+            model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
+            state: "running",
+          };
+        },
+        liveChildren: () => [],
+        recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
+      }),
+    });
+    const call = (
+      input: Record<string, unknown>,
+      caller: RuntimeSessionIdentity = CALLER,
+      toolCallId = "tc-9",
+    ) =>
+      door(caller, { verb: "session.delegate", input, toolCallId }, new AbortController().signal);
+    return { call, door, delegated };
+  }
+
+  it("binds the caller as the parent and returns at once with the child's handle", async () => {
+    const h = delegateHarness();
+
+    const result = await h.call({
+      task: "Find where the auth token is refreshed",
+      title: "Token refresh hunt",
+      // Every field an attacker would want to set is ignored: the parent, the
+      // project and the Ticket come from the attachment.
+      parentSessionId: "somebody-else",
+      projectId: "project-two",
+    });
+
+    expect(h.delegated).toEqual([
+      expect.objectContaining({
+        operationId: "caller-session:tc-9",
+        parent: CALLER,
+        task: "Find where the auth token is refreshed",
+        title: "Token refresh hunt",
+        actor: { kind: "session", sessionId: "caller-session", ticketId: null },
+      }),
+    ]);
+    expect(result.text).toContain(`Delegated to subagent Session ${CHILD_SESSION.slice(0, 8)}`);
+    expect(result.text).toContain('"Token refresh hunt"');
+    // The two facts the model must act on: keep working, and the answer
+    // arrives as a message.
+    expect(result.text).toMatch(/arrive|delivered/);
+    expect(result.text).toMatch(/keep working|continue/i);
+    expect(result.text).not.toContain(CHILD_SESSION);
+    // The row's structured aside: the child's id to open and its name.
+    expect(result.details).toEqual({ sessionId: CHILD_SESSION, title: "Token refresh hunt" });
+  });
+
+  it("a Ticket Session delegates within its own Ticket", async () => {
+    const h = delegateHarness();
+
+    await h.call({ task: "Run the flaky test ten times and report" }, TICKET_CALLER);
+
+    expect(h.delegated[0]).toMatchObject({ parent: TICKET_CALLER });
+  });
+
+  it("refuses a missing task, an operation refusal, and a host without a runtime in words", async () => {
+    const h = delegateHarness();
+
+    expect((await h.call({})).text).toContain("`task` is required");
+    expect((await h.call({ task: "   " })).text).toContain("`task` is required");
+    expect((await h.call({ task: "overflow" })).text).toContain("still running");
+    expect((await h.call({ task: "x", model: { providerId: "anthropic" } })).text).toContain(
+      "`model` needs both",
+    );
+
+    const degraded = harness();
+    const result = await degraded.door(
+      CALLER,
+      { verb: "session.delegate", input: { task: "anything" }, toolCallId: "tc-1" },
+      new AbortController().signal,
+    );
+    expect(result.text).toContain("not available this launch");
   });
 });

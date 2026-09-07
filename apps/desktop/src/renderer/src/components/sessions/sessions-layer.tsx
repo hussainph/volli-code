@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { errorMessage } from "@volli/shared";
+
 import { ConfirmCloseDialog } from "@renderer/components/sessions/confirm-close-dialog";
 import { SessionSplitLayout } from "@renderer/components/sessions/session-split-layout";
 import {
@@ -21,8 +23,13 @@ import {
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
+import {
+  hydrateBackgroundShells,
+  subscribeBackgroundShells,
+} from "@renderer/stores/background-shells";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { subscribeWorktreePhases } from "@renderer/stores/worktree";
+import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { getEngine } from "@renderer/terminal/registry";
@@ -197,6 +204,21 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   // board's active-session ring both read what it feeds.
   React.useEffect(() => subscribeProjectSessionActivity(), []);
 
+  // Background shells (VC-270), pushed from main's one host for the reason
+  // the channels above are mounted here. Hydrated once behind the
+  // subscription, so a window opened after a shell started still lists it.
+  React.useEffect(() => {
+    const stop = subscribeBackgroundShells(window.api.shells);
+    void hydrateBackgroundShells(window.api.shells)
+      .then((result) => {
+        if (!result.ok) toastError(`Could not load background shells: ${result.error}`);
+      })
+      .catch((reason: unknown) => {
+        toastError(`Could not load background shells: ${errorMessage(reason)}`);
+      });
+    return stop;
+  }, []);
+
   // And the catalog those events are read against: which harnesses beyond the
   // four this renderer ships main will actually launch. Pulled once here so a
   // launch that never passes through a picker — a ticket dragged to Doing with
@@ -210,7 +232,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   // ⌘T / ⌥⌘T. Bound here rather than beside the other accelerators in the app
   // shell because this layer is already the app's one always-mounted component
   // — it owns the terminal, harness and worktree fan-outs for the same reason —
-  // and because the two things a press has to reach, the Project-Session boot
+  // and because the two things a press has to reach, the Board Session boot
   // paths and the surfaces they land on, are exactly what this half of Home
   // owns. One
   // listener, mounted once: a hook per control would count one chord as four
@@ -248,7 +270,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
 
   // ⌘D split, ⌘⌥arrow pane nav, ⌘+/-/0 font size — resolved off the focused
   // pane's data-* attributes, so it is surface-agnostic: the same handler drives
-  // Project Session panes and ticket panes (the overlay wires it too), routing
+  // Board Session panes and ticket panes (the overlay wires it too), routing
   // through the tab's own scope.
   const handleTerminalShortcut = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -323,7 +345,7 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
           className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background"
           onKeyDownCapture={handleTerminalShortcut}
         >
-          {/* Keep-alive: render every project's Project-Session split tree, and
+          {/* Keep-alive: render every project's Board Session split tree, and
               position each over the pane that published an anchor for it. A tab
               no pane is showing keeps its box hidden and its engine alive —
               which is the same statement `visible` makes to the tree inside. */}

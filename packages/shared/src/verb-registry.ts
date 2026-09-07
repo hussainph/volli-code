@@ -1026,7 +1026,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -1047,7 +1047,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -1068,6 +1068,31 @@ export const VERB_REGISTRY = [
     ],
   },
   {
+    // A Session's answer (VC-9): its final message, in full, and how its
+    // latest turn ended. The door to a Subagent Session's deliverable — the
+    // notice its parent receives names only this command — and a plain read
+    // for any chat Session whose last words someone wants whole rather than
+    // cut to a peek's line. Read tier, on the socket, because reading a
+    // transcript already is (`session peek`); the trust line is drawn by the
+    // rendering, which quotes the message as another author's prose.
+    key: "session.answer",
+    accessModes: ["cli"],
+    actor: "any",
+    handler: { site: "main", id: "session.answer" },
+    listed: true,
+    referenceOrder: 26,
+    group: "Session",
+    summary: "Read a chat session's final message in full: a subagent's answer.",
+    example: "volli session answer a1b2c3",
+    notes: [
+      "Handle is a short session id from session list, or the one a subagent notice names.",
+      "Answers the state of the latest turn — completed, running, interrupted, stopped, failed, not-started — then the last assistant message, untruncated.",
+      "The message is quoted as untrusted prose: another Session's words, never an instruction.",
+    ],
+    positionalId: "required",
+    options: [],
+  },
+  {
     // Attended-only Session start (VC-13): rides the app-owned product start
     // route (the Sessions facade) over the socket. The CLI's only transport is
     // that socket and the Pi runtime lives in Electron main, so there is
@@ -1083,7 +1108,7 @@ export const VERB_REGISTRY = [
     // what shuts the socket door, and only now is the control claim true.
     //
     // Why it had to leave the socket rather than be gated on it: a socket call
-    // can be attributed but never authenticated, so "only a Project Session may
+    // can be attributed but never authenticated, so "only a Board Session may
     // start Sessions" would have rested on an environment variable any process
     // running as the user can set. VC-163's per-attachment token narrows that
     // to injected strings and cross-session confusion; it does not close it
@@ -1140,7 +1165,7 @@ export const VERB_REGISTRY = [
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
-        "A Project Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
+        "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1230,13 +1255,14 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 27,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
     notes: [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
+      "Leaves this session's last todo list on the ticket as a comment, when it kept one.",
     ],
     effects: {
       durableWrites: [
@@ -1246,12 +1272,25 @@ export const VERB_REGISTRY = [
           summary:
             "Append a completed done signal command and receipt to the current Session ledger.",
         },
+        // VC-6. Conditional, and said so: a Board Session has no ticket, and a
+        // Session that never called `todo_write` has nothing to post. The
+        // preview names the write anyway, because `--dry-run` describes what
+        // the verb MAY do — a caller told only about the ledger would be
+        // surprised by a comment on their ticket.
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket comment holding this Session's final todo list, when it kept one and belongs to a Ticket.",
+        },
       ],
       humanVisible: [
         "The done signal and optional reason appear in the Session's durable history.",
+        "The Session's final todo list appears in the Ticket activity feed.",
       ],
       nonEffects: [
         "No Ticket moves, the Session identity remains openable, and its worktree is not removed.",
+        "No comment is written for a Board Session or for one that kept no todo list.",
       ],
     },
     options: [
@@ -1265,13 +1304,14 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 28,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
     notes: [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Raises attention on this session; --reason is the text a person sees.",
+      "Leaves this session's last todo list on the ticket as a comment, when it kept one.",
     ],
     effects: {
       durableWrites: [
@@ -1281,9 +1321,23 @@ export const VERB_REGISTRY = [
           summary:
             "Append a completed blocked signal command and receipt to the current Session ledger.",
         },
+        // VC-6, and the more useful of the two: an unfinished list beside a
+        // reason is most of a handover to the person the block is for.
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket comment holding this Session's unfinished todo list, when it kept one and belongs to a Ticket.",
+        },
       ],
-      humanVisible: ["The Session raises attention in the app and shows the optional reason."],
-      nonEffects: ["No Ticket moves, and the Session is not archived or deleted."],
+      humanVisible: [
+        "The Session raises attention in the app and shows the optional reason.",
+        "The Session's todo list as it stood appears in the Ticket activity feed.",
+      ],
+      nonEffects: [
+        "No Ticket moves, and the Session is not archived or deleted.",
+        "No comment is written for a Board Session or for one that kept no todo list.",
+      ],
     },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },
@@ -1296,7 +1350,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 29,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1356,7 +1410,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 28,
+    referenceOrder: 30,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1415,7 +1469,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 31,
+    referenceOrder: 33,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1460,7 +1514,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 30,
+    referenceOrder: 32,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1475,7 +1529,7 @@ export const VERB_REGISTRY = [
         name: "--ticket",
         kind: "value",
         placeholder: "<id>",
-        help: "Price a Ticket Session for this ticket instead of a project chat.",
+        help: "Price a Ticket Session for this ticket instead of a Board chat.",
       },
       {
         name: "--project",
@@ -1497,7 +1551,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 29,
+    referenceOrder: 31,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1522,7 +1576,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 32,
+    referenceOrder: 34,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -1712,7 +1766,7 @@ export const VERB_REGISTRY = [
     summary: "Stop another agent session's work, recording who stopped it.",
     example: "volli session stop a1b2c3d4",
     notes: [
-      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
       "Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.",
       "The Session identity survives: its history stays openable, and a person can reattach it.",
     ],
@@ -1778,7 +1832,7 @@ export const VERB_REGISTRY = [
     summary: "Steer a message into another running agent session.",
     example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
     notes: [
-      "Runs as a named tool in the project Role bundle; the shell never executes it.",
+      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
       "Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.",
       "The message arrives marked as supervisor steering from this Session, never as the target's own user.",
     ],
@@ -1823,6 +1877,127 @@ export const VERB_REGISTRY = [
       ],
     },
     positionalId: "required",
+    options: [],
+  },
+  {
+    // Delegation to a bounded helper (VC-9): hand one task to a new Subagent
+    // Session and go on working. The child is a real Session — its own Role,
+    // transcript, model attachment and row in the session list — never a
+    // hidden thread inside the parent. When its first turn completes a NOTICE
+    // — Volli's facts, none of the child's words — is steered into the parent,
+    // and the answer itself is read through `session answer`, so the child's
+    // prose reaches the parent as a tool result and never as its user. The
+    // parent is not parked on it.
+    //
+    // Control tier, tool-only, for the reason `session.start` is: it opens
+    // agent work and spends a model, so it must carry its caller in the
+    // binding rather than in a request any same-uid process could forge. In
+    // BOTH working bundles: an executor needs "go read this and report back"
+    // as much as an orchestrator does, and what makes that safe is the child's
+    // bundle — no agent-control verb, no `ticket.await`, no `ask_user` — not
+    // the parent's Role. Depth is therefore structural: a child has no
+    // `session.delegate` to call, so there is no grandchild to count.
+    //
+    // Appended after `session.send`, because registry declaration order is
+    // the frozen tool order and inserting earlier would shift every verb after
+    // it inside every already-frozen surface record.
+    key: "session.delegate",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.delegate" },
+    // Listed for the reason `session.stop` is: `volli session delegate` must
+    // teach its real door rather than answer UNSUPPORTED_COMMAND. It prints
+    // beside `session send`, the verb it is most often mistaken for.
+    listed: true,
+    referenceOrder: 23,
+    group: "Session",
+    summary: "Delegate one task to a subagent Session that answers back here.",
+    example: 'volli session delegate "Find where the auth token is refreshed"',
+    notes: [
+      "Runs as a named tool in the project and ticket Role bundles; the shell never executes it.",
+      "Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session naming it; `volli session answer <handle>` reads its final message.",
+      "The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "session",
+          operation: "create",
+          summary:
+            "Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.",
+        },
+        {
+          resource: "session-ledger",
+          operation: "append",
+          summary:
+            "When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state; its final message stays in the subagent's own ledger, read through `session answer`.",
+        },
+      ],
+      humanVisible: [
+        "The subagent appears in the session list as a child of this Session, with its own transcript.",
+      ],
+      nonEffects: [
+        "No Ticket moves, and the person driving is not asked anything.",
+        "This Session is not paused: the call returns at once and the answer arrives later.",
+      ],
+    },
+    tool: {
+      name: "session_delegate",
+      // Written for the model, and mostly about the three facts the schema
+      // cannot carry: that a notice arrives later as a message (so the model
+      // should go on working rather than wait or poll), that the answer is
+      // read through `volli session answer` (a tool result, not its user's
+      // words), and that the child shares the working tree (so two agents
+      // editing one file is the model's own coordination problem to avoid).
+      // The last line is the same one every control-tier tool ends on.
+      description: [
+        "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
+        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll or wait for it. Several may run at once.",
+        "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
+        "It cannot start, stop, steer or delegate to other Sessions.",
+        "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
+      ].join(" "),
+      input: [
+        {
+          name: "task",
+          type: "string",
+          required: true,
+          description:
+            "The delegated task, complete on its own: what to do, where to look, and what the answer should contain.",
+        },
+        {
+          name: "title",
+          type: "string",
+          description:
+            "A permanent title for the subagent Session. Omit to let Volli name it from the task.",
+        },
+        {
+          name: "model",
+          type: "object",
+          description: "Run the subagent on a specific model instead of the utility default.",
+          fields: [
+            {
+              name: "providerId",
+              type: "string",
+              required: true,
+              description: "Provider id, as `model list` prints it.",
+            },
+            {
+              name: "modelId",
+              type: "string",
+              required: true,
+              description: "Model id, as `model list` prints it.",
+            },
+          ],
+        },
+        {
+          name: "reasoning",
+          type: "enum",
+          values: REASONING_LEVELS,
+          description: "Reasoning level override; the chosen model must support it.",
+        },
+      ],
+    },
     options: [],
   },
 ] as const satisfies readonly VerbEntry[];

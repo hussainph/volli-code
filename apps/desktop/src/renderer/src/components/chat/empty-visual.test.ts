@@ -9,7 +9,7 @@ import {
 } from "./empty-visual";
 
 describe("visualsForScope", () => {
-  it("offers a Project Session the whole field", () => {
+  it("offers a Board Session the whole field", () => {
     expect(visualsForScope("project")).toEqual(["streak", "board", "venue"]);
   });
 

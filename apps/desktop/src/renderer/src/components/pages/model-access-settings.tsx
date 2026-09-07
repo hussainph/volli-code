@@ -3,10 +3,10 @@
  * the visibility curation every composer honors, and the provider accounts
  * underneath all three.
  *
- * Three defaults instead of one (VC-53): orchestration (project chats),
+ * Three defaults instead of one (VC-53): orchestration (Board chats),
  * execution (Ticket Sessions), and cost-efficient utility work resolve
- * separately at Session creation. Ticket and Utility inherit the project
- * default until an explicit choice is made — the "Project default" option is
+ * separately at Session creation. Ticket and Utility inherit the Board
+ * default until an explicit choice is made — the "Board default" option is
  * that inheritance stated as a value, never a silent substitution.
  *
  * Compaction is one switch, not a per-model surface. Per-model reserve
@@ -88,7 +88,7 @@ export const PURPOSE_ROWS: readonly {
   label: string;
   hint?: string;
 }[] = [
-  { purpose: "global", label: "Project chats" },
+  { purpose: "global", label: "Board chats" },
   { purpose: "ticket", label: "Ticket Sessions" },
   {
     purpose: "utility",
@@ -97,7 +97,7 @@ export const PURPOSE_ROWS: readonly {
   },
 ];
 
-/** The Select value that says "no explicit choice — resolve the project default". */
+/** The Select value that says "no explicit choice — resolve the Board default". */
 const INHERIT_VALUE = "__project-default__";
 
 export function ModelAccessSettings({
@@ -382,7 +382,7 @@ function CatalogSection({
 /**
  * One purpose's choice: the model, and the reasoning level beside it.
  *
- * A ticket/utility row carries "Project default" as an ordinary option rather
+ * A ticket/utility row carries "Board default" as an ordinary option rather
  * than a blank: unset is a real, resolvable value, and a Select that shows
  * nothing when the purpose inherits would read as unconfigured — which is the
  * one thing it is not.
@@ -453,7 +453,7 @@ function DefaultModelRow({
           <SelectValue placeholder="Choose a model" />
         </SelectTrigger>
         <SelectContent>
-          {inheritable ? <SelectItem value={INHERIT_VALUE}>Project default</SelectItem> : null}
+          {inheritable ? <SelectItem value={INHERIT_VALUE}>Board default</SelectItem> : null}
           {offerable.map((model) => (
             <SelectItem key={modelKey(model)} value={modelKey(model)}>
               {modelOptionLabel(model, providers)}

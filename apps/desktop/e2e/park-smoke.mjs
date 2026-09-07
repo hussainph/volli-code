@@ -22,23 +22,9 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-import { _electron } from "playwright-core";
-
-const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const APP_DIR = join(REPO, "apps", "desktop");
-const ELECTRON = join(
-  APP_DIR,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+import { launch as launchSmokeApp, launchEnvFor } from "./lib/smoke-kit.mjs";
 
 // Shrunk timers: idle after 3s, sweep every 1s → auto-park lands ~5s after the
 // last activity (threshold + two quiet CPU samples). The breathe window is
@@ -150,30 +136,26 @@ async function main() {
     },
   ];
 
-  const dbDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-db-"));
-  const env = {
-    ...process.env,
-    VOLLI_DB_PATH: join(dbDir, "volli.db"),
-    VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
-    VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
-    VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
-    // The nc/timer sessions run foreground work; without this, teardown's
-    // app.close() would hang forever on the busy-session quit confirm.
-    VOLLI_SKIP_CLOSE_CONFIRM: "1",
-  };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
-  }
-
   // An isolated Chromium profile. Sharing <userData> with a Volli the owner
   // already has open loses the single-instance lock, so the launch quits at
   // exit code 0 before its first window — surfacing only as "Target page,
   // context or browser has been closed", which reads like a crash in the app.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-park-smoke-profile-"));
-  const app = await _electron.launch({
-    executablePath: ELECTRON,
-    args: [APP_DIR, `--user-data-dir=${profileDir}`],
-    env,
+  const env = launchEnvFor(join(profileDir, "volli.db"), {
+    VOLLI_PARK_IDLE_MS: String(PARK_IDLE_MS),
+    VOLLI_PARK_SWEEP_MS: String(PARK_SWEEP_MS),
+    VOLLI_PARK_BREATHE_MS: String(PARK_BREATHE_MS),
+    // launchEnvFor also skips the busy-session quit confirm: these nc/timer
+    // sessions run foreground work and app.close() cannot answer a native modal.
+  });
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("CLAUDECODE") || key.startsWith("CLAUDE_CODE")) delete env[key];
+  }
+
+  const app = await launchSmokeApp({
+    dbPath: join(profileDir, "volli.db"),
+    userDataDir: profileDir,
+    extraEnv: env,
   });
 
   try {
@@ -191,7 +173,7 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     await sleep(1500);
 
-    // === Setup: two Project Session tabs, each writing its shell pid to a marker ======
+    // === Setup: two Board Session tabs, each writing its shell pid to a marker ======
     // The surface's default Session is a structured chat (which, with no
     // default model in this profile, refuses into the empty state) — parking
     // is a terminal-only tier, so tab 1 is minted explicitly through the
@@ -213,7 +195,7 @@ async function main() {
     await page.keyboard.press("Enter");
     const pid1 = await shellPidFromMarker(marker1);
 
-    // The Project Session strip's control is a split button — its press starts a chat,
+    // The Board Session strip's control is a split button — its press starts a chat,
     // its caret half opens the kinds. Parking is a terminal-only tier, so this
     // goes through the caret. The item's name carries its chord, hence the regex.
     await page.getByLabel("Other things to open").click();

@@ -354,7 +354,10 @@ function chat(
     // together in main, and a fixture that split them would be testing a state
     // the app cannot produce.
     waitingOn: null,
+    outcome: null,
     bornTicketless: overrides.ticketId === null,
+    role: overrides.ticketId === null ? "project" : "ticket",
+    parentSessionId: null,
     ...overrides,
   };
 }

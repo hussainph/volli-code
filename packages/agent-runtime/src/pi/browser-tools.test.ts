@@ -1,11 +1,13 @@
 import {
   NON_CODING_TOOL_IDS,
+  type RuntimeBrowserActResult,
+  type RuntimeBrowserHoldPort,
   type RuntimeBrowserPort,
   type RuntimeBrowserSnapshot,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { BrowserRefusal } from "../browser/refusal";
-import { createBrowserTool, BROWSER_TOOL_NAMES } from "./browser-tools";
+import { createBrowserHoldTool, createBrowserTool, BROWSER_TOOL_NAMES } from "./browser-tools";
 import { createSessionTools } from "./tools";
 
 /** The method every fresh fixture port answers with: a loud failure. */
@@ -25,16 +27,28 @@ function unusedPort(): RuntimeBrowserPort {
   };
 }
 
+/** The same, carrying the hold pair a Session born since VC-239 is handed. */
+function unusedHoldPort(): RuntimeBrowserHoldPort {
+  return { ...unusedPort(), acquire: unused, release: unused };
+}
+
 function snapshot(overrides: Partial<RuntimeBrowserSnapshot> = {}): RuntimeBrowserSnapshot {
   return {
     tabId: "tab-1",
     url: "http://localhost:5173/",
     title: "Fixture App",
+    ownerSessionId: "s1",
+    error: null,
     snapshotText: '- button "Save" [ref=e2]',
     generation: 4,
     truncated: false,
+    picture: null,
     ...overrides,
   };
+}
+
+function acted(overrides: Partial<RuntimeBrowserActResult> = {}): RuntimeBrowserActResult {
+  return { ...snapshot(), target: null, ...overrides };
 }
 
 /** The text half of a tool result, joined the way the model reads it. */
@@ -59,7 +73,7 @@ function lastLine(text: string): string {
 
 describe("browser tools", () => {
   it("reaches the Session's surface through createSessionTools when the one port is wired", async () => {
-    const port = unusedPort();
+    const port = unusedHoldPort();
     port.tabs = async () => ({ tabs: [] });
     const tools = createSessionTools({ tools: { tools: [] }, browser: port }, {} as never);
 
@@ -70,10 +84,11 @@ describe("browser tools", () => {
     expect(listing?.content[0]).toMatchObject({ type: "text" });
   });
 
-  it("names all six browser tools in the Authority vocabulary, in the offered order", () => {
+  it("names all eight browser tools in the Authority vocabulary, in the offered order", () => {
     // The names the factory answers to are the names the vocabulary appended,
     // in the same order sessionToolBindings offers them — the Cache Prefix is
-    // computed over that order, so this list is durable product shape.
+    // computed over that order, so this list is durable product shape. The
+    // hold pair (VC-239) sits last for exactly that reason.
     expect(BROWSER_TOOL_NAMES).toEqual([
       "browser_tabs",
       "browser_navigate",
@@ -81,11 +96,67 @@ describe("browser tools", () => {
       "browser_act",
       "browser_screenshot",
       "browser_console",
+      "browser_acquire",
+      "browser_release",
     ]);
     for (const name of BROWSER_TOOL_NAMES) expect(NON_CODING_TOOL_IDS).toContain(name);
     for (const name of BROWSER_TOOL_NAMES) {
-      expect(createBrowserTool(name, unusedPort()).name).toBe(name);
+      const tool =
+        name === "browser_acquire" || name === "browser_release"
+          ? createBrowserHoldTool(name, unusedHoldPort())
+          : createBrowserTool(name, unusedPort());
+      expect(tool.name).toBe(name);
     }
+  });
+
+  it("keeps a Session frozen with six tools at six: no hold pair without the port's pair", () => {
+    // The port IS the capability. A port handed over without `acquire` and
+    // `release` — what a pre-VC-239 frozen surface gets — binds the six and
+    // no more, so the recorded tool array is the one the provider sees.
+    const tools = createSessionTools({ tools: { tools: [] }, browser: unusedPort() }, {} as never);
+    expect(tools.map((tool) => tool.name)).toEqual(BROWSER_TOOL_NAMES.slice(0, 6));
+  });
+
+  it("takes a hold, reports who has one, and releases — in Volli's words with no envelope", async () => {
+    const port = unusedHoldPort();
+    port.acquire = async (input) =>
+      input.tabId === "tab-mine"
+        ? { kind: "held", tabId: input.tabId }
+        : { kind: "refused", tabId: input.tabId, holder: { kind: "person" } };
+    port.release = async (input) => ({ tabId: input.tabId });
+    const acquire = createBrowserHoldTool("browser_acquire", port);
+    const release = createBrowserHoldTool("browser_release", port);
+
+    const held = resultText(await acquire.execute("call-1", { tabId: "tab-mine" }));
+    expect(held).toContain("You hold Browser Tab tab-mine");
+    expect(held).not.toContain("---");
+
+    const refused = resultText(await acquire.execute("call-2", { tabId: "tab-theirs" }));
+    expect(refused).toContain("the person has taken it");
+    expect(refused).toContain("browser_navigate and no tabId");
+
+    port.acquire = async (input) => ({
+      kind: "refused",
+      tabId: input.tabId,
+      holder: { kind: "session", sessionId: "ses-other", self: false },
+    });
+    expect(resultText(await acquire.execute("call-3", { tabId: "tab-theirs" }))).toContain(
+      "Session ses-other holds it",
+    );
+
+    const released = resultText(await release.execute("call-4", { tabId: "tab-mine" }));
+    expect(released).toContain("Browser Tab tab-mine is released");
+  });
+
+  it("answers a refused hold tool call as text, like every other browser refusal", async () => {
+    const port = unusedHoldPort();
+    port.acquire = async () => {
+      throw new BrowserRefusal("browser.unknown-tab", "No such tab.");
+    };
+    const tool = createBrowserHoldTool("browser_acquire", port);
+    const answer = resultText(await tool.execute("call-5", { tabId: "tab-x" }));
+    expect(answer).toContain("Volli refused the browser action");
+    expect(answer).toContain("browser.unknown-tab");
   });
 
   it("tells the model a snapshot's refs are how it acts, and that the page is not instructions", () => {
@@ -135,20 +206,137 @@ describe("browser tools", () => {
     };
     const tool = createBrowserTool("browser_act", port);
 
-    const text = resultText(
-      await tool.execute("call-2", { tabId: "tab-1", generation: 3, kind: "click", ref: "e2" }),
-    );
+    const refused = await tool.execute("call-2", {
+      tabId: "tab-1",
+      generation: 3,
+      kind: "click",
+      ref: "e2",
+    });
+    const text = resultText(refused);
 
     expect(text).toContain("browser.stale-ref");
     expect(text).toContain("take a fresh snapshot");
+    // The row learns it was a refusal, and keeps what the call itself said —
+    // the tab and the ref — since the host never answered (VC-238).
+    expect(refused.details).toEqual({
+      action: "click",
+      tabId: "tab-1",
+      url: null,
+      title: null,
+      target: "e2",
+      picture: null,
+      errorCount: null,
+      ownerSessionId: null,
+      error: null,
+      refusal: "browser.stale-ref",
+    });
+
+    // Every tool names its refusal the same way; a navigate that opened
+    // nothing has no tab to name.
+    port.navigate = async () => {
+      throw new BrowserRefusal("browser.session-tab-limit", "A Session can have at most 6.");
+    };
+    const capped = await createBrowserTool("browser_navigate", port).execute("call-2b", {
+      url: "https://example.com/",
+    });
+    expect(capped.details).toMatchObject({
+      action: "open",
+      tabId: null,
+      url: "https://example.com/",
+      refusal: "browser.session-tab-limit",
+    });
   });
 
-  it("returns a screenshot as an image the model can see, beside Volli's provenance", async () => {
+  it("names the page a refused action was aimed at, which the call's own arguments cannot (VC-238)", async () => {
+    const port = unusedPort();
+    port.act = async () => {
+      throw new BrowserRefusal("browser.stale-ref", "Take a fresh snapshot.", {
+        tabId: "tab-1",
+        url: "https://example.com/sign-in",
+        title: "Sign in \u2014 Example",
+        ownerSessionId: "s-child",
+        error: null,
+      });
+    };
+
+    const refused = await createBrowserTool("browser_act", port).execute("call-2c", {
+      tabId: "tab-1",
+      generation: 3,
+      kind: "click",
+      ref: "e2",
+    });
+
+    // `Clicked e2 · refused` with no page was the whole of the row before this.
+    expect(refused.details).toMatchObject({
+      action: "click",
+      tabId: "tab-1",
+      url: "https://example.com/sign-in",
+      title: "Sign in \u2014 Example",
+      target: "e2",
+      ownerSessionId: "s-child",
+      refusal: "browser.stale-ref",
+    });
+  });
+
+  it("keeps the model's own target on a refused navigation, rather than the page it stayed on", async () => {
+    const port = unusedPort();
+    port.navigate = async () => {
+      throw new BrowserRefusal("browser.navigation-policy", "http and https only.", {
+        tabId: "tab-1",
+        url: "https://example.com/current",
+        title: "Current",
+        ownerSessionId: null,
+        error: null,
+      });
+    };
+
+    const refused = await createBrowserTool("browser_navigate", port).execute("call-2d", {
+      tabId: "tab-1",
+      url: "file:///etc/passwd",
+    });
+
+    // A navigation refused FOR its target must name that target; the tab and
+    // its owner still come from the page the port had in hand.
+    expect(refused.details).toMatchObject({
+      action: "open",
+      tabId: "tab-1",
+      url: "file:///etc/passwd",
+      title: "Current",
+      refusal: "browser.navigation-policy",
+    });
+  });
+
+  it("carries the tab's owner and its load failure onto the row, so the card need not guess", async () => {
+    const port = unusedPort();
+    port.navigate = async () =>
+      snapshot({
+        ownerSessionId: "s-child",
+        error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+        picture: "picture-9",
+      });
+
+    const opened = await createBrowserTool("browser_navigate", port).execute("call-2e", {
+      url: "https://nowhere.example/",
+    });
+
+    expect(opened.details).toMatchObject({
+      action: "open",
+      ownerSessionId: "s-child",
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+      picture: "picture-9",
+    });
+  });
+
+  it("returns a screenshot as an image the model can see, beside Volli's provenance, and names the kept picture", async () => {
     const port = unusedPort();
     port.screenshot = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s-child",
+      error: null,
       base64Png: "aGVsbG8=",
+      picture: "picture-3",
       width: 800,
       height: 600,
     });
@@ -159,28 +347,83 @@ describe("browser tools", () => {
     const image = result.content.find((entry) => entry.type === "image");
     expect(image).toMatchObject({ type: "image", data: "aGVsbG8=", mimeType: "image/png" });
     expect(resultText(result)).toContain("http://localhost:5173/");
+    // The card's half of the same picture: the host's id, never the bytes twice.
+    expect(result.details).toEqual({
+      action: "screenshot",
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      target: null,
+      picture: "picture-3",
+      errorCount: null,
+      // The PORT's answer, not a guess here: without it the card renders a
+      // child Session's tab as the person's own once the tab is gone.
+      ownerSessionId: "s-child",
+      error: null,
+      refusal: null,
+    });
+    // The description stays honest with what ships: the person sees the
+    // picture in the transcript card, not in the tool row's raw payload.
+    expect(tool.description).toContain("in the chat");
   });
 
-  it("lists tabs with their titles enveloped, and says plainly when none are open", async () => {
+  it("lists tabs with their titles enveloped, naming each owner, and says plainly when none are open", async () => {
     const port = unusedPort();
     port.tabs = async () => ({
       tabs: [
-        { tabId: "tab-1", url: "https://example.com/", title: "Docs", createdBy: "user" },
-        { tabId: "tab-2", url: "http://localhost:5173/", title: "App", createdBy: "session" },
+        {
+          tabId: "tab-1",
+          url: "https://example.com/",
+          title: "Docs",
+          createdBy: "user",
+          ownerSessionId: null,
+          heldBy: null,
+        },
+        {
+          tabId: "tab-2",
+          url: "http://localhost:5173/",
+          title: "App",
+          createdBy: "session",
+          ownerSessionId: "ses-me",
+          heldBy: { kind: "session", sessionId: "ses-me", self: true },
+        },
+        {
+          tabId: "tab-3",
+          url: "http://localhost:5173/admin",
+          title: "Admin",
+          createdBy: "session",
+          ownerSessionId: "ses-other",
+          heldBy: { kind: "session", sessionId: "ses-other", self: false },
+        },
+        {
+          tabId: "tab-4",
+          url: "https://example.com/mine",
+          title: "Mine",
+          createdBy: "user",
+          ownerSessionId: null,
+          heldBy: { kind: "person" },
+        },
       ],
     });
     const tool = createBrowserTool("browser_tabs", port);
 
-    const listing = resultText(await tool.execute("call-5", {}));
+    const result = await tool.execute("call-5", {});
+    const listing = resultText(result);
 
-    // Ids and URLs are Volli's records; the titles are the pages talking, so
-    // every listing line sits inside the markers.
+    // Ids, URLs, owners and holders are Volli's records; the titles are the
+    // pages talking, so every listing line sits inside the markers. The owner
+    // is named so a parent shown a child's tabs can tell them from its own
+    // (VC-238), and the holder so contention is visible before a write fails
+    // (VC-239) — a tab can be owned by a Session and held by nobody.
     expect(enveloped(listing)).toBe(
       [
-        "tab-1 (opened by user) — https://example.com/ — title: Docs",
-        "tab-2 (opened by session) — http://localhost:5173/ — title: App",
+        "tab-1 (opened by user, free) — https://example.com/ — title: Docs",
+        "tab-2 (opened by Session ses-me, held by you) — http://localhost:5173/ — title: App",
+        "tab-3 (opened by Session ses-other, held by Session ses-other) — http://localhost:5173/admin — title: Admin",
+        "tab-4 (opened by user, held by the person) — https://example.com/mine — title: Mine",
       ].join("\n"),
     );
+    expect(result.details).toMatchObject({ action: "tabs", tabId: null, url: null });
 
     port.tabs = async () => ({ tabs: [] });
     const empty = resultText(await tool.execute("call-6", {}));
@@ -198,8 +441,12 @@ describe("browser tools", () => {
     };
     const tool = createBrowserTool("browser_navigate", port);
 
-    await tool.execute("call-7", { url: "http://localhost:5173/" });
-    await tool.execute("call-8", { tabId: "tab-1", action: "back" });
+    const opened = await tool.execute("call-7", { url: "http://localhost:5173/" });
+    const back = await tool.execute("call-8", { tabId: "tab-1", action: "back" });
+    // The row reads the action from the details, not from the model's call:
+    // an open and a history move on the same tab are different rows.
+    expect(opened.details).toMatchObject({ action: "open", tabId: "tab-1" });
+    expect(back.details).toMatchObject({ action: "back", tabId: "tab-1" });
     const mixed = resultText(
       await tool.execute("call-9", { url: "http://localhost:5173/", action: "reload" }),
     );
@@ -220,6 +467,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [
         { level: "warn", text: "deprecated call" },
         { level: "error", text: "Uncaught Error: boom" },
@@ -228,9 +478,12 @@ describe("browser tools", () => {
     });
     const tool = createBrowserTool("browser_console", port);
 
-    const record = resultText(await tool.execute("call-11", { tabId: "tab-1" }));
+    const read = await tool.execute("call-11", { tabId: "tab-1" });
+    const record = resultText(read);
 
     expect(enveloped(record)).toBe("[warn] deprecated call\n[error] Uncaught Error: boom");
+    // Errors counted for the row's meta (`Read console · 1 error`).
+    expect(read.details).toMatchObject({ action: "console", tabId: "tab-1", errorCount: 1 });
     // The bound is stated in Volli's half, outside the markers a page's own
     // output could bury it inside.
     expect(record).toContain("most recent messages");
@@ -238,6 +491,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [{ level: "log", text: "whole record" }],
       truncated: false,
     });
@@ -247,6 +503,9 @@ describe("browser tools", () => {
     port.console = async () => ({
       tabId: "tab-1",
       url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
       messages: [],
       truncated: false,
     });
@@ -260,10 +519,12 @@ describe("browser tools", () => {
     port.snapshot = async () => snapshot({ truncated: true });
     const tool = createBrowserTool("browser_snapshot", port);
 
-    const cut = resultText(await tool.execute("call-13", { tabId: "tab-1" }));
+    const read = await tool.execute("call-13", { tabId: "tab-1" });
+    const cut = resultText(read);
 
     expect(cut).toContain("stopped printing the tree");
     expect(enveloped(cut)).not.toContain("stopped printing");
+    expect(read.details).toMatchObject({ action: "read", tabId: "tab-1", picture: null });
   });
 
   it("passes every optional action field through whole, and nothing invented", async () => {
@@ -272,7 +533,7 @@ describe("browser tools", () => {
     port.act = async (input) => {
       const { signal: _signal, ...rest } = input;
       acts.push(rest);
-      return snapshot();
+      return acted();
     };
     const tool = createBrowserTool("browser_act", port);
 
@@ -291,6 +552,15 @@ describe("browser tools", () => {
       direction: "down",
     });
     await tool.execute("call-16", { tabId: "tab-1", generation: 4, kind: "wait", waitMs: 250 });
+    // An element the page gave no name falls back to the ref the model used.
+    port.act = async () => acted({ target: { ref: "e7", name: null } });
+    const nameless = await tool.execute("call-16b", {
+      tabId: "tab-1",
+      generation: 4,
+      kind: "hover",
+      ref: "e7",
+    });
+    expect(nameless.details).toMatchObject({ action: "hover", target: "e7" });
 
     expect(acts).toEqual([
       { tabId: "tab-1", generation: 4, kind: "type", ref: "e2", text: "hello" },
@@ -347,18 +617,27 @@ describe("browser tools", () => {
     await expect(tool.execute("call-19", {})).rejects.toThrow("not meant to be called");
   });
 
-  it("acts and answers with the fresh snapshot the action produced", async () => {
+  it("acts and answers with the fresh snapshot the action produced, reporting what it touched", async () => {
     const acts: unknown[] = [];
     const port = unusedPort();
     port.act = async (input) => {
       acts.push(input);
-      return snapshot({ generation: 5, snapshotText: '- button "Saved" [ref=e2]' });
+      return acted({
+        generation: 5,
+        snapshotText: '- button "Saved" [ref=e2]',
+        target: { ref: "e2", name: "Save" },
+        picture: "picture-9",
+      });
     };
     const tool = createBrowserTool("browser_act", port);
 
-    const text = resultText(
-      await tool.execute("call-4", { tabId: "tab-1", generation: 4, kind: "click", ref: "e2" }),
-    );
+    const result = await tool.execute("call-4", {
+      tabId: "tab-1",
+      generation: 4,
+      kind: "click",
+      ref: "e2",
+    });
+    const text = resultText(result);
 
     // What the model said travels through whole, plus the signal and nothing else.
     expect(acts).toHaveLength(1);
@@ -366,5 +645,19 @@ describe("browser tools", () => {
     // The answer is the page as it now stands, refs re-minted.
     expect(text).toContain("generation 5");
     expect(enveloped(text)).toBe('- button "Saved" [ref=e2]');
+    // The row's facts, beside the model's text: the page's name for the
+    // element, and the picture the host took afterwards (VC-238).
+    expect(result.details).toEqual({
+      action: "click",
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      target: "Save",
+      picture: "picture-9",
+      errorCount: null,
+      ownerSessionId: "s1",
+      error: null,
+      refusal: null,
+    });
   });
 });

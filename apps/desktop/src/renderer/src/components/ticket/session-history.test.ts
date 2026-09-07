@@ -84,8 +84,11 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     live: true,
     activity: "idle",
     waitingOn: null,
+    outcome: null,
     lastActivityAt: 1,
     bornTicketless: false,
+    role: "ticket",
+    parentSessionId: null,
     ...overrides,
   };
 }
@@ -288,6 +291,25 @@ describe("sessionSourceLabel", () => {
   it("names a chat row without displaying its attachment state", () => {
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe("Chat");
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
+  });
+
+  // The Role is the row's source (VC-9): a helper another Session started is
+  // named as one, so a person scanning the list can tell it from the chat
+  // that started it.
+  it("names a Subagent Session by its Role and the parent it answers to", () => {
+    expect(
+      sessionSourceLabel({
+        kind: "chat",
+        record: chatRecord({
+          role: "subagent",
+          parentSessionId: "aaaaaaaa-0000-0000-0000-000000000000",
+        }),
+      }),
+    ).toBe("Subagent · of aaaaaaaa");
+    // A helper whose parent the ledger does not name is still a helper.
+    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ role: "subagent" }) })).toBe(
+      "Subagent",
+    );
   });
 });
 

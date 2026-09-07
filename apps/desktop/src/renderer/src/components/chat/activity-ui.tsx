@@ -15,6 +15,7 @@
  * artifact.
  */
 import {
+  BrowserIcon,
   CaretRightIcon,
   CheckCircleIcon,
   CircleDashedIcon,
@@ -36,13 +37,14 @@ import {
   XCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import type { ActivityKind } from "@volli/shared";
+import type { ActivityBrowse, ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
+  activityDescriptor,
   bundleNeedsAttention,
   bundleSummary,
   describeActivity,
@@ -53,12 +55,18 @@ import {
   type ActivityRow,
   type ActivityStatus,
   type BundleRow,
+  type DiffLine,
+  type NumberedLine,
   type SummarySegment,
   type SummaryTone,
 } from "@volli/session-presentation";
+import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
+import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
+
+import { TokenText, useHighlightedLines } from "./tool-output-highlight";
 
 /* ------------------------------------------------------------------- motion */
 
@@ -291,6 +299,7 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
   "fetch-url": GlobeSimpleIcon,
   plan: ListChecksIcon,
   delegate: UsersThreeIcon,
+  browse: BrowserIcon,
   other: WrenchIcon,
 };
 
@@ -403,25 +412,35 @@ function ObjectText({ value }: { value: string }) {
 export const ToolRow = React.memo(function ToolRow({
   part,
   onOpenFile,
+  onOpenSession,
   className,
 }: {
   part: DynamicToolUIPart;
   onOpenFile?(path: string): void;
+  /** Opens a `delegate` row's child Session (VC-9). */
+  onOpenSession?(sessionId: string): void;
   className?: string;
 }) {
   const row = describeActivity(part);
+  // A browse row that touched a tab opens onto the tab card (VC-238): the live
+  // tab, its owner, its picture, and the controls that show or close it.
+  const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable = row.detail !== null || row.command !== null;
+  const expandable = row.detail !== null || row.command !== null || card !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
     <div className={cn("group/row not-prose", className)}>
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
+        {/* A refused call and a page that would not load are both successes to
+            the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
-        {row.object ? <RowObject row={row} onOpenFile={onOpenFile} /> : null}
+        {row.object ? (
+          <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+        ) : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
         {row.meta ? (
@@ -435,20 +454,65 @@ export const ToolRow = React.memo(function ToolRow({
       </div>
       {expandable ? (
         <Disclosure open={open}>
-          <ToolDetail command={row.command} detail={row.detail} />
+          {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
+          <ToolDetail
+            kind={row.kind}
+            command={row.command}
+            detail={row.detail}
+            openPath={row.openPath}
+          />
         </Disclosure>
       ) : null}
     </div>
   );
 });
 
+const OBJECT_LINK_CLASS =
+  "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
 /**
- * The second click target. The object opens the real artifact; the row around it
- * only expands the inline detail.
+ * Volli's words for a refusal, for the card: the second line of the tool's own
+ * bounded summary, which is the rule's message the model was given. Nothing
+ * from the page is in it — a refused call never read one.
  */
-function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: string): void }) {
+function refusalNote(part: DynamicToolUIPart, facet: ActivityBrowse): string | null {
+  if (facet.refusal === null) return null;
+  const summary = activityDescriptor(part).outcome?.summary ?? null;
+  return summary === null ? null : (summary.split("\n")[1] ?? summary);
+}
+
+/**
+ * The second click target. The object opens the real artifact — a file, or a
+ * `delegate` row's child Session (VC-9); the row around it only expands the
+ * inline detail.
+ */
+function RowObject({
+  row,
+  onOpenFile,
+  onOpenSession,
+}: {
+  row: ActivityRow;
+  onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
+}) {
   const object = row.object ?? "";
   const openPath = row.openPath;
+  const openSessionId = row.openSessionId ?? null;
+  if (openSessionId !== null && onOpenSession) {
+    return (
+      <button
+        type="button"
+        title="Open the subagent Session"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenSession(openSessionId);
+        }}
+        className={OBJECT_LINK_CLASS}
+      >
+        <ObjectText value={object} />
+      </button>
+    );
+  }
   if (!openPath || !onOpenFile) {
     return (
       <code
@@ -469,7 +533,7 @@ function RowObject({ row, onOpenFile }: { row: ActivityRow; onOpenFile?(path: st
         // spaces, dot segments) — the title above keeps the raw spelling.
         onOpenFile(normalizeChatToolPath(openPath));
       }}
-      className="min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className={OBJECT_LINK_CLASS}
     >
       <ObjectText value={object} />
     </button>
@@ -583,54 +647,59 @@ function DetailFrame({ className, children }: React.PropsWithChildren<{ classNam
 }
 
 function ToolDetail({
+  kind,
   command,
   detail,
+  openPath,
 }: {
+  kind: ActivityKind;
   command: string | null;
   detail: ActivityDetail | null;
+  openPath: string | null;
 }) {
   return (
     <>
       {command !== null ? (
         <DetailFrame className="whitespace-pre-wrap text-foreground">{command}</DetailFrame>
       ) : null}
-      {detail !== null ? <ActivityOutputDetail detail={detail} /> : null}
+      {detail !== null ? (
+        <ActivityOutputDetail detail={detail} kind={kind} openPath={openPath} />
+      ) : null}
     </>
   );
 }
 
-function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
+/**
+ * The file's grammar, by the same rule the editor uses for its tabs (VC-125).
+ * Only the details that show source take it: a Read's numbered lines, an
+ * Edit's diff and a Write's content. Bash output, grep matches and raw
+ * signatures stay plain. `plaintext` and any id the chat highlighter does not
+ * carry resolve to no colouring, never to an error.
+ */
+function ActivityOutputDetail({
+  detail,
+  kind,
+  openPath,
+}: {
+  detail: ActivityDetail;
+  kind: ActivityKind;
+  openPath: string | null;
+}) {
+  const language = openPath === null ? null : languageForPath(openPath);
   switch (detail.view) {
     case "diff":
-      return (
-        <DetailFrame>
-          {detail.lines.map((line) => (
-            <div
-              key={line.id}
-              className={cn(
-                "whitespace-pre",
-                line.kind === "add" && "text-primary-text",
-                line.kind === "remove" && "text-destructive",
-                line.kind === "hunk" && "text-muted-foreground/50",
-                line.kind === "context" && "text-muted-foreground",
-              )}
-            >
-              {line.text || " "}
-            </div>
-          ))}
-        </DetailFrame>
-      );
+      return <DiffDetail lines={detail.lines} language={language} />;
     case "numbered":
-      return (
-        <DetailFrame>
-          {detail.lines.map((line) => (
-            <div key={line.number} className="flex gap-4 whitespace-pre">
-              <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
-                {line.number}
-              </span>
-              <span className="text-muted-foreground">{line.text || " "}</span>
-            </div>
-          ))}
+      return <NumberedDetail lines={detail.lines} language={language} />;
+    case "output":
+      // The current presenter carries a newly-written file as an `output`
+      // detail, while Bash/list/fetch also use that view for non-source text.
+      // The activity kind is the boundary between those two meanings.
+      return kind === "write-file" ? (
+        <SourceOutputDetail text={detail.text} language={language} />
+      ) : (
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground">
+          {detail.text}
         </DetailFrame>
       );
     case "matches":
@@ -659,13 +728,121 @@ function ActivityOutputDetail({ detail }: { detail: ActivityDetail }) {
           {detail.text}
         </DetailFrame>
       );
-    default:
-      return (
-        <DetailFrame className="whitespace-pre-wrap text-muted-foreground">
-          {detail.text}
-        </DetailFrame>
-      );
   }
+}
+
+/** File content from a Write row: no gutter or diff marker, just source lines. */
+function SourceOutputDetail({ text, language }: { text: string; language: string | null }) {
+  const lines = React.useMemo(() => {
+    let offset = 0;
+    return text.split("\n").map((line) => {
+      const sourceLine = { text: line, offset };
+      offset += line.length + 1;
+      return sourceLine;
+    });
+  }, [text]);
+  const tokens = useHighlightedLines(text, language);
+  return (
+    <DetailFrame>
+      {lines.map((line, index) => (
+        <div key={line.offset} data-line className="whitespace-pre text-muted-foreground">
+          <TokenText text={line.text} tokens={tokens?.[index]} />
+        </div>
+      ))}
+    </DetailFrame>
+  );
+}
+
+/**
+ * The lines go to the grammar as ONE text, not one call per line: a block
+ * comment or template literal that opens on line 3 and closes on line 9 only
+ * colours right when the tokenizer saw lines 4–8 in between. The result comes
+ * back per line, index-aligned with what went in.
+ */
+function NumberedDetail({ lines, language }: { lines: NumberedLine[]; language: string | null }) {
+  const text = React.useMemo(() => lines.map((line) => line.text).join("\n"), [lines]);
+  const tokens = useHighlightedLines(text, language);
+  return (
+    <DetailFrame>
+      {lines.map((line, index) => (
+        <div key={line.number} data-line className="flex gap-4 whitespace-pre">
+          <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
+            {line.number}
+          </span>
+          <span className="text-muted-foreground">
+            <TokenText text={line.text} tokens={tokens?.[index]} />
+          </span>
+        </div>
+      ))}
+    </DetailFrame>
+  );
+}
+
+/**
+ * The unified-diff marker is the first column: `+`, `-`, or the space in front
+ * of a context line. It is diff syntax, not the file's, so it is split off
+ * before the grammar sees the line and painted with the change kind's own
+ * tint. A context line that has no leading space (an empty line, git's
+ * `\ No newline at end of file`) has no marker to split.
+ */
+function splitDiffMarker(line: DiffLine): { marker: string; source: string } {
+  if (line.kind === "add" || line.kind === "remove" || line.text.startsWith(" ")) {
+    return { marker: line.text.slice(0, 1), source: line.text.slice(1) };
+  }
+  return { marker: "", source: line.text };
+}
+
+/**
+ * Tokens carry the syntax colour, so the change kind moves off the text and
+ * onto the row: a `/10` wash (DESIGN.md's tinted-row rung) under an add or a
+ * remove, and the marker keeps the text tint it always had. Hunk headers are
+ * diff syntax and never reach the grammar; they contribute an empty line to
+ * its input so the per-line result stays aligned with what is drawn.
+ */
+function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string | null }) {
+  const text = React.useMemo(
+    () =>
+      lines.map((line) => (line.kind === "hunk" ? "" : splitDiffMarker(line).source)).join("\n"),
+    [lines],
+  );
+  const tokens = useHighlightedLines(text, language);
+  return (
+    <DetailFrame>
+      {lines.map((line, index) => {
+        if (line.kind === "hunk") {
+          return (
+            <div key={line.id} data-line className="whitespace-pre text-muted-foreground/50">
+              {line.text || " "}
+            </div>
+          );
+        }
+        const { marker, source } = splitDiffMarker(line);
+        return (
+          <div
+            key={line.id}
+            data-line
+            className={cn(
+              "whitespace-pre",
+              line.kind === "add" && "bg-primary/10 text-foreground",
+              line.kind === "remove" && "bg-destructive/10 text-foreground",
+              line.kind === "context" && "text-muted-foreground",
+            )}
+          >
+            <span
+              data-marker
+              className={cn(
+                line.kind === "add" && "text-primary-text",
+                line.kind === "remove" && "text-destructive",
+              )}
+            >
+              {marker}
+            </span>
+            <TokenText text={source} tokens={tokens?.[index]} />
+          </div>
+        );
+      })}
+    </DetailFrame>
+  );
 }
 
 /* ------------------------------------------------------------------ bundle */
@@ -700,9 +877,11 @@ export const ActivityBundle = React.memo(
   function ActivityBundle({
     rows,
     onOpenFile,
+    onOpenSession,
   }: {
     rows: readonly BundleRow[];
     onOpenFile?(path: string): void;
+    onOpenSession?(sessionId: string): void;
   }) {
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
@@ -715,7 +894,12 @@ export const ActivityBundle = React.memo(
     const list = (
       <div className="space-y-1">
         {rows.map((row) => (
-          <BundleRowView key={row.key} row={row} onOpenFile={onOpenFile} />
+          <BundleRowView
+            key={row.key}
+            row={row}
+            onOpenFile={onOpenFile}
+            onOpenSession={onOpenSession}
+          />
         ))}
       </div>
     );
@@ -755,7 +939,9 @@ export const ActivityBundle = React.memo(
     );
   },
   (previous, next) =>
-    previous.onOpenFile === next.onOpenFile && sameBundleRows(previous.rows, next.rows),
+    previous.onOpenFile === next.onOpenFile &&
+    previous.onOpenSession === next.onOpenSession &&
+    sameBundleRows(previous.rows, next.rows),
 );
 
 /**
@@ -786,14 +972,16 @@ function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow
 const BundleRowView = React.memo(function BundleRowView({
   row,
   onOpenFile,
+  onOpenSession,
 }: {
   row: BundleRow;
   onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
 }) {
   if (row.kind === "reasoning") {
     return <ReasoningRow part={row.part} streaming={row.streaming} />;
   }
-  return <ToolRow part={row.part} onOpenFile={onOpenFile} />;
+  return <ToolRow part={row.part} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />;
 });
 
 /**

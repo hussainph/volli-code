@@ -21,7 +21,7 @@
  * renamable.
  */
 import * as React from "react";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 
@@ -30,8 +30,9 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
-import { sessionProvenanceHoverLine } from "@volli/shared";
+import { sessionProvenanceHoverLine, type BrowserTabHolder } from "@volli/shared";
 
+import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-dot";
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
@@ -132,6 +133,10 @@ export interface TicketTabDescriptor {
   browserTabId?: string;
   /** A `"browser"` tab's pushed loading state. */
   loading?: boolean;
+  /** A `"browser"` tab a Session owns and may be driving (VC-238). */
+  driven?: boolean;
+  /** Who holds a `"browser"` tab (VC-239), for the strip's holder dot. */
+  heldBy?: BrowserTabHolder | null;
   /**
    * A `"file"` tab in the replaceable preview slot (decision #56). Diff tabs
    * are always persistent and never set this. Preview labels render italic.
@@ -350,11 +355,7 @@ function TicketTab({
       }
       leading={
         tab.kind === "browser" ? (
-          <BrowserIcon
-            aria-hidden
-            weight="bold"
-            className="size-3 shrink-0 text-muted-foreground"
-          />
+          <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
           <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
         ) : null
@@ -368,6 +369,11 @@ function TicketTab({
         // worktree badge.
         sessionId !== null ? (
           <SessionProvenanceMark provenance={provenance} rowTitle={tab.label} />
+        ) : tab.kind === "browser" ? (
+          // A held Browser tab wears its holder's colour here (VC-239), on
+          // screen or not: the strip is where a person learns a Session is
+          // driving a tab they are not looking at.
+          <BrowserHolderDot holder={tab.heldBy ?? null} />
         ) : tab.badge === "worktree" ? (
           // A quiet dot marking a file resolved from the ticket's worktree copy
           // rather than the main checkout (decision #6).

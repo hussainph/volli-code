@@ -1,7 +1,10 @@
+// @vitest-environment jsdom
 import { ACTIVITY_METADATA_KEY, type ActivityDescriptor } from "@volli/shared";
 import type { DynamicToolUIPart } from "ai";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ActivityBundle, copyActivityObject, ToolRow } from "./activity-ui";
 
@@ -86,6 +89,202 @@ describe("ActivityBundle scroll window", () => {
     // `pointer-events-none` would match the button primitive's `[&_svg]:` rule.)
     expect(html).not.toContain("pointer-events-none absolute");
     expect(html).not.toContain("gradient");
+  });
+});
+
+/* ------------------------------------------------ expanded detail colouring */
+
+/** A token span as the chat's code fences paint one: a light colour plus the dark-theme variable. */
+const TOKEN_SELECTOR = '[style*="--shiki-dark"]';
+
+let container: HTMLElement | null = null;
+let root: Root | null = null;
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  container?.remove();
+  container = null;
+  root = null;
+  vi.unstubAllGlobals();
+});
+
+function mountExpanded(part: DynamicToolUIPart): HTMLElement {
+  act(() => {
+    root?.render(<ToolRow part={part} />);
+  });
+  const disclosure = container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]');
+  if (!disclosure) throw new Error("row has no disclosure");
+  act(() => disclosure.click());
+  return container as HTMLElement;
+}
+
+/**
+ * The first grammar load is real work (shiki compiles the TextMate regexes on
+ * first use), so the async tests get a budget above the poll's own deadline:
+ * `waitFor` must be the one to fail, or its loop outlives the test and its
+ * stray `act` scopes break the next one's mount.
+ */
+const HIGHLIGHT_WAIT_MS = 8000;
+const HIGHLIGHT_TEST_TIMEOUT_MS = HIGHLIGHT_WAIT_MS + 4000;
+
+/** The grammar loads off-thread; poll until the swap lands or give up loudly. */
+async function waitFor(predicate: () => boolean, timeoutMs = HIGHLIGHT_WAIT_MS): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for highlight");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+  }
+}
+
+const readTs: DynamicToolUIPart = {
+  ...row,
+  toolCallId: "read-ts",
+  output: "export const answer = 42;\n// the question",
+};
+
+const writeTs: DynamicToolUIPart = {
+  type: "dynamic-tool",
+  toolName: "write",
+  toolCallId: "write-ts",
+  state: "output-available",
+  // The real Write shape is a record, not a bare string: the file lives in
+  // `content` and the output is only the harness confirmation (VC-125).
+  input: { path: "src/created.ts", content: "export const created = true;\n" },
+  output: "ok",
+  toolMetadata: {
+    [ACTIVITY_METADATA_KEY]: {
+      ...descriptor,
+      kind: "write-file",
+      nativeToolName: "write",
+      subject: { label: "src/created.ts", path: "src/created.ts", lineRange: null },
+    },
+  } as DynamicToolUIPart["toolMetadata"],
+};
+
+const editTs: DynamicToolUIPart = {
+  type: "dynamic-tool",
+  toolName: "edit",
+  toolCallId: "edit-ts",
+  state: "output-available",
+  input: null,
+  output: "ok",
+  toolMetadata: {
+    [ACTIVITY_METADATA_KEY]: {
+      ...descriptor,
+      kind: "edit-file",
+      nativeToolName: "edit",
+      outcome: {
+        exitCode: null,
+        matchCount: null,
+        fileCount: null,
+        lineCount: null,
+        bytes: null,
+        addedLines: 1,
+        removedLines: 1,
+        diff: "@@ -1,2 +1,2 @@\n-const answer = 41;\n+const answer = 42;\n export {};",
+        summary: null,
+      },
+    },
+  } as DynamicToolUIPart["toolMetadata"],
+};
+
+describe("ToolRow expanded detail colouring (VC-125)", () => {
+  it(
+    "colours a Read row's lines with the file's grammar and keeps the number column",
+    async () => {
+      const host = mountExpanded(readTs);
+
+      // Plain text first: the row is readable before any grammar has loaded.
+      expect(host.textContent).toContain("export const answer = 42;");
+      expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
+
+      await waitFor(() => host.querySelector(TOKEN_SELECTOR) !== null);
+
+      const lines = Array.from(host.querySelectorAll("[data-line]"));
+      expect(lines).toHaveLength(2);
+      // The number column is untouched; the text beside it is now tokens that
+      // still spell the same line.
+      expect(lines[0]?.textContent).toMatch(/^1\s*export const answer = 42;$/);
+      expect(lines[1]?.textContent).toMatch(/^2\s*\/\/ the question$/);
+      expect(lines[0]?.querySelectorAll(TOKEN_SELECTOR).length).toBeGreaterThan(1);
+      // Light and dark are both in the token, the same way a code fence carries them.
+      const token = host.querySelector<HTMLElement>(TOKEN_SELECTOR);
+      expect(token?.getAttribute("style")).toMatch(/--sdm-c:\s*#/);
+      expect(token?.getAttribute("style")).toMatch(/--shiki-dark:\s*#/);
+    },
+    HIGHLIGHT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "colours diff lines after the marker and keeps the change kind visible",
+    async () => {
+      const host = mountExpanded(editTs);
+      await waitFor(() => host.querySelector(TOKEN_SELECTOR) !== null);
+
+      const lines = Array.from(host.querySelectorAll<HTMLElement>("[data-line]"));
+      expect(lines.map((line) => line.textContent)).toEqual([
+        "@@ -1,2 +1,2 @@",
+        "-const answer = 41;",
+        "+const answer = 42;",
+        " export {};",
+      ]);
+      const [hunk, removed, added, context] = lines;
+
+      // The hunk header is diff syntax, not source: never fed to the grammar.
+      expect(hunk?.querySelector(TOKEN_SELECTOR)).toBeNull();
+
+      // Tokens carry the syntax colour, so the tint moves to a row wash and the
+      // marker keeps the old text tint.
+      expect(added?.className).toContain("bg-primary/10");
+      expect(removed?.className).toContain("bg-destructive/10");
+      expect(context?.className).not.toMatch(/bg-(primary|destructive)\/10/);
+      expect(added?.querySelector("[data-marker]")?.textContent).toBe("+");
+      expect(added?.querySelector("[data-marker]")?.className).toContain("text-primary-text");
+      expect(removed?.querySelector("[data-marker]")?.textContent).toBe("-");
+      expect(removed?.querySelector("[data-marker]")?.className).toContain("text-destructive");
+      for (const line of [removed, added, context]) {
+        expect(line?.querySelectorAll(TOKEN_SELECTOR).length).toBeGreaterThan(1);
+        // The marker itself is never a token.
+        expect(line?.querySelector("[data-marker]")?.matches(TOKEN_SELECTOR)).toBe(false);
+      }
+    },
+    HIGHLIGHT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "colours a Write row's file-content output while preserving the content",
+    async () => {
+      const host = mountExpanded(writeTs);
+
+      expect(host.textContent).toContain("export const created = true;");
+      expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
+      await waitFor(() => host.querySelector(TOKEN_SELECTOR) !== null);
+
+      const line = host.querySelector("[data-line]");
+      expect(line?.textContent).toBe("export const created = true;");
+      expect(line?.querySelectorAll(TOKEN_SELECTOR).length).toBeGreaterThan(1);
+    },
+    HIGHLIGHT_TEST_TIMEOUT_MS,
+  );
+
+  it("leaves a Bash row's output plain", async () => {
+    const host = mountExpanded(bashRow);
+    // Give a would-be highlighter longer than it needs; nothing should arrive.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+
+    expect(host.textContent).toContain("Typecheck passed");
+    expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
   });
 });
 

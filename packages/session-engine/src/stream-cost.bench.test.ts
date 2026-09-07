@@ -224,7 +224,14 @@ function buildRuntime(): {
 async function createAndAttach(runtime: SessionRuntime) {
   const created = await runtime.command({
     commandId: "command-create",
-    command: { kind: "session.create", projectId: "project-1", ticketId: null, title: "Probe" },
+    command: {
+      kind: "session.create",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Probe",
+    },
   });
   await runtime.command({
     commandId: "command-attach",

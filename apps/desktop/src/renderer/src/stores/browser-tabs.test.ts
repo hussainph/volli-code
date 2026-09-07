@@ -5,6 +5,10 @@ import type { BrowserTabState, BrowserTabStateEvent } from "../../../ipc/contrac
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import {
   browserTabDisplayTitle,
+  browserTabOwnerLabel,
+  previewedBrowserTab,
+  sessionBrowserTabs,
+  stripBrowserTabs,
   hydrateBrowserTabs,
   subscribeBrowserTabs,
   useBrowserTabsStore,
@@ -16,6 +20,8 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     projectId: "project-1",
     ticketId: null,
     createdBy: "user",
+    ownerSessionId: null,
+    presentation: "tab",
     url: "https://volli.dev/docs",
     title: "Volli docs",
     loading: false,
@@ -23,6 +29,7 @@ function tab(overrides: Partial<BrowserTabState> = {}): BrowserTabState {
     canGoBack: false,
     canGoForward: false,
     generation: 0,
+    heldBy: null,
     ...overrides,
   };
 }
@@ -119,5 +126,70 @@ describe("browserTabDisplayTitle", () => {
     expect(browserTabDisplayTitle(tab({ url: BROWSER_START_URL, title: "about:blank" }))).toBe(
       "New Tab",
     );
+  });
+});
+
+/**
+ * Which tabs a strip draws, and which tabs a chat owns (VC-238). Both are pure
+ * over the store's records so the strip filter and the chip's inventory cannot
+ * disagree about what "shown" means.
+ */
+describe("strip and inventory selection (VC-238)", () => {
+  const agent = (tabId: string, owner: string, presentation: BrowserTabState["presentation"]) =>
+    tab({ tabId, createdBy: "session", ownerSessionId: owner, presentation });
+
+  it("draws in the strip only a person's tabs and the agent tabs a person promoted there", () => {
+    const tabs = [
+      tab({ tabId: "person" }),
+      agent("headless", "s1", "headless"),
+      agent("previewed", "s1", "preview"),
+      agent("promoted", "s1", "tab"),
+    ];
+
+    expect(stripBrowserTabs(tabs).map((one) => one.tabId)).toEqual(["person", "promoted"]);
+  });
+
+  it("lists a Session's own tabs and its children's, in every presentation, and nobody else's", () => {
+    const byId = Object.fromEntries(
+      [
+        tab({ tabId: "person" }),
+        agent("mine-headless", "s1", "headless"),
+        agent("mine-shown", "s1", "preview"),
+        agent("child", "s1-child", "headless"),
+        agent("stranger", "s9", "headless"),
+      ].map((one) => [one.tabId, one]),
+    );
+
+    const inventory = sessionBrowserTabs(byId, "s1", new Set(["s1-child"]));
+
+    expect(inventory.map((one) => one.tabId)).toEqual(["mine-headless", "mine-shown", "child"]);
+    expect(sessionBrowserTabs(byId, "s1")).toHaveLength(2);
+    expect(sessionBrowserTabs({}, "s1")).toEqual([]);
+  });
+
+  it("finds the one tab a chat is previewing, or none", () => {
+    const byId = Object.fromEntries(
+      [agent("a", "s1", "headless"), agent("b", "s1", "preview"), agent("c", "s2", "preview")].map(
+        (one) => [one.tabId, one],
+      ),
+    );
+
+    expect(previewedBrowserTab(byId, "s1")?.tabId).toBe("b");
+    expect(previewedBrowserTab(byId, "s3")).toBeNull();
+  });
+
+  it("says who is driving a tab in the chat's own terms", () => {
+    expect(browserTabOwnerLabel(agent("a", "s1", "headless"), "s1", () => null)).toBe(
+      "this Session",
+    );
+    expect(
+      browserTabOwnerLabel(agent("a", "s1-child", "headless"), "s1", (id) =>
+        id === "s1-child" ? "Explore the seam" : null,
+      ),
+    ).toBe("Explore the seam");
+    expect(browserTabOwnerLabel(agent("a", "s9", "headless"), "s1", () => null)).toBe(
+      "another Session",
+    );
+    expect(browserTabOwnerLabel(tab(), "s1", () => null)).toBe("you");
   });
 });

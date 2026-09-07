@@ -8,8 +8,8 @@
  * beside the ledger and must never be imported by production modules.
  */
 import type Database from "better-sqlite3";
-import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
-import type { SessionNativeReference, SessionRecord } from "@volli/shared";
+import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
+import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -84,10 +84,12 @@ export function insertSession(db: Database.Database, record: SessionRecord): voi
     native: terminalNativeReference(detail),
   };
   db.transaction(() => {
+    // A terminal companion is a person's Session on a Ticket or on the
+    // project: the Ticket says which Role, exactly as `PtyManager` states it.
     db.prepare(
-      `INSERT INTO sessions (id, project_id, ticket_id, title, created_at)
-       VALUES (@id, @projectId, @ticketId, @title, @createdAt)`,
-    ).run(record);
+      `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
+       VALUES (@id, @projectId, @ticketId, @role, @title, @createdAt)`,
+    ).run({ ...record, role: roleImpliedByTicket(record.ticketId) });
     db.prepare(
       `INSERT INTO session_attachments
          (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
@@ -124,6 +126,8 @@ interface SessionRow {
   id: string;
   project_id: string;
   ticket_id: string | null;
+  role: SessionRole;
+  parent_session_id: string | null;
   title: string | null;
   created_at: number;
 }
@@ -164,7 +168,9 @@ function latestNativeReference(
 /** Reads a terminal compatibility DTO by projecting the persisted ledger facts. */
 export function getSession(db: Database.Database, sessionId: string): SessionRecord | undefined {
   const session = db
-    .prepare("SELECT id, project_id, ticket_id, title, created_at FROM sessions WHERE id = ?")
+    .prepare(
+      "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
+    )
     .get(sessionId) as SessionRow | undefined;
   if (!session) return undefined;
   const attachment = db
@@ -195,6 +201,8 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
       id: session.id,
       projectId: session.project_id,
       ticketId: session.ticket_id,
+      role: session.role,
+      parentSessionId: session.parent_session_id,
       title: session.title,
       createdAt: session.created_at,
     },
@@ -227,6 +235,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     stopped: null,
     modelSelection: null,
     turnActive: false,
+    lastTurnOutcome: null,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: session.created_at,

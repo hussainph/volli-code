@@ -20,6 +20,31 @@ function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivity
 }
 
 describe("mapPiActivity", () => {
+  it("files a todo_write call as the plan kind, so the plan surfaces can find it (VC-6)", () => {
+    // Without this mapping the call lands as `other`: the durable record would
+    // still hold the list, and nothing drawing a plan would ever look at it.
+    const call = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-9",
+        toolName: "todo_write",
+        result: { content: [{ type: "text", text: "The todo list is now:" }] },
+        isError: false,
+      },
+      activityContext({
+        input: { todos: [{ content: "Write the tool", status: "in_progress" }] },
+        startedAt: 10,
+        observedAt: 12,
+      }),
+    );
+
+    expect(call).toMatchObject({
+      state: "completed",
+      input: { todos: [{ content: "Write the tool", status: "in_progress" }] },
+      descriptor: { kind: "plan", nativeToolName: "todo_write" },
+    });
+  });
+
   it("maps exact Pi read lifecycle shapes and retains settled input context", () => {
     const startedEvent = {
       type: "tool_execution_start",
@@ -683,6 +708,225 @@ describe("mapPiActivity", () => {
     ).toMatchObject({ summary: "completed normally" });
   });
 
+  it("maps the three shell tools onto run-command rows with a background marker (VC-270)", () => {
+    // shell_start is the command itself, marked as running beside the turn.
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-shell-start",
+        toolName: "shell_start",
+        args: { command: "pnpm dev\n# watch", title: "dev server" },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(started).toMatchObject({
+      descriptor: {
+        kind: "run-command",
+        nativeToolName: "shell_start",
+        subject: { label: "pnpm dev (background)", path: null },
+        outcome: null,
+      },
+    });
+    // The read and the kill name the command through the host's structured
+    // details, never by parsing the result's prose; before the details
+    // arrive the shell id is the only fact there is.
+    const readStarted = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-shell-read",
+        toolName: "shell_output",
+        args: { shellId: "sh-1" },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(readStarted.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "shell sh-1 (background · read)" },
+    });
+    const read = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-read",
+        toolName: "shell_output",
+        result: {
+          content: [{ type: "text", text: "Background shell sh-1 is running..." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "running", exitCode: null },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(read.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "pnpm dev (background · read)" },
+      outcome: { exitCode: null },
+    });
+    const killed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-kill",
+        toolName: "shell_kill",
+        result: {
+          content: [{ type: "text", text: "Killed background shell sh-1." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "exited", exitCode: 143 },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(killed.descriptor).toMatchObject({
+      kind: "run-command",
+      subject: { label: "pnpm dev (background · killed)" },
+      outcome: { exitCode: 143 },
+    });
+    // An exited read carries the code in its outcome, like a finished command.
+    const exitedRead = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-shell-read-2",
+        toolName: "shell_output",
+        result: {
+          content: [{ type: "text", text: "Background shell sh-1 exited with code 0." }],
+          details: { shellId: "sh-1", command: "pnpm dev", state: "exited", exitCode: 0 },
+        },
+        isError: false,
+      },
+      activityContext({ input: { shellId: "sh-1" }, startedAt: 700, observedAt: 720 }),
+    );
+    expect(exitedRead.descriptor.outcome).toMatchObject({ exitCode: 0 });
+    // A shell call that named nothing — no command, no shell id — still gets
+    // its marker rather than an empty label.
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-shell-bare",
+          toolName: "shell_output",
+          args: {},
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject.label,
+    ).toBe("(background · read)");
+  });
+
+  it("maps session_delegate to a delegate row naming the child Session (VC-9)", () => {
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-delegate",
+        toolName: "session_delegate",
+        args: {
+          task: "Find where the auth token is refreshed\nReport the file.",
+          title: "Token hunt",
+        },
+      },
+      activityContext({ observedAt: 700 }),
+    );
+    expect(started).toMatchObject({
+      descriptor: {
+        kind: "delegate",
+        nativeToolName: "session_delegate",
+        // The title names the helper before the child exists; nothing to open yet.
+        subject: { label: "Token hunt", agentName: "Token hunt", sessionId: null, path: null },
+        outcome: null,
+      },
+    });
+    const ended = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-delegate",
+        toolName: "session_delegate",
+        result: {
+          content: [{ type: "text", text: "Delegated to subagent Session cccccccc." }],
+          // The host's structured facts: the child's id and title, which the
+          // transcript row links to and names.
+          details: { sessionId: "cccccccc-0000-0000-0000-000000000000", title: "Token hunt" },
+        },
+        isError: false,
+      },
+      activityContext({
+        input: { task: "Find where the auth token is refreshed", title: "Token hunt" },
+        startedAt: 700,
+        observedAt: 900,
+      }),
+    );
+    expect(ended).toMatchObject({
+      state: "completed",
+      descriptor: {
+        kind: "delegate",
+        subject: {
+          label: "Token hunt",
+          agentName: "Token hunt",
+          sessionId: "cccccccc-0000-0000-0000-000000000000",
+        },
+        outcome: { childCount: 1, summary: "Delegated to subagent Session cccccccc." },
+      },
+    });
+    // Without a title, the task's first line names the helper — trimmed and
+    // with runs of whitespace collapsed, exactly as the host derives the
+    // child's durable title (`delegate-session.ts`, `titleFromTask`; its
+    // test pins the same inputs to the same names — VC-269 §4).
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-2",
+          toolName: "session_delegate",
+          args: { task: "  Run   the flaky\ttest ten times  \nand report" },
+        },
+        activityContext({ observedAt: 700 }),
+      ),
+    ).toMatchObject({
+      descriptor: {
+        subject: {
+          label: "Run the flaky test ten times",
+          agentName: "Run the flaky test ten times",
+        },
+      },
+    });
+    // A long first line is cut to a row's width; a call with no task at all
+    // names nothing rather than inventing a label.
+    const long = "x".repeat(120);
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-3",
+          toolName: "session_delegate",
+          args: { task: long },
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject.agentName,
+    ).toBe(`${"x".repeat(79)}…`);
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_start",
+          toolCallId: "call-delegate-4",
+          toolName: "session_delegate",
+          args: {},
+        },
+        activityContext({ observedAt: 700 }),
+      ).descriptor.subject,
+    ).toMatchObject({ label: null, agentName: null, sessionId: null });
+    // A refusal opened no child: the outcome counts zero rather than one.
+    expect(
+      mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "call-delegate-5",
+          toolName: "session_delegate",
+          result: { content: [{ type: "text", text: "This Session already has 3 subagents." }] },
+          isError: false,
+        },
+        activityContext({ input: { task: "One more" }, startedAt: 700, observedAt: 800 }),
+      ).descriptor,
+    ).toMatchObject({
+      subject: { agentName: "One more", sessionId: null },
+      outcome: { childCount: 0 },
+    });
+  });
+
   it("uses a path as the subject label for otherwise unknown tools", () => {
     expect(
       mapPiActivity(
@@ -700,6 +944,294 @@ describe("mapPiActivity", () => {
         subject: { label: "plugin/data.json", path: "plugin/data.json", lineRange: null },
       },
     });
+  });
+});
+
+/**
+ * Browser tools become `browse` rows with a facet the renderer reads instead
+ * of tool names (VC-238). At start the facet is what the CALL says — the tab
+ * and ref the model named; at end it is what the host REPORTED in `details` —
+ * the page's own name for the element, the URL it landed on, the picture id.
+ */
+describe("mapPiActivity browser tools (VC-238)", () => {
+  it("classifies a navigation as an open of the page it landed on, labelled by host and path", () => {
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "nav-1",
+        toolName: "browser_navigate",
+        args: { url: "https://example.com/docs/intro?x=1" },
+      },
+      activityContext({ observedAt: 10 }),
+    );
+    expect(started.descriptor).toMatchObject({
+      kind: "browse",
+      nativeToolName: "browser_navigate",
+      subject: { label: "example.com/docs/intro", path: null },
+      browse: { action: "open", tabId: null, url: "https://example.com/docs/intro?x=1" },
+    });
+
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "nav-1",
+        toolName: "browser_navigate",
+        result: {
+          content: [{ type: "text", text: "Untrusted page content…" }],
+          details: {
+            action: "open",
+            tabId: "tab-9",
+            url: "https://example.com/docs/intro/",
+            title: "Intro — Example",
+            target: null,
+            picture: "picture-1",
+            errorCount: null,
+            ownerSessionId: "s1",
+          },
+        },
+        isError: false,
+      },
+      activityContext({ input: started.input, startedAt: 10, observedAt: 50 }),
+    );
+    expect(completed.descriptor).toMatchObject({
+      kind: "browse",
+      subject: { label: "example.com/docs/intro" },
+      browse: {
+        action: "open",
+        tabId: "tab-9",
+        url: "https://example.com/docs/intro/",
+        title: "Intro — Example",
+        picture: "picture-1",
+        ownerSessionId: "s1",
+      },
+    });
+  });
+
+  it("derives the action from the call for every browser tool before the host has answered", () => {
+    const facet = (toolName: string, args: Record<string, unknown>) =>
+      mapPiActivity(
+        { type: "tool_execution_start", toolCallId: "c", toolName, args },
+        activityContext({ observedAt: 1 }),
+      ).descriptor.browse;
+
+    expect(facet("browser_navigate", { tabId: "t", action: "back" })).toMatchObject({
+      action: "back",
+      tabId: "t",
+    });
+    expect(facet("browser_navigate", { tabId: "t", action: "reload" })?.action).toBe("reload");
+    expect(facet("browser_navigate", { tabId: "t", action: "forward" })?.action).toBe("forward");
+    // Neither url nor action: the tool will answer "nothing was done"; the row
+    // still needs a kind, and an open is what a navigate call is for.
+    expect(facet("browser_navigate", {})?.action).toBe("open");
+    expect(facet("browser_act", { tabId: "t", generation: 2, kind: "click", ref: "e5" })).toEqual({
+      action: "click",
+      tabId: "t",
+      url: null,
+      title: null,
+      // The ref stands in until the host reports the element's name.
+      target: "e5",
+      picture: null,
+      errorCount: null,
+      ownerSessionId: null,
+      error: null,
+      refusal: null,
+    });
+    expect(
+      facet("browser_act", { tabId: "t", generation: 2, kind: "press", key: "Enter" }),
+    ).toMatchObject({
+      action: "press",
+      target: "Enter",
+    });
+    expect(
+      facet("browser_act", { tabId: "t", generation: 2, kind: "scroll", direction: "down" }),
+    ).toMatchObject({ action: "scroll", target: "down" });
+    expect(facet("browser_act", { tabId: "t", generation: 2, kind: "teleport" })?.action).toBe(
+      "click",
+    );
+    expect(facet("browser_snapshot", { tabId: "t" })?.action).toBe("read");
+    expect(facet("browser_screenshot", { tabId: "t" })?.action).toBe("screenshot");
+    expect(facet("browser_console", { tabId: "t" })?.action).toBe("console");
+    expect(facet("browser_tabs", {})?.action).toBe("tabs");
+  });
+
+  it("prefers the host's report of what an action touched over the ref the model passed", () => {
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "act-1",
+        toolName: "browser_act",
+        result: {
+          content: [{ type: "text", text: "…" }],
+          details: {
+            action: "click",
+            tabId: "tab-9",
+            url: "https://example.com/sign-in",
+            title: "Sign in",
+            target: "Sign in",
+            picture: null,
+            errorCount: null,
+            ownerSessionId: "s1",
+          },
+        },
+        isError: false,
+      },
+      activityContext({
+        input: { tabId: "tab-9", generation: 3, kind: "click", ref: "e5" },
+        startedAt: 10,
+        observedAt: 20,
+      }),
+    );
+    expect(completed.descriptor.browse).toMatchObject({ action: "click", target: "Sign in" });
+    expect(completed.descriptor.subject.label).toBe("example.com/sign-in");
+  });
+
+  it("keeps a screenshot's pixels out of the activity payload: the picture travels as the host's id", () => {
+    const pixels = "A".repeat(200_000);
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "shot-1",
+        toolName: "browser_screenshot",
+        result: {
+          content: [
+            { type: "text", text: "Screenshot of Browser Tab tab-9" },
+            { type: "image", data: pixels, mimeType: "image/png" },
+          ],
+          details: {
+            action: "screenshot",
+            tabId: "tab-9",
+            url: "https://example.com/",
+            title: "Example",
+            target: null,
+            picture: "picture-4",
+            errorCount: null,
+            ownerSessionId: "s1",
+          },
+        },
+        isError: false,
+      },
+      activityContext({ input: { tabId: "tab-9" }, startedAt: 10, observedAt: 20 }),
+    );
+
+    expect(JSON.stringify(completed.output)).not.toContain("AAAAAAAAAA");
+    expect(completed.output).toMatchObject({
+      content: [
+        { type: "text", text: "Screenshot of Browser Tab tab-9" },
+        { type: "image", mimeType: "image/png", data: "[image]" },
+      ],
+    });
+    expect(completed.descriptor.browse).toMatchObject({
+      action: "screenshot",
+      picture: "picture-4",
+    });
+  });
+
+  it("carries the console's error count and labels a tab listing by nothing", () => {
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "con-1",
+        toolName: "browser_console",
+        result: {
+          content: [{ type: "text", text: "…" }],
+          details: {
+            action: "console",
+            tabId: "tab-9",
+            url: "https://example.com/",
+            title: "Example",
+            target: null,
+            picture: null,
+            errorCount: 3,
+            ownerSessionId: "s1",
+          },
+        },
+        isError: false,
+      },
+      activityContext({ input: { tabId: "tab-9" }, startedAt: 10, observedAt: 20 }),
+    );
+    expect(completed.descriptor.browse).toMatchObject({ action: "console", errorCount: 3 });
+    expect(completed.descriptor.subject.label).toBe("example.com");
+
+    const tabs = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "tabs-1",
+        toolName: "browser_tabs",
+        result: { content: [{ type: "text", text: "No Browser Tabs" }], details: undefined },
+        isError: false,
+      },
+      activityContext({ input: {}, startedAt: 10, observedAt: 20 }),
+    );
+    expect(tabs.descriptor.browse).toMatchObject({ action: "tabs", url: null });
+    expect(tabs.descriptor.subject.label).toBeNull();
+  });
+
+  it("labels an unparseable URL by its raw text rather than dropping the row's object", () => {
+    const started = mapPiActivity(
+      {
+        type: "tool_execution_start",
+        toolCallId: "nav-2",
+        toolName: "browser_navigate",
+        args: { url: "not a url" },
+      },
+      activityContext({ observedAt: 10 }),
+    );
+    expect(started.descriptor.subject.label).toBe("not a url");
+  });
+
+  it("carries the host's report of a page that would not load onto the facet", () => {
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "nav-3",
+        toolName: "browser_navigate",
+        result: {
+          content: [{ type: "text", text: "\u2026" }],
+          details: {
+            action: "open",
+            tabId: "tab-9",
+            url: "https://nowhere.example/",
+            title: "",
+            target: null,
+            picture: null,
+            errorCount: null,
+            ownerSessionId: "s1",
+            error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+          },
+        },
+        isError: false,
+      },
+      activityContext({ input: { url: "https://nowhere.example/" }, startedAt: 1, observedAt: 2 }),
+    );
+
+    // The harness calls this a success — it answered with a snapshot. The
+    // facet is what lets the row's glyph disagree (§9).
+    expect(completed.state).toBe("completed");
+    expect(completed.descriptor.browse).toMatchObject({
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+    });
+  });
+
+  it("leaves another tool's image blocks alone: only a browser result has a picture standing in", () => {
+    const pixels = "A".repeat(1_000);
+    const completed = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "mcp-1",
+        toolName: "mcp__figma__render",
+        result: {
+          content: [{ type: "image", data: pixels, mimeType: "image/png" }],
+        },
+        isError: false,
+      },
+      activityContext({ input: {}, startedAt: 10, observedAt: 20 }),
+    );
+
+    // The picture path is the browser's; substituting `[image]` everywhere
+    // would quietly change what an unrelated tool's payload carries, with
+    // nothing standing in for the bytes it dropped.
+    expect(JSON.stringify(completed.output)).toContain("AAAAAAAAAA");
+    expect(completed.descriptor.kind).toBe("other");
   });
 });
 

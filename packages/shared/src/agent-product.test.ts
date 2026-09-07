@@ -51,6 +51,19 @@ describe("agent product guidance", () => {
     ]);
   });
 
+  it("records the todo tool and the comment it leaves behind (VC-6)", () => {
+    // Two agent-facing changes in one ticket, and an agent reading this record
+    // needs both: a tool it can now call, and a second durable write its own
+    // lifecycle signal performs on its ticket.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-6");
+    expect(entry).toBeDefined();
+    // The newest build heads the record, and this is where that pin lives now.
+    expect(entry).toMatchObject({ baseline: "VC-185" });
+    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    expect(entry!.added.join("\n")).toContain("todo_write");
+    expect(entry!.changed.join("\n")).toContain("session done");
+  });
+
   it("records the Role-scoped tool surface as an agent-facing capability (VC-162)", () => {
     // VC-91's own entry promised this one by name ("ready for session.start
     // when VC-162 supplies its tool seam"), so the record owes a reader the
@@ -95,10 +108,9 @@ describe("agent product guidance", () => {
     // usage line.
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-185");
     expect(entry).toBeDefined();
-    // Newest-first: VC-185 follows VC-178 and heads the record, carrying the
-    // "[0] is the newest build" pin forward from the VC-178 test above.
+    // Newest-first: VC-185 follows VC-178. It no longer heads the record —
+    // VC-6 landed after it and carries the "[0] is the newest build" pin now.
     expect(entry).toMatchObject({ baseline: "VC-178" });
-    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
     // The shape itself: all four headings present, so `volli help changes`
     // renders "None in this record" rather than omitting a heading.
     for (const bucket of ["added", "changed", "fixed", "removed"] as const) {

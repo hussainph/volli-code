@@ -285,7 +285,7 @@
   background: #111111;
 }
 
-/* Home's tab strip: the Board is a permanent first tab, project chats and files
+/* Home's tab strip: the Board is a permanent first tab, Board chats and files
    sit beside it, and one control starts a chat (home/home-tab-strip.tsx). This
    is the shape that replaced the old standalone Sessions page. */
 .demo-home-tabs {

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
@@ -39,11 +40,19 @@ function scratch(): string {
 }
 
 function ticketSession(projectId: string, ticketId: string): Session {
-  return { id: "ticket-session", projectId, ticketId, title: null, createdAt: 0 };
+  return {
+    id: "ticket-session",
+    projectId,
+    ticketId,
+    role: "ticket",
+    parentSessionId: null,
+    title: null,
+    createdAt: 0,
+  };
 }
 
 describe("desktop Session location resolver", () => {
-  it("routes Project Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
+  it("routes Board Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     const ticket = testTicket(project.id, {
@@ -59,6 +68,8 @@ describe("desktop Session location resolver", () => {
         id: "project-session",
         projectId: project.id,
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -68,6 +79,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -97,6 +110,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -106,6 +121,8 @@ describe("desktop Session location resolver", () => {
         id: "missing-project-session",
         projectId: "missing",
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -115,6 +132,8 @@ describe("desktop Session location resolver", () => {
         id: "missing-ticket-session",
         projectId: project.id,
         ticketId: "missing",
+        role: "ticket",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -124,13 +143,15 @@ describe("desktop Session location resolver", () => {
         id: "cross-project-ticket-session",
         projectId: project.id,
         ticketId: foreignTicket.id,
+        role: roleImpliedByTicket(foreignTicket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
     ).rejects.toThrow(`Ticket ${foreignTicket.id} was not found in project ${project.id}`);
   });
 
-  // A Project Session has no ticket and therefore no isolated checkout to
+  // A Board Session has no ticket and therefore no isolated checkout to
   // materialize — it runs in the project root. Pinned because `prepare` is the
   // attach path's only git seam, and a ticketless Session reaching `ensure`
   // would be asking for a worktree for a ticket that does not exist.
@@ -145,6 +166,8 @@ describe("desktop Session location resolver", () => {
         id: "project-session",
         projectId: project.id,
         ticketId: null,
+        role: "project",
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -165,6 +188,8 @@ describe("desktop Session location resolver", () => {
         id: "ticket-session",
         projectId: project.id,
         ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
         title: null,
         createdAt: 0,
       }),
@@ -240,7 +265,7 @@ describe("desktop Session location resolver", () => {
     );
   });
 
-  // A Project Session runs in the project root, which no pipeline materializes.
+  // A Board Session runs in the project root, which no pipeline materializes.
   it("refuses a project root that is gone instead of pretending it is there", async () => {
     testDb = openTestDb();
     const root = scratch();
@@ -251,6 +276,8 @@ describe("desktop Session location resolver", () => {
       id: "project-session",
       projectId: project.id,
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: null,
       createdAt: 0,
     };

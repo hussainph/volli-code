@@ -28,6 +28,12 @@
  * told. The Session identity stays openable throughout — stop ends work,
  * never identity (Session durability doctrine).
  *
+ * The three acts are one function, {@link stopResolvedSession}, behind two
+ * doors that differ only in who is asking and how the target is named:
+ * {@link stopSessionOperation} is the agent tool (a handle, the calling
+ * Session as actor) and {@link stopSessionById} is the person's (an id, the
+ * `user` actor — VC-269's island stop). Neither copies the other's acts.
+ *
  * ## What a send is
  *
  * One `message.submit` into the target's live attachment, delivery `steer`, so
@@ -39,7 +45,12 @@
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { CommandReceipt, SessionProjection } from "@volli/shared";
+import type {
+  CommandReceipt,
+  SessionEventProvenance,
+  SessionProjection,
+  SessionStopActor,
+} from "@volli/shared";
 import type { SessionEngine, SessionRuntime } from "@volli/session-engine";
 
 import { latestStructuredAttachment, terminalSessionRecord } from "../session-control";
@@ -47,6 +58,12 @@ import { latestStructuredAttachment, terminalSessionRecord } from "../session-co
 /** What the operations need. Narrow on purpose; everything is per-call. */
 export interface SuperviseSessionPorts {
   sessionEngine: Pick<SessionEngine, "listSessions" | "submit">;
+  runtime: Pick<SessionRuntime, "command">;
+}
+
+/** The person's door reads its target by id rather than resolving a handle. */
+export interface StopSessionByIdPorts {
+  sessionEngine: Pick<SessionEngine, "getSession" | "submit">;
   runtime: Pick<SessionRuntime, "command">;
 }
 
@@ -143,6 +160,92 @@ export async function stopSessionOperation(
   input: StopSessionInput,
 ): Promise<StopSessionOutcome> {
   const target = await resolveTarget(ports, input);
+  return stopResolvedSession(ports, target, () => resolveTarget(ports, input), {
+    operationId: input.operationId,
+    by: { kind: "session", sessionId: input.callerSessionId },
+    reason: input.reason ?? null,
+    name: `Session ${input.handle}`,
+    provenance: { kind: "system", id: "session-supervision", detail: null },
+  });
+}
+
+export interface StopSessionByIdInput {
+  /** Idempotency key: every durable write derives from it. */
+  operationId: string;
+  sessionId: string;
+  reason?: string;
+}
+
+/**
+ * A person stops a Session's work from the app (VC-269): the same three acts
+ * as the tool, with `{ kind: "user" }` as the durable actor and the target
+ * named by id. No project bound and no self-guard — a person is not a Session,
+ * and the renderer only ever names Sessions it is already showing.
+ *
+ * NOT-LIVE IS A NAMED REFUSAL (fix-first, review c5714a22), checked before the
+ * durable write: a target with no open structured attachment has nothing for
+ * the runtime acts to touch, and the island's stop button races the row's own
+ * state (it shows only while the child reads `working`) — by the time the
+ * click reaches here the child may already have gone idle or fully closed.
+ * Recording `session.stop` anyway would durably stamp a no-op as a quiet
+ * success; refusing by name lets the door word it and the renderer toast it,
+ * the same as every other mutation. A target `stopped` once already but whose
+ * attachment is still open is a legitimate RETRY of the runtime release, not
+ * a not-live target, so liveness reads the attachment alone.
+ */
+export async function stopSessionById(
+  ports: StopSessionByIdPorts,
+  input: StopSessionByIdInput,
+): Promise<StopSessionOutcome> {
+  const read = async (): Promise<SessionProjection> => {
+    const projection = await ports.sessionEngine.getSession({ sessionId: input.sessionId });
+    if (projection === null) throw new SuperviseSessionError("Unknown session.");
+    return projection;
+  };
+  const target = await read();
+  if (terminalSessionRecord(target) !== null) {
+    throw new SuperviseSessionError(
+      "That is a terminal session; stop addresses structured chat Sessions only.",
+    );
+  }
+  if (latestStructuredAttachment(target.attachments)?.status !== "open") {
+    throw new SuperviseSessionError(
+      `Session ${shortSessionId(input.sessionId)} is not live; there is nothing running to stop.`,
+    );
+  }
+  return stopResolvedSession(ports, target, read, {
+    operationId: input.operationId,
+    by: { kind: "user" },
+    reason: input.reason ?? null,
+    name: `Session ${shortSessionId(input.sessionId)}`,
+    provenance: { kind: "user", id: "renderer", detail: null },
+  });
+}
+
+interface StopActs {
+  operationId: string;
+  by: SessionStopActor;
+  reason: string | null;
+  /** How the target is named in a refusal, as the door's caller knows it. */
+  name: string;
+  provenance: SessionEventProvenance["source"];
+}
+
+/**
+ * The three acts of a stop on a target already resolved: record, interrupt,
+ * release. `reread` is how the door re-resolves its target after the durable
+ * write — by handle or by id, the door's business — so the runtime acts land
+ * on the attachment and turn that exist NOW rather than the snapshot resolved
+ * before the stop.
+ */
+async function stopResolvedSession(
+  ports: Pick<StopSessionByIdPorts, "runtime"> & {
+    sessionEngine: Pick<SessionEngine, "submit">;
+  },
+  target: SessionProjection,
+  reread: () => Promise<SessionProjection>,
+  acts: StopActs,
+): Promise<StopSessionOutcome> {
   const previouslyStopped = target.stopped !== null;
   let liveTarget = target;
 
@@ -150,27 +253,21 @@ export async function stopSessionOperation(
     // The durable fact first: whatever the runtime does next, the stop and its
     // actor exist. A failed durable write is not a stop and must not be hidden.
     const submitted = await ports.sessionEngine.submit({
-      commandId: input.operationId,
+      commandId: acts.operationId,
       sessionId: target.session.id,
-      intent: {
-        kind: "session.stop",
-        reason: input.reason ?? null,
-        by: { kind: "session", sessionId: input.callerSessionId },
-      },
+      intent: { kind: "session.stop", reason: acts.reason, by: acts.by },
       provenance: {
-        source: { kind: "system", id: "session-supervision", detail: null },
+        source: acts.provenance,
         venue: { id: "local", kind: "local" },
       },
     });
     if (submitted.receipt?.status !== "completed") {
-      throw new SuperviseSessionError(
-        `Session ${input.handle} could not be durably recorded as stopped.`,
-      );
+      throw new SuperviseSessionError(`${acts.name} could not be durably recorded as stopped.`);
     }
     // A turn can be admitted while the stop fact commits. Re-read before
     // interrupting so the release acts on the attachment and turn that exist
     // now, rather than the snapshot we resolved before the stop.
-    liveTarget = await resolveTarget(ports, input);
+    liveTarget = await reread();
   }
 
   const failures: string[] = [];
@@ -181,7 +278,7 @@ export async function stopSessionOperation(
     if (liveTarget.turnActive) {
       try {
         const result = await ports.runtime.command({
-          commandId: `${input.operationId}:interrupt`,
+          commandId: `${acts.operationId}:interrupt`,
           sessionId: target.session.id,
           command: { kind: "executor.interrupt", attachmentId: attachment.id },
         });
@@ -193,7 +290,7 @@ export async function stopSessionOperation(
     }
     try {
       const result = await ports.runtime.command({
-        commandId: `${input.operationId}:release`,
+        commandId: `${acts.operationId}:release`,
         sessionId: target.session.id,
         command: { kind: "adapter.release", attachmentId: attachment.id },
       });

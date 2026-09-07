@@ -64,10 +64,10 @@ export const AGENT_CONCEPT_SECTIONS: readonly AgentConceptSection[] = [
     ],
   },
   {
-    heading: "Tickets, worktrees, and Project Sessions",
+    heading: "Tickets, worktrees, and Board Sessions",
     paragraphs: [
       "A worktree-scoped Ticket records the intent to use isolation before a checkout exists. Volli materializes or reuses the Ticket worktree when work starts. Ending a Session does not remove the checkout. Archiving a Ticket preserves its worktree; later retention or an explicit app action can remove disposable checkout state while the retained branch remains the source for recreation.",
-      "A Project Session runs on the Main checkout, the project folder the person added to Volli. It has no Ticket worktree and no board effect. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.",
+      "A Board Session runs on the Main checkout, the project folder the person added to Volli. It sees the whole board but has no Ticket of its own, so it has no worktree and its lifecycle moves no card. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.",
     ],
   },
   {
@@ -122,6 +122,20 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-185",
+    build: "VC-6",
+    added: [
+      "todo_write — a named tool for keeping this Session's todo list. Each call REPLACES the whole list, so send every item every time, including the ones already finished. It takes a status per item (pending, in_progress, completed, cancelled), which means work may be finished out of order and a step may be dropped rather than deleted.",
+      "The tool answers with the whole list rather than an acknowledgement. That is deliberate: compaction drops older tool calls out of what the model sees, and the newest result is the copy of the plan that survives it.",
+      "A person watching the Session sees the list live, above the composer. It is for them and for the ticket record — not a thinking aid, so a list that is written once and never updated is worse than no list at all.",
+    ],
+    changed: [
+      "session done and session blocked now leave this Session's last todo list on its Ticket as one attributed comment, when it kept a list and belongs to a Ticket. Their registry effects and --dry-run preview say so. Neither verb moves the board; a comment is a record, not a state change.",
+    ],
+    fixed: [],
+    removed: [],
+  },
+  {
     baseline: "VC-178",
     build: "VC-185",
     added: [
@@ -171,7 +185,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     ],
     fixed: [],
     removed: [
-      "session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.",
+      "session.start left the Agent CLI. It is control tier now: the named session_start tool in the Board Session's tool bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.",
       "ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.",
     ],
   },
@@ -195,7 +209,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     build: "VC-162",
     added: [
       "A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.",
-      "session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.",
+      "session_start as a named tool in the Board Session's tool bundle. A Board Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.",
       "A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.",
     ],
     changed: [

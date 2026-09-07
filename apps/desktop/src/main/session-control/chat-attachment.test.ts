@@ -23,6 +23,8 @@ function projectionWith(
       id: "session",
       projectId: "project",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Plan the migration",
       createdAt: 1,
     },
@@ -37,6 +39,7 @@ function projectionWith(
     signal: null,
     stopped: null,
     turnActive: false,
+    lastTurnOutcome: null,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
@@ -105,8 +108,11 @@ describe("chatSessionRecord", () => {
       live: false,
       activity: "idle",
       waitingOn: null,
+      outcome: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
     });
   });
 
@@ -121,8 +127,11 @@ describe("chatSessionRecord", () => {
       live: true,
       activity: "idle",
       waitingOn: null,
+      outcome: null,
       lastActivityAt: 1,
       bornTicketless: true,
+      role: "project",
+      parentSessionId: null,
     });
   });
 
@@ -189,6 +198,34 @@ describe("chatSessionRecord", () => {
     expect(
       chatSessionRecord(projectionWith([structuredAttachment({ id: "structured" }), terminal])),
     ).toMatchObject({ adapterId: "opencode", live: true });
+  });
+});
+
+// VC-269. Two idle rows, one finished and one broken, and `activity` says the
+// same word for both; the outcome is the fact that tells them apart, and it is
+// the fold's own verdict rather than a second reading of the attachment.
+describe("chatSessionRecord outcome", () => {
+  it("carries the projection's last turn outcome verbatim, null included", () => {
+    expect(chatSessionRecord(projectionWith([structuredAttachment()]))).toMatchObject({
+      activity: "idle",
+      outcome: null,
+    });
+    for (const lastTurnOutcome of ["completed", "interrupted", "failed"] as const) {
+      expect(
+        chatSessionRecord(projectionWith([structuredAttachment()], { lastTurnOutcome })),
+      ).toMatchObject({ activity: "idle", outcome: lastTurnOutcome });
+    }
+  });
+
+  it("keeps the outcome beside a stop rather than under it", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([], {
+          lastTurnOutcome: "interrupted",
+          stopped: { at: 9, reason: null, by: { kind: "user" } },
+        }),
+      ),
+    ).toMatchObject({ activity: "stopped", outcome: "interrupted" });
   });
 });
 

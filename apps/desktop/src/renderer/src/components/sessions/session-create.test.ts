@@ -4,14 +4,17 @@
  * the create open, refuse it, or answer it, and the assertions are about what
  * the pipeline does around that answer.
  */
-import type { Project } from "@volli/shared";
+import type { Project, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
-import { bootChatSession, terminalCreateRequest } from "./session-create";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 // The engine registry reaches for restty/WebGPU on import and no chat boot
@@ -32,6 +35,25 @@ const PROJECT: Project = {
   updatedAt: 0,
 };
 const SCOPE = ticketScope("p1", "t1");
+const TICKET: Ticket = {
+  id: "t1",
+  projectId: "p1",
+  ticketNumber: 1,
+  title: "Auto-title composed starts",
+  body: "",
+  status: "doing",
+  priority: "medium",
+  labels: [],
+  usesWorktree: true,
+  preferredHarnessId: "claude-code",
+  order: 0,
+  worktreePath: null,
+  branch: null,
+  baseBranch: null,
+  prUrl: null,
+  createdAt: 0,
+  updatedAt: 0,
+};
 
 function stubChatStore(createChatSession: () => Promise<string | null>) {
   const closeChatSession = vi.fn();
@@ -41,6 +63,7 @@ function stubChatStore(createChatSession: () => Promise<string | null>) {
 
 beforeEach(() => {
   useProjectsStore.setState({ projects: [PROJECT] });
+  useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
   useChatSessionsStore.setState({ starting: {} });
 });
 
@@ -168,6 +191,48 @@ describe("bootChatSession", () => {
       expect.anything(),
     );
     expect(useChatSessionsStore.getState().starting).toEqual({});
+  });
+});
+
+describe("startTicketChat", () => {
+  function startHarness() {
+    stubChatStore(async () => "durable-1");
+    const enqueue = vi.fn();
+    useChatSessionsStore.setState({ enqueue, openChatTab: vi.fn() });
+    useWorkspaceStore.setState({ setTicketActiveTab: vi.fn() });
+    useTicketSessionRecordsStore.setState({ refresh: vi.fn(async () => {}) });
+    return { enqueue };
+  }
+
+  it("carries a composed start's fallback as the opening message auto-title baseline", async () => {
+    const { enqueue } = startHarness();
+    const message = "Begin work on this ticket. Your assignment is the Ticket Brief above.";
+
+    await startTicketChat("p1", "t1", {
+      title: "Work on VC-1",
+      refineTitle: true,
+      message,
+    });
+
+    expect(enqueue).toHaveBeenCalledWith("durable-1", {
+      id: expect.any(String),
+      text: message,
+      autoTitleBaseline: "Work on VC-1",
+    });
+  });
+
+  it("does not make an ordinary explicit title eligible for refinement", async () => {
+    const { enqueue } = startHarness();
+
+    await startTicketChat("p1", "t1", {
+      title: "My review",
+      message: "Begin the review",
+    });
+
+    expect(enqueue).toHaveBeenCalledWith("durable-1", {
+      id: expect.any(String),
+      text: "Begin the review",
+    });
   });
 });
 

@@ -1,4 +1,6 @@
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
+import type { JsonUnsafeProcedures } from "./json-safe";
+export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
 import {
   isSessionStreamFrame,
   type ModelAccessSnapshot,
@@ -16,6 +18,7 @@ import {
 import {
   MODEL_PURPOSES,
   REASONING_LEVELS,
+  SESSION_ROLES,
   scrubSessionAttention,
   scrubSessionEvent,
   scrubSessionInteraction,
@@ -79,7 +82,7 @@ function isRendererStreamTransient(
 export interface SessionCreateInput {
   operationId: string;
   projectId: string;
-  /** The Role: a Ticket Session when set, a project Session when null. */
+  /** The Role: a Ticket Session when set, a Board Session when null. */
   ticketId: string | null;
   title: string | null;
   /**
@@ -136,7 +139,7 @@ export interface SessionRouterContext {
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
-  transport?: "electron-ipc" | "lab-http" | "unknown";
+  transport?: "electron-ipc" | "unknown";
 }
 
 export interface RpcDiagnosticEntry {
@@ -500,6 +503,13 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
     ticketId: nullableString,
+    // Stated, never derived from `ticketId` (VC-9). This raw command is the
+    // lab transport's door only; the product `sessions.create` route below
+    // states the two Roles a person can choose through `roleImpliedByTicket`.
+    role: z.enum(SESSION_ROLES),
+    // The lab transport can only ever mint a root Session: the field is
+    // stated, never derived, and pinned null at this door.
+    parentSessionId: z.null(),
     title: nullableString,
   }),
   z.object({
@@ -581,20 +591,20 @@ const DIAGNOSTICS_OVERFLOW_MESSAGE =
  * frames. Ending normally is what this replaces, and a normal end is a lie the
  * client cannot detect: over Electron IPC the pump sends `{kind:"done"}` and the
  * renderer link calls `observer.complete()`, so a surface that registered only
- * `onData`/`onError` — the lab chat controller is one — simply stops updating,
- * with the loss visible solely in a main-process diagnostic no user can read.
- * This matters more now that one runtime tick emits several deltas instead of a
- * single snapshot: the queue fills faster, and holding up under concurrent
- * sessions is the point of emitting deltas at all.
+ * `onData`/`onError` simply stops updating, with the loss visible solely in a
+ * main-process diagnostic no user can read. This matters more now that one
+ * runtime tick emits several deltas instead of a single snapshot: the queue
+ * fills faster, and holding up under concurrent sessions is the point of
+ * emitting deltas at all.
  *
  * `TOO_MANY_REQUESTS` is the 429 slot, where gRPC's `RESOURCE_EXHAUSTED` also
  * lands, and it is the only bucket in tRPC's vocabulary that means flow control
  * rather than a malformed request or a broken server. The retryable codes
  * (`INTERNAL_SERVER_ERROR`, `BAD_GATEWAY`, `SERVICE_UNAVAILABLE`,
- * `GATEWAY_TIMEOUT`) are avoided deliberately: `httpSubscriptionLink` reconnects
- * on those by itself, which would re-arm the same losing race on the lab
- * transport without the consumer ever learning it fell behind — the exact
- * silence this error exists to break.
+ * `GATEWAY_TIMEOUT`) are avoided deliberately: on a future HTTP transport,
+ * `httpSubscriptionLink` reconnects on those by itself. That would re-arm the
+ * same losing race without the consumer ever learning it fell behind — the
+ * exact silence this error exists to break.
  */
 function subscriptionOverflowError(message: string): TRPCError {
   return new TRPCError({ code: "TOO_MANY_REQUESTS", message });
@@ -626,7 +636,7 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
   return result;
 });
 
-/** Creates the reusable Session API used by both Electron IPC and Lab HTTP/SSE adapters. */
+/** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
   return t.router({
     sessions: t.router({
@@ -683,12 +693,12 @@ export function createSessionRouter() {
         .input(
           z
             .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the project default"; clearing
+            // Clearing ticket/utility means "use the Board default"; clearing
             // global would leave every purpose resolving to nothing, which is a
             // state the UI never offers and this edge refuses to mint.
             .refine(
               (input) => input.purpose !== "global" || input.selection !== null,
-              "The project default cannot be cleared — choose a model instead",
+              "The Board default cannot be cleared — choose a model instead",
             ),
         )
         .mutation(async ({ ctx, input }) => {
@@ -978,6 +988,14 @@ function unavailable(message: string): never {
 }
 
 export type AppRouter = ReturnType<typeof createSessionRouter>;
+
+/**
+ * The Session RPC seam, checked in one place. If a procedure starts carrying a
+ * value that changes across a JSON wire, this alias fails here and names the
+ * procedure plus `input` or `output`.
+ */
+type AssertNever<Type extends never> = Type;
+export type SessionRouterJsonSafety = AssertNever<JsonUnsafeProcedures<AppRouter>>;
 
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];

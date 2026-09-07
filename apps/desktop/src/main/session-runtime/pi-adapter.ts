@@ -100,6 +100,7 @@ import {
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
   type RuntimeObservation,
+  type RuntimeShellPort,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -289,12 +290,53 @@ interface PiRuntimeContextFields {
  * The Role a Session attaches under, resolved with the identity it implies.
  *
  * Mirrors the runtime's own identity union rather than carrying an optional
- * Ticket: "ticketless" is what a project Session *is*, and a resolver that
+ * Ticket: "ticketless" is what a Board Session *is*, and a resolver that
  * returned a Ticket Session with a null Ticket would not typecheck here.
  */
 export type PiRuntimeContext =
   | (PiRuntimeContextFields & { role: "ticket"; ticketId: string })
-  | (PiRuntimeContextFields & { role: "project"; ticketId: null });
+  | (PiRuntimeContextFields & { role: "project"; ticketId: null })
+  // A subagent's Ticket is its parent's, or none (VC-9); the parent is what
+  // the Role guarantees, exactly as the Ticket is for the Ticket Role.
+  | (PiRuntimeContextFields & {
+      role: "subagent";
+      ticketId: string | null;
+      parentSessionId: string;
+    });
+
+/**
+ * The runtime's Browser port plus the one lifecycle door the desktop adapter
+ * drives that the runtime never sees: a turn ending (VC-239). A hold on a
+ * Browser Tab lasts a turn, and the runtime observation is where the adapter
+ * learns a turn is over — so the adapter tells the port, here. Required, not
+ * optional: it is the one door that keeps a hold from outliving its turn, and
+ * a port built without it would keep holds silently.
+ */
+export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+
+/**
+ * The runtime's shell port with the one lifecycle door the adapter drives
+ * (VC-270): the attachment ending. Required rather than optional, for
+ * {@link DesktopBrowserPort}'s reason — it is what keeps a Session's shells
+ * from outliving it.
+ */
+export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+
+/**
+ * A Session frozen before the hold tools existed (VC-239) keeps its six: its
+ * port is handed over without `acquire`/`release`, so `sessionToolBindings`
+ * offers the six it recorded and the provider sees the array it was promised.
+ * The six writes still take the hold, because the port does that for every
+ * writer, hold tools or not.
+ */
+function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
+  // A shallow copy is safe here, unlike in `browserHoldPort`, because the
+  // desktop's port is an object literal of closures (`createAgentBrowserPort`)
+  // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
+  // turn ends, so the copy the runtime gets shares every hold with it.
+  const { acquire: _acquire, release: _release, ...withoutPair } = port;
+  return withoutPair;
+}
 
 export interface PiAdapterOptions {
   /**
@@ -362,7 +404,34 @@ export interface PiAdapterOptions {
   resolveBrowserPort?: (scope: {
     projectId: string;
     ticketId: string | null;
-  }) => RuntimeBrowserPort;
+    /**
+     * Who the port serves: the Session and this attachment. A hold on a
+     * Browser Tab is taken in this name and judged against it (VC-239), and
+     * the same `sessionId` is the owner every tab the port opens is stamped
+     * with (VC-238). The model never gets to say either.
+     */
+    sessionId: string;
+    attachmentId: string;
+  }) => DesktopBrowserPort;
+  /**
+   * The desktop's background shell capability for one Session (VC-270),
+   * scoped on {@link resolveBrowserPort}'s terms and resolved once per
+   * attachment. Absent means a Session is offered no shell tool. The port's
+   * `dispose` is required here, because it is the door that kills every
+   * shell the Session started when the attachment ends — a port without it
+   * would leak processes past their Session.
+   *
+   * `workspacePath` rides with the scope because the port decides where a
+   * shell may run: the directory the Session Engine prepared, and nothing
+   * outside it.
+   */
+  resolveShellPort?: (scope: {
+    projectId: string;
+    ticketId: string | null;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+  }) => DesktopShellPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -612,6 +681,15 @@ function piNativeAdapter(
         browser: options.resolveBrowserPort?.({
           projectId: context.projectId,
           ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
+        }),
+        shell: options.resolveShellPort?.({
+          projectId: context.projectId,
+          ticketId: context.ticketId,
+          sessionId: spec.sessionId,
+          attachmentId: spec.attachmentId,
+          workspacePath: spec.directory,
         }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
@@ -695,7 +773,9 @@ interface PiBindingOptions {
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
-  browser: RuntimeBrowserPort | undefined;
+  browser: DesktopBrowserPort | undefined;
+  /** The Session's scoped background shell capability; `undefined` is "no shells". */
+  shell: DesktopShellPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -709,7 +789,8 @@ class PiBinding implements BindingHandle {
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
-  readonly #browser: RuntimeBrowserPort | undefined;
+  readonly #browser: DesktopBrowserPort | undefined;
+  readonly #shell: DesktopShellPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -743,6 +824,7 @@ class PiBinding implements BindingHandle {
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
+    this.#shell = options.shell;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
@@ -810,10 +892,15 @@ class PiBinding implements BindingHandle {
     const wantsAskUser = context.toolSurface.includes("ask_user");
     const wantsWebFetch = context.toolSurface.includes("web_fetch");
     const wantsWebSearch = context.toolSurface.includes("web_search");
-    // One name stands for all six: the browser tools ride one port and one
+    // One name stands for the six: the browser tools ride one port and one
     // binding decision, so a recorded surface holds either every browser name
-    // or none — checking the first is checking the capability.
+    // or none — checking the first is checking the capability. The hold pair
+    // (VC-239) is the one qualification: a surface frozen before it existed
+    // names six, and is handed a port without the pair so it binds six.
     const wantsBrowser = context.toolSurface.includes("browser_tabs");
+    const wantsHoldPair = context.toolSurface.includes("browser_acquire");
+    // One name stands for the three (VC-270), on the browser's reasoning.
+    const wantsShell = context.toolSurface.includes("shell_start");
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -830,6 +917,11 @@ class PiBinding implements BindingHandle {
         "This Session's frozen Agent Tool Surface includes the Browser, but this build wired no Browser host. Retry the attachment on a build that carries one.",
       );
     }
+    if (wantsShell && this.#shell === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes background shells, but this build wired no shell host. Retry the attachment on a build that carries one.",
+      );
+    }
     // The verb half of the frozen record, read back rather than re-derived from
     // Role and grants (VC-162). Re-deriving would be the recomposition the
     // record exists to prevent: a Session attaching months later would resolve
@@ -844,7 +936,14 @@ class PiBinding implements BindingHandle {
     const sessionIdentity: RuntimeSessionIdentity =
       context.role === "ticket"
         ? { ...identity, role: "ticket", ticketId: context.ticketId }
-        : { ...identity, role: "project", ticketId: null };
+        : context.role === "project"
+          ? { ...identity, role: "project", ticketId: null }
+          : {
+              ...identity,
+              role: "subagent",
+              ticketId: context.ticketId,
+              parentSessionId: context.parentSessionId,
+            };
     const runtimeSpec: SessionRuntimeSpec = {
       identity: sessionIdentity,
       // The directory the Session Engine PREPARED: for a worktree ticket the
@@ -891,6 +990,13 @@ class PiBinding implements BindingHandle {
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
       tools: {
         tools: context.toolSurface.filter(isPiCodingTool),
+        // The todo tool's membership (VC-6), read back off the frozen record
+        // exactly as the verb half is and for the same reason: it has no port,
+        // so nothing else could decide it, and re-deriving it from today's
+        // capabilities would hand an older Session a tool array its own
+        // history does not describe. Omitted rather than `false`, so a Session
+        // frozen before the tool existed produces the bundle it always did.
+        ...(context.toolSurface.includes("todo_write") ? { todoWrite: true } : {}),
         // Omitted rather than empty for the reason `promptResources` is: a
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
@@ -903,7 +1009,10 @@ class PiBinding implements BindingHandle {
       ...(wantsAskUser ? { askUser: (request, signal) => this.#askUser(request, signal) } : {}),
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
-      ...(wantsBrowser && this.#browser !== undefined ? { browser: this.#browser } : {}),
+      ...(wantsBrowser && this.#browser !== undefined
+        ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
+        : {}),
+      ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1128,6 +1237,10 @@ class PiBinding implements BindingHandle {
     this.#released = true;
     this.#abort.abort();
     this.#browser?.dispose?.();
+    // Before the handle closes: the execution environment's cleanup revokes
+    // the attachment's token, and a shell still being SIGTERMed should not
+    // outlive the identity it was spawned under (VC-270).
+    this.#shell?.dispose();
     await this.#handle?.close();
   }
 
@@ -1464,6 +1577,13 @@ class PiBinding implements BindingHandle {
   #observe(observation: RuntimeObservation): Promise<void> {
     if (this.#released) return Promise.resolve();
     if (observation.kind === "attachment" && this.#handle === null) return Promise.resolve();
+    // A turn over — completed or interrupted — ends every Browser Tab hold
+    // this attachment has (VC-239). Told before the fact is recorded rather
+    // than after: a hold outliving its turn by even the sink's write would be
+    // a hold with nobody driving, and the person's pill would say otherwise.
+    if (observation.kind === "turn" && observation.state !== "started") {
+      this.#browser?.turnEnded();
+    }
     return this.#sink.emit(observation);
   }
 }

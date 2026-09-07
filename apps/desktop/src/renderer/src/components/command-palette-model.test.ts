@@ -73,8 +73,11 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     live: true,
     activity: "idle",
     waitingOn: null,
+    outcome: null,
     lastActivityAt: 0,
     bornTicketless: false,
+    role: "ticket",
+    parentSessionId: null,
     ...overrides,
   };
 }
@@ -99,7 +102,7 @@ describe("buildCommandPaletteItems", () => {
     ]);
   });
 
-  it("lists multiple live tabs per ticket plus Project Sessions", () => {
+  it("lists multiple live tabs per ticket plus Board Sessions", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
     const scope = ticketScope(alpha.id, linked.id);

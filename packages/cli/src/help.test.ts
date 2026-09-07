@@ -400,10 +400,10 @@ describe("renderHelp over a supplied entry list", () => {
       surface: { sessionId: "session-2", role: "ticket", tools: [] },
     };
     expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: carried })).toContain(
-      "carried by this project Session's frozen Agent Tool Surface",
+      "carried by this Board Session's frozen Agent Tool Surface",
     );
     expect(renderHelp(["vault", "rotate"], [toolOnly], { runtime: absent })).toContain(
-      "not carried by this ticket Session's frozen Agent Tool Surface",
+      "not carried by this Ticket Session's frozen Agent Tool Surface",
     );
     expect(bareHelpText([toolOnly], { runtime: carried })).toContain(
       "Frozen Agent Tool Surface: vault.rotate",

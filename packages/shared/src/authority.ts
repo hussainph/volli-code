@@ -84,12 +84,14 @@ export const NON_CODING_TOOL_IDS = [
   "web_fetch",
   /** Asking the configured search provider for references, through Volli's own search boundary. */
   "web_search",
-  // The six names below are one capability — the Browser port — split only for
-  // the model's sake: a tool per intent keeps each schema small and each call
-  // legible in the ledger, while membership stays all-or-nothing because one
-  // port answers them all. Appended after the names that shipped before them
-  // and never reordered: the Cache Prefix is computed over the serialized tool
-  // array, and a durable Snapshot that recorded the old order must stay valid.
+  // The eight names below are one capability — the Browser port — split only
+  // for the model's sake: a tool per intent keeps each schema small and each
+  // call legible in the ledger, while membership stays all-or-nothing because
+  // one port answers them all. Appended after the names that shipped before
+  // them and never reordered: the Cache Prefix is computed over the serialized
+  // tool array, and a durable Snapshot that recorded the old order must stay
+  // valid. The last two (VC-239) came after the first six for that reason, and
+  // a Session frozen with six keeps six — its port is offered without them.
   /** Listing the Browser Tabs this Session may see. */
   "browser_tabs",
   /** Opening or steering a Browser Tab: a URL, back, forward, or reload. */
@@ -102,6 +104,36 @@ export const NON_CODING_TOOL_IDS = [
   "browser_screenshot",
   /** Reading a Browser Tab's console messages and page errors, bounded. */
   "browser_console",
+  /** Taking a Browser Tab's hold — one party's turn to drive it — or learning who has it (VC-239). */
+  "browser_acquire",
+  /** Giving a hold back before the turn ends. */
+  "browser_release",
+  /**
+   * Rewriting this Session's todo list, whole, so a person can see progress
+   * at a glance and the ticket keeps the last version (VC-6).
+   *
+   * The one name here with no port behind it, and the exception is deliberate
+   * rather than an oversight: a checklist needs no environment, no file and no
+   * host to answer, so there is nothing whose presence could decide membership.
+   * {@link RuntimeToolBundle.todoWrite} says it instead — the same place a
+   * verb's membership is said, for the same reason.
+   *
+   * Appended, like the hold pair before it: the Cache Prefix is computed over
+   * the serialized tool array, and a Session frozen without this name keeps its
+   * shorter list and every position in it.
+   */
+  "todo_write",
+  // The three names below are one capability — the background shell port
+  // (VC-270) — split per intent for the browser tools' reason. Appended after
+  // `todo_write`, which reached `main` first, and never reordered: the Cache
+  // Prefix is computed over the serialized tool array, so a Session frozen
+  // with the shorter list must keep every position in it.
+  /** Starting a command that runs beside the turn, and reading its first second of output. */
+  "shell_start",
+  /** Reading what a background shell has printed since the last read, or its tail. */
+  "shell_output",
+  /** Ending a background shell. */
+  "shell_kill",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

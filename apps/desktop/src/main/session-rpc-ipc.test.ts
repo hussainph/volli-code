@@ -133,6 +133,8 @@ function frame(sequence: number): SessionStreamFrame {
           id: "session-1",
           projectId: "project-1",
           ticketId: null,
+          role: "project",
+          parentSessionId: null,
           title: null,
           createdAt: 10,
         },
@@ -642,7 +644,7 @@ describe("registerSessionRpcIpcHandlers", () => {
           operationId: "project-create",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       }),
     ).resolves.toEqual({ ok: true, data: { sessionId: "session-2" } });
@@ -663,7 +665,7 @@ describe("registerSessionRpcIpcHandlers", () => {
           operationId: "project-create",
           projectId: "project-1",
           ticketId: null,
-          title: "Project chat",
+          title: "Board chat",
         },
       ],
     ]);

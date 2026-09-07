@@ -43,10 +43,10 @@ function skill(name: string): SkillReference {
 function input(overrides: Partial<PromptBaselineInput> = {}): PromptBaselineInput {
   return {
     role: "project",
-    // A Project Session's real bundle, verb half included (VC-162) — the
+    // A Board Session's real bundle, verb half included (VC-162) — the
     // baseline exists to price what a fresh Session is actually sent.
     tools: { tools: ["read", "edit", "write", "execute"], verbs: ["session.start"] },
-    brief: { text: "A project-scoped chat Session." },
+    brief: { text: "A Board Session." },
     promptResources: [INDEX],
     ...overrides,
   };
@@ -78,7 +78,7 @@ describe("promptBaseline", () => {
 
   it("prices the brief as its delimited block — the bytes the first message opens with", () => {
     const measured = promptBaseline(input());
-    const block = composeBriefBlock("project", { text: "A project-scoped chat Session." });
+    const block = composeBriefBlock("project", { text: "A Board Session." });
     expect(measured.brief.chars).toBe(block.length);
     expect(measured.sections.find((section) => section.id === "brief")).toEqual({
       id: "brief",
@@ -203,7 +203,7 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
     }
   });
 
-  it("claims a class per section of a fresh project Session", () => {
+  it("claims a class per section of a fresh Board Session", () => {
     const measured = promptBaseline(input());
     expect(
       measured.sections.map((section) => [section.id, section.cacheClass, section.placement]),
