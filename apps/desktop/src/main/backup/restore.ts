@@ -327,30 +327,52 @@ const PROFILE_ENTRIES = [
   "session-transcripts",
 ] as const;
 
-function moveInto(from: string, to: string, names: readonly string[]): void {
+/**
+ * Moves each named entry from one directory to another, recording every name
+ * it moved in `moved` BEFORE moving the next one.
+ *
+ * The accumulator is the whole point: a rename that fails on the third entry
+ * has already moved two, and the caller's rollback has to know exactly which
+ * two so it can put those back and only those. Returning the list would lose
+ * it on the throw.
+ */
+function moveInto(from: string, to: string, names: readonly string[], moved: string[]): void {
   mkdirSync(to, { recursive: true });
   for (const name of names) {
     const source = join(from, name);
     if (!existsSync(source)) continue;
     renameSync(source, join(to, name));
+    moved.push(name);
   }
 }
 
 /**
  * The swap, and the only moment the live profile changes.
  *
- * Two renames with a window between them, so the window is what this function
- * exists to handle: if the staged profile cannot be moved into place after the
- * old one has been set aside, the old one is moved back before the failure is
- * reported. That is the difference between "the restore did not happen" and a
- * profile directory with nothing in it.
+ * Two multi-entry moves with a window between and inside them, so the window
+ * is what this function exists to handle. Either move can fail PARTWAY — the
+ * database renamed aside, the blob directory refused — and each failure is
+ * unwound to the entry: whatever the staged profile had already placed goes
+ * back to staging, whatever the old profile had already set aside comes back,
+ * and only then is the failure reported. That is the difference between "the
+ * restore did not happen" and a profile directory missing its database.
  */
 function activateProfile(profileRoot: string, staging: string, replacedPath: string): void {
-  moveInto(profileRoot, replacedPath, PROFILE_ENTRIES);
+  const setAside: string[] = [];
   try {
-    moveInto(staging, profileRoot, PROFILE_ENTRIES);
+    moveInto(profileRoot, replacedPath, PROFILE_ENTRIES, setAside);
   } catch (error) {
-    moveInto(replacedPath, profileRoot, PROFILE_ENTRIES);
+    moveInto(replacedPath, profileRoot, setAside, []);
+    rmSync(replacedPath, { recursive: true, force: true });
+    throw error;
+  }
+  const activated: string[] = [];
+  try {
+    moveInto(staging, profileRoot, PROFILE_ENTRIES, activated);
+  } catch (error) {
+    // Staged entries first, so the old ones do not land on top of them.
+    moveInto(profileRoot, staging, activated, []);
+    moveInto(replacedPath, profileRoot, setAside, []);
     rmSync(replacedPath, { recursive: true, force: true });
     throw error;
   }

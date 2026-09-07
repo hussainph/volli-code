@@ -7,7 +7,15 @@
  * staged profile and the swap is the last thing that occurs.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -296,6 +304,38 @@ describe("restoreBackupBundle — a clean restore", () => {
     // No staging left behind.
     expect(readdirSync(target.root).some((name) => name.startsWith(".volli-restore-"))).toBe(false);
   });
+
+  it("puts the previous profile back when the swap fails partway through", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+    const now = 1_800_000_000_000;
+    // The live profile has a blob directory of its own, and the place it
+    // would be set aside to is already a non-empty directory, so the swap's
+    // FIRST move succeeds for volli.db and then fails on `blobs`. Every check
+    // has passed by this point; the only thing left to go wrong is the swap.
+    mkdirSync(join(blobsRoot(target.root), "aa"), { recursive: true });
+    writeFileSync(join(blobsRoot(target.root), "aa", "old-blob"), "old");
+    const replacedPath = join(target.root, `.volli-replaced-${now}`);
+    mkdirSync(join(replacedPath, "blobs", "occupied"), { recursive: true });
+    writeFileSync(join(replacedPath, "blobs", "occupied", "file"), "x");
+    const before = readFileSync(join(target.root, "volli.db"));
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems[0]?.message).toMatch(/current profile is unchanged/);
+    // The claim in that message has to be true: the database is back where it
+    // was, with the same bytes, and the old blob directory is intact.
+    expect(readFileSync(join(target.root, "volli.db")).equals(before)).toBe(true);
+    expect(existsSync(join(blobsRoot(target.root), "aa", "old-blob"))).toBe(true);
+    expect(readdirSync(target.root).some((name) => name.startsWith(".volli-restore-"))).toBe(false);
+  });
 });
 
 describe("restoreBackupBundle — an older bundle from a supported app version", () => {
@@ -325,34 +365,41 @@ describe("restoreBackupBundle — an older bundle from a supported app version",
     }
   });
 
-  it("walks every supported schema step, not only the newest one", async () => {
-    // Each supported step is exercised as its own restore: the point of the
-    // window is that EVERY documented version still restores, and a loop that
-    // only checked the newest would pass on a build where the older ones do not.
-    for (const version of [HEAD_SCHEMA, HEAD_SCHEMA - 1, HEAD_SCHEMA - 2]) {
-      const bytes = bundleBytes({ schemaVersion: version });
-      const target = targetProfile();
+  // Three whole restores in one case, each a migrate-write-migrate-verify
+  // walk; comfortably under a second alone, tens of seconds under a loaded CI
+  // runner, so the budget is stated rather than left to the default.
+  it(
+    "walks every supported schema step, not only the newest one",
+    { timeout: 60_000 },
+    async () => {
+      // Each supported step is exercised as its own restore: the point of the
+      // window is that EVERY documented version still restores, and a loop that
+      // only checked the newest would pass on a build where the older ones do not.
+      for (const version of [HEAD_SCHEMA, HEAD_SCHEMA - 1, HEAD_SCHEMA - 2]) {
+        const bytes = bundleBytes({ schemaVersion: version });
+        const target = targetProfile();
 
-      const result = await restoreBackupBundle({
-        bundle: bytes,
-        profileRoot: target.root,
-        projectPaths: makeCheckouts(mapping(target.checkoutPath)),
-        now: 1_800_000_000_000,
-      });
+        const result = await restoreBackupBundle({
+          bundle: bytes,
+          profileRoot: target.root,
+          projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+          now: 1_800_000_000_000,
+        });
 
-      expect(result.ok, `schema ${version} should restore`).toBe(true);
-      const db = restoredDb(target.root);
-      try {
-        expect(db.pragma("user_version", { simple: true })).toBe(HEAD_SCHEMA);
-        expect(db.prepare("SELECT COUNT(*) AS n FROM session_usage").get()).toEqual({ n: 1 });
-      } finally {
-        db.close();
+        expect(result.ok, `schema ${version} should restore`).toBe(true);
+        const db = restoredDb(target.root);
+        try {
+          expect(db.pragma("user_version", { simple: true })).toBe(HEAD_SCHEMA);
+          expect(db.prepare("SELECT COUNT(*) AS n FROM session_usage").get()).toEqual({ n: 1 });
+        } finally {
+          db.close();
+        }
+        source.cleanup();
       }
-      source.cleanup();
-    }
-    // The afterEach cleanup expects a live fixture; give it the last one.
-    source = createFixtureProfile();
-  });
+      // The afterEach cleanup expects a live fixture; give it the last one.
+      source = createFixtureProfile();
+    },
+  );
 });
 
 /** The claim every refusal makes: the profile is exactly as it was. */
