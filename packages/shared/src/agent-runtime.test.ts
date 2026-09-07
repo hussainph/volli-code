@@ -7,9 +7,12 @@ import {
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
+  shellCommandLine,
+  shellStanding,
   UtilityCompletionError,
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
+  type RuntimeShellPort,
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
@@ -165,6 +168,12 @@ const browserPort: RuntimeBrowserPort = {
 const browserHoldPortFixture: RuntimeBrowserPort = { ...browserPort, acquire: port, release: port };
 
 /**
+ * Stands in for a wired background shell port (VC-270). Presence only, like
+ * the two above: the three shell tools ride this one port together.
+ */
+const shellPort: RuntimeShellPort = { start: port, output: port, kill: port };
+
+/**
  * The verb port, which unlike the three above decides no membership — the
  * bundle does. Kept apart because it has a return type the others do not.
  */
@@ -223,6 +232,70 @@ describe("sessionToolIds", () => {
     ]);
   });
 
+  it("offers the three shell tools together exactly when the one shell port is wired (VC-270)", () => {
+    // One port, three names, appended AFTER the hold pair: a Session frozen
+    // before background shells existed keeps its shorter list and its Cache
+    // Prefix, and one born since gets the three on the end.
+    expect(sessionToolIds({ tools: { tools: [] }, shell: shellPort })).toEqual([
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
+    expect(
+      sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture, shell: shellPort }),
+    ).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+      "browser_acquire",
+      "browser_release",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
+    expect(NON_CODING_TOOL_IDS.slice(-3)).toEqual(["shell_start", "shell_output", "shell_kill"]);
+    // The binding carries the port, so the runtime never null-checks one.
+    for (const binding of sessionToolBindings({ tools: { tools: [] }, shell: shellPort })) {
+      expect(binding).toMatchObject({ port: shellPort });
+    }
+  });
+
+  it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
+    // Three surfaces ask this — the model's result text, the output pane's
+    // header, and any listing — and they must not disagree about what a
+    // shell did.
+    expect(shellStanding({ state: "running", code: null, signal: null })).toBe("running");
+    expect(shellStanding({ state: "exited", code: 0, signal: null })).toBe("exited 0");
+    expect(shellStanding({ state: "exited", code: 1, signal: null })).toBe("exited 1");
+    // A signal wins over the code, because a killed shell's code is null and
+    // "exited null" tells nobody anything.
+    expect(shellStanding({ state: "exited", code: null, signal: "SIGKILL" })).toBe(
+      "exited by SIGKILL",
+    );
+    // Exited with neither: the OS told us nothing, and the text says so
+    // rather than inventing a zero that would read as success.
+    expect(shellStanding({ state: "exited", code: null, signal: null })).toBe("exited ?");
+  });
+
+  it("names a shell by the first line that says something (VC-270)", () => {
+    expect(shellCommandLine("pnpm dev")).toBe("pnpm dev");
+    expect(shellCommandLine("  pnpm dev  ")).toBe("pnpm dev");
+    // The first NON-BLANK line: a command that opens with a newline still
+    // gets a name, rather than an empty row.
+    expect(shellCommandLine("\n\n  pnpm test --watch\nsecond line")).toBe("pnpm test --watch");
+    expect(shellCommandLine("pnpm dev\n# never shown")).toBe("pnpm dev");
+    // Nothing to name: empty, so a caller can fall back to a title or an id.
+    expect(shellCommandLine("   \n\t\n")).toBe("");
+    expect(shellCommandLine("")).toBe("");
+    // Never truncated here — how short is the caller's business, and a bound
+    // baked in would be applied twice.
+    const long = "x".repeat(500);
+    expect(shellCommandLine(long)).toBe(long);
+  });
+
   it("refuses a port carrying only half of the hold pair", () => {
     // A Session that could take a hold and never give it back is not a
     // smaller surface; it is a build bug, caught where a throw is cheap.
@@ -254,15 +327,48 @@ describe("sessionToolIds", () => {
     // a Snapshot built from this call cannot under-report the surface, whatever
     // the surface holds.
     const everything = sessionToolIds({
-      tools: { tools: ["read", "edit", "write", "execute"] },
+      tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
       askUser: port,
       webFetch: port,
       webSearch: port,
       browser: browserHoldPortFixture,
+      shell: shellPort,
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);
-    expect(everything).toHaveLength(15);
+    // Four coding tools plus every non-coding name, todo_write (VC-6) and
+    // the three shell tools (VC-270) included.
+    expect(everything).toHaveLength(4 + NON_CODING_TOOL_IDS.length);
+  });
+
+  it("takes todo_write from the bundle rather than a port, and puts it last in the vocabulary (VC-6)", () => {
+    // The one interaction tool with nothing behind it: a todo list needs no
+    // environment, no file and no host to answer, so there is no port whose
+    // presence could decide membership. The bundle says it instead, exactly as
+    // it does for a verb.
+    expect(sessionToolIds({ tools: { tools: [], todoWrite: true } })).toEqual(["todo_write"]);
+    expect(sessionToolIds({ tools: { tools: [] } })).toEqual([]);
+    expect(sessionToolIds({ tools: { tools: ["read"], todoWrite: true }, askUser: port })).toEqual([
+      "read",
+      "ask_user",
+      "todo_write",
+    ]);
+  });
+
+  it("binds todo_write with no port, so the runtime has nothing to null-check (VC-6)", () => {
+    expect(sessionToolBindings({ tools: { tools: [], todoWrite: true } })).toEqual([
+      { tool: "todo_write" },
+    ]);
+  });
+
+  it("leaves a surface frozen before todo_write existed exactly as it was (VC-6)", () => {
+    // The reason membership is a bundle flag and not an unconditional arm: the
+    // Pi adapter refuses an attachment whose derived tool array disagrees with
+    // the durable record, so a name that appeared on its own would refuse every
+    // Session that predates it.
+    expect(
+      sessionToolIds({ tools: { tools: ["read", "edit"] }, askUser: port, webFetch: port }),
+    ).toEqual(["read", "edit", "ask_user", "web_fetch"]);
   });
 
   it("puts the Role's verbs last, after every capability tool (VC-162)", () => {

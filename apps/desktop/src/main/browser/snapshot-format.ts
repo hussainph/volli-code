@@ -40,6 +40,12 @@ export interface BrowserSnapshotFormat {
   text: string;
   /** `eN` to the CDP backendDOMNodeId input is dispatched at. */
   refs: ReadonlyMap<string, number>;
+  /**
+   * `eN` to the accessible name printed beside it (VC-238), so an action can
+   * be reported by what the page calls the element. Page content, already cut
+   * to the name bound; empty names are absent rather than `""`.
+   */
+  names: ReadonlyMap<string, string>;
   /** First number no line in this print minted, including lines truncated away. */
   nextRef: number;
   truncated: boolean;
@@ -125,6 +131,7 @@ function headingLevel(node: AXNodeLike): number | null {
 interface MintedRef {
   ref: string;
   backendDOMNodeId: number;
+  name: string;
   lineIndex: number;
 }
 
@@ -184,7 +191,7 @@ function printNode(
   if (level !== null) line += ` [level=${level}]`;
   if (INTERACTIVE_ROLES.has(role) && node.backendDOMNodeId !== undefined) {
     const ref = `e${refStart + refs.length}`;
-    refs.push({ ref, backendDOMNodeId: node.backendDOMNodeId, lineIndex: lines.length });
+    refs.push({ ref, backendDOMNodeId: node.backendDOMNodeId, name, lineIndex: lines.length });
     line += ` [ref=${ref}]`;
   }
 
@@ -241,9 +248,9 @@ export function formatAXSnapshot(
   // line that MINTED each ref, never by re-reading tokens out of the surviving
   // text — a page's own name can carry a `[ref=eN]` lookalike, and a token
   // inside quotes is the page talking, not a key of this map.
-  const refs = new Map(
-    minted.filter((one) => one.lineIndex < keptLines).map((one) => [one.ref, one.backendDOMNodeId]),
-  );
+  const kept = minted.filter((one) => one.lineIndex < keptLines);
+  const refs = new Map(kept.map((one) => [one.ref, one.backendDOMNodeId]));
+  const names = new Map(kept.filter((one) => one.name !== "").map((one) => [one.ref, one.name]));
 
-  return { text, refs, nextRef: refStart + minted.length, truncated };
+  return { text, refs, names, nextRef: refStart + minted.length, truncated };
 }

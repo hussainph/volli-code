@@ -89,13 +89,15 @@ const SHELL_COMMANDS = [
 ] as const;
 
 const PLAN_STEPS: readonly IslandStep[] = [
-  { id: "step-1", title: "Read composer stack" },
-  { id: "step-2", title: "Sketch closed pill" },
-  { id: "step-3", title: "Wire feel dials" },
-  { id: "step-4", title: "Cluster drawings" },
-  { id: "step-5", title: "Hover treatments" },
-  { id: "step-6", title: "Reduced motion pass" },
-  { id: "step-7", title: "Record verdicts" },
+  { id: "step-1", title: "Read composer stack", state: "in_progress" },
+  { id: "step-2", title: "Sketch closed pill", state: "pending" },
+  { id: "step-3", title: "Wire feel dials", state: "pending" },
+  { id: "step-4", title: "Cluster drawings", state: "pending" },
+  { id: "step-5", title: "Hover treatments", state: "pending" },
+  // Dropped rather than done: the lab needs a cancelled row on screen, since
+  // it is the one plan state a person cannot produce with the advance dial.
+  { id: "step-6", title: "Reduced motion pass", state: "cancelled" },
+  { id: "step-7", title: "Record verdicts", state: "pending" },
 ];
 
 const MODELS: ComposerModel[] = [
@@ -174,7 +176,18 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const next = flashed(sim, "Opened", host);
       return {
         ...next,
-        tabs: [...sim.tabs, { id: `tab-${next.seq}`, host, state: "loading", promoted: false }],
+        tabs: [
+          ...sim.tabs,
+          {
+            id: `tab-${next.seq}`,
+            host,
+            state: "loading",
+            promoted: false,
+            surface: null,
+            // Every other tab is a child's, so the owner register gets exercised.
+            owner: sim.tabs.length % 2 === 1 ? "Read the docs" : null,
+          },
+        ],
         seq: next.seq + 1,
       };
     }
@@ -245,7 +258,25 @@ function simReducer(sim: Sim, action: SimAction): Sim {
     }
     case "advance-plan": {
       if (!sim.plan) return sim;
-      const plan = { ...sim.plan, done: Math.min(sim.plan.steps.length, sim.plan.done + 1) };
+      // Ticks the step in hand and starts the next one, because a step carries
+      // its own state now (VC-6) — bumping `done` alone moved the number and
+      // left every row drawn exactly as it was. `done` stays the COUNT the
+      // pill prints, derived rather than incremented.
+      const current = planCurrent(sim.plan);
+      const ticked: IslandStep[] = [];
+      for (const step of sim.plan.steps) {
+        ticked.push(step.id === current?.id ? { ...step, state: "completed" } : step);
+      }
+      const next = ticked.find((step) => step.state === "pending");
+      const steps: IslandStep[] = [];
+      for (const step of ticked) {
+        steps.push(step.id === next?.id ? { ...step, state: "in_progress" } : step);
+      }
+      const plan = {
+        ...sim.plan,
+        steps,
+        done: steps.filter((step) => step.state === "completed").length,
+      };
       return {
         ...flashed(sim, `Plan ${planCount(plan)}`, planCurrent(plan)?.title ?? "Wrap up"),
         plan,
@@ -287,9 +318,15 @@ function simReducer(sim: Sim, action: SimAction): Sim {
       const tab = sim.tabs.find((candidate) => candidate.id === action.id);
       if (!tab) return sim;
       return {
-        ...flashed(sim, tab.promoted ? "Focused pane" : "Opened in pane", tab.host),
+        // The verb pins one tab as the chat's preview (VC-268): the one that
+        // was pinned goes back to headless, the way main keeps it to one.
+        ...flashed(sim, "Pinned here", tab.host),
         tabs: sim.tabs.map((candidate) =>
-          candidate.id === action.id ? { ...candidate, promoted: true } : candidate,
+          candidate.id === action.id
+            ? { ...candidate, promoted: true, surface: "preview" as const }
+            : candidate.surface === "preview"
+              ? { ...candidate, promoted: false, surface: null }
+              : candidate,
         ),
       };
     }

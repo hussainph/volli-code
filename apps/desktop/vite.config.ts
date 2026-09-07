@@ -144,6 +144,25 @@ export default defineConfig(({ mode }) => ({
         "src/chat/composer-picker.ts",
         "src/chat/rename.ts",
         "src/chat/transport.ts",
+        // The Activity Island's seam and its Browser Tab feed (VC-268), listed
+        // on the same argument as `island-shells.ts` below and DESPITE being
+        // hooks: what gets announced is decided in an effect, not in a shape a
+        // screenshot could show. `use-island-tabs.ts` reconstructs "opened",
+        // "loaded", "failed" and "closed" by diffing a push cache that keeps no
+        // history, and its baseline spans TWO stores that fill from two
+        // independent fetches — a rule with no visible surface at all, whose
+        // first bug was a child's existing tabs announced as new when the
+        // slower fetch landed. `use-activity-island.ts` is where a feed that
+        // returns nothing must still leave the island empty.
+        "src/chat/use-activity-island.ts",
+        "src/chat/use-island-flash.ts",
+        "src/chat/use-island-tabs.ts",
+        // The subagent feed (VC-269), on the same argument: which listing
+        // rows are children is a rule with a known trap (provenance reads a
+        // Board chat's children as person-started), the chip's state is a
+        // fold of two record facts, and "delegated" / "done" / "failed" are
+        // a diff over a baseline — none of it visible in a screenshot.
+        "src/chat/use-island-agents.ts",
         "src/components/attachments/attachment-model.ts",
         // What the renderer does with the Run door's answer (VC-126/VC-234):
         // which refusal opens Model Access, which toasts, and what success
@@ -195,6 +214,16 @@ export default defineConfig(({ mode }) => ({
         // pair that deliberately does not.
         "src/components/board/board-summary.ts",
         "src/components/chat/chat-plane-model.ts",
+        // The Activity Island's shell feed (VC-270). `-model.ts` is the pure
+        // half — one Session's shells as the island models them, the flash
+        // per transition, and the two verbs its card fires. `island-shells.ts`
+        // is the React hook over it and is listed DESPITE not being pure,
+        // because the rule that decides what gets announced lives in its
+        // effect: a start announced twice, or an exit never announced, is
+        // invisible in a screenshot and cannot be reached from the model half
+        // alone.
+        "src/components/chat/island-shells.ts",
+        "src/components/chat/island-shells-model.ts",
         // Which drawing an empty chat may offer, per scope (VC-55). A pure
         // `.ts` beside the views precisely so the gate can reach it: the menu
         // a scope offers IS the identity signal, so a scope quietly gaining an

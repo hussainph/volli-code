@@ -79,6 +79,9 @@ import {
   useSessionController,
   type ChatSessionsStore,
 } from "@renderer/chat/use-session-controller";
+import { useActivityIsland } from "@renderer/chat/use-activity-island";
+import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
+import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle, ToolRow, copyText } from "@renderer/components/chat/activity-ui";
 import {
   CompactionBoundary,
@@ -141,6 +144,11 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+
+import { BrowserPreview } from "@renderer/components/browser/browser-preview";
+import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
+import { SubagentPeekDialog } from "@renderer/components/chat/subagent-peek-dialog";
+import { ShellOutputDialog } from "@renderer/components/shell/shell-output-dialog";
 import { useMeasuredHeight } from "@renderer/hooks/use-measured-height";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -213,6 +221,12 @@ export interface ChatPlaneProps {
   /** Project scope for Model Access and file navigation. */
   projectId: string;
   /**
+   * Whether the surface around this chat is on screen. Only the pinned
+   * Browser preview reads it (VC-238): a native view ignores the CSS that
+   * stands the rest of the plane down, so it has to be told. Default true.
+   */
+  visible?: boolean;
+  /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
    * The Session's SCOPE, handed down rather than looked up: both hosts already
@@ -240,8 +254,47 @@ export function ChatPlane({
   onOpenFile,
   onOpenSession,
   store,
+  visible: surfaceVisible = true,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
+  const browser = useChatBrowserTabs(sessionId, projectId);
+  // Where a background shell's tail opens (VC-270's hand-off): a modal over
+  // this chat, mounted only while open — see `ShellOutputDialog`. The shells
+  // bridge is read here rather than inside the dialog so the lab, which has
+  // no bridge and no shells, mounts neither.
+  const shellsApi = typeof window === "undefined" ? undefined : window.api?.shells;
+  const [openShellId, setOpenShellId] = React.useState<string | null>(null);
+  const closeShellOutput = React.useCallback(() => setOpenShellId(null), []);
+  // Where a subagent peeks (VC-269): one id, so one peek at a time is
+  // structural. Promotion to a tab is the host's own `onOpenSession` — the
+  // door the `delegate` transcript row already takes — threaded through the
+  // island's deps rather than a second door written here.
+  const [peekedAgentId, setPeekedAgentId] = React.useState<string | null>(null);
+  const closePeek = React.useCallback(() => setPeekedAgentId(null), []);
+  // Where focus lands when the peek closes: this plane's own agents cluster,
+  // the anchor the row's card reopens from (see `SubagentPeekDialog`). Read
+  // off the plane's subtree rather than the document so a split with two
+  // chats never hands focus to the other one's island.
+  const planeRef = React.useRef<HTMLDivElement>(null);
+  const peekReturnFocus = React.useCallback(
+    () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
+    [],
+  );
+  const island = useActivityIsland(sessionId, projectId, {
+    ...(store === undefined ? {} : { store }),
+    ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
+    peekSession: setPeekedAgentId,
+    ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
+  });
+  // The peeked child as the island models it; a child that left the listing
+  // while peeked closes the overlay with it.
+  const peekedAgent = React.useMemo(
+    () =>
+      peekedAgentId === null
+        ? null
+        : (island.model.agents.find((agent) => agent.id === peekedAgentId) ?? null),
+    [island.model.agents, peekedAgentId],
+  );
   const sessionsStore = store ?? useChatSessionsStore;
   const {
     claimQueued,
@@ -1036,71 +1089,103 @@ export function ChatPlane({
   // caps its long-form prose against this pane's actual height. `vh` follows the
   // whole window and therefore misses a short top/bottom split.
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col [container-type:size]" style={planeStyle}>
-      <FileMentionProvider onOpenFile={onOpenFile}>
-        {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
-            against (VC-273) — the agent writes the path the brief handed it,
-            and this is what turns that back into the Blob it names. */}
-        <MarkdownAttachmentsProvider attachments={materializedAttachments}>
-          <Conversation className="min-h-0 bg-background">
-            {/* The bottom padding clears the composer plus the h-16 gradient over
+    <div
+      ref={planeRef}
+      className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+      style={planeStyle}
+    >
+      <BrowserCardHostContext.Provider value={browser?.cardHost ?? null}>
+        <FileMentionProvider onOpenFile={onOpenFile}>
+          {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
+              against (VC-273) — the agent writes the path the brief handed it,
+              and this is what turns that back into the Blob it names. */}
+          <MarkdownAttachmentsProvider attachments={materializedAttachments}>
+            <Conversation className="min-h-0 bg-background">
+              {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-            <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-              {messages.length === 0 ? (
-                // Where this Session runs, drawn (VC-55). It replaces the bare
-                // mark that stood here — see `empty/chat-empty-state.tsx` for why
-                // that reversal is deliberate. What blocks TYPING still sits on
-                // the composer, where the typing is.
-                <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                  <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-                </ConversationEmptyState>
-              ) : (
-                <ContentColumn className={MESSAGE_GAP}>
-                  {rows.map((row) =>
-                    row.kind === "compaction" ? (
-                      <CompactionBoundary
-                        key={`compaction:${row.compaction.sequence}`}
-                        compaction={row.compaction}
-                      />
-                    ) : row.kind === "reasoning-drop" ? (
-                      <ReasoningDropNotice
-                        key={`reasoning-drop:${row.drop.sequence}`}
-                        drop={row.drop}
-                      />
-                    ) : (
-                      <ChatTurn
-                        key={row.messages[0]?.id}
-                        messages={row.messages}
-                        context={turnContext}
-                        live={row.messages === liveTurn}
-                      />
-                    ),
-                  )}
-                  {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                  {working ? <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} /> : null}
-                </ContentColumn>
-              )}
-            </ConversationContent>
-            {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+              <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+                {messages.length === 0 ? (
+                  // Where this Session runs, drawn (VC-55). It replaces the bare
+                  // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                  // that reversal is deliberate. What blocks TYPING still sits on
+                  // the composer, where the typing is.
+                  <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                    <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                  </ConversationEmptyState>
+                ) : (
+                  <ContentColumn className={MESSAGE_GAP}>
+                    {rows.map((row) =>
+                      row.kind === "compaction" ? (
+                        <CompactionBoundary
+                          key={`compaction:${row.compaction.sequence}`}
+                          compaction={row.compaction}
+                        />
+                      ) : row.kind === "reasoning-drop" ? (
+                        <ReasoningDropNotice
+                          key={`reasoning-drop:${row.drop.sequence}`}
+                          drop={row.drop}
+                        />
+                      ) : (
+                        <ChatTurn
+                          key={row.messages[0]?.id}
+                          messages={row.messages}
+                          context={turnContext}
+                          live={row.messages === liveTurn}
+                        />
+                      ),
+                    )}
+                    {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                    {working ? (
+                      <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
+                    ) : null}
+                  </ContentColumn>
+                )}
+              </ConversationContent>
+              {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-            <div
-              className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-              style={{ backgroundImage: COMPOSER_SCRIM }}
-            />
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+                style={{ backgroundImage: COMPOSER_SCRIM }}
+              />
 
-            {/* Glass, not a plug: this button only exists while the reader is
+              {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-            {messages.length > 0 ? (
-              <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-            ) : null}
-          </Conversation>
-        </MarkdownAttachmentsProvider>
-      </FileMentionProvider>
+              {messages.length > 0 ? (
+                <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+              ) : null}
+            </Conversation>
+          </MarkdownAttachmentsProvider>
+        </FileMentionProvider>
+      </BrowserCardHostContext.Provider>
+
+      {/* The tab a person asked to see (VC-238), IN FLOW between the transcript
+          and the composer rather than inside the composer's absolute block: a
+          native view cannot be clipped, so a pane too short for the block would
+          push the pinned page up behind whatever sits above this plane — in a
+          split, another pane's own native view — and its header with it. Here
+          the transcript shrinks to make room, the frame is bounded by the
+          plane's own height, and the composer's measured block still clears
+          the bottom. */}
+      {browser !== null && browser.preview !== null ? (
+        <div
+          className="flex min-h-0 shrink-0 flex-col"
+          style={{ marginBottom: "var(--composer-height)", maxHeight: "45%" }}
+        >
+          <ContentColumn className="flex min-h-0 flex-col">
+            <BrowserPreview
+              tab={browser.preview}
+              api={browser.api}
+              ownerLabel={browser.ownerLabel(browser.preview)}
+              visible={surfaceVisible}
+            />
+          </ContentColumn>
+        </div>
+      ) : null}
 
       {/* Opaque, because the transcript scrolls the full height of the plane
           behind it. The fade above hands off to this; between them the
@@ -1115,9 +1200,23 @@ export function ChatPlane({
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
           {blocker ? <SessionBlocker blocker={blocker} /> : null}
-          {/* Overlay on the composer, never in its place. Ask-user cards (and
-              later plans / subagent activity) stack above the input so a
-              follow-up can still be typed while the card waits. */}
+          {/* The Activity Island (VC-268): what this Session holds beyond the
+              chat stream — its Browser Tabs, its plan, its background shells
+              — a SIBLING of the interaction stack, sharing its shell material
+              and never absorbed into it (VC-247). It decides for itself when
+              there is nothing to draw (`islandEmpty`, inside the component);
+              no guard here, because a second one could disagree with it. The
+              spacing to the composer rides the pill so it leaves with it. The
+              overlay ignores hits so its padding does not cover the
+              transcript; the island carries controls, so it opts back in. */}
+          <ActivityIsland
+            model={island.model}
+            actions={island.actions}
+            className="pointer-events-auto mb-2"
+          />
+          {/* Overlay on the composer, never in its place. Ask-user cards
+              stack above the input so a follow-up can still be typed while
+              the card waits. */}
           <ComposerInteractionStack
             interaction={pending}
             resolving={pending ? resolving.has(pending.id) : false}
@@ -1172,6 +1271,16 @@ export function ChatPlane({
           </ComposerInteractionStack>
         </ContentColumn>
       </div>
+      {shellsApi === undefined ? null : (
+        <ShellOutputDialog shellId={openShellId} api={shellsApi} onClose={closeShellOutput} />
+      )}
+      <SubagentPeekDialog
+        agent={peekedAgent}
+        onClose={closePeek}
+        returnFocus={peekReturnFocus}
+        {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}
+        {...(store === undefined ? {} : { store })}
+      />
     </div>
   );
 }

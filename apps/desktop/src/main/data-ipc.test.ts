@@ -11,6 +11,7 @@ import type {
   RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
+  SessionStopResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -1494,6 +1495,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         live: false,
         activity: "idle",
         waitingOn: null,
+        outcome: null,
         lastActivityAt: 500,
         bornTicketless: false,
         role: "ticket",
@@ -1738,6 +1740,146 @@ describe("volli:session-rename", () => {
         title: "Renamed",
       }),
     ).toEqual({ ok: false, error: "Session rename was not completed" });
+  });
+});
+
+// VC-269: the Activity Island's armed stop, as the person.
+describe("volli:session-stop", () => {
+  async function structuredSession(sessionEngine: ReturnType<typeof createDesktopSessionEngine>) {
+    const projectId = createProject();
+    const created = await sessionEngine.createSession({
+      commandId: "stop-create",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Helper",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    return { projectId, sessionId: created.session.id };
+  }
+
+  it("records the stop with the user actor, then interrupts and releases through the runtime", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const { projectId, sessionId } = await structuredSession(sessionEngine);
+    const attachment = {
+      id: "att-1",
+      sessionId,
+      adapterId: "pi",
+      venue: { id: "local", kind: "local" as const },
+      continuity: "fresh" as const,
+      native: null,
+      authority: null,
+    };
+    const provenance = {
+      source: { kind: "adapter" as const, id: "pi", detail: null },
+      venue: { id: "local", kind: "local" as const },
+    };
+    await sessionEngine.observe({
+      id: "stop-opened",
+      kind: "attachment.opened",
+      sessionId,
+      commandId: null,
+      occurredAt: 501,
+      provenance,
+      attachment,
+    });
+    await sessionEngine.observe({
+      id: "stop-turn",
+      kind: "turn.started",
+      sessionId,
+      attachmentId: "att-1",
+      turnId: "t1",
+      commandId: null,
+      occurredAt: 502,
+      provenance,
+    });
+    const commands: { commandId: string; command: { kind: string } }[] = [];
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine,
+        sessionRuntime: {
+          command: async (request) => {
+            commands.push({ commandId: request.commandId, command: request.command });
+            return {
+              receipt: {
+                id: `${request.commandId}:receipt`,
+                commandId: request.commandId,
+                status: "accepted",
+                recordedAt: 1,
+                sequence: 1,
+              },
+            } as never;
+          },
+        },
+      },
+    );
+
+    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", {
+      sessionId,
+      reason: "  Runaway  ",
+    });
+
+    expect(result).toEqual({ ok: true, interrupted: true, released: true, failures: [] });
+    expect(commands.map((one) => one.command.kind)).toEqual([
+      "executor.interrupt",
+      "adapter.release",
+    ]);
+    // The durable fact names the person, and the listing now reads stopped.
+    const projection = await sessionEngine.getSession({ sessionId });
+    expect(projection?.stopped).toMatchObject({ reason: "Runaway", by: { kind: "user" } });
+    const list = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    expect(list.ok && list.sessions.find((row) => rowId(row) === sessionId)).toMatchObject({
+      kind: "chat",
+      record: { activity: "stopped" },
+    });
+  });
+
+  // Fix-first (review c5714a22): a not-live target — no open attachment, so
+  // nothing for the runtime acts to touch — is refused by name through the
+  // door's ordinary `{ ok: false }` shape, the same as every other mutation's
+  // refusal, and NOT durably recorded as a quiet success.
+  it("refuses a not-live target as an ordinary ok:false, and writes nothing", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const { sessionId } = await structuredSession(sessionEngine);
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
+    );
+
+    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId });
+
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("is not live") });
+    const projection = await sessionEngine.getSession({ sessionId });
+    expect(projection?.stopped).toBeNull();
+  });
+
+  it("refuses without a runtime, and words an unknown session as the operation does", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    expect(
+      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
+    ).toEqual({ ok: false, error: expect.stringContaining("not available this launch") });
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
+    );
+    expect(
+      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
+    ).toEqual({ ok: false, error: "Unknown session." });
+    expect(invoke<SessionStopResult>("volli:session-stop", { sessionId: "" })).toEqual({
+      ok: false,
+      error: "Invalid session stop",
+    });
   });
 });
 

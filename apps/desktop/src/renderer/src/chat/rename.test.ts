@@ -60,6 +60,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       live: true,
       activity: "idle",
       waitingOn: null,
+      outcome: null,
       lastActivityAt: 1,
       bornTicketless: false,
       role: "ticket",

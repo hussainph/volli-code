@@ -39,6 +39,7 @@ describe("HomeTabStrip Browser Tabs", () => {
       tabId: "tab-7",
       title: "Volli docs",
       loading: true,
+      driven: false,
       heldBy: null,
     };
 
@@ -50,7 +51,33 @@ describe("HomeTabStrip Browser Tabs", () => {
     // The way in is the "+" menu's Browser row now, not a second labelled
     // button on the strip — see `new-session-control.test.tsx`.
     expect(html).not.toContain('aria-label="New Browser Tab"');
-    // A free tab wears no holder dot.
+    // The person's own tab wears the plain browser glyph, and a free tab
+    // wears no holder dot.
+    expect(html).toContain('data-browser-tab-mark="user"');
+    expect(html).not.toContain('aria-label="Driven by a Session"');
+    expect(html).not.toContain("browser-holder-dot");
+  });
+
+  it("marks a promoted agent tab as driven, so the strip says an agent may still be steering it", () => {
+    // "Open as tab" puts a Session's tab in the person's strip beside their
+    // own (VC-238 §4). Without the mark the two are indistinguishable, and the
+    // person cannot tell which page moves under them.
+    const promoted: HomeTabDescriptor = {
+      kind: "browser",
+      id: "browser:tab-8",
+      tabId: "tab-8",
+      title: "Agent page",
+      loading: false,
+      driven: true,
+      heldBy: null,
+    };
+
+    const html = draw([HOME_BOARD_TAB, promoted], promoted.id);
+
+    expect(html).toContain('data-browser-tab-mark="session"');
+    expect(html).toContain('aria-label="Driven by a Session"');
+    // Owned but not held: the two marks are independent, which is the whole
+    // reason there are two of them.
     expect(html).not.toContain("browser-holder-dot");
   });
 
@@ -61,6 +88,7 @@ describe("HomeTabStrip Browser Tabs", () => {
       tabId: "tab-8",
       title: "Checkout",
       loading: false,
+      driven: false,
       heldBy: { kind: "session", sessionId: "ses-a", name: "Fix checkout form", color: "#d07c00" },
     };
     // Not the active tab: the dot is how a person learns a Session is driving

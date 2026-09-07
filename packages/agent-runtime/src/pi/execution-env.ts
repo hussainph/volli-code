@@ -186,9 +186,54 @@ function identityVariables(identity: PiSessionEnvIdentity | undefined): Record<s
   };
 }
 
+/** What building a Session command's environment record takes. */
+export interface SessionCommandEnvironmentOptions {
+  /** See {@link PiExecutionEnvOptions.pathPrefixes}. */
+  pathPrefixes?: readonly string[];
+  /** See {@link PiExecutionEnvOptions.identity}. */
+  identity?: PiSessionEnvIdentity;
+  /**
+   * The caller's own variables, believed over the sanitized set and the
+   * identity alike: a tool call that names `VOLLI_SESSION` explicitly is
+   * believed, exactly as it is for every other variable. `PATH` stated here
+   * still gets the prefixes put in front of it.
+   */
+  overrides?: Record<string, string>;
+}
+
+/**
+ * The environment record a Session's command is handed, on the default
+ * uncontained path: {@link unsandboxedEnvironment} over `source`, the
+ * host-minted identity, the caller's overrides, and the prefixes at the front
+ * of whatever `PATH` that came to.
+ *
+ * The ONE builder, exported (VC-270). `SanitizedEnvExecutionEnv.exec` calls
+ * it for Pi's `execute` tool, and the desktop's background shell host calls
+ * it to `spawn` with pipes — the door `exec` cannot open, because `exec`
+ * blocks until the command exits. Two copies of this would drift, and the
+ * symptom would be quiet: a `volli` call from inside a background shell that
+ * arrived unattributed, or with a token the socket no longer accepts. The
+ * parity test in `execution-env.test.ts` holds the two doors to one record.
+ *
+ * `source` is a parameter rather than `process.env` read here, so the record
+ * can be built for a stated environment under test; production passes
+ * `process.env` at the moment of the spawn, as `exec` does.
+ */
+export function sessionCommandEnvironment(
+  source: NodeJS.ProcessEnv,
+  options: SessionCommandEnvironmentOptions,
+): Record<string, string> {
+  const merged = {
+    ...unsandboxedEnvironment(source),
+    ...identityVariables(options.identity),
+    ...options.overrides,
+  };
+  return { ...merged, PATH: prefixedPath(merged.PATH ?? "", options.pathPrefixes ?? []) };
+}
+
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
-  readonly #identityVariables: Record<string, string>;
+  readonly #identity: PiSessionEnvIdentity | undefined;
   readonly #onCleanup: (() => void | Promise<void>) | undefined;
   #cleaned = false;
 
@@ -200,7 +245,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
-    this.#identityVariables = identityVariables(options.identity);
+    this.#identity = options.identity;
     this.#onCleanup = options.onCleanup;
   }
 
@@ -215,23 +260,14 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
    * implementation untouched.
    */
   override async exec(command: string, options: ShellExecOptions | undefined, context: Context) {
-    const sanitized = unsandboxedEnvironment(process.env);
-    // Identity sits between the sanitized set and the caller's own `env`: a
-    // tool call that names VOLLI_SESSION explicitly is believed, exactly as it
-    // is for every other variable.
-    const merged = { ...sanitized, ...this.#identityVariables, ...options?.env };
-    return super.exec(
-      command,
-      {
-        ...options,
-        env: {
-          ...merged,
-          PATH: prefixedPath(merged.PATH ?? "", this.#pathPrefixes),
-        },
-        inheritEnv: false,
-      },
-      context,
-    );
+    // The one record builder, so what `execute` hands a command and what a
+    // background shell is spawned with cannot differ (VC-270).
+    const env = sessionCommandEnvironment(process.env, {
+      pathPrefixes: this.#pathPrefixes,
+      identity: this.#identity,
+      overrides: options?.env,
+    });
+    return super.exec(command, { ...options, env, inheritEnv: false }, context);
   }
 
   override async cleanup(context: Context): Promise<void> {

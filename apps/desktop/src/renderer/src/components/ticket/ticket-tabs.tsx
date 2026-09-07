@@ -21,7 +21,7 @@
  * renamable.
  */
 import * as React from "react";
-import { BrowserIcon } from "@phosphor-icons/react/dist/csr/Browser";
+import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 
@@ -133,6 +133,8 @@ export interface TicketTabDescriptor {
   browserTabId?: string;
   /** A `"browser"` tab's pushed loading state. */
   loading?: boolean;
+  /** A `"browser"` tab a Session owns and may be driving (VC-238). */
+  driven?: boolean;
   /** Who holds a `"browser"` tab (VC-239), for the strip's holder dot. */
   heldBy?: BrowserTabHolder | null;
   /**
@@ -353,11 +355,7 @@ function TicketTab({
       }
       leading={
         tab.kind === "browser" ? (
-          <BrowserIcon
-            aria-hidden
-            weight="bold"
-            className="size-3 shrink-0 text-muted-foreground"
-          />
+          <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
           <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
         ) : null

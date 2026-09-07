@@ -106,12 +106,20 @@ export interface CursorOverlayWindow {
 
 /** What the overlay asks of the host: the plane, the holds, the holder. */
 export interface CursorOverlayHost {
-  attachedTabId(): string | null;
+  /**
+   * Whether one tab's page is on screen. A question rather than "which tab is
+   * attached", because the host attaches a view per tab (VC-238): a shown
+   * agent tab and the person's own pane can both be up. A headless tab is
+   * attached to nothing, so the cursor can never draw over one.
+   */
+  isOnScreen(tabId: string): boolean;
+  /** Every tab on screen right now, for choosing the one cursor to draw. */
+  attachedTabIds(): readonly string[];
   pageBoundsOf(tabId: string): Rectangle | null;
   zoomFactorOf(tabId: string): number;
   heldBy(tabId: string): BrowserTabHolder | null;
   onHoldChange(listener: (event: BrowserHoldEvent) => void): () => void;
-  onPlaneChange(listener: (attachedTabId: string | null) => void): () => void;
+  onPlaneChange(listener: (attachedTabIds: readonly string[]) => void): () => void;
   takeOver(tabId: string): unknown;
   askToLeave(tabId: string): unknown;
 }
@@ -172,6 +180,8 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
   const acks = new Map<number, () => void>();
   /** Where the view was last placed, for the distance the glide scales on. */
   let lastPlaced: { x: number; y: number } | null = null;
+  /** Whether the overlay page has spoken once; before that it can hear nothing. */
+  let ready = false;
   /** Timers that re-render after a pin expires or an exit finishes. */
   const timers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -224,19 +234,22 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     state: TabCursorState;
     holder: BrowserTabSessionHolder;
   } | null => {
-    const tabId = deps.host.attachedTabId();
-    if (tabId === null) return null;
-    const state = states.get(tabId);
-    if (state === undefined || state.point === null) return null;
-    const holder = deps.host.heldBy(tabId);
-    if (holder?.kind !== "session") {
-      // A hold that just ended still draws its exit, in the colour it had.
-      return state.exit === null || state.lastHolder === undefined
-        ? null
-        : { tabId, state, holder: state.lastHolder };
+    // One cursor is drawn at a time, so with several tabs on screen the one
+    // with a cursor to draw wins — in the host's registry order, so the choice
+    // is stable rather than dependent on which pane was clicked last.
+    for (const tabId of deps.host.attachedTabIds()) {
+      const state = states.get(tabId);
+      if (state === undefined || state.point === null) continue;
+      const holder = deps.host.heldBy(tabId);
+      if (holder?.kind !== "session") {
+        // A hold that just ended still draws its exit, in the colour it had.
+        if (state.exit === null || state.lastHolder === undefined) continue;
+        return { tabId, state, holder: state.lastHolder };
+      }
+      state.lastHolder = holder;
+      return { tabId, state, holder };
     }
-    state.lastHolder = holder;
-    return { tabId, state, holder };
+    return null;
   };
 
   /** Where the view goes for a point on a tab, in window content coordinates. */
@@ -330,22 +343,59 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
     ) {
       return;
     }
+    const firstReport = !ready;
+    ready = true;
     size = { width: Math.ceil(reported.width), height: Math.ceil(reported.height) };
     // Resize in place: the tip does not move, only how much of the page the
-    // view covers.
+    // view covers. The first report skips it and lets {@link onReady}'s own
+    // render place the view, so the page is not moved twice for one message.
+    if (firstReport) {
+      onReady();
+      return;
+    }
     if (view !== null && attachedTo !== null && lastPlaced !== null) {
       view.setBounds({ ...lastPlaced, ...size });
     }
   };
+
+  /**
+   * The page's first word, and the first moment a state push can reach it.
+   *
+   * The overlay's view is built lazily inside the first `render()`, which then
+   * sends the state straight at a page that has not loaded — and a `send`
+   * before the renderer is listening goes nowhere. The label is pinned for
+   * {@link SESSION_CURSOR_LABEL_PIN_MS} from the moment the hold was taken, so
+   * on any machine where the page takes longer than that to boot, every push
+   * it can actually hear already says `labelPinned: false`: the person is
+   * never told which Session took their tab, and the view never grows past the
+   * bare arrow. A dev Mac boots inside the pin and a CI runner does not, which
+   * is why this only ever showed up there.
+   *
+   * So the pin runs from when it could first be SEEN. A pin still live is left
+   * alone — the fast path already worked — and a hold that has since ended
+   * gets nothing but the render it was owed.
+   */
+  const onReady = (): void => {
+    const target = drawable();
+    if (target !== null && target.state.exit === null && target.state.labelPinnedUntil > 0) {
+      if (target.state.labelPinnedUntil <= Date.now()) {
+        target.state.labelPinnedUntil = Date.now() + SESSION_CURSOR_LABEL_PIN_MS;
+        later(SESSION_CURSOR_LABEL_PIN_MS, () => render());
+      }
+    }
+    render();
+  };
+  // Both controls act on the tab the overlay is DRAWING, which is the one the
+  // person is looking at when they press them — not merely one that is up.
   const onTakeOver = (event: { sender: { id: number } }): void => {
     if (!fromOverlay(event)) return;
-    const tabId = deps.host.attachedTabId();
-    if (tabId !== null) deps.host.takeOver(tabId);
+    const tabId = drawable()?.tabId;
+    if (tabId !== undefined) deps.host.takeOver(tabId);
   };
   const onAskToLeave = (event: { sender: { id: number } }): void => {
     if (!fromOverlay(event)) return;
-    const tabId = deps.host.attachedTabId();
-    if (tabId !== null) deps.host.askToLeave(tabId);
+    const tabId = drawable()?.tabId;
+    if (tabId !== undefined) deps.host.askToLeave(tabId);
   };
   deps.ipc.on(CURSOR_SETTLED_CHANNEL, onSettled);
   deps.ipc.on(CURSOR_SIZE_CHANNEL, onSize);
@@ -407,7 +457,7 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
         // A tab that is not on screen pays nothing: its state is kept for
         // the moment it is shown, and nothing is drawn or waited on. Rendering
         // here would redraw whichever tab IS on screen and wait on that.
-        const onScreen = deps.host.attachedTabId() === tabId;
+        const onScreen = deps.host.isOnScreen(tabId);
         const moved = onScreen ? render() : null;
         if (moved !== null) {
           // Landed: the page has drawn the state, and the view has finished
@@ -425,7 +475,7 @@ export function createCursorOverlay(deps: CursorOverlayDependencies): CursorOver
         const state = states.get(tabId);
         if (state === undefined) return;
         state.gesture = kind;
-        if (deps.host.attachedTabId() === tabId) render();
+        if (deps.host.isOnScreen(tabId)) render();
       },
     }),
     dispose: () => {

@@ -44,6 +44,8 @@
  * it. `resolveFeel` is the one place an override meets the default.
  */
 
+import { todoListCompleted, type TodoStatus } from "@volli/shared";
+
 /* ------------------------------------------------------------- projection */
 
 /**
@@ -60,8 +62,27 @@ export interface IslandTab {
   /** What the pill and the card name the tab by. */
   host: string;
   state: "loading" | "ready";
-  /** Promoted to a Browser pane from its card row — the card and the pane are one model. */
+  /**
+   * Somewhere a person can see it — the card and that surface are one model.
+   * One boolean, because that is all the pill asks; WHICH surface is
+   * {@link surface}'s answer, and only the card's caption needs it.
+   */
   promoted: boolean;
+  /**
+   * Where a promoted tab is drawn (VC-268): `preview` is pinned above this
+   * chat's composer, `tab` is out in the workspace strip, `null` is headless.
+   * The two visible places are different answers to "where is it", so the
+   * state word says which rather than printing one word for both.
+   */
+  surface: "preview" | "tab" | null;
+  /**
+   * Whose tab it is, as the card says it: `null` for this Session's own, a
+   * child Session's title otherwise. A parent watching its children's tabs
+   * could not otherwise tell whose is whose — the whole point of the inventory
+   * the island replaced (VC-238 §8). The projection decides the words; this
+   * contract only carries them.
+   */
+  owner: string | null;
 }
 
 /** A subagent Session the Session delegated to. */
@@ -90,13 +111,39 @@ export interface IslandAgent {
 export interface IslandStep {
   id: string;
   title: string;
+  /**
+   * Where this step stands, in the model's own words (VC-6).
+   *
+   * Per step rather than derived from {@link IslandPlan.done}, and the widening
+   * is the one edit VC-6 made to VC-246's work. The original model was a
+   * straight run down the list: `steps[done]` was current and everything before
+   * it was finished. Real todo tools do not behave that way — `todo_write` lets
+   * the model finish the third item first and abandon the second — and a count
+   * of completed prefixes drew that as the wrong row ticked.
+   *
+   * It is {@link TodoStatus} ITSELF rather than a union re-spelled to match, so
+   * the projection is a rename and not a translation — and so a status added to
+   * the vocabulary cannot leave a step unable to carry it. What this is NOT is
+   * {@link PlanStepState}, the drawing state: `current` lives there because
+   * which row is current is a fact about the whole plan, not about one step.
+   */
+  state: TodoStatus;
 }
 
 /** The Session's plan: an ordered list of steps and how many are done. */
 export interface IslandPlan {
   id: string;
   steps: readonly IslandStep[];
-  /** Steps completed, from the top; `steps[done]` is the current one. */
+  /**
+   * How many steps are COMPLETED — a count, not a cursor.
+   *
+   * It stayed a count when the steps gained their own state (VC-6), because
+   * everything that reads it wants a count: `planCount` prints `n/n`,
+   * `planPercent` fills the hairline, and the pill's grammar is "1/3". What it
+   * is no longer is a POSITION: `steps[done]` names nothing in particular once
+   * the model may finish items out of order, which is why {@link planCurrent}
+   * and {@link planStepState} read the steps instead.
+   */
   done: number;
 }
 
@@ -147,14 +194,19 @@ export const EMPTY_ACTIVITY_ISLAND: ActivityIslandModel = {
 
 /**
  * What a card can do. Every row is its obvious promotion (row = verb): a tab
- * opens in the Browser pane, a subagent peeks in an overlay, a shell opens its
- * output, a plan step jumps. The destructive three — close, stop, kill — arm
- * on first press in the UI; by the time one of these is called the person has
- * pressed twice. The wiring ticket implements these against the runtime; the
- * island never learns what they do.
+ * is pinned as this chat's preview, a subagent peeks in an overlay, a shell
+ * opens its output, a plan step jumps. The destructive three — close, stop,
+ * kill — arm on first press in the UI; by the time one of these is called the
+ * person has pressed twice. The wiring ticket implements these against the
+ * runtime; the island never learns what they do.
  */
 export interface ActivityIslandActions {
   closeTab(id: string): void;
+  /**
+   * Pin the tab above this chat's composer — VC-238's Show, the cheap reveal.
+   * "Open as tab" stays where VC-238 put it, on the preview chrome and the
+   * transcript card; the island never promotes straight to the strip.
+   */
   promoteTab(id: string): void;
   peekAgent(id: string): void;
   promoteAgent(id: string): void;
@@ -166,6 +218,13 @@ export interface ActivityIslandActions {
    * projection cannot keep: the list it was read from may already have been
    * re-projected by the time the click lands, and index 3 would then name a
    * different step (docs/BOUNDARIES.md rule 2 — never adjacency as position).
+   *
+   * NOT CALLED BY THE CARD TODAY (VC-268). It was designed against a sim where
+   * each step had a place to jump to; on main one `todo_write` writes the whole
+   * list and a step has no message of its own, so the plan card's rows draw
+   * inert rather than activatable-and-idle. The verb stays in the contract for
+   * the condition that reopens it: per-step targets exist once plan activity
+   * rows render per step in the transcript.
    */
   jumpStep(id: string): void;
 }
@@ -298,10 +357,19 @@ export function tabsHeading(tabs: readonly IslandTab[]): string {
   return `Browser${FLASH_SEPARATOR}${plural(tabs.length, "tab")}`;
 }
 
-/** The state word riding a tab row's name; `null` when there is nothing to say. */
+/**
+ * The state word riding a tab row's name; `null` when there is nothing to say.
+ *
+ * Reads {@link IslandTab.surface}, not `promoted`: the pill's boolean says
+ * "visible somewhere", and a caption that said only that would print the same
+ * word for a preview above this composer and a tab in the strip. In the card's
+ * own caption grammar: `pinned here` / `as a tab`.
+ */
 export function tabStateWord(tab: IslandTab): string | null {
   if (tab.state === "loading") return "loading";
-  return tab.promoted ? "in pane" : null;
+  if (tab.surface === "preview") return "pinned here";
+  if (tab.surface === "tab") return "as a tab";
+  return null;
 }
 
 /* ----------------------------------------------------------------- agents */
@@ -323,9 +391,27 @@ export function agentsHeading(agents: readonly IslandAgent[]): string {
   return `Subagents${FLASH_SEPARATOR}${agentsDone(agents)}/${agents.length} done`;
 }
 
-/** `72%` while working, the state otherwise; `· tab` once promoted. */
+/**
+ * Whether a working agent's `progress` is a measure at all (VC-269). Today
+ * no feed has one: there is no honest account of how far through a turn an
+ * agent is, so the subagent feed leaves `progress` at 0 and the arc orbits
+ * on its own. Zero is therefore "unmeasured", not "none done" — a row that
+ * printed `0%` for the whole of a turn would be reporting a number nobody
+ * took. The field stays so a later bound (a max-turns budget) is a
+ * projection change and not a contract change.
+ */
+export function agentProgressMeasured(agent: IslandAgent): boolean {
+  return agent.state === "working" && agent.progress > 0;
+}
+
+/** `72%` while working and measured, `working` unmeasured, the state otherwise; `· tab` once promoted. */
 export function agentStateWord(agent: IslandAgent): string {
-  const base = agent.state === "working" ? `${Math.round(agent.progress * 100)}%` : agent.state;
+  const base =
+    agent.state !== "working"
+      ? agent.state
+      : agentProgressMeasured(agent)
+        ? `${Math.round(agent.progress * 100)}%`
+        : "working";
   return agent.promoted ? `${base}${FLASH_SEPARATOR}tab` : base;
 }
 
@@ -340,9 +426,26 @@ export function planTotal(plan: IslandPlan): number {
   return plan.steps.length;
 }
 
-/** The step in progress; `null` once every step is done. */
+/**
+ * The step in progress; `null` once nothing is left to do.
+ *
+ * Two answers in priority order, because a model writes both shapes. The one
+ * it means is `in_progress` — the item it says it is on. But a model that ticks
+ * an item and rewrites the list before starting the next one leaves NO item in
+ * progress and several still pending, and a card that answered `null` there
+ * would say the plan was finished while two steps waited. So the first pending
+ * step is the fallback, and `null` is reserved for a list with neither.
+ *
+ * A `cancelled` step is never current: it is a step the model decided against,
+ * and pointing the card at it would be reporting abandoned work as the work in
+ * hand.
+ */
 export function planCurrent(plan: IslandPlan): IslandStep | null {
-  return plan.steps[plan.done] ?? null;
+  return (
+    plan.steps.find((step) => step.state === "in_progress") ??
+    plan.steps.find((step) => step.state === "pending") ??
+    null
+  );
 }
 
 /** `done`/`total` as the pill and the card heading both print it. */
@@ -370,11 +473,61 @@ export function planHeading(plan: IslandPlan): string {
   return `Plan${FLASH_SEPARATOR}${planCount(plan)}`;
 }
 
-export type PlanStepState = "done" | "current" | "pending";
+export type PlanStepState = "done" | "current" | "pending" | "cancelled";
 
+/**
+ * How one row draws, from the step's own state (VC-6).
+ *
+ * `current` is the one answer that is not a straight rename, and it has to be
+ * asked of the PLAN rather than the step: exactly one row may be current, and
+ * which one it is is {@link planCurrent}'s single decision. Asking the step
+ * alone would draw every pending row as current in a list with none in
+ * progress.
+ */
 export function planStepState(plan: IslandPlan, index: number): PlanStepState {
-  if (index < plan.done) return "done";
-  return index === plan.done ? "current" : "pending";
+  const step = plan.steps[index];
+  if (step === undefined) return "pending";
+  if (step.state === "completed") return "done";
+  if (step.state === "cancelled") return "cancelled";
+  return planCurrent(plan)?.id === step.id ? "current" : "pending";
+}
+
+/**
+ * The Session's current todo list as the plan card's model (VC-6).
+ *
+ * The one place the todo vocabulary becomes island vocabulary, so no client
+ * re-derives it and no second reading of "done" can appear. It is a projection
+ * and not a fold: `list` is already the answer to "what is the plan now", read
+ * from durable history by `currentTodoList`.
+ *
+ * `null` and `[]` both mean NO CARD, which is the one place this surface may
+ * collapse the distinction the fold works to keep: a Session that cleared its
+ * list has nothing to draw, exactly like one that never wrote a list. The
+ * difference matters upstream, where reviving the previous list would be wrong,
+ * and stops mattering here.
+ *
+ * Step ids are positional because a todo list has no ids of its own — the model
+ * sends words and a status. They are scoped to the Session so two open chats
+ * cannot collide as React keys, and they are stable for as long as the list is,
+ * which is all `jumpStep` needs: the next call replaces the whole list anyway.
+ */
+export function islandPlanFromTodos(
+  sessionId: string,
+  list: readonly { content: string; status: IslandStep["state"] }[] | null,
+): IslandPlan | null {
+  if (list === null || list.length === 0) return null;
+  return {
+    id: sessionId,
+    steps: list.map((todo, index) => ({
+      id: `${sessionId}:${index}`,
+      title: todo.content,
+      state: todo.status,
+    })),
+    // Completed only, and counted by the vocabulary's own function rather than
+    // by a filter repeated here. A cancelled step is not progress — counting it
+    // would let a model reach 100% by dropping the work it did not do.
+    done: todoListCompleted(list),
+  };
 }
 
 /* ----------------------------------------------------------------- shells */
@@ -415,8 +568,14 @@ export function summaryLine(model: ActivityIslandModel): string {
   if (model.tabs.length > 0) parts.push(plural(model.tabs.length, "tab"));
   const working = model.agents.filter((agent) => agent.state === "working");
   if (working.length > 0) {
+    // The same rule as `agentStateWord`: a mean of unmeasured zeros is not a
+    // percentage, so the line counts the workers instead.
     const mean = working.reduce((sum, agent) => sum + agent.progress, 0) / working.length;
-    parts.push(`agents ${Math.round(mean * 100)}%`);
+    parts.push(
+      working.some(agentProgressMeasured)
+        ? `agents ${Math.round(mean * 100)}%`
+        : `agents ${working.length} working`,
+    );
   } else if (model.agents.length > 0) {
     parts.push(`agents ${agentsDone(model.agents)}/${model.agents.length}`);
   }

@@ -341,6 +341,17 @@ export interface SessionRenameInput {
 }
 
 /**
+ * A person's stop of a Session's work (VC-269): the Activity Island's armed
+ * "Stop subagent". `reason` is the optional durable why, as the agent tool's
+ * is. One request channel and no push: the row the stop moves already rides
+ * `volli:session-activity`.
+ */
+export interface SessionStopInput {
+  sessionId: string;
+  reason?: string;
+}
+
+/**
  * A retitle main performed on its own (VC-81 auto-titling), pushed so live
  * surfaces can move their labels the same way a renderer rename does.
  */
@@ -667,6 +678,13 @@ export interface VolliDataIpcContract {
   "volli:session-list-for-ticket": { args: [input: TicketIdInput]; result: SessionsResult };
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
+  /**
+   * Stops a Session's work as the person (VC-269): records `session.stop`
+   * with the `user` actor, interrupts the open turn and releases the live
+   * attachment — the agent tool's three acts, by id. The Session stays
+   * openable; a person can reattach it.
+   */
+  "volli:session-stop": { args: [input: SessionStopInput]; result: SessionStopResult };
   /**
    * When Sessions were started, across EVERY project, from `sinceMs` onward
    * (VC-55). Stamps only: the Home empty chat draws a count per day, and
@@ -1446,6 +1464,19 @@ export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContr
 export type BrowserTabCreatedBy = "user" | "session";
 
 /**
+ * Where a Browser Tab is drawn (VC-238). Main owns the value; the renderer asks
+ * to change it through `volli:browser-set-presentation` and never writes it.
+ *
+ * - `headless`: the tab exists with a real viewport, wake hold, console and
+ *   screenshots, but is in no strip, no tab order, and never attached to the
+ *   window. Every Session-created tab is born this way.
+ * - `preview`: pinned live above the composer of the chat that owns it.
+ * - `tab`: an ordinary item in the Home or Ticket strip. A person's own tabs
+ *   are always this and cannot be anything else.
+ */
+export type BrowserTabPresentation = "headless" | "preview" | "tab";
+
+/**
  * Renderer-safe state for one live Browser Tab. Product identity and bounded
  * browser chrome facts cross IPC; Chromium ids, Session partitions, page
  * content, cookies, and history entries never do.
@@ -1457,6 +1488,14 @@ export interface BrowserTabState {
   /** Null for a project-level tab, whether opened by a person or Board Session. */
   ticketId: string | null;
   createdBy: BrowserTabCreatedBy;
+  /**
+   * The Session that opened this tab, or null for a person's tab. Ownership is
+   * who may drive it through the Browser port — sibling Sessions on the same
+   * Ticket never see each other's — and is separate from the storage partition,
+   * which stays per Ticket.
+   */
+  ownerSessionId: string | null;
+  presentation: BrowserTabPresentation;
   url: string;
   title: string;
   loading: boolean;
@@ -1513,6 +1552,27 @@ export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
   bounds: BrowserTabBounds;
 }
 
+/**
+ * A person's request to draw a Session's tab somewhere else (VC-238): hide it,
+ * pin it above the owning chat's composer, or promote it into the strip. Main
+ * refuses it for a person's own tab, which is always in the strip.
+ */
+export interface BrowserTabSetPresentationInput extends BrowserTabIdInput {
+  presentation: BrowserTabPresentation;
+}
+
+/** One picture the host took of a tab, by the id the transcript carries. */
+export interface BrowserPictureInput {
+  pictureId: string;
+}
+
+/**
+ * The picture as an `<img src>`, or null when the host no longer has it: a
+ * live capture the bounded set let go of, or an id this launch never minted.
+ * Null is an answer, not a failure — the card says the picture is gone.
+ */
+export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
+
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
@@ -1563,6 +1623,11 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  "volli:browser-set-presentation": {
+    args: [input: BrowserTabSetPresentationInput];
+    result: BrowserTabResult;
+  };
+  "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
   /**
    * The person's three hold controls (VC-239). Explicit, never inferred from
    * input: main cannot tell a person's click in the native view from a
@@ -1584,6 +1649,73 @@ export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
 export type BrowserTabStateEvent =
   | { tab: BrowserTabState; closedTabId?: never }
   | { tab?: never; closedTabId: string };
+// ---- background shells (VC-270) ---------------------------------------------
+
+/**
+ * Renderer-safe state for one background shell a Session started. Product
+ * identity and bounded chrome facts cross IPC; the process handle, the
+ * environment it was spawned with and its output never do — the tail is a
+ * separate, explicit read.
+ *
+ * Shells are live resources, not ledger facts: they die with the attachment
+ * that started them, do not survive a relaunch, and the tool calls that
+ * started and read them are the durable record.
+ */
+export interface BackgroundShellState {
+  /** Host-minted opaque id, never a pid. */
+  shellId: string;
+  sessionId: string;
+  projectId: string;
+  ticketId: string | null;
+  /** The command as the model gave it; the island shows its first line. */
+  command: string;
+  title: string | null;
+  state: "running" | "exited";
+  /** Exit code once exited; `null` while running and when a signal ended it. */
+  code: number | null;
+  signal: string | null;
+  startedAt: number;
+  exitedAt: number | null;
+  pid: number;
+}
+
+/**
+ * A complete shell snapshot pushed on start and on exit, or the id of a shell
+ * the host forgot when its Session's attachment ended.
+ */
+export type BackgroundShellStateEvent =
+  | { shell: BackgroundShellState; removedShellId?: never }
+  | { shell?: never; removedShellId: string };
+
+export interface BackgroundShellIdInput {
+  shellId: string;
+}
+
+/** Every live shell the host holds, across Sessions; the renderer filters by Session. */
+export type BackgroundShellListResult = Result<{ shells: BackgroundShellState[] }>;
+
+/**
+ * A shell's whole retained output for a person's read, with its chrome. Read
+ * on demand rather than pushed: output is bounded but not small, and only an
+ * open output tab wants it. Moves no cursor of the model's.
+ */
+export type BackgroundShellTailResult = Result<{ output: string; shell: BackgroundShellState }>;
+
+/**
+ * The renderer's command surface for background shells (VC-270). Host IPC,
+ * not a durable domain API (docs/BOUNDARIES.md #5): shells are ephemeral
+ * machine resources like PTY planes, and nothing here writes history.
+ * A person's kill is a no-op on a shell already exited, not an error — they
+ * pressed the row, and the row is gone either way.
+ */
+export interface VolliShellIpcContract {
+  "volli:shell-list": { args: []; result: BackgroundShellListResult };
+  "volli:shell-tail": { args: [input: BackgroundShellIdInput]; result: BackgroundShellTailResult };
+  "volli:shell-kill": { args: [input: BackgroundShellIdInput]; result: Result };
+}
+
+export type ShellIpcChannel = keyof VolliShellIpcContract;
+
 // ---- automations (VC-112, tracer VC-126) -----------------------------------
 
 /** What a create carries. `projectId: null` is global Ownership. */
@@ -2124,6 +2256,7 @@ export interface VolliInvokeContract
     VolliWebAccessIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
+    VolliShellIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
@@ -2145,6 +2278,9 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
   | "volli:browser-tab-state"
+  // A background shell started, exited, or was forgotten with its Session's
+  // attachment (VC-270): one push, one store, the island's shell feed.
+  | "volli:shell-state"
   | "volli:terminal-data"
   | "volli:terminal-exit"
   | "volli:terminal-park-state"
@@ -2593,6 +2729,18 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 
 /** Ack for a session title rename (`session-rename`); the caller already holds the new title optimistically. */
 export type SessionRenameResult = Result;
+
+/**
+ * What a person's stop did (`session-stop`). `ok` means the stop fact is
+ * durable; the two booleans and `failures` are the runtime acts, reported
+ * rather than hidden — "stopped" with a still-streaming executor is the one
+ * lie the door must not tell (see `supervise-session.ts`).
+ */
+export type SessionStopResult = Result<{
+  interrupted: boolean;
+  released: boolean;
+  failures: string[];
+}>;
 
 /** Session creation stamps in the requested window, ascending — every project's. */
 export type SessionStartsResult = Result<{ startedAt: number[] }>;

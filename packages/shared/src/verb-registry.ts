@@ -1262,6 +1262,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Records the signal in the session ledger; the board does not move. Use ticket move for that.",
+      "Leaves this session's last todo list on the ticket as a comment, when it kept one.",
     ],
     effects: {
       durableWrites: [
@@ -1271,12 +1272,25 @@ export const VERB_REGISTRY = [
           summary:
             "Append a completed done signal command and receipt to the current Session ledger.",
         },
+        // VC-6. Conditional, and said so: a Board Session has no ticket, and a
+        // Session that never called `todo_write` has nothing to post. The
+        // preview names the write anyway, because `--dry-run` describes what
+        // the verb MAY do — a caller told only about the ledger would be
+        // surprised by a comment on their ticket.
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket comment holding this Session's final todo list, when it kept one and belongs to a Ticket.",
+        },
       ],
       humanVisible: [
         "The done signal and optional reason appear in the Session's durable history.",
+        "The Session's final todo list appears in the Ticket activity feed.",
       ],
       nonEffects: [
         "No Ticket moves, the Session identity remains openable, and its worktree is not removed.",
+        "No comment is written for a Board Session or for one that kept no todo list.",
       ],
     },
     options: [
@@ -1297,6 +1311,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Acts on VOLLI_SESSION; needs a Volli session.",
       "Raises attention on this session; --reason is the text a person sees.",
+      "Leaves this session's last todo list on the ticket as a comment, when it kept one.",
     ],
     effects: {
       durableWrites: [
@@ -1306,9 +1321,23 @@ export const VERB_REGISTRY = [
           summary:
             "Append a completed blocked signal command and receipt to the current Session ledger.",
         },
+        // VC-6, and the more useful of the two: an unfinished list beside a
+        // reason is most of a handover to the person the block is for.
+        {
+          resource: "ticket-comment",
+          operation: "create",
+          summary:
+            "Create one attributed Ticket comment holding this Session's unfinished todo list, when it kept one and belongs to a Ticket.",
+        },
       ],
-      humanVisible: ["The Session raises attention in the app and shows the optional reason."],
-      nonEffects: ["No Ticket moves, and the Session is not archived or deleted."],
+      humanVisible: [
+        "The Session raises attention in the app and shows the optional reason.",
+        "The Session's todo list as it stood appears in the Ticket activity feed.",
+      ],
+      nonEffects: [
+        "No Ticket moves, and the Session is not archived or deleted.",
+        "No comment is written for a Board Session or for one that kept no todo list.",
+      ],
     },
     options: [
       { name: "--reason", kind: "value", placeholder: "<text>", help: "Human-readable reason." },

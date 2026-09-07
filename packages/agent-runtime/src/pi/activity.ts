@@ -7,12 +7,15 @@
  */
 
 import type {
+  ActivityBrowse,
+  ActivityBrowseAction,
   ActivityDescriptor,
   ActivityKind,
   ActivityOutcome,
   RuntimeActivityObservation,
   RuntimeActivityValue,
 } from "@volli/shared";
+import { isActivityBrowseAction, readActivityBrowse } from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
@@ -52,7 +55,46 @@ const TOOL_KIND: Record<string, ActivityKind> = {
   // its own, because it is the only one whose row opens something — the child
   // Session — rather than reporting a fact.
   session_delegate: "delegate",
+  // The tool is `todo_write` and the kind is `plan`, and the mismatch is
+  // deliberate on both sides (VC-6). The TOOL is not called `plan` because
+  // `agent-plan.ts` already means the dry-run preview of a write. The KIND is,
+  // because it was spelled that way before anything produced it and shipped
+  // history is not worth churning for a rename.
+  todo_write: "plan",
+  // The background shell tools (VC-270) are one command's life told in
+  // three rows: the start IS a command, marked as running beside the turn;
+  // a read and a kill are about that command, so they take its kind and name
+  // it through the host's structured details.
+  shell_start: "run-command",
+  shell_output: "run-command",
+  shell_kill: "run-command",
 };
+
+/** The background marker a shell row's subject carries, by tool. */
+const SHELL_MARKERS: Record<string, string> = {
+  shell_start: "background",
+  shell_output: "background · read",
+  shell_kill: "background · killed",
+};
+
+/**
+ * The browser tools, and what each one's call MEANS before the host has
+ * answered (VC-238). Membership here is what makes a tool a `browse` row;
+ * `browser_navigate` and `browser_act` refine the action from their arguments,
+ * the rest are one action each. Once the tool ends, the host's own `details`
+ * report replaces the guess entirely.
+ */
+const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
+  browser_tabs: "tabs",
+  browser_navigate: "open",
+  browser_snapshot: "read",
+  browser_act: "click",
+  browser_screenshot: "screenshot",
+  browser_console: "console",
+};
+
+/** Image bytes never enter an activity payload; the picture travels as the host's id. */
+const IMAGE_OMITTED = "[image]";
 
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
@@ -89,7 +131,9 @@ export function mapPiActivity(
           ? readField(rawEvent, "result")
           : null;
     const input = normalizeInput(sourceInput);
-    const output = normalizeActivityValue(sourceOutput);
+    const output = normalizeActivityValue(
+      toolName in BROWSER_TOOL_ACTION ? withoutImageBytes(sourceOutput) : sourceOutput,
+    );
     const startedAt =
       type === "tool_execution_start"
         ? timestampOf(readField(rawContext, "observedAt"))
@@ -192,15 +236,120 @@ function descriptorFor(
   startedAt: number | null,
   endedAt: number | null,
 ): ActivityDescriptor {
-  const kind = TOOL_KIND[toolName] ?? "other";
+  const browse = browseFacet(toolName, input, rawOutput);
+  const kind: ActivityKind = browse !== null ? "browse" : (TOOL_KIND[toolName] ?? "other");
   return {
     kind,
     nativeToolName: toolName,
-    subject: subjectFor(kind, input, toolName, output),
+    // A browse row's object is the page, which only the facet knows; every
+    // other kind asks the subject reader, VC-9's `delegate` included.
+    subject:
+      browse === null
+        ? subjectFor(kind, input, toolName, output)
+        : { label: displayUrl(browse.url), path: null, lineRange: null },
     outcome: endedAt === null ? null : outcomeFor(output, rawOutput, kind),
     startedAt,
     endedAt,
+    ...(browse === null ? {} : { browse }),
   };
+}
+
+/**
+ * The facet a `browse` row is drawn from: the host's `details` once the call
+ * has ended, otherwise what the call itself says. The host report wins because
+ * it knows what the model could not — the page's name for a ref, the URL a
+ * navigation actually landed on, the picture it took afterwards.
+ */
+function browseFacet(
+  toolName: string,
+  input: RuntimeActivityValue,
+  rawOutput: unknown,
+): ActivityBrowse | null {
+  const base = BROWSER_TOOL_ACTION[toolName];
+  if (base === undefined) return null;
+  const reported = readActivityBrowse(readField(recordOf(rawOutput), "details"));
+  if (reported !== null) return reported;
+  const source = recordOf(input);
+  return {
+    action: browseActionOf(toolName, base, source),
+    tabId: cleanPayloadText(readField(source, "tabId")),
+    url: toolName === "browser_navigate" ? cleanPayloadText(readField(source, "url")) : null,
+    title: null,
+    target: toolName === "browser_act" ? actTargetOf(source) : null,
+    picture: null,
+    errorCount: null,
+    ownerSessionId: null,
+    error: null,
+    refusal: null,
+  };
+}
+
+function browseActionOf(
+  toolName: string,
+  fallback: ActivityBrowseAction,
+  input: Record<string, RuntimeActivityValue> | null,
+): ActivityBrowseAction {
+  if (toolName === "browser_navigate") {
+    const history = readField(input, "action");
+    return history === "back" || history === "forward" || history === "reload" ? history : fallback;
+  }
+  if (toolName === "browser_act") {
+    const kind = readField(input, "kind");
+    return isActivityBrowseAction(kind) ? kind : fallback;
+  }
+  return fallback;
+}
+
+/** What an action names before the host does: its ref, its key, or its direction. */
+function actTargetOf(input: Record<string, RuntimeActivityValue> | null): string | null {
+  return (
+    cleanPayloadText(readField(input, "ref")) ??
+    cleanPayloadText(readField(input, "key")) ??
+    cleanPayloadText(readField(input, "direction"))
+  );
+}
+
+/**
+ * `example.com/docs/intro` for a row's object: host and path, no scheme, no
+ * query, no trailing slash. A URL that does not parse is shown as typed — the
+ * row still owes the reader an object.
+ */
+export function displayUrl(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.host}${path}`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * A BROWSER tool result with its image blocks' bytes removed, before the value
+ * bound ever sees them. A screenshot is ~100 KB of base64 against a 32 KB
+ * string bound: kept, it would be cut mid-string and shown to nobody; the host
+ * holds the real picture and the facet names it.
+ *
+ * Only browser tools, deliberately. This slice built the picture path for
+ * `browser_screenshot` alone, and stripping every tool's image blocks would
+ * silently change what an unrelated tool's activity payload carries with
+ * nothing standing in for the bytes — a loss where here it is a substitution.
+ */
+function withoutImageBytes(rawOutput: unknown): unknown {
+  const result = recordOf(rawOutput);
+  const content = readField(result, "content");
+  if (result === null || !Array.isArray(content)) return rawOutput;
+  const stripped: unknown[] = [];
+  for (const block of content) {
+    const item = recordOf(block);
+    stripped.push(
+      item !== null && readField(item, "type") === "image" && "data" in item
+        ? { ...item, data: IMAGE_OMITTED }
+        : block,
+    );
+  }
+  return { ...result, content: stripped };
 }
 
 /** The first line of a delegated task, as the helper's name when none was given. */
@@ -213,19 +362,40 @@ function subjectFor(
   output: RuntimeActivityValue,
 ) {
   const source = recordOf(input);
+  const shellMarker = SHELL_MARKERS[toolName];
+  if (shellMarker !== undefined) {
+    // The start names the command from its own input; a read or a kill
+    // learns it from the result's details once the host has answered, and
+    // names the shell id until then. Never parsed out of the result's prose.
+    const details = recordOf(readField(recordOf(output), "details"));
+    const command =
+      firstLineOf(cleanPayloadText(readField(source, "command"))) ??
+      firstLineOf(cleanPayloadText(readField(details, "command")));
+    const shellId = cleanPayloadText(readField(source, "shellId"));
+    const named = command ?? (shellId === null ? null : `shell ${shellId}`);
+    return {
+      label: named === null ? `(${shellMarker})` : `${named} (${shellMarker})`,
+      path: null,
+      lineRange: null,
+    };
+  }
   if (kind === "run-command") {
     return { label: cleanPayloadText(readField(source, "command")), path: null, lineRange: null };
   }
   if (kind === "delegate") {
     // The helper's name is the title if the parent gave one, else the task's
     // first line; the child's id is a fact only the host has, and it arrives
-    // on the result's `details` once the child exists.
+    // on the result's `details` once the child exists. The same derivation
+    // the host makes for the child's durable title (`delegate-session.ts`,
+    // `titleFromTask`) — runs of whitespace collapsed, capped at the same
+    // width — so the transcript row and the island's chip (VC-269) name one
+    // helper by one name; a test there pins the two together.
     const title = cleanPayloadText(readField(source, "title"));
     const task = cleanPayloadText(readField(source, "task"));
-    const firstLine = task?.split("\n")[0]?.trim() ?? null;
+    const firstLine = task?.split("\n")[0]?.trim().replaceAll(/\s+/gu, " ") ?? null;
     const agentName =
       title ??
-      (firstLine === null
+      (firstLine === null || firstLine.length === 0
         ? null
         : firstLine.length > DELEGATE_LABEL_LIMIT
           ? `${firstLine.slice(0, DELEGATE_LABEL_LIMIT - 1)}…`
@@ -246,6 +416,11 @@ function subjectFor(
     path,
     lineRange: kind === "read-file" ? readRange(source) : null,
   };
+}
+
+function firstLineOf(value: string | null): string | null {
+  const line = value?.split("\n")[0]?.trim() ?? "";
+  return line.length === 0 ? null : line;
 }
 
 function readRange(input: Record<string, RuntimeActivityValue> | null) {

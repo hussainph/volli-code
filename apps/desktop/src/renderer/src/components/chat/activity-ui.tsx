@@ -15,6 +15,7 @@
  * artifact.
  */
 import {
+  BrowserIcon,
   CaretRightIcon,
   CheckCircleIcon,
   CircleDashedIcon,
@@ -36,13 +37,14 @@ import {
   XCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import type { ActivityKind } from "@volli/shared";
+import type { ActivityBrowse, ActivityKind } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 import * as React from "react";
 
 import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversation";
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
+  activityDescriptor,
   bundleNeedsAttention,
   bundleSummary,
   describeActivity,
@@ -58,6 +60,7 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "@volli/session-presentation";
+import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
@@ -296,6 +299,7 @@ const KIND_ICONS: Record<ActivityKind, Icon> = {
   "fetch-url": GlobeSimpleIcon,
   plan: ListChecksIcon,
   delegate: UsersThreeIcon,
+  browse: BrowserIcon,
   other: WrenchIcon,
 };
 
@@ -418,15 +422,20 @@ export const ToolRow = React.memo(function ToolRow({
   className?: string;
 }) {
   const row = describeActivity(part);
+  // A browse row that touched a tab opens onto the tab card (VC-238): the live
+  // tab, its owner, its picture, and the controls that show or close it.
+  const card = row.browse !== null && row.browse.tabId !== null ? row.browse : null;
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable = row.detail !== null || row.command !== null;
+  const expandable = row.detail !== null || row.command !== null || card !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
     <div className={cn("group/row not-prose", className)}>
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
+        {/* A refused call and a page that would not load are both successes to
+            the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
         <span className="shrink-0">{row.verb}</span>
         {row.object ? (
@@ -445,6 +454,7 @@ export const ToolRow = React.memo(function ToolRow({
       </div>
       {expandable ? (
         <Disclosure open={open}>
+          {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
           <ToolDetail
             kind={row.kind}
             command={row.command}
@@ -459,6 +469,17 @@ export const ToolRow = React.memo(function ToolRow({
 
 const OBJECT_LINK_CLASS =
   "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+/**
+ * Volli's words for a refusal, for the card: the second line of the tool's own
+ * bounded summary, which is the rule's message the model was given. Nothing
+ * from the page is in it — a refused call never read one.
+ */
+function refusalNote(part: DynamicToolUIPart, facet: ActivityBrowse): string | null {
+  if (facet.refusal === null) return null;
+  const summary = activityDescriptor(part).outcome?.summary ?? null;
+  return summary === null ? null : (summary.split("\n")[1] ?? summary);
+}
 
 /**
  * The second click target. The object opens the real artifact — a file, or a

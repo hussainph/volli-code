@@ -46,6 +46,7 @@ const fixture = vi.hoisted(() => {
     live: true,
     activity: "waiting",
     waitingOn: "question",
+    outcome: null,
     lastActivityAt: 2,
     bornTicketless: false,
     role: "ticket",
@@ -59,6 +60,7 @@ const fixture = vi.hoisted(() => {
     live: false,
     activity: "stopped",
     waitingOn: null,
+    outcome: null,
   };
   // The rail is a listing like any other, so it draws the same three marks the
   // sidebar's bands do (VC-131). One Run, one Session-started child, one row a
@@ -70,6 +72,7 @@ const fixture = vi.hoisted(() => {
     live: true,
     activity: "working",
     waitingOn: null,
+    outcome: null,
   };
   const byAgent: ChatSessionRecord = {
     ...record,
@@ -78,6 +81,7 @@ const fixture = vi.hoisted(() => {
     live: true,
     activity: "working",
     waitingOn: null,
+    outcome: null,
   };
   const rows: SessionListingRow[] = [
     { kind: "chat", record, usage: unmetered, provenance: personStarted },

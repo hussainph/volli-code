@@ -272,6 +272,22 @@ export interface RuntimeToolBundle {
    * for it to fail.
    */
   verbs?: readonly VerbToolKey[];
+  /**
+   * Whether this Session's surface names `todo_write` (VC-6).
+   *
+   * A boolean where its neighbours are lists, because the tool is one name and
+   * there is nothing to order. It is HERE rather than beside the ports for the
+   * reason this interface exists at all: `todo_write` is answered by neither an
+   * execution environment nor a host port — a call replaces a list the durable
+   * transcript already keeps — so the bundle is the only thing left that can
+   * say whether the Session holds it.
+   *
+   * Absent means no, and absent is what every Session frozen before VC-6 says.
+   * That is the whole point of gating it: the Pi adapter refuses an attachment
+   * whose derived tool array disagrees with the durable record, so a name added
+   * unconditionally would refuse every Session that predates it.
+   */
+  todoWrite?: boolean;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -570,6 +586,19 @@ export interface RuntimeBrowserTab {
   title: string;
   /** Who opened it. A person's tab and an agent's tab render differently and are audited differently. */
   createdBy: "user" | "session";
+  /**
+   * Which Session opened it, or null for a person's tab (VC-238). The host
+   * shows a Session only its own tabs by default, so this usually names the
+   * caller; it is here so a parent that is shown a child's tabs can tell them
+   * apart from its own.
+   *
+   * Separate from {@link heldBy}, and deliberately: ownership says whose tab
+   * this IS — who may see it, whose attachment end closes it, whose cap it
+   * counts against — while the hold says whose turn it is to write to it right
+   * now. A Session owns its headless tabs permanently and holds one only while
+   * it is driving it; the person owns none and may hold any.
+   */
+  ownerSessionId: string | null;
   /** Who holds it right now, or `null` for a free tab. */
   heldBy: RuntimeBrowserHolder;
 }
@@ -582,6 +611,27 @@ export type RuntimeBrowserHoldOutcome =
 /** Every Browser Tab the host let this Session see. */
 export interface RuntimeBrowserTabList {
   tabs: readonly RuntimeBrowserTab[];
+}
+
+/**
+ * The tab facts every Browser answer carries beside its own payload (VC-238):
+ * enough for the person's transcript card to name the tab, mark who is driving
+ * it, and show that its page did not load — none of which the model's text can
+ * say, and none of which the renderer may infer from a tool name.
+ */
+export interface RuntimeBrowserPage {
+  tabId: string;
+  url: string;
+  title: string;
+  /** Which Session owns the tab, or null for the person's own. */
+  ownerSessionId: string | null;
+  /**
+   * Volli's words for the tab's last load failure or renderer crash, or null
+   * when the page is healthy. A navigation onto a page that fails to load
+   * still answers with a snapshot, so without this the row would wear a
+   * success glyph over a broken page (§9).
+   */
+  error: string | null;
 }
 
 /**
@@ -598,16 +648,30 @@ export interface RuntimeBrowserTabList {
  * provenance envelope a fetched web document gets; nothing below the envelope
  * may treat a line of it as an instruction.
  */
-export interface RuntimeBrowserSnapshot {
-  tabId: string;
-  url: string;
-  title: string;
+export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** The formatted accessibility snapshot, already bounded by the host. */
   snapshotText: string;
   /** Monotonic per-tab counter; refs are valid only against the generation that minted them. */
   generation: number;
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
+  /**
+   * An opaque id for the picture the host took of the page after this call
+   * changed it, for the person's transcript card — never the bytes, which
+   * stay with the host (VC-238). Null when nothing changed (a plain read) or
+   * when the host declined to look because the person was using the tab.
+   */
+  picture: string | null;
+}
+
+/** The answer to one action: the fresh snapshot, plus what the action touched. */
+export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
+  /**
+   * The element acted on, as the last snapshot named it (VC-238): the ref the
+   * model passed and the page's accessible name for it, or null when the name
+   * was empty. Null altogether for page-level actions (press, scroll, wait).
+   */
+  target: { ref: string; name: string | null } | null;
 }
 
 /**
@@ -645,11 +709,11 @@ export interface RuntimeBrowserActRequest {
 }
 
 /** A captured Browser Tab image, bounded by the host before it reaches anyone. */
-export interface RuntimeBrowserScreenshot {
-  tabId: string;
-  url: string;
+export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
   /** PNG bytes, base64. The host owns scale and size bounds. */
   base64Png: string;
+  /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
+  picture: string | null;
   width: number;
   height: number;
 }
@@ -661,9 +725,7 @@ export interface RuntimeBrowserConsoleMessage {
 }
 
 /** A Browser Tab's recent console output and page errors, bounded. */
-export interface RuntimeBrowserConsole {
-  tabId: string;
-  url: string;
+export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
   messages: readonly RuntimeBrowserConsoleMessage[];
   truncated: boolean;
 }
@@ -692,7 +754,7 @@ export interface RuntimeBrowserPort {
   }): Promise<RuntimeBrowserSnapshot>;
   snapshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
   /** Act, then answer with the fresh snapshot the action produced. */
-  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserSnapshot>;
+  act(input: RuntimeBrowserActRequest & { signal: AbortSignal }): Promise<RuntimeBrowserActResult>;
   screenshot(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserScreenshot>;
   console(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserConsole>;
   /**
@@ -734,6 +796,132 @@ export function browserHoldPort(
   // narrowing is a fact about `port` rather than a copy that could lose a
   // `this`-bound method.
   return port as RuntimeBrowserHoldPort;
+}
+
+/** How a background shell stands: still running, or exited with what it exited with. */
+export type RuntimeShellState = "running" | "exited";
+
+/**
+ * One background shell as the runtime lists it (VC-270): bounded metadata,
+ * never its output. Every shell result restates the Session's live shells in
+ * this shape, so the tool calls that started and read them are the record the
+ * model re-reads for free — there is no per-turn prompt channel for them.
+ */
+export interface RuntimeShellRecord {
+  /** Host-minted opaque id, never a pid: a pid is reused by the OS and a shell id is not. */
+  shellId: string;
+  /** The command as the model gave it. */
+  command: string;
+  /** The model's own label for the shell, or `null` when it gave none. */
+  title: string | null;
+  state: RuntimeShellState;
+  /** Exit code once exited; `null` while running and when the shell died of a signal. */
+  code: number | null;
+  /** The signal that ended it, once exited that way. */
+  signal: string | null;
+  /** Host clock, milliseconds. */
+  startedAt: number;
+  exitedAt: number | null;
+}
+
+/**
+ * How a shell stands, in the words every surface says it in: `running`,
+ * `exited 0`, or `exited by SIGTERM`.
+ *
+ * Here rather than beside any one caller because three surfaces answer the
+ * same question — the tool result the model reads, the output pane's header,
+ * and any listing — and a Session must not be told its shell `exited 0` in
+ * one place and `exited by SIGKILL` in another. Takes the three fields it
+ * reads, so the desktop's renderer-facing shell state satisfies it as well as
+ * a {@link RuntimeShellRecord}.
+ */
+export function shellStanding(
+  shell: Pick<RuntimeShellRecord, "state" | "code" | "signal">,
+): string {
+  if (shell.state === "running") return "running";
+  if (shell.signal !== null) return `exited by ${shell.signal}`;
+  return `exited ${shell.code ?? "?"}`;
+}
+
+/**
+ * The one line a shell is named by: the first non-blank line of its command,
+ * trimmed. Deliberately NOT truncated — how short a name must be is the
+ * caller's business (the model's listing bounds it to fit a result; the
+ * Activity Island lets its own truncation chain do it), and a bound baked in
+ * here would be applied twice.
+ */
+export function shellCommandLine(command: string): string {
+  return (
+    command
+      .split("\n")
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? ""
+  );
+}
+
+/** What starting a shell comes to: its record, and what it printed in the settle window. */
+export interface RuntimeShellStartOutcome {
+  shell: RuntimeShellRecord;
+  pid: number;
+  /** Whatever the command printed before the host stopped waiting — a server's "listening on" line. */
+  output: string;
+  /** Every shell this Session holds after the start, the one just started included. */
+  shells: readonly RuntimeShellRecord[];
+}
+
+/**
+ * What a read comes to. `output` is only what is NEW since the last read of
+ * this shell, unless the caller asked for a `tail`, in which case it is the
+ * last N bytes of everything retained. `truncated` says the host's own bound
+ * dropped bytes before the caller could read them — either the ring buffer's
+ * or the tail cap's.
+ */
+export interface RuntimeShellOutputOutcome {
+  shell: RuntimeShellRecord;
+  output: string;
+  truncated: boolean;
+  shells: readonly RuntimeShellRecord[];
+}
+
+/** What a kill comes to: the shell's record once it has exited. */
+export interface RuntimeShellKillOutcome {
+  shell: RuntimeShellRecord;
+  shells: readonly RuntimeShellRecord[];
+}
+
+/**
+ * The one background shell port (VC-270): everything a Session can do to a
+ * command that runs beside the turn, answered by the host that owns the
+ * process.
+ *
+ * One port for three tools, on {@link RuntimeBrowserPort}'s terms: starting,
+ * reading and killing are one capability with one answerer, so a spec cannot
+ * offer a Session the ability to start a process without the ability to end
+ * it. Every method takes what the model said and a signal, and decides
+ * everything else itself: the per-Session cap, the output bound, whether the
+ * `cwd` is inside the workspace. A refusal is a typed error the tools turn
+ * into text; anything else thrown is a host that could not answer at all.
+ *
+ * Deliberately absent: stdin, a PTY, a restart verb, a filter on reads. A
+ * shell a person types into is the terminal, not this.
+ */
+export interface RuntimeShellPort {
+  start(input: {
+    command: string;
+    /** Defaults to the Session workspace, and must stay inside it. */
+    cwd?: string;
+    title?: string;
+    signal: AbortSignal;
+  }): Promise<RuntimeShellStartOutcome>;
+  output(input: {
+    shellId: string;
+    /** The last N bytes of everything retained, instead of what is new. Bounded by the host. */
+    tail?: number;
+    signal: AbortSignal;
+  }): Promise<RuntimeShellOutputOutcome>;
+  kill(input: { shellId: string; signal: AbortSignal }): Promise<RuntimeShellKillOutcome>;
+  /** Kills every shell this Session started and forgets them; the attachment's end. */
+  dispose?(): void;
 }
 
 /**
@@ -928,6 +1116,13 @@ export interface SessionRuntimeSpec {
    */
   browser?: RuntimeBrowserPort;
   /**
+   * Run commands beside the turn, through the one {@link RuntimeShellPort}
+   * (VC-270). Optional on {@link browser}'s terms: absence is what decides
+   * whether the model is offered any shell tool, and one port carries all
+   * three names.
+   */
+  shell?: RuntimeShellPort;
+  /**
    * Run one product verb the Session's frozen Agent Tool Surface names, in the
    * host's own process (VC-162).
    *
@@ -994,7 +1189,7 @@ export interface RuntimeVerbResult {
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "callVerb"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "callVerb"
 >;
 
 /**
@@ -1025,6 +1220,15 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // A name and nothing else, like a coding tool — but for the opposite reason.
+  // A coding tool carries nothing because the runtime holds the environment
+  // this package cannot see; `todo_write` carries nothing because there is
+  // nothing to hold (VC-6).
+  | { tool: "todo_write" }
+  // Three arms, one port (VC-270), on the browser arms' terms.
+  | { tool: "shell_start"; port: RuntimeShellPort }
+  | { tool: "shell_output"; port: RuntimeShellPort }
+  | { tool: "shell_kill"; port: RuntimeShellPort }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -1062,6 +1266,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // smaller surface, and it is caught here where the cost is a thrown error
   // rather than a Session that can take a hold it cannot give back.
   const hold = browserHoldPort(browser);
+  const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
@@ -1075,6 +1280,13 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     browser_console: browser === undefined ? null : { tool: "browser_console", port: browser },
     browser_acquire: hold === undefined ? null : { tool: "browser_acquire", port: hold },
     browser_release: hold === undefined ? null : { tool: "browser_release", port: hold },
+    // The one arm that reads the bundle instead of a port, and the one binding
+    // that carries nothing: see `RuntimeToolBundle.todoWrite` for why a todo
+    // list has no port to be answered by.
+    todo_write: spec.tools.todoWrite === true ? { tool: "todo_write" } : null,
+    shell_start: shell === undefined ? null : { tool: "shell_start", port: shell },
+    shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
+    shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;

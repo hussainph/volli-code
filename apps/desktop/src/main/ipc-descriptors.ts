@@ -36,6 +36,7 @@ import type {
   HarnessIpcChannel,
   IpcArgs,
   ModelAccessIpcChannel,
+  ShellIpcChannel,
   ThemeIpcChannel,
   WebAccessIpcChannel,
   UpdateIpcChannel,
@@ -277,6 +278,19 @@ export const BROWSER_IPC: {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },
+  "volli:browser-set-presentation": {
+    guard: (args): args is IpcArgs<"volli:browser-set-presentation"> => {
+      if (!isBrowserTabIdArgs(args)) return false;
+      const presentation = (args[0] as Record<string, unknown>)["presentation"];
+      return presentation === "headless" || presentation === "preview" || presentation === "tab";
+    },
+    invalidError: "Invalid Browser Tab request",
+  },
+  "volli:browser-picture": {
+    guard: (args): args is IpcArgs<"volli:browser-picture"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["pictureId"] === "string",
+    invalidError: "Invalid Browser Tab request",
+  },
   "volli:browser-take-over": {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
@@ -293,6 +307,29 @@ export const BROWSER_IPC: {
 
 /** Every Browser Tab command, derived so handler registration cannot omit one. */
 export const BROWSER_CHANNELS = Object.keys(BROWSER_IPC) as readonly BrowserIpcChannel[];
+
+// ---- background shell descriptor table (VC-270) --------------------------
+
+const isShellIdArgs = (args: unknown[]): args is [{ shellId: string }] =>
+  args.length === 1 && isRecord(args[0]) && typeof args[0]["shellId"] === "string";
+
+export const SHELL_IPC: { readonly [C in ShellIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:shell-list": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid background shell request",
+  },
+  "volli:shell-tail": {
+    guard: isShellIdArgs,
+    invalidError: "Invalid background shell request",
+  },
+  "volli:shell-kill": {
+    guard: isShellIdArgs,
+    invalidError: "Invalid background shell request",
+  },
+};
+
+/** Every background shell command, derived so handler registration cannot omit one. */
+export const SHELL_CHANNELS = Object.keys(SHELL_IPC) as readonly ShellIpcChannel[];
 
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
@@ -720,6 +757,18 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       );
     },
     invalidError: "Invalid session title",
+  },
+  "volli:session-stop": {
+    guard: (args): args is IpcArgs<"volli:session-stop"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
+      // The reason is the durable why: absent, or a non-blank sentence.
+      const reason = input["reason"];
+      return reason === undefined || (typeof reason === "string" && reason.trim().length > 0);
+    },
+    invalidError: "Invalid session stop",
   },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {

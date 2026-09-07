@@ -759,7 +759,9 @@ describe("Pi native adapter attach", () => {
 
     // The scope is the adapter's word, from the Session's own context — never
     // a value the model or the port could invent. The Session and attachment
-    // ride with it (VC-239): a hold is taken in that name and judged against it.
+    // ride with it: a hold is taken in that name and judged against it
+    // (VC-239), and the same Session id is the owner every tab the port opens
+    // is stamped with (VC-238).
     expect(scopes).toEqual([
       {
         projectId: "project-1",
@@ -854,6 +856,120 @@ describe("Pi native adapter attach", () => {
     // The frozen surface is a promise about the provider tool array; a build
     // that cannot keep it must fail the attachment, not shrink the surface.
     await expect(attempt).rejects.toThrow(/Browser/);
+  });
+
+  it("offers no shell tool to a Session whose host wired none", async () => {
+    const { runtime } = await attached();
+    expect("shell" in runtime.spec).toBe(false);
+  });
+
+  it("binds no shell port to a Session frozen before background shells existed", async () => {
+    // The other half of the guard above. The host carries a port and would
+    // happily answer, but this Session's frozen surface does not name the
+    // shell tools — so it must not gain them. The tool array is what the
+    // provider Cache Prefix is computed over, and a Session that silently
+    // grew three names would lose its prefix on the next turn.
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
+      // The default surface: read, edit, write, execute, ask_user.
+      resolveShellPort: () => ({
+        start: unusedPortMethod,
+        output: unusedPortMethod,
+        kill: unusedPortMethod,
+        dispose,
+      }),
+    });
+
+    expect("shell" in runtime.spec).toBe(false);
+    expect(runtime.spec.tools.tools).not.toContain("shell_start");
+
+    // And the port it never bound is still released with the attachment, so
+    // a port resolved per attachment cannot outlive one.
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("hands the desktop's shell port to a recorded surface, scoped to the Session, and disposes it on release (VC-270)", async () => {
+    const scopes: unknown[] = [];
+    const dispose = vi.fn();
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "shell_start",
+          "shell_output",
+          "shell_kill",
+        ],
+      }),
+      resolveShellPort: (scope) => {
+        scopes.push(scope);
+        return {
+          start: unusedPortMethod,
+          output: async () => ({
+            shell: {
+              shellId: "sh-1",
+              command: "pnpm dev",
+              title: null,
+              state: "running",
+              code: null,
+              signal: null,
+              startedAt: 1,
+              exitedAt: null,
+            },
+            output: "",
+            truncated: false,
+            shells: [],
+          }),
+          kill: unusedPortMethod,
+          dispose,
+        };
+      },
+    });
+
+    // The scope is the adapter's word: project, Ticket, Session, attachment
+    // and the directory the Engine prepared — never a value the model names.
+    expect(scopes).toEqual([
+      {
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        sessionId: SESSION_ID,
+        attachmentId: ATTACHMENT_ID,
+        workspacePath: "/work/volli/.worktrees/VC-12",
+      },
+    ]);
+    const read = await runtime.spec.shell?.output({
+      shellId: "sh-1",
+      signal: new AbortController().signal,
+    });
+    expect(read?.shell.shellId).toBe("sh-1");
+    expect(dispose).not.toHaveBeenCalled();
+
+    // Every shell the Session started dies with the attachment — the same
+    // release path the Browser port's dispose rides.
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("refuses attachment rather than binding a frozen shell surface the host cannot answer", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [
+          "read",
+          "edit",
+          "write",
+          "execute",
+          "shell_start",
+          "shell_output",
+          "shell_kill",
+        ],
+      }),
+    });
+    await expect(attempt).rejects.toThrow(/shell/);
   });
 
   it("resolves the ports once per attachment rather than per turn", async () => {
@@ -997,6 +1113,32 @@ describe("Pi native adapter attach", () => {
         request: { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "tc-0" },
       },
     ]);
+  });
+
+  it("names todo_write in the bundle exactly when the frozen surface holds it (VC-6)", async () => {
+    // Membership is the bundle's to state because the tool has no port. It is
+    // read back off the durable record like the verb half, never re-derived:
+    // a Session frozen before VC-6 must keep the tool array it recorded.
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "todo_write"],
+      }),
+    });
+
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      todoWrite: true,
+    });
+  });
+
+  it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
+    // Absent, not `false`: the attachment refuses a derived tool array that
+    // disagrees with the record, so this is the assertion standing between an
+    // older Session and a refused reattachment.
+    const { runtime } = await attached({});
+
+    expect("todoWrite" in runtime.spec.tools).toBe(false);
   });
 
   it("omits the verb half entirely for a Session whose Role carries none", async () => {
