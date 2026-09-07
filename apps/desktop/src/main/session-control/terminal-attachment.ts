@@ -100,6 +100,44 @@ export function terminalSessionRecord(projection: SessionProjection): SessionRec
   };
 }
 
+/**
+ * The native detail to re-reference when a PTY exits with `exitCode`, or `null`
+ * when there is nothing honest to write (VC-290).
+ *
+ * The exit code is the one fact about a terminal's ending that only the PTY
+ * observes, and it used to reach the live renderer and nothing else: the ledger
+ * recorded a completed/failed OUTCOME, so a closed record read back
+ * `exitCode: null` — the same answer a boot sweep leaves for a process nobody
+ * saw end. Two different facts, one indistinguishable null, and a session-detail
+ * view that could only ever say "unavailable".
+ *
+ * It re-emits the attachment's CURRENT detail with the code stamped on, never
+ * the launch snapshot: hooks and the `volli` CLI socket link a newer harness id
+ * and harness session id onto this same attachment while it runs, and replaying
+ * the snapshot would roll that evidence back on the way out
+ * (`agent-dispatch/harness-verbs.ts` takes the same care, for the same reason).
+ *
+ * `null` covers every case where writing would be a guess or a lie: no
+ * projection, an attachment that is not this one, one the ledger has already
+ * closed, a native detail this build cannot parse, and the code already being
+ * recorded — the last of which keeps a re-observed exit from appending an event
+ * that changes nothing.
+ */
+export function terminalExitDetail(
+  projection: SessionProjection | null,
+  attachmentId: string,
+  exitCode: number,
+): TerminalAttachmentDetail | null {
+  if (projection === null) return null;
+  const attachment = projection.attachments.find(
+    (candidate) => candidate.id === attachmentId && candidate.adapterId === "terminal",
+  );
+  if (attachment === undefined || attachment.status !== "open") return null;
+  const detail = readTerminalAttachmentDetail(attachment.native);
+  if (detail === null || detail.exitCode === exitCode) return null;
+  return { ...detail, exitCode };
+}
+
 export function latestTerminalAttachment(
   attachments: readonly SessionAttachmentProjection[],
 ): SessionAttachmentProjection | null {

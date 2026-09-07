@@ -35,6 +35,7 @@ import {
   isConcludedBusiness,
   listingOutputStamps,
   PREVIOUS_MAX_AGE_MS,
+  sessionRowRoute,
   sessionRowScope,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -1304,6 +1305,181 @@ describe("buildActiveSessionListing — the Previous band", () => {
 
     expect(result.active).toMatchObject([{ title: "Board chat", ticket: null }]);
     expect(result.previous).toMatchObject([{ title: "Project terminal", ticket: null }]);
+  });
+});
+
+/**
+ * A closed terminal's row names the terminal, so it has to OPEN the terminal
+ * (VC-290). It used to carry no target at all, and the sidebar sent a targetless
+ * row to its ticket workspace — or to Home when it had none — so selecting
+ * "Session 2" landed you in a chat that had nothing to do with it.
+ */
+describe("buildActiveSessionListing — a closed terminal's own destination", () => {
+  const now = 5_000_000;
+
+  function previousOf(records: SessionRecord[], tickets: Ticket[] = []) {
+    return buildActiveSessionListing({
+      tickets,
+      containers: {},
+      signalsByTicket: {},
+      records,
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    }).previous;
+  }
+
+  it("addresses an ended ticket terminal by its project and Session id", () => {
+    const previous = previousOf(
+      [record({ id: "r1", ticketId: "t1", title: "Session 2", endedAt: now - 1_000 })],
+      [ticket({ id: "t1", status: "doing" })],
+    );
+
+    expect(previous[0]?.target).toEqual({
+      kind: "session-detail",
+      projectId: "p1",
+      sessionId: "r1",
+    });
+  });
+
+  it("addresses an ended project terminal the same way", () => {
+    const previous = previousOf([
+      record({ id: "r1", ticketId: null, title: "Poke at the repo", endedAt: now - 1_000 }),
+    ]);
+
+    expect(previous[0]?.target).toEqual({
+      kind: "session-detail",
+      projectId: "p1",
+      sessionId: "r1",
+    });
+  });
+
+  // The record's own project, not the sidebar's. They agree today; reading the
+  // record is what keeps the address pointing at the Session it names.
+  it("takes the project from the record it is addressing", () => {
+    const previous = previousOf([
+      record({ id: "r1", projectId: "p-other", ticketId: null, endedAt: now - 1_000 }),
+    ]);
+
+    expect(previous[0]?.target).toMatchObject({ projectId: "p-other" });
+  });
+
+  // An exited TAB is a different thing: its pane is still mounted, so the row
+  // still opens the terminal a person can see. Only a record with no tab left
+  // gets the detail.
+  it("leaves a still-open exited tab pointing at its pane", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: { t1: container("s1", [paneTab("s1", "Exited but open", 0)]) },
+      signalsByTicket: {},
+      records: [record({ id: "s1", ticketId: "t1", endedAt: now - 1_000 })],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(result.previous[0]?.target).toEqual({
+      kind: "terminal",
+      tabId: "s1",
+      paneId: "s1",
+    });
+  });
+
+  it("never lights a detail row as the tab in front of you", () => {
+    const row = previousRow({
+      id: "session:r1",
+      kind: "terminal",
+      target: { kind: "session-detail", projectId: "p1", sessionId: "r1" },
+    });
+
+    // Home is showing, and the recorded tab could not be this row's anyway:
+    // a saved record is not a tab, so it is never "where you are".
+    expect(isProjectSessionRowSelected(row, true, undefined, "r1")).toBe(false);
+  });
+});
+
+describe("sessionRowRoute", () => {
+  const t1 = ticket({ id: "t1", status: "doing" });
+
+  it("sends a closed terminal to its own saved record", () => {
+    expect(
+      sessionRowRoute(
+        previousRow({
+          id: "session:r1",
+          ticket: t1,
+          kind: "terminal",
+          target: { kind: "session-detail", projectId: "p1", sessionId: "r1" },
+        }),
+      ),
+    ).toEqual({ kind: "session-detail", projectId: "p1", sessionId: "r1" });
+  });
+
+  // The bug, stated as a test: a closed terminal that HAS a ticket must not be
+  // answered with that ticket's workspace, which opens whatever tab was last in
+  // front there and says nothing about the Session that was clicked.
+  it("does not fall back to the ticket workspace for a row that has a ticket", () => {
+    const route = sessionRowRoute(
+      previousRow({
+        id: "session:r1",
+        ticket: t1,
+        kind: "terminal",
+        target: { kind: "session-detail", projectId: "p1", sessionId: "r1" },
+      }),
+    );
+
+    expect(route.kind).not.toBe("ticket-workspace");
+  });
+
+  it("opens a ticket terminal's pane", () => {
+    expect(
+      sessionRowRoute(
+        previousRow({
+          id: "s1",
+          ticket: t1,
+          kind: "terminal",
+          target: { kind: "terminal", tabId: "s1", paneId: "s2" },
+        }),
+      ),
+    ).toEqual({ kind: "ticket-terminal", ticketId: "t1", tabId: "s1", paneId: "s2" });
+  });
+
+  it("opens a ticket chat's tab", () => {
+    expect(
+      sessionRowRoute(
+        previousRow({
+          id: "chat:c1",
+          ticket: t1,
+          target: { kind: "chat", tabId: "chat:c1", sessionId: "c1" },
+        }),
+      ),
+    ).toEqual({ kind: "ticket-chat", ticketId: "t1", tabId: "chat:c1", sessionId: "c1" });
+  });
+
+  it("opens a ticketless terminal and chat on Home", () => {
+    expect(
+      sessionRowRoute(
+        previousRow({
+          id: "s1",
+          kind: "terminal",
+          target: { kind: "terminal", tabId: "s1", paneId: "s1" },
+        }),
+      ),
+    ).toEqual({ kind: "home-terminal", tabId: "s1", paneId: "s1" });
+    expect(
+      sessionRowRoute(
+        previousRow({ id: "chat:c1", target: { kind: "chat", tabId: "chat:c1", sessionId: "c1" } }),
+      ),
+    ).toEqual({ kind: "home-chat", tabId: "chat:c1", sessionId: "c1" });
+  });
+
+  it("keeps the old fallbacks for a row that genuinely has no target", () => {
+    expect(sessionRowRoute(previousRow({ id: "a", ticket: t1 }))).toEqual({
+      kind: "ticket-workspace",
+      ticketId: "t1",
+    });
+    expect(sessionRowRoute(previousRow({ id: "b" }))).toEqual({ kind: "home" });
   });
 });
 

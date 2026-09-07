@@ -63,6 +63,7 @@ import {
   useSessionsStore,
 } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 
@@ -364,11 +365,16 @@ function SessionList({
                   }
             }
             // Exited-but-open panes live in History but still activate their tab
-            // and exact split pane; closed records (no live tab, so no `tabId`)
-            // remain inert until resume lands.
+            // and exact split pane. A CLOSED record has no tab to activate, and
+            // it is no longer inert either (VC-290): it opens its own saved
+            // record — the same destination the sidebar's Previous row and ⌘K
+            // now reach, so the three surfaces holding this Session's history
+            // answer a click the same way.
             onActivate={
               tabId === undefined
-                ? null
+                ? () => {
+                    useUiStore.getState().openSessionDetail(projectId, record.id);
+                  }
                 : () => {
                     onActivateSession(tabId);
                     setActivePane(ticketId, tabId, record.id);

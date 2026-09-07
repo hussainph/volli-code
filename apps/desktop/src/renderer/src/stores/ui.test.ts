@@ -354,6 +354,44 @@ describe("setNewTicketOpen", () => {
   });
 });
 
+describe("session detail", () => {
+  it("opens one closed Session's saved record, by project and Session id", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().sessionDetail).toBeNull();
+
+    store.getState().openSessionDetail("p1", "s1");
+    expect(store.getState().sessionDetail).toEqual({ projectId: "p1", sessionId: "s1" });
+  });
+
+  it("moves to the next record rather than stacking one over another", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().openSessionDetail("p1", "s1");
+    store.getState().openSessionDetail("p2", "s2");
+
+    expect(store.getState().sessionDetail).toEqual({ projectId: "p2", sessionId: "s2" });
+  });
+
+  it("closes to nothing, leaving whatever was behind it in front", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().openSessionDetail("p1", "s1");
+    store.getState().closeSessionDetail();
+
+    expect(store.getState().sessionDetail).toBeNull();
+  });
+
+  // Session-only, like `newTicketOpen` and for the same reason: it is a place
+  // you were LOOKING, not a preference. Relaunching into a dialog about a
+  // terminal that ended days ago is nobody's idea of where they left off.
+  it("is never persisted", () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().openSessionDetail("p1", "s1");
+
+    const persisted = storage.getItem("volli:ui");
+    expect(persisted === null ? "" : persisted).not.toContain("sessionDetail");
+  });
+});
+
 describe("terminal focus", () => {
   const target = { projectId: "p1", ticketId: "t1", sessionId: "s1" };
 

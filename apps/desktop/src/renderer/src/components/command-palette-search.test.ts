@@ -142,6 +142,7 @@ function sessionItem(
     ticketDisplayId: null,
     ticketTitle: null,
     provenance: PERSON_STARTED,
+    destination: "tab",
     ...overrides,
   };
 }

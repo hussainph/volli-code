@@ -291,6 +291,13 @@ export default defineConfig(({ mode }) => ({
         // and which command that offer would run.
         "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
+        // What a CLOSED terminal's saved record says (VC-290). In the gate
+        // because every branch here is a refusal to guess: an exit nobody
+        // observed must not read as success, a deleted ticket must not read as
+        // a project session, and an unreadable working folder must not print as
+        // a path. A missed branch is a confident sentence about a Session that
+        // nothing actually observed — which is the failure the ticket is about.
+        "src/components/sessions/session-detail-model.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
         "src/components/sidebar/edge-region.ts",

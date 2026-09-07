@@ -15,6 +15,7 @@ import {
   groupPreviousByTicket,
   isProjectSessionRowSelected,
   listingOutputStamps,
+  sessionRowRoute,
   type ActiveSessionRow,
   type PreviousSessionRow,
 } from "@renderer/components/sidebar/active-session-listing";
@@ -45,6 +46,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
@@ -490,6 +492,8 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     (row.ticket !== null &&
       shownTicketId === row.ticket.id &&
       row.target !== null &&
+      // A saved record has no tab, so it is never the tab in front (VC-290).
+      row.target.kind !== "session-detail" &&
       activeTabId === row.target.tabId);
 
   /**
@@ -528,25 +532,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   }, [selectedGroupId, project.id, setSessionGroupExpanded]);
 
   /**
-   * Where a row goes. A ticketed row reopens its exact session, or failing that
-   * its ticket workspace.
-   *
-   * A TICKETLESS row has no ticket workspace to open — both terminal and chat
-   * targets land on HOME instead, through `openHome`, which switches the page
-   * and names the tab in one write. That seam deliberately leaves `openTicketId`
-   * alone: a Home Session tab is its own place and keeps the ticket remembered
-   * behind it (VC-54 decision 1), so reaching a chat from here never costs you
-   * the ticket you were in. A ticketless chat is additionally adopted and given
-   * a tab under the project's owner key, the same two calls the ticketed chat
-   * case below makes — the tab has to exist before the strip can put it in
-   * front.
-   *
-   * Stable across renders, and handed to every row AS IS rather than wrapped in
-   * a per-row closure: both band rows are memoised, and a fresh handler per row
-   * per render is exactly the prop that would make that memo do nothing. Its
-   * dependencies are store actions and one id, none of which move.
-   */
-  /**
    * Opens or closes one ticket's group. Stable, and handed to every entry AS IS
    * for the same reason `activate` is: `TicketGroupRow` is memoised, and a
    * fresh `() => toggle(id)` per entry per render is exactly the prop that
@@ -562,45 +547,76 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [project.id, setSessionGroupExpanded],
   );
 
+  /**
+   * Where a row goes — `sessionRowRoute` decides, this performs it.
+   *
+   * The decision is pure and lives with the row model (VC-290): a closed
+   * terminal's row now names its own saved record, and the two fallbacks that
+   * used to swallow it — the ticket's workspace, and Home — belong only to a
+   * Session with no surface at all. Splitting them was the fix, not a
+   * refactor: while "open the Session" and "open something near the Session"
+   * were one function, the second silently answered for the first.
+   *
+   * A TICKETLESS live row lands on HOME through `openHome`, which switches the
+   * page and names the tab in one write. That seam deliberately leaves
+   * `openTicketId` alone: a Home Session tab is its own place and keeps the
+   * ticket remembered behind it (VC-54 decision 1). A chat is additionally
+   * adopted and given a tab under its owner key — the tab has to exist before
+   * the strip can put it in front.
+   *
+   * Stable across renders, and handed to every row AS IS rather than wrapped in
+   * a per-row closure: both band rows are memoised, and a fresh handler per row
+   * per render is exactly the prop that would make that memo do nothing. Its
+   * dependencies are store actions and one id, none of which move.
+   */
   const activate = React.useCallback(
     (row: ActiveSessionRow | PreviousSessionRow) => {
-      const ticket = row.ticket;
-      if (ticket === null) {
-        const target = row.target;
-        if (target?.kind === "terminal") {
-          const sessions = useSessionsStore.getState();
-          sessions.setActiveSession(project.id, target.tabId);
-          sessions.setActivePane(project.id, target.tabId, target.paneId);
-          openHome(project.id, target.tabId);
-        } else if (target?.kind === "chat") {
+      const route = sessionRowRoute(row);
+      switch (route.kind) {
+        case "session-detail": {
+          // No navigation at all: the record opens over whatever you were
+          // doing, and closing it puts you back there.
+          useUiStore.getState().openSessionDetail(route.projectId, route.sessionId);
+          return;
+        }
+        case "ticket-terminal": {
+          openTicketSession(project.id, route.ticketId, route.tabId, route.paneId);
+          return;
+        }
+        case "ticket-chat": {
+          // The two store calls the ticket rail's own chat row makes, for the
+          // same reason: a chat the strip has no tab for is not reachable by
+          // activating its id — the activation falls back to the Ticket Body.
+          // `adoptChatSession` is idempotent, so a chat already in front takes
+          // this path too.
           const chat = useChatSessionsStore.getState();
-          chat.adoptChatSession(target.sessionId);
-          chat.openChatTab(project.id, target.sessionId);
-          openHome(project.id, target.tabId);
-        } else {
-          // No target at all — a Session whose tab is gone. Home is still where
-          // it would live, so go there and leave the strip as it was.
+          chat.adoptChatSession(route.sessionId);
+          chat.openChatTab(route.ticketId, route.sessionId);
+          openTicketWorkspace(project.id, route.ticketId, { tabId: route.tabId });
+          return;
+        }
+        case "ticket-workspace": {
+          openTicketWorkspace(project.id, route.ticketId);
+          return;
+        }
+        case "home-terminal": {
+          const sessions = useSessionsStore.getState();
+          sessions.setActiveSession(project.id, route.tabId);
+          sessions.setActivePane(project.id, route.tabId, route.paneId);
+          openHome(project.id, route.tabId);
+          return;
+        }
+        case "home-chat": {
+          const chat = useChatSessionsStore.getState();
+          chat.adoptChatSession(route.sessionId);
+          chat.openChatTab(project.id, route.sessionId);
+          openHome(project.id, route.tabId);
+          return;
+        }
+        default: {
           openHome(project.id);
         }
-        return;
       }
-      const target = row.target;
-      if (target === null) {
-        openTicketWorkspace(project.id, ticket.id);
-        return;
-      }
-      if (target.kind === "chat") {
-        // The two store calls the ticket rail's own chat row makes, for the same
-        // reason: a chat the strip has no tab for is not reachable by activating
-        // its id — the activation falls back to the Ticket Body. `adoptChatSession`
-        // is idempotent, so a chat already in front takes this path too.
-        const chat = useChatSessionsStore.getState();
-        chat.adoptChatSession(target.sessionId);
-        chat.openChatTab(ticket.id, target.sessionId);
-        openTicketWorkspace(project.id, ticket.id, { tabId: target.tabId });
-        return;
-      }
-      openTicketSession(project.id, ticket.id, target.tabId, target.paneId);
     },
     [project.id, openHome, openTicketSession, openTicketWorkspace],
   );
