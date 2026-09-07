@@ -46,14 +46,13 @@ describe("authorityChip", () => {
 
   /*
    * `rulePackHash` is the version, because there is no saved policy version
-   * field to read and `mode: "auto"` is not a user-facing outcome. The chip
-   * therefore moves when the pack does, and never when the internal mode word
-   * changes.
+   * field to read. Give the id a tempting display value so this test proves the
+   * formatter selects the hash rather than merely receiving no competing word.
    */
-  it("versions the chip by the saved pack hash, not by the Snapshot's internal mode", () => {
+  it("versions the chip by the saved pack hash, not by the pack id", () => {
     const chip = authorityChip({
       attachmentId: "attachment-1",
-      snapshot: { enforcement: "enforce", rulePackId: "volli.builtin", rulePackHash: "0badc0de" },
+      snapshot: { enforcement: "enforce", rulePackId: "auto", rulePackHash: "0badc0de" },
     });
 
     expect(chip?.label).toContain("pack 0badc0de");
@@ -70,7 +69,7 @@ describe("authorityChip", () => {
     const chip = authorityChip({ attachmentId: "attachment-1", snapshot: null });
 
     expect(chip).toEqual({
-      state: "none",
+      state: "no-snapshot",
       label: "No policy snapshot — runtime defaults",
       summary: "Authority: no policy snapshot — runtime defaults",
     });

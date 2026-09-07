@@ -17,8 +17,8 @@
  * THE WHOLE SENTENCE IS VISIBLE, on purpose. The finding this ticket answers was
  * that the meaning of a posture lived in an information popover; a chip that
  * showed "Observe" and hid "policy record · pack dca89a93" behind a hover would
- * be the same failure in a smaller box. The `sr-only` twin carries the same
- * sentence with the word the shield glyph says visually.
+ * be the same failure in a smaller box. The visible sentence includes
+ * “Authority” too; a shield alone is not a label.
  */
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import type { AuthorityChipView } from "@volli/session-presentation";
@@ -33,25 +33,17 @@ export function AuthorityChip({ chip }: { chip: AuthorityChipView | null }) {
     <Badge
       data-testid="session-authority-chip"
       data-authority={chip.state}
-      title={chip.summary}
-      // `gap-1.5` and no fill: the footer's resting chrome is quiet, and a
-      // filled chip here would out-shout the model pill beside it — this
-      // qualifies the Session, it does not alarm about it.
+      // No fill: the footer's resting chrome is quiet, and a filled chip here
+      // would out-shout the model pill beside it — this qualifies the Session,
+      // it does not alarm about it.
       //
-      // It may shrink, against the primitive's own `shrink-0`, and only at the
-      // width where the row has already wrapped it onto a line of its own: the
-      // chat pane's floor is 265px and this sentence is longer than the model
-      // name that gives first. Truncating with the whole fact still in `title`
-      // beats a chip that pushes the composer wider than its column.
-      className="min-w-0 max-w-full shrink gap-1.5 border-transparent px-1.5"
+      // It may shrink, against the primitive's own `shrink-0`, but the sentence
+      // wraps rather than truncates at the chat pane's narrow floor. Outcome and
+      // pack version are both required visible facts, not tooltip detail.
+      className="min-w-0 max-w-full shrink whitespace-normal border-transparent"
     >
-      <ShieldCheckIcon aria-hidden className="size-3 shrink-0" />
-      {/* The same fact twice, deliberately: the sentence a screen reader gets
-          names Authority, which the glyph names for everyone else. */}
-      <span className="sr-only">{chip.summary}</span>
-      <span aria-hidden className="truncate">
-        {chip.label}
-      </span>
+      <ShieldCheckIcon aria-hidden className="size-3 shrink-0" weight="bold" />
+      <span className="min-w-0">{chip.summary}</span>
     </Badge>
   );
 }

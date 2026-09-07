@@ -33,10 +33,11 @@ describe("AuthorityChip", () => {
   it("shows the saved outcome and the pack version, unopened", () => {
     const html = render(pinned("observe"));
 
-    expect(html).toContain("Observe — policy record");
-    expect(html).toContain(`pack ${BUILTIN_RULE_PACK_HASH}`);
+    expect(html).toContain(`Authority: Observe — policy record · pack ${BUILTIN_RULE_PACK_HASH}`);
     expect(html).toContain('data-testid="session-authority-chip"');
     expect(html).toContain('data-authority="observe"');
+    expect(html).toContain("whitespace-normal");
+    expect(html).not.toContain("truncate");
   });
 
   it("says an enforcing attachment blocks rules", () => {
@@ -49,15 +50,18 @@ describe("AuthorityChip", () => {
   it("names the runtime defaults when the attachment saved no Snapshot", () => {
     const html = render({ attachmentId: "attachment-1", snapshot: null });
 
-    expect(html).toContain("No policy snapshot — runtime defaults");
-    expect(html).toContain('data-authority="none"');
+    expect(html).toContain("Authority: no policy snapshot — runtime defaults");
+    expect(html).toContain('data-authority="no-snapshot"');
     expect(html).not.toContain("pack");
   });
 
-  it("names the fact for a screen reader as Authority, which the glyph says visually", () => {
-    expect(render(pinned("enforce"))).toContain(
-      `Authority: Enforce — blocks rules · pack ${BUILTIN_RULE_PACK_HASH}`,
+  it("names the fact as Authority in the same visible sentence", () => {
+    const html = render(pinned("enforce"));
+
+    expect(html).toContain(
+      `<span class="min-w-0">Authority: Enforce — blocks rules · pack ${BUILTIN_RULE_PACK_HASH}</span>`,
     );
+    expect(html).not.toContain("sr-only");
   });
 
   it("draws nothing at all while no attachment is live", () => {

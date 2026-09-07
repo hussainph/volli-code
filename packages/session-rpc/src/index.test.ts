@@ -634,28 +634,34 @@ describe("Session tRPC router", () => {
   });
 
   /*
-   * One Session, two attachments, two policies — which is the case pinning
-   * exists for. A Session that reattached after a Configure edit has genuinely
-   * run under both, so the summary must follow the LIVE attachment rather than
-   * the newest, the first, or anything folded across them.
+   * One Session, several attachments, several policies — which is the case
+   * pinning exists for. A Session that reattached after a Configure edit has
+   * genuinely run under all of them, so the summary must follow the LIVE
+   * attachment rather than the first, last, or anything folded across them.
    */
-  it("follows the live attachment when a Session has run under two policies", async () => {
+  it("follows the live attachment when a Session has run under several policies", async () => {
     const fixture = runtimeFixture();
     const serverSnapshot = snapshotWithRecovery();
-    const closed = {
+    const closedBefore = {
       ...attachmentWithRecovery(),
       id: "attachment-0",
       status: "closed" as const,
       authority: { ...pinnedAuthority(), enforcement: "enforce" as const },
     };
     const live = { ...attachmentWithRecovery(), authority: pinnedAuthority() };
+    const closedAfter = {
+      ...attachmentWithRecovery(),
+      id: "attachment-2",
+      status: "closed" as const,
+      authority: null,
+    };
     const caller = createSessionRouter().createCaller({
       runtime: {
         ...fixture.runtime,
         projection: async () => ({
           projection: {
             ...serverSnapshot.projection,
-            attachments: [closed, live],
+            attachments: [closedBefore, live, closedAfter],
             liveExecutor: live,
           },
           throughSequence: serverSnapshot.throughSequence,
@@ -666,7 +672,7 @@ describe("Session tRPC router", () => {
 
     const resolved = await caller.session.projection({ sessionId: "session-1" });
 
-    expect(resolved.projection.authority?.attachmentId).toBe("attachment-1");
+    expect(resolved.projection.authority?.attachmentId).toBe(resolved.projection.liveExecutor?.id);
     expect(resolved.projection.authority?.snapshot?.enforcement).toBe("observe");
   });
 

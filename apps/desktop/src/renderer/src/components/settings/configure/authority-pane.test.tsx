@@ -123,8 +123,8 @@ describe("Configure → Authority", () => {
    */
   it("says what each posture does beside the control, not in a popover", () => {
     expect(render({ enforcement: "off" })).toContain("Off — no authority checks.");
-    expect(render(null)).toContain("Observe — saves the policy for this attachment; allows calls.");
-    expect(render({ enforcement: "enforce" })).toContain("Enforce — blocks rule violations.");
+    expect(render(null)).toContain("Observe — save this attachment’s policy; allow calls.");
+    expect(render({ enforcement: "enforce" })).toContain("Enforce — block rule violations.");
   });
 
   it("says when a person is asked, and only under Enforce", () => {
@@ -137,7 +137,7 @@ describe("Configure → Authority", () => {
     const html = render({ enforcement: "enforce" });
 
     expect(html).not.toContain("no authority checks");
-    expect(html).not.toContain("saves the policy for this attachment");
+    expect(html).not.toContain("save this attachment’s policy");
   });
 
   /*
@@ -176,11 +176,23 @@ describe("Configure → Authority", () => {
     }
   });
 
+  it("also disables an overridden threshold's reset while that threshold is inactive", () => {
+    const inactive = render({ fallback: { consecutiveDenials: 7 } });
+    const active = render({
+      enforcement: "enforce",
+      fallback: { consecutiveDenials: 7 },
+    });
+    const reset = /<button[^>]*aria-label="Reset Ask me after[^"]*"[^>]*>/;
+
+    expect(inactive.match(reset)?.[0]).toContain('disabled=""');
+    expect(active.match(reset)?.[0]).not.toContain('disabled=""');
+  });
+
   it("spells out what each limit means once Enforce is what runs", () => {
     const html = render({ enforcement: "enforce" });
 
-    expect(html).toContain("Asks a person after 3 denied calls in a row.");
-    expect(html).toContain("Asks a person after 20 denied calls across the Session.");
+    expect(html).toContain("Asks a person when a call would reach 3 denials in a row.");
+    expect(html).toContain("Asks a person when a call would reach 20 denials across the Session.");
     expect(html).not.toContain("Not active while calls are allowed.");
     expect(html.match(/<input[^>]*disabled=""/g) ?? []).toHaveLength(0);
   });
@@ -188,7 +200,14 @@ describe("Configure → Authority", () => {
   it("reads a departed threshold back in the same sentence", () => {
     const html = render({ enforcement: "enforce", fallback: { consecutiveDenials: 7 } });
 
-    expect(html).toContain("Asks a person after 7 denied calls in a row.");
+    expect(html).toContain("Asks a person when a call would reach 7 denials in a row.");
+  });
+
+  it("describes a limit of one as asking on that would-be denial, not after it", () => {
+    const html = render({ enforcement: "enforce", fallback: { consecutiveDenials: 1 } });
+
+    expect(html).toContain("Asks a person when a call would reach 1 denial in a row.");
+    expect(html).not.toContain("after 1 denied call");
   });
 
   /*

@@ -110,8 +110,8 @@ const ENFORCEMENT_LABELS: Record<AuthorityEnforcement, string> = {
  */
 const ENFORCEMENT_OUTCOMES: Record<AuthorityEnforcement, string> = {
   off: "Off \u2014 no authority checks.",
-  observe: "Observe \u2014 saves the policy for this attachment; allows calls.",
-  enforce: "Enforce \u2014 blocks rule violations.",
+  observe: "Observe \u2014 save this attachment’s policy; allow calls.",
+  enforce: "Enforce \u2014 block rule violations.",
 };
 
 const JUDGMENT_LABELS: Record<JudgmentMode, string> = {
@@ -137,6 +137,10 @@ const ACTOR_HINTS: Record<AuthorityActorKind, string> = {
   session: "An agent running inside one of this project's Sessions.",
   unauthenticated: "A caller on the agent socket that has not proved who it is.",
 };
+
+function denialCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "denial" : "denials"}`;
+}
 
 export function AuthorityPane({ project }: { project: Project }) {
   const adoptProject = useProjectsStore((store) => store.adoptProject);
@@ -268,7 +272,7 @@ export function AuthorityPane({ project }: { project: Project }) {
                 the qualification on when the choice lands. */}
             <span className="text-foreground">{ENFORCEMENT_OUTCOMES[effective.enforcement]}</span>
             {enforcing ? " Ask after the limits below." : null}
-            <span className="mt-0.5 block">
+            <span className="mt-1 block">
               Applies to new attachments — the live connection a Session runs on.
             </span>
           </>
@@ -376,7 +380,7 @@ export function AuthorityPane({ project }: { project: Project }) {
         testId="authority-consecutive-denials"
         description={
           enforcing
-            ? `Asks a person after ${effective.fallback.consecutiveDenials} denied calls in a row.`
+            ? `Asks a person when a call would reach ${denialCountLabel(effective.fallback.consecutiveDenials)} in a row.`
             : "Not active while calls are allowed."
         }
         hint={
@@ -390,6 +394,7 @@ export function AuthorityPane({ project }: { project: Project }) {
           label="Ask me after"
           inheritedValue={`${defaults.fallback.consecutiveDenials} denials in a row`}
           overridden={override?.fallback?.consecutiveDenials !== undefined}
+          disabled={saving || !enforcing}
           onRevert={() => void commitThreshold("consecutiveDenials")("")}
         >
           <CommitField
@@ -410,7 +415,7 @@ export function AuthorityPane({ project }: { project: Project }) {
         testId="authority-session-denials"
         description={
           enforcing
-            ? `Asks a person after ${effective.fallback.sessionDenials} denied calls across the Session.`
+            ? `Asks a person when a call would reach ${denialCountLabel(effective.fallback.sessionDenials)} across the Session.`
             : "Not active while calls are allowed."
         }
         hint={<>Denials across the whole Session, however far apart, before it asks you.</>}
@@ -419,6 +424,7 @@ export function AuthorityPane({ project }: { project: Project }) {
           label="Or after, in total"
           inheritedValue={`${defaults.fallback.sessionDenials} denials total`}
           overridden={override?.fallback?.sessionDenials !== undefined}
+          disabled={saving || !enforcing}
           onRevert={() => void commitThreshold("sessionDenials")("")}
         >
           <CommitField

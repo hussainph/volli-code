@@ -30,7 +30,7 @@
 import type { RendererSessionAuthority } from "@volli/shared";
 
 /** Which of the three states a chip is in — for styling and for tests. */
-export type AuthorityChipState = "observe" | "enforce" | "none";
+export type AuthorityChipState = "observe" | "enforce" | "no-snapshot";
 
 export interface AuthorityChipView {
   state: AuthorityChipState;
@@ -68,7 +68,7 @@ export function authorityChip(
   const { snapshot } = authority;
   if (snapshot === null) {
     return {
-      state: "none",
+      state: "no-snapshot",
       label: "No policy snapshot — runtime defaults",
       summary: "Authority: no policy snapshot — runtime defaults",
     };

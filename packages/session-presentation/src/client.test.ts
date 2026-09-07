@@ -768,6 +768,7 @@ describe("stream folding", () => {
 
     expect(rpc.projectionQueries).toBe(1);
     expect(slice()!.projection?.liveExecutor?.id).toBe("attach-1");
+    expect(slice()!.projection?.authority?.attachmentId).toBe("attach-1");
   });
 
   it("asks for no projection on a transcript reference", async () => {
