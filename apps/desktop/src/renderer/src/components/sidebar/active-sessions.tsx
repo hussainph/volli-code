@@ -613,8 +613,15 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           openHome(project.id, route.tabId);
           return;
         }
-        default: {
+        case "home": {
           openHome(project.id);
+          return;
+        }
+        default: {
+          // A new route must name its own store writes. Falling through to Home
+          // is the exact substitution this history destination removed.
+          const unhandled: never = route;
+          return unhandled;
         }
       }
     },
