@@ -9,9 +9,7 @@
 import type {
   ModelAccessModel,
   ModelAccessProvider,
-  RendererSessionInteraction,
   SessionAttention,
-  SessionInteractionPrompt,
   SessionInteractionResolution,
 } from "@volli/shared";
 import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
@@ -771,7 +769,7 @@ describe("answerInteraction", () => {
 });
 
 describe("withdrawInteraction", () => {
-  /** The card's controls, including Cancel request, share this in-flight latch. */
+  /** The card's controls, Withdraw question among them, share this in-flight latch. */
   it("holds the card's own in-flight latch for the whole round trip", async () => {
     const flags: [string, boolean][] = [];
     const acts: string[] = [];
@@ -831,79 +829,32 @@ describe("resolvingWith", () => {
   });
 });
 
-function askPrompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionInteractionPrompt {
-  return {
-    id: "prompt:0",
-    label: "Which branch should this land on?",
-    detail: null,
-    options: [{ id: "question:0:bWFpbg", label: "main", description: null }],
-    multiple: false,
-    custom: true,
-    ...overrides,
-  };
-}
-
-/** A model's own question: encoded ids, so none of them can read as a declared no. */
-function ask(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
-  return {
-    id: "ask-user:call-7",
-    attachmentId: "attach-1",
-    kind: "question",
-    title: "Which branch should this land on?",
-    detail: null,
-    options: prompts.flatMap((prompt) => prompt.options),
-    multiple: false,
-    prompts,
-    native: { id: null, detail: null },
-  };
-}
-
 describe("composerPress", () => {
-  it("answers the open question with what was typed, under that question's id", () => {
-    // The dead end this closes: a press here used to be a message, and a
-    // message typed at a blocked turn joins a queue that only an idle Session
-    // drains — which this one cannot become until the question is answered.
-    expect(composerPress(ask([askPrompt()]), "the release branch")).toEqual({
-      kind: "answer",
-      interactionId: "ask-user:call-7",
-      submission: {
-        resolution: {
-          optionIds: [],
-          response: "the release branch",
-          answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
-        },
-        message: null,
-      },
-    });
+  it("is a message while a question is standing open above the box", () => {
+    // This press used to become the pending question's answer, which gave one
+    // question two answer fields and two submit paths — and let the same
+    // question be sent twice. The card above owns the answer; words typed here
+    // are the reader's own message and travel as one.
+    expect(composerPress("the release branch")).toEqual({ kind: "message" });
   });
 
   it("is an ordinary message while nothing is being asked", () => {
-    expect(composerPress(null, "ship it")).toEqual({ kind: "message" });
-  });
-
-  it("is an ordinary message wherever the request cannot take the words", () => {
-    // The rule and its reasons are `composerAnswer`'s; what is pinned here is
-    // that a press it refuses is never dropped — it falls back to the road it
-    // has always taken.
-    expect(composerPress(ask([askPrompt({ custom: false })]), "neither")).toEqual({
-      kind: "message",
-    });
-    expect(composerPress(ask([askPrompt()]), "   ")).toEqual({ kind: "message" });
+    expect(composerPress("ship it")).toEqual({ kind: "message" });
   });
 
   it("is a compaction when the whole draft is the verb", () => {
-    expect(composerPress(null, "/compact")).toEqual({
+    expect(composerPress("/compact")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: null,
     });
     // What the picker leaves in the box, and what someone types after it.
-    expect(composerPress(null, "/compact ")).toEqual({
+    expect(composerPress("/compact ")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: null,
     });
-    expect(composerPress(null, "/compact keep the API work")).toEqual({
+    expect(composerPress("/compact keep the API work")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: "keep the API work",
@@ -916,17 +867,17 @@ describe("composerPress", () => {
     // the picker's. `/settings` with words is still claimed — dropping them
     // silently to make it "just a settings open" is the trap the whole-draft
     // rule exists to prevent.
-    expect(composerPress(null, "/copy")).toEqual({
+    expect(composerPress("/copy")).toEqual({
       kind: "verb",
       verb: COPY_VERB,
       instructions: null,
     });
-    expect(composerPress(null, "/settings now")).toEqual({
+    expect(composerPress("/settings now")).toEqual({
       kind: "verb",
       verb: SETTINGS_VERB,
       instructions: "now",
     });
-    expect(composerPress(null, "/login")).toEqual({
+    expect(composerPress("/login")).toEqual({
       kind: "verb",
       verb: LOGIN_VERB,
       instructions: null,
@@ -937,15 +888,15 @@ describe("composerPress", () => {
     // The grammar and its reasons are `composer-verb.ts`'s. What is pinned
     // here is that a draft it refuses still goes somewhere: claiming this
     // would send nothing and silently drop the sentence around the verb.
-    expect(composerPress(null, "please /compact and carry on")).toEqual({ kind: "message" });
-    expect(composerPress(null, "/compacted")).toEqual({ kind: "message" });
+    expect(composerPress("please /compact and carry on")).toEqual({ kind: "message" });
+    expect(composerPress("/compacted")).toEqual({ kind: "message" });
   });
 
-  it("lets a standing question outrank the verb", () => {
-    // The surface has already said twice that this box is answering: it is
-    // renamed Answer and the `/` picker is shut. A Session waiting on a
-    // question is mid-turn anyway, where a compaction would be refused.
-    expect(composerPress(ask([askPrompt()]), "/compact")).toMatchObject({ kind: "answer" });
+  it("still reads a verb while a question waits, because it is not an answer", () => {
+    // A verb typed at a blocked turn is refused by the verb's own moment rule,
+    // in words that say why. What it must never be is an answer nobody meant to
+    // send to the question standing above the box.
+    expect(composerPress("/compact")).toMatchObject({ kind: "verb" });
   });
 });
 

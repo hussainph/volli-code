@@ -12,7 +12,6 @@ import type {
   ModelAccessProvider,
   ModelAccessState,
   ModelSelection,
-  RendererSessionInteraction,
   SessionAttention,
   SessionAttentionProjection,
   SessionInteraction,
@@ -22,7 +21,6 @@ import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/sh
 import type { UIMessage } from "ai";
 
 import {
-  composerAnswer,
   type ComposerIntent,
   type InteractionSubmission,
   type QueuedMessage,
@@ -216,47 +214,32 @@ export function lastAssistantText(messages: readonly UIMessage[]): string | null
 /**
  * What one press of the composer turns out to have been.
  *
- * Three things, and a message is still what every press is unless something
- * more specific claims it. An **answer** is what a press becomes while a
- * question is standing open above the box that can take its words
- * ({@link composerAnswer}, which owns the rule and the reasons). A **verb** is
- * what a draft that is nothing but a `/name` from the verb registry becomes:
- * an operation the client runs, with no message sent at all
- * (`composer-verb.ts`).
+ * Two things, and a message is what every press is unless something more
+ * specific claims it. A **verb** is what a draft that is nothing but a `/name`
+ * from the verb registry becomes: an operation the client runs, with no message
+ * sent at all (`composer-verb.ts`).
  *
- * It is a decision rather than a mode, and that distinction is the whole
- * design: the composer is not put into an answering state that a reader has to
- * leave, and no press is ever refused for being the wrong kind. What the words
- * are is read off the request that is open at the moment they are sent, and
- * where they are neither an answer nor a verb they are a message — which is
- * exactly what the surface did before, and remains the road for everything a
- * question cannot take: a permission waiting on a verdict, a walk through
- * several questions, a model that asked for one of its own listed answers.
+ * **An answer is not one of them, and that is the decision (VC-289).** This
+ * press used to become the pending question's answer wherever the question
+ * could take free text — which gave one question two answer fields, this box
+ * and the card's own, each with its own submit path. The card disables while a
+ * response is in flight and has no way to disable a composer that has never
+ * heard of it, so the same question could be answered twice. Now the card is
+ * the whole answer form and this box is what it always was: the reader's own
+ * message, which while a turn is live joins the release queue like any other.
  *
- * **A standing question outranks a verb**, and the surface has already said so
- * twice by the time this is asked: the box is renamed to Answer and the `/`
- * picker is shut, so a `/compact` typed in that state was typed at a question,
- * not chosen from a list. It is also the arm that gives way harmlessly —
- * `composerAnswer` only claims a press for a question that takes free text at
- * all, and a Session waiting on one is mid-turn, where an explicit compaction
- * would be refused anyway.
+ * The dead end VC-68 closed is closed elsewhere rather than reopened: the card
+ * draws its own field for every question that takes words, unconditionally, so
+ * there is no question a reader can be asked with nowhere on it to answer.
  */
 export type ComposerPress =
-  | { kind: "answer"; interactionId: string; submission: InteractionSubmission }
   | { kind: "verb"; verb: ComposerVerb; instructions: string | null }
   | { kind: "message" };
 
 /** The verb arm of a press, named for the handler that performs it. */
 export type ComposerVerbPress = Extract<ComposerPress, { kind: "verb" }>;
 
-export function composerPress(
-  pending: RendererSessionInteraction | null,
-  text: string,
-): ComposerPress {
-  const submission = pending === null ? null : composerAnswer(pending, text);
-  if (submission !== null && pending !== null) {
-    return { kind: "answer", interactionId: pending.id, submission };
-  }
+export function composerPress(text: string): ComposerPress {
   const invocation = findComposerVerb(text);
   if (invocation === null) return { kind: "message" };
   // The verb travels with the press rather than being flattened into one arm
