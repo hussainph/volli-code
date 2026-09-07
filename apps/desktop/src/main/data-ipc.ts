@@ -1058,7 +1058,7 @@ export function registerDataIpcHandlers(
       // git in, and the drawing can never be of a tree the agent is not in.
       const read = await readVenue(worktreeDeps(db), input);
       if (!read.ok) return { ok: false, error: read.error };
-      return { ok: true, venue: read.value };
+      return { ok: true, reading: read.value };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {

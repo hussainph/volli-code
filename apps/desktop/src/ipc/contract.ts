@@ -86,7 +86,7 @@ import type {
   TicketStatus,
   TicketStatusEntry,
   ValidAutomationRuntime,
-  VenueSnapshot,
+  VenueReading,
   WorkspaceDependenciesStatus,
 } from "@volli/shared";
 
@@ -2756,8 +2756,15 @@ export type SessionStartsResult = Result<{ startedAt: number[] }>;
  */
 export type UsageReportResult = Result<{ report: SessionUsageReport }>;
 
-/** One venue reading (`venue-snapshot`); the error arm carries git's own message. */
-export type VenueSnapshotResult = Result<{ venue: VenueSnapshot }>;
+/**
+ * One venue reading (`venue-snapshot`); the error arm carries git's own message.
+ *
+ * The success arm is a {@link VenueReading} rather than a snapshot because
+ * "there is no checkout to measure yet" is an ANSWER, not a failure (VC-286):
+ * a ticket whose isolated worktree has not materialised has no venue, and
+ * saying so is what stops a surface from drawing the main checkout in its place.
+ */
+export type VenueSnapshotResult = Result<{ reading: VenueReading }>;
 
 // ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
 

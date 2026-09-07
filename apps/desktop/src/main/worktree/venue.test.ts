@@ -9,7 +9,7 @@ import { venueFileTotal } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
-import { insertTicket } from "../db/tickets-repo";
+import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { GitError } from "./git";
 import { scriptedGit } from "./scripted-git";
 import { readVenue, venueSnapshot } from "./venue";
@@ -238,6 +238,12 @@ describe("venueSnapshot", () => {
   });
 });
 
+/** The measurement inside a reading, or `null` for anything else. */
+function measured(result: Awaited<ReturnType<typeof readVenue>>) {
+  if (!result.ok || result.value.state !== "measured") return null;
+  return result.value.venue;
+}
+
 describe("readVenue", () => {
   let ctx: TestDb | null = null;
 
@@ -258,8 +264,8 @@ describe("readVenue", () => {
 
     const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: null });
 
-    expect(result.ok && result.value.kind).toBe("main-checkout");
-    expect(result.ok && result.value.path).toBe("/repo");
+    expect(measured(result)?.kind).toBe("main-checkout");
+    expect(measured(result)?.path).toBe("/repo");
     expect(calls.every((call) => call.cwd === "/repo")).toBe(true);
   });
 
@@ -278,23 +284,82 @@ describe("readVenue", () => {
 
     const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
 
-    expect(result.ok && result.value.kind).toBe("worktree");
-    expect(result.ok && result.value.path).toBe("/worktrees/ticket");
-    expect(result.ok && result.value.diff?.base).toBe("main");
+    expect(measured(result)?.kind).toBe("worktree");
+    expect(measured(result)?.path).toBe("/worktrees/ticket");
+    expect(measured(result)?.diff?.base).toBe("main");
     expect(calls.every((call) => call.cwd === "/worktrees/ticket")).toBe(true);
   });
 
-  it("measures the main checkout for a ticket that has no worktree of its own", async () => {
+  it("measures the main checkout for a ticket configured to run in it", async () => {
     const { db } = setup();
-    insertTicket(db, testTicket("project", { id: "ticket" }));
+    insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: false }));
     const { gitAsync } = scriptedVenueGit({});
 
     const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
 
     // Exactly where the Session runtime binds such a Session — and with no
     // hairline, because a main checkout has no branch of its own to measure.
-    expect(result.ok && result.value.kind).toBe("main-checkout");
-    expect(result.ok && result.value.diff).toBeNull();
+    expect(measured(result)?.kind).toBe("main-checkout");
+    expect(measured(result)?.diff).toBeNull();
+  });
+
+  it("answers PENDING for a worktree ticket whose checkout has not materialized (VC-286)", async () => {
+    const { db } = setup();
+    insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: true }));
+    const { gitAsync, calls } = scriptedVenueGit({});
+
+    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+
+    // The Session runtime refuses to bind such a ticket to the main checkout
+    // (`session-runtime/location.ts`), so measuring it here would put a venue
+    // on screen that no Session will ever run in.
+    expect(result).toEqual({ ok: true, value: { state: "pending" } });
+    // And nothing is measured at all: the tree to measure does not exist yet.
+    expect(calls).toEqual([]);
+  });
+
+  it("measures the worktree again once it materializes, with no reading in between", async () => {
+    const { db } = setup();
+    insertTicket(db, testTicket("project", { id: "ticket", usesWorktree: true }));
+    const before = await readVenue(
+      { db, gitAsync: scriptedVenueGit({}).gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
+    updateTicketFields(
+      db,
+      "ticket",
+      { worktreePath: "/worktrees/ticket", branch: "volli/VC-1-x", baseBranch: "main" },
+      1,
+    );
+
+    const after = await readVenue(
+      { db, gitAsync: scriptedVenueGit({}).gitAsync },
+      { projectId: "project", ticketId: "ticket" },
+    );
+
+    expect(before.ok && before.value.state).toBe("pending");
+    expect(measured(after)?.kind).toBe("worktree");
+    expect(measured(after)?.path).toBe("/worktrees/ticket");
+  });
+
+  it("stops measuring the removed checkout when a worktree is taken away", async () => {
+    const { db } = setup();
+    insertTicket(
+      db,
+      testTicket("project", {
+        id: "ticket",
+        usesWorktree: true,
+        worktreePath: "/worktrees/ticket",
+        branch: "volli/VC-1-x",
+        baseBranch: "main",
+      }),
+    );
+    updateTicketFields(db, "ticket", { worktreePath: null }, 1);
+    const { gitAsync } = scriptedVenueGit({});
+
+    const result = await readVenue({ db, gitAsync }, { projectId: "project", ticketId: "ticket" });
+
+    expect(result).toEqual({ ok: true, value: { state: "pending" } });
   });
 
   it("refuses an unknown project, an unknown ticket, and a ticket from elsewhere", async () => {
