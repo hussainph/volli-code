@@ -6,6 +6,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_MARKDOWN_FILE_VIEW,
   documentViewRefusal,
+  frontmatterSpan,
+  offersMarkdownPreview,
   offersMarkdownViewToggle,
   resolveMarkdownFileView,
 } from "./document-view-policy";
@@ -39,6 +41,52 @@ describe("resolveMarkdownFileView", () => {
     const refusal = documentViewRefusal("---\ntitle: x\n---\n\nBody.\n");
     expect(refusal).not.toBeNull();
     expect(resolveMarkdownFileView({ preferred: "document", refusal })).toBe("source");
+  });
+
+  it("honours a remembered Preview choice for the file that refused Document", () => {
+    const refusal = documentViewRefusal("<p align=\"center\">\n  <b>hi</b>\n</p>\n");
+    expect(resolveMarkdownFileView({ preferred: "preview", refusal })).toBe("preview");
+  });
+
+  it("drops a remembered Preview choice once the bytes can be edited as a document", () => {
+    // Preview is the fallback for a file Document view refuses, never a third
+    // way to read an ordinary one — so a file that lost its raw HTML comes back
+    // to the editable pair rather than staying on a read-only surface.
+    expect(resolveMarkdownFileView({ preferred: "preview", refusal: null })).toBe("source");
+  });
+});
+
+describe("offersMarkdownPreview", () => {
+  it("offers the read-only fallback exactly where Document view is refused", () => {
+    expect(offersMarkdownPreview(documentViewRefusal("# Notes\n\nProse.\n"))).toBe(false);
+    expect(offersMarkdownPreview(documentViewRefusal("---\ntitle: x\n---\n\nBody.\n"))).toBe(true);
+    expect(offersMarkdownPreview(documentViewRefusal("<div>\n  <b>hi</b>\n</div>\n"))).toBe(true);
+  });
+});
+
+describe("frontmatterSpan", () => {
+  it("measures the leading block the refusal above is about", () => {
+    const text = "---\ntitle: Hello\n---\n\n# Real\n";
+    const span = frontmatterSpan(text);
+    expect(span).not.toBeNull();
+    expect(text.slice(span?.from ?? 0, span?.to ?? 0)).toBe("---\ntitle: Hello\n---\n");
+    expect(text.slice(span?.to ?? 0)).toBe("\n# Real\n");
+  });
+
+  it("measures the `...` close and a CRLF file the same way", () => {
+    const text = "---\r\ntitle: x\r\n...\r\ntext\r\n";
+    const span = frontmatterSpan(text);
+    expect(text.slice(span?.to ?? 0)).toBe("text\r\n");
+  });
+
+  it("is null where there is no frontmatter to hide", () => {
+    expect(frontmatterSpan("# Title\n\n---\n\nRule above.\n")).toBeNull();
+    expect(frontmatterSpan("---\n\nJust a rule.\n")).toBeNull();
+  });
+
+  it("ends at the file's end when the closing fence is its last line", () => {
+    const text = "---\ntitle: x\n---";
+    expect(frontmatterSpan(text)).toEqual({ from: 0, to: text.length });
   });
 });
 
