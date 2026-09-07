@@ -393,7 +393,12 @@ const usageLimitsSchema = z.object({
         label: displayLabel,
         usedPercent: z.number().finite().min(0).max(100),
         resetsAt: z.string().optional(),
-        windowDurationMins: positiveSafeInteger.optional(),
+        // A length is the one field here a provider's own unit can spoil: it
+        // is derived, not reported, and the runtime clamps it. `.catch` makes
+        // this schema's own opinion cost the FIELD rather than the snapshot —
+        // a window whose length we cannot vouch for draws no hairline, where a
+        // throw would take the whole Model Access page down with it.
+        windowDurationMins: positiveSafeInteger.optional().catch(undefined),
       }),
     )
     .max(50),
