@@ -1,4 +1,5 @@
 export * from "./file-ref";
+export * from "./quick-open-rank";
 export * from "./file-save-policy";
 export * from "./file-workspace";
 export * from "./tab-order";

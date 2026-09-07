@@ -134,12 +134,59 @@ describe("quickOpenSurfaceFiles", () => {
 });
 
 describe("quickOpenRows", () => {
-  it("ranks by the @ picker's own matcher, best first", () => {
+  it("ranks by name, best first", () => {
     const rows = quickOpenRows({
       query: "main",
       index: [indexed("a/b/c/d/main.ts"), indexed("main.ts"), indexed("src/other.ts")],
     });
     expect(rows.map((row) => row.relPath)).toEqual(["main.ts", "a/b/c/d/main.ts"]);
+  });
+
+  it("puts the root README above a deep artifact — NOT the @ picker's artifact-first order", () => {
+    // The audit's worked example (VC-299 / A13). Through `scoreFileMatch` the
+    // artifact scored 1030 to README.md's 46 and led this list; ⌘P ranks a
+    // basename hit above a path-only one instead.
+    const rows = quickOpenRows({
+      query: "README",
+      index: [indexed(".volli/artifacts/design-audit/audit-motion-perf.md", true), indexed("README.md")],
+    });
+    expect(rows.map((row) => row.relPath)).toEqual([
+      "README.md",
+      ".volli/artifacts/design-audit/audit-motion-perf.md",
+    ]);
+  });
+
+  it("keeps that top result when unrelated artifacts join the index", () => {
+    const rows = quickOpenRows({
+      query: "README",
+      index: [
+        indexed(".volli/artifacts/read-me-later.md", true),
+        indexed(".volli/artifacts/design-audit/audit-motion-perf.md", true),
+        indexed("README.md"),
+        indexed(".volli/artifacts/reports/ready-made-summary.md", true),
+      ],
+    });
+    expect(rows[0]?.relPath).toBe("README.md");
+  });
+
+  it("puts an exact basename ahead of an artifact and a path-only match", () => {
+    const rows = quickOpenRows({
+      query: "package.json",
+      index: [
+        indexed(".volli/artifacts/package.json-audit.md", true),
+        indexed("packages/shared/src/app.json.ts"),
+        indexed("apps/desktop/package.json"),
+      ],
+    });
+    expect(rows[0]?.relPath).toBe("apps/desktop/package.json");
+  });
+
+  it("puts an exact relative path first", () => {
+    const rows = quickOpenRows({
+      query: "src/app/main.ts",
+      index: [indexed("src/app/main.tsx"), indexed("src/app/main.ts")],
+    });
+    expect(rows[0]?.relPath).toBe("src/app/main.ts");
   });
 
   it("splits each row into the name searched for and the folder that disambiguates it", () => {
@@ -152,7 +199,22 @@ describe("quickOpenRows", () => {
     });
   });
 
-  it("carries the artifact flag the shared ranking already favours", () => {
+  it("tells duplicate basenames apart by the directory beside each of them", () => {
+    // Every tie-breaker below the tier is a shape fact, so same-named files
+    // arrive adjacent and identical — the detail column is the only thing that
+    // says which is which, and the repo root's is empty on purpose.
+    const rows = quickOpenRows({
+      query: "index.ts",
+      index: [indexed("src/b/index.ts"), indexed("index.ts"), indexed("src/a/index.ts")],
+    });
+    expect(rows.map((row) => ({ label: row.label, detail: row.detail }))).toEqual([
+      { label: "index.ts", detail: "" },
+      { label: "index.ts", detail: "src/a" },
+      { label: "index.ts", detail: "src/b" },
+    ]);
+  });
+
+  it("carries the artifact flag, which breaks a tie inside one rank tier", () => {
     const rows = quickOpenRows({
       query: "notes",
       index: [indexed("notes.md"), indexed(".volli/artifacts/notes.md", true)],

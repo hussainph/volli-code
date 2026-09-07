@@ -6,18 +6,25 @@
  * that could be wrong lives here: WHICH checkout is being searched, WHAT the
  * query matches, and WHETHER an invocation previews or pins.
  *
- * Nothing about ranking is invented here either. {@link rankIndexedFiles} is
- * the `@` picker's own matcher (`editor/file-refs.ts` → `@volli/shared`'s
- * `scoreFileMatch`), so the list ⌘P shows and the list `@` shows are ordered by
- * one function. What quick-open does NOT take from that picker is its
+ * Nothing about ranking is invented here either — but it is no longer the `@`
+ * picker's. ⌘P ranks through `@volli/shared`'s {@link rankQuickOpenFiles}, whose
+ * tiers put an exact basename above a scattered path hit; the `@` picker keeps
+ * `scoreFileMatch`, whose +1000 artifact bonus is deliberate for writing a ref
+ * and was wrong here (VC-299: typing `README` offered a design-audit artifact
+ * above the root `README.md`). Quick-open also does not take that picker's
  * `isExpressibleRefPath` filter or its "Create artifact" row: both belong to
  * writing a ref into text, and this surface writes nothing — it opens a tab.
  */
-import { baseNameOf, dirNameOf, type FileWorkspaceTab, type IndexedFile } from "@volli/shared";
+import {
+  baseNameOf,
+  dirNameOf,
+  type FileWorkspaceTab,
+  type IndexedFile,
+  rankQuickOpenFiles,
+} from "@volli/shared";
 
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { parseFileTabId } from "@renderer/components/ticket/ticket-file-tab";
-import { rankIndexedFiles } from "@renderer/editor/file-refs";
 import type { NavKey, WorkspaceUiState } from "@renderer/stores/workspace";
 
 /**
@@ -102,7 +109,7 @@ export interface QuickOpenRow {
   readonly label: string;
   /** Its directory, shown beside it: an index is full of same-named files. */
   readonly detail: string;
-  /** A `.volli/artifacts/` file, which the shared ranking already favours. */
+  /** A `.volli/artifacts/` file, which the ranking favours to break a tie inside a rank tier. */
   readonly artifact: boolean;
 }
 
@@ -112,15 +119,16 @@ export const MAX_QUICK_OPEN_RESULTS = 50;
 /**
  * What one query offers, best match first.
  *
- * An empty query is not an empty list: `scoreFileMatch` scores it by shape
- * alone, so a freshly opened overlay shows the index's most plausible entries
- * rather than a blank box waiting to be typed into.
+ * An empty query is not an empty list: it expresses no preference, so
+ * {@link rankQuickOpenFiles} falls through to shape alone and a freshly opened
+ * overlay shows the index's most plausible entries rather than a blank box
+ * waiting to be typed into.
  */
 export function quickOpenRows(input: {
   query: string;
   index: readonly IndexedFile[];
 }): readonly QuickOpenRow[] {
-  return rankIndexedFiles({
+  return rankQuickOpenFiles({
     query: input.query.trim(),
     index: input.index,
     limit: MAX_QUICK_OPEN_RESULTS,

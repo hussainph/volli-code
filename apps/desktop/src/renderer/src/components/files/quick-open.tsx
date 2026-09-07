@@ -2,9 +2,11 @@
  * Quick-open (⌘P) — jump to a file by name (plan §4.4, wall W4).
  *
  * A thin surface over machinery that already existed. The index is
- * `volli:file-index`, the ranking is the `@` picker's, the preview/pin
- * transitions are the rail navigator's store actions, and the drawing is the
- * ⌘K palette's. What this file adds is the overlay and the wiring between them.
+ * `volli:file-index`, the ranking is `@volli/shared`'s `rankQuickOpenFiles`
+ * (⌘P's own tiers, not the `@` picker's artifact-first score — VC-299), the
+ * preview/pin transitions are the rail navigator's store actions, and the
+ * drawing is the ⌘K palette's. What this file adds is the overlay and the
+ * wiring between them.
  *
  * SCOPE FOLLOWS THE SURFACE, and it is resolved at OPEN. Home searches the
  * project's Main checkout; a Ticket workspace searches that ticket's worktree —
