@@ -1389,6 +1389,18 @@ describe("ticket sessions", () => {
         "attachment.closed",
       ]);
       expect(exitEvents[0]!.sequence).toBeLessThan(exitEvents[1]!.sequence);
+      const openedNativeExitField = testDb.db
+        .prepare(
+          `SELECT json_type(payload, '$.attachment.native.detail.exitCode') AS type
+             FROM session_events
+            WHERE session_id = ?
+              AND json_extract(payload, '$.kind') = 'attachment.opened'`,
+        )
+        .get(result.sessionId) as { type: string | null };
+      // The product-owned exit fact is the ONLY durable answer. Keeping even a
+      // null placeholder in adapter detail would leave the old, private answer
+      // spellable and invite a second host to parse it again.
+      expect(openedNativeExitField.type).toBeNull();
       expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
     },
   );

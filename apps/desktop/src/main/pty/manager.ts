@@ -186,7 +186,6 @@ function terminalDetailFor(
   scope: Pick<SessionScope, "harnessId" | "launchKind" | "placement">,
   cwd: string,
   harnessSessionId: string | null,
-  exitCode: number | null,
 ): TerminalAttachmentDetail {
   return {
     kind: "volli.terminal.v1",
@@ -196,7 +195,6 @@ function terminalDetailFor(
     harnessSessionId,
     launchKind: scope.launchKind,
     placement: scope.placement,
-    exitCode,
   };
 }
 
@@ -375,7 +373,7 @@ export class PtyManager {
     const attachmentId = randomUUID();
     let startCommandId: string | undefined;
     const recordAttachmentFailure = async (failure: unknown, cwd: string): Promise<void> => {
-      const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null, null);
+      const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null);
       try {
         await sessionEngine.observe({
           id: randomUUID(),
@@ -611,12 +609,7 @@ export class PtyManager {
         );
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
-      const terminalDetail = terminalDetailFor(
-        scope,
-        cwd,
-        scope.resume?.harnessSessionId ?? null,
-        null,
-      );
+      const terminalDetail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null);
       try {
         await sessionEngine.observe({
           id: randomUUID(),
