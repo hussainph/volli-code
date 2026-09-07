@@ -22,10 +22,7 @@
  * exactly; nothing here re-derives a policy sentence or a path main did not
  * already name.
  */
-import {
-  CLEANUP_PRESERVATION_RULES,
-  preservationRuleText,
-} from "@volli/shared";
+import { CLEANUP_PRESERVATION_RULES, preservationRuleText } from "@volli/shared";
 
 import type {
   KeptWorktreeMetadata,
@@ -157,7 +154,8 @@ export function describeMetadata(entry: PrunableWorktreeMetadata): string {
 
 /** A stale record cleanup will NOT prune, and why (VC-284 review C6). */
 export function describeKeptMetadata(entry: KeptWorktreeMetadata): string {
-  const why = entry.reason === "ticket-linked" ? "still linked to a ticket" : "not owned by this database";
+  const why =
+    entry.reason === "ticket-linked" ? "still linked to a ticket" : "not owned by this database";
   return `${entry.projectName} — stale git record (${entry.gitReason}) kept — ${why}.`;
 }
 
@@ -169,6 +167,18 @@ export function describeUnreadableProject(entry: UnreadableWorktreeProject): str
 /** The retention window Storage shows so an eligibility date can be understood. */
 export function retentionNote(retentionDays: number): string {
   return `Unused folders become eligible after ${retentionDays} day(s).`;
+}
+
+/**
+ * The policy row the list itself carries (VC-284 review C6): the configured
+ * retention window, and the difference between an orphan and a ticket's
+ * checkout. It is a ROW rather than prose under a control because the
+ * acceptance asks Storage to SHOW the retention period — a summoned tooltip is
+ * not shown — and because an orphan having no ticket to archive is the fact
+ * that explains why this list's only verb is "remove the folder".
+ */
+export function orphanPolicyNote(retentionDays: number): string {
+  return `${retentionNote(retentionDays)} An orphan has no ticket to archive, so a reviewed folder removal is all that can happen here; the branch stays in git. Archiving a ticket is a separate action.`;
 }
 
 /** One row of durable history: what was removed, by whom, and when. */
@@ -193,7 +203,9 @@ export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem
   }
   const verb = run.source === "startup" ? "Removed during startup" : "Removed by cleanup";
   const branchPart =
-    item.branch === null ? "No branch was checked out here." : `Branch ${item.branch} is still in git.`;
+    item.branch === null
+      ? "No branch was checked out here."
+      : `Branch ${item.branch} is still in git.`;
   return `${project} — ${verb} at ${when}. ${branchPart}`;
 }
 
@@ -209,7 +221,11 @@ export function historyRows(runs: readonly OrphanCleanupRun[]): HistoryRow[] {
   for (const run of runs) {
     for (const item of run.items) {
       if (item.state !== "completed") continue;
-      rows.push({ key: `${run.id}:${item.id}`, path: item.path, meta: describeCompleted(run, item) });
+      rows.push({
+        key: `${run.id}:${item.id}`,
+        path: item.path,
+        meta: describeCompleted(run, item),
+      });
     }
   }
   return rows;
@@ -279,7 +295,8 @@ export function unfinishedRuns(runs: readonly OrphanCleanupRun[]): OrphanCleanup
     (run) =>
       run.finishedAt === null &&
       run.items.some(
-        (item) => item.state === "pending" || item.state === "executing" || item.state === "indeterminate",
+        (item) =>
+          item.state === "pending" || item.state === "executing" || item.state === "indeterminate",
       ),
   );
 }
@@ -305,7 +322,9 @@ export function runsWithFailures(runs: readonly OrphanCleanupRun[]): OrphanClean
  * all.)
  */
 export function describeRunFailures(run: OrphanCleanupRun): string {
-  const failed = run.items.filter((item) => item.state === "failed" || item.state === "indeterminate");
+  const failed = run.items.filter(
+    (item) => item.state === "failed" || item.state === "indeterminate",
+  );
   const detail = failed
     .map((item) => `${item.projectName ?? item.path}: ${item.detail ?? "no reason recorded"}`)
     .join("; ");
@@ -339,7 +358,9 @@ export interface CleanupOutcome {
  */
 export function cleanupOutcome(run: OrphanCleanupRun): CleanupOutcome {
   const summary = cleanupSummary(run);
-  const hasTrouble = run.items.some((item) => item.state === "failed" || item.state === "indeterminate");
+  const hasTrouble = run.items.some(
+    (item) => item.state === "failed" || item.state === "indeterminate",
+  );
   return hasTrouble
     ? {
         kind: "warning",

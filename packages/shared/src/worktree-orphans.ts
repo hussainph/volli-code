@@ -121,10 +121,7 @@ export type OrphanCleanupItemOutcome = Exclude<OrphanCleanupItemState, "pending"
 /** Whether a value is an immutable outcome this build knows. */
 export function isOrphanCleanupItemOutcome(value: unknown): value is OrphanCleanupItemOutcome {
   return (
-    value === "completed" ||
-    value === "skipped" ||
-    value === "failed" ||
-    value === "indeterminate"
+    value === "completed" || value === "skipped" || value === "failed" || value === "indeterminate"
   );
 }
 
@@ -191,9 +188,7 @@ export type OrphanCleanupRejectionCode =
   | "conflict";
 
 /** Whether a value is a rejection code this build knows. */
-export function isOrphanCleanupRejectionCode(
-  value: unknown,
-): value is OrphanCleanupRejectionCode {
+export function isOrphanCleanupRejectionCode(value: unknown): value is OrphanCleanupRejectionCode {
   return value === "scan-superseded" || value === "unknown-items" || value === "conflict";
 }
 

@@ -64,7 +64,7 @@ function parseJson(raw: string, what: string): unknown {
   try {
     return JSON.parse(raw);
   } catch (error) {
-    throw new Error(`${what} is not readable JSON: ${(error as Error).message}`);
+    throw new Error(`${what} is not readable JSON`, { cause: error });
   }
 }
 

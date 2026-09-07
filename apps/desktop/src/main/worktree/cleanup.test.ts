@@ -18,7 +18,11 @@ import { cleanupOrphans } from "./cleanup";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
 import { projectContainerName } from "./containers";
-import { acquireDeletionLease, isUnderDeletion, resetDeletionLeasesForTest } from "./deletion-lease";
+import {
+  acquireDeletionLease,
+  isUnderDeletion,
+  resetDeletionLeasesForTest,
+} from "./deletion-lease";
 import { scriptedGit } from "./scripted-git";
 import type { WorktreeDeps } from "./types";
 

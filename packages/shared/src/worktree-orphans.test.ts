@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   isCompletedOrphanCleanupItem,
@@ -15,7 +15,7 @@ import {
   type OrphanCleanupItemState,
 } from "./worktree-orphans";
 
-function item(state: OrphanCleanupItemState, id = state): OrphanCleanupItem {
+function item(state: OrphanCleanupItemState, id: string = state): OrphanCleanupItem {
   return {
     id,
     kind: "worktree",

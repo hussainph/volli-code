@@ -172,9 +172,9 @@ describe("scanOrphans is read-only", () => {
       expect(issued.some((line) => line.includes("worktree prune"))).toBe(false);
 
       // …and it wrote no cleanup history either: a scan is not an act.
-      expect(
-        ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get(),
-      ).toEqual({ n: 0 });
+      expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get()).toEqual({
+        n: 0,
+      });
       expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_facts").get()).toEqual({
         n: 0,
       });

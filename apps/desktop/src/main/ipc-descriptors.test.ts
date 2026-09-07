@@ -1572,9 +1572,7 @@ describe("DATA_IPC descriptor table", () => {
 
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
-      expect(
-        guard([{ commandId: "c", scanRevision: "r", itemIds: ["i"] }, {}]),
-      ).toBe(false);
+      expect(guard([{ commandId: "c", scanRevision: "r", itemIds: ["i"] }, {}])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {

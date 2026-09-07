@@ -42,7 +42,14 @@ describe("cleanup command core", () => {
     const accepted = await engine.accept({
       commandId: "cmd-1",
       ...ACCEPT,
-      items: [planItem(), planItem({ id: "rev1:metadata:0", kind: "metadata", gitReason: "gitdir file points to non-existent location" })],
+      items: [
+        planItem(),
+        planItem({
+          id: "rev1:metadata:0",
+          kind: "metadata",
+          gitReason: "gitdir file points to non-existent location",
+        }),
+      ],
     });
 
     expect(accepted.ok).toBe(true);

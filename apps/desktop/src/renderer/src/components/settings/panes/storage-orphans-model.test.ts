@@ -25,6 +25,7 @@ import {
   describeUnreadableProject,
   hasCleanupWork,
   historyRows,
+  orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
@@ -157,10 +158,7 @@ describe("what a row says", () => {
 
   it("says a candidate has no branch rather than inventing one, and names a commit-basis deadline", () => {
     expect(
-      describeRemovable(
-        { ...removable, branch: null, ageBasis: "commit" },
-        { retentionDays: 7 },
-      ),
+      describeRemovable({ ...removable, branch: null, ageBasis: "commit" }, { retentionDays: 7 }),
     ).toBe(
       `Proj One — eligible for cleanup since ${new Date(AT).toLocaleDateString()} (its branch's last commit, past the 7-day retention window). No branch is checked out here.`,
     );
@@ -196,9 +194,9 @@ describe("what a row says", () => {
   });
 
   it("says an unreadable age outright", () => {
-    expect(describeKept({ ...keptBase, reason: "age-unknown", removableAt: null, ageBasis: null })).toBe(
-      "Proj One — Kept — Volli can't tell when this was last used.",
-    );
+    expect(
+      describeKept({ ...keptBase, reason: "age-unknown", removableAt: null, ageBasis: null }),
+    ).toBe("Proj One — Kept — Volli can't tell when this was last used.");
   });
 
   it("names what is live inside an active worktree", () => {
@@ -255,6 +253,17 @@ describe("what a row says", () => {
   it("shows the retention window the eligibility dates come from", () => {
     expect(retentionNote(14)).toBe("Unused folders become eligible after 14 day(s).");
   });
+
+  // Review C6: the retention period and the archive policy have to be SHOWN,
+  // not summoned — and the orphan/ticket distinction is what explains why this
+  // list's only verb is "remove the folder".
+  it("states the retention window and the archive policy as a row of its own", () => {
+    const note = orphanPolicyNote(9);
+    expect(note).toContain("eligible after 9 day(s)");
+    expect(note).toContain("no ticket to archive");
+    expect(note).toContain("branch stays in git");
+    expect(note).toContain("Archiving a ticket is a separate action");
+  });
 });
 
 describe("the cleanup history", () => {
@@ -273,15 +282,15 @@ describe("the cleanup history", () => {
   });
 
   it("falls back to the run's finish time when an item has no settle time of its own", () => {
-    expect(
-      describeCompleted(run({ finishedAt: AT + 500 }), item({ settledAt: null })),
-    ).toContain(new Date(AT + 500).toLocaleString());
+    expect(describeCompleted(run({ finishedAt: AT + 500 }), item({ settledAt: null }))).toContain(
+      new Date(AT + 500).toLocaleString(),
+    );
   });
 
   it("falls back to the run's start time when neither the item nor the run recorded a finish", () => {
-    expect(
-      describeCompleted(run({ finishedAt: null }), item({ settledAt: null })),
-    ).toContain(new Date(AT).toLocaleString());
+    expect(describeCompleted(run({ finishedAt: null }), item({ settledAt: null }))).toContain(
+      new Date(AT).toLocaleString(),
+    );
   });
 
   it("names a pruned record without pretending a folder went with it, crediting the right project", () => {
@@ -290,7 +299,9 @@ describe("the cleanup history", () => {
         run(),
         item({ kind: "metadata", path: "/repo", branch: null, projectName: null }),
       ),
-    ).toBe(`Unknown project — stale git record pruned by cleanup at ${new Date(AT).toLocaleString()}.`);
+    ).toBe(
+      `Unknown project — stale git record pruned by cleanup at ${new Date(AT).toLocaleString()}.`,
+    );
   });
 
   it("attributes a pruned record to startup when that is who ran it", () => {
@@ -389,9 +400,7 @@ describe("an interrupted run", () => {
   });
 
   it("counts failures separately, and dates an unstamped interruption from the run's start", () => {
-    expect(
-      describeInterrupted(run({ finishedAt: null, items: [item({ state: "failed" })] })),
-    ).toBe(
+    expect(describeInterrupted(run({ finishedAt: null, items: [item({ state: "failed" })] }))).toBe(
       `A cleanup was interrupted on ${new Date(AT).toLocaleString()}: 0 completed, 1 failed, 0 never attempted. Scan again to review what is left.`,
     );
   });
@@ -413,7 +422,11 @@ describe("an interrupted run", () => {
 
   it("surfaces only runs that stopped with pending, executing, or indeterminate work left", () => {
     const pending = run({ id: "pending", finishedAt: null, items: [item({ state: "pending" })] });
-    const executing = run({ id: "executing", finishedAt: null, items: [item({ state: "executing" })] });
+    const executing = run({
+      id: "executing",
+      finishedAt: null,
+      items: [item({ state: "executing" })],
+    });
     const indeterminate = run({
       id: "indeterminate",
       finishedAt: null,
@@ -447,22 +460,28 @@ describe("a run that finished with trouble in it", () => {
   });
 
   it("is not reported as troubled once it finished clean", () => {
-    expect(runsWithFailures([run({ finishedAt: AT, items: [item({ state: "completed" })] })])).toEqual(
-      [],
-    );
+    expect(
+      runsWithFailures([run({ finishedAt: AT, items: [item({ state: "completed" })] })]),
+    ).toEqual([]);
   });
 
   it("is not reported as troubled while it is still open, even with a failure recorded", () => {
-    expect(runsWithFailures([run({ finishedAt: null, items: [item({ state: "failed" })] })])).toEqual(
-      [],
-    );
+    expect(
+      runsWithFailures([run({ finishedAt: null, items: [item({ state: "failed" })] })]),
+    ).toEqual([]);
   });
 
   it("names every failed path with its reason, and the one recovery: scan again", () => {
     const troubled = run({
       finishedAt: AT,
       items: [
-        item({ id: "a", path: "/wt/one", projectName: "Proj One", state: "failed", detail: "disk busy" }),
+        item({
+          id: "a",
+          path: "/wt/one",
+          projectName: "Proj One",
+          state: "failed",
+          detail: "disk busy",
+        }),
         item({
           id: "b",
           path: "/wt/two",
@@ -510,7 +529,8 @@ describe("what a finished cleanup says", () => {
   it("announces a run with a failure as a warning naming the recovery", () => {
     expect(cleanupOutcome(run({ items: [item({ state: "failed" })] }))).toEqual({
       kind: "warning",
-      message: "Cleanup finished with problems: 0 cleaned up, 1 failed. Scan again to review what is left.",
+      message:
+        "Cleanup finished with problems: 0 cleaned up, 1 failed. Scan again to review what is left.",
     });
   });
 

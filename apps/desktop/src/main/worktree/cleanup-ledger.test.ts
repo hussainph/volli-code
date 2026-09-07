@@ -169,9 +169,9 @@ describe("SqliteOrphanCleanupLedger", () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    expect(
-      ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get(),
-    ).toEqual({ n: 0 });
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get()).toEqual({
+      n: 0,
+    });
   });
 
   it("refuses to erase a command that still has facts", async () => {

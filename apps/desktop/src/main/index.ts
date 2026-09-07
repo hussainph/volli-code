@@ -2795,7 +2795,10 @@ app.whenReady().then(async () => {
       // run is stamped, so an already-removed folder is recorded as removed
       // rather than described as work nobody attempted (review C3). Read-only,
       // and never fatal to a launch.
-      void reconcileInterruptedCleanups({ worktree: worktreeDeps(db), engine: orphanCleanupEngine(db) })
+      void reconcileInterruptedCleanups({
+        worktree: worktreeDeps(db),
+        engine: orphanCleanupEngine(db),
+      })
         .then((runs) => {
           for (const run of runs) {
             const done = run.items.filter((item) => item.state === "completed").length;

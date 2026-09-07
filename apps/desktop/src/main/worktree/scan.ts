@@ -195,7 +195,10 @@ interface ProjectListing {
 
 function listWorktrees(git: RunGit, projectPath: string): ProjectListing {
   try {
-    return { entries: parseWorktreeList(git(["worktree", "list", "--porcelain"], projectPath)), error: null };
+    return {
+      entries: parseWorktreeList(git(["worktree", "list", "--porcelain"], projectPath)),
+      error: null,
+    };
   } catch (caught) {
     return { entries: [], error: caught instanceof Error ? caught.message : String(caught) };
   }
@@ -474,7 +477,10 @@ function containerLeaves(container: OwnedContainer): string[] {
  * mistake as proposing one whose age could not be read — the fail-safe answer
  * keeps it, and the cleanup's own re-check gets to ask again.
  */
-async function busySite(sites: BusyWorktreeSites | undefined, path: string): Promise<string | null> {
+async function busySite(
+  sites: BusyWorktreeSites | undefined,
+  path: string,
+): Promise<string | null> {
   if (sites === undefined) return null;
   try {
     const site = busySiteWithin(path, await sites(path));

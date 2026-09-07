@@ -237,8 +237,7 @@ export function foldCleanupRun(facts: readonly OrphanCleanupFact[]): OrphanClean
           preservation: Array.isArray(intent["preservation"])
             ? intent["preservation"].filter((rule): rule is string => typeof rule === "string")
             : [],
-          retentionDays:
-            typeof intent["retentionDays"] === "number" ? intent["retentionDays"] : 0,
+          retentionDays: typeof intent["retentionDays"] === "number" ? intent["retentionDays"] : 0,
           items: projected,
         };
         for (const item of projected) byId.set(item.id, item);
@@ -279,6 +278,15 @@ export function foldCleanupRun(facts: readonly OrphanCleanupFact[]): OrphanClean
   return run;
 }
 
+/** The last receipt recorded for a command, or `null` when it has none. */
+async function latestReceipt(
+  tx: OrphanCleanupLedgerTransaction,
+  commandId: string,
+): Promise<OrphanCleanupReceipt | null> {
+  const receipts = await tx.listReceipts(commandId);
+  return receipts.at(-1) ?? null;
+}
+
 /** The transport-neutral cleanup command core. */
 export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): OrphanCleanupEngine {
   const fact = (
@@ -303,14 +311,6 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
     commandId: string,
   ): Promise<OrphanCleanupRun | null> {
     return foldCleanupRun(await tx.listFacts(commandId));
-  }
-
-  async function latestReceipt(
-    tx: OrphanCleanupLedgerTransaction,
-    commandId: string,
-  ): Promise<OrphanCleanupReceipt | null> {
-    const receipts = await tx.listReceipts(commandId);
-    return receipts.at(-1) ?? null;
   }
 
   /** Appends one fact to an already-accepted command; a stray command id is a no-op. */

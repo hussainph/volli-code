@@ -38,8 +38,7 @@ export function createMemoryOrphanCleanupLedger(): MemoryOrphanCleanupLedger {
           facts.push(fact);
         },
         listFacts: (commandId) => facts.filter((fact) => fact.commandId === commandId),
-        listReceipts: (commandId) =>
-          receipts.filter((receipt) => receipt.commandId === commandId),
+        listReceipts: (commandId) => receipts.filter((receipt) => receipt.commandId === commandId),
         appendReceipt: (receipt) => {
           receipts.push(receipt);
         },

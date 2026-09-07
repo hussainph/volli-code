@@ -47,6 +47,7 @@ import {
   describeRunFailures,
   describeUnreadableProject,
   historyRows,
+  orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
@@ -653,8 +654,6 @@ function OrphansSection() {
           <>
             Scanning only looks. Cleanup removes folders you confirm and keeps their branches;
             anything with uncommitted work, recent use, or a live terminal or agent is left alone.
-            An orphan has no ticket to archive, so a reviewed folder removal is the only thing that
-            can happen to it here — archiving a ticket stays a separate action, in Retention above.
             {retentionDays === null ? null : ` ${retentionNote(retentionDays)}`}
           </>
         }
@@ -688,6 +687,14 @@ function OrphansSection() {
         {(report) => (
           <>
             {/*
+             * The window every date below was measured against, and what this
+             * list may do at all — on the surface rather than behind the
+             * section's summoned hint, because an eligibility date nobody can
+             * check against a policy is a date nobody can argue with.
+             */}
+            <ItemRow name="Retention" meta={orphanPolicyNote(report.retentionDays)} />
+
+            {/*
              * A cleanup the app never finished. It is stated before anything
              * else because it is the only row that describes an incomplete act
              * — and it says what completed, so nothing already removed reads as
@@ -709,7 +716,11 @@ function OrphansSection() {
              * recovery.
              */}
             {runsWithFailures(report.runs).map((run) => (
-              <ItemRow key={`failures:${run.id}`} name="Cleanup finished with problems" meta={describeRunFailures(run)}>
+              <ItemRow
+                key={`failures:${run.id}`}
+                name="Cleanup finished with problems"
+                meta={describeRunFailures(run)}
+              >
                 <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
                   Scan again
                 </Button>
@@ -746,7 +757,9 @@ function OrphansSection() {
               <ItemRow
                 key={orphan.path}
                 name={truncateMiddle(orphan.path)}
-                meta={orphan.projectName ? `${orphan.projectName} — ${orphan.reason}` : orphan.reason}
+                meta={
+                  orphan.projectName ? `${orphan.projectName} — ${orphan.reason}` : orphan.reason
+                }
                 testId="orphan-row"
               >
                 <RowAction

@@ -68,8 +68,7 @@ export const CLEANUP_PRESERVATION_RULES: readonly WorktreePreservationRule[] =
 /** Whether a stored or transported value is a rule id THIS build knows. */
 export function isWorktreePreservationRule(value: unknown): value is WorktreePreservationRule {
   return (
-    typeof value === "string" &&
-    (WORKTREE_PRESERVATION_RULES as readonly string[]).includes(value)
+    typeof value === "string" && (WORKTREE_PRESERVATION_RULES as readonly string[]).includes(value)
   );
 }
 
