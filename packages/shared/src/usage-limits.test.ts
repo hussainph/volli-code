@@ -3,14 +3,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyUsageLimitsUpdate,
   clampPercent,
+  clampWindowDurationMins,
   elapsedShare,
-  formatCheckedAgo,
   formatDuration,
   formatResetsIn,
-  isUsageStale,
   paceOf,
   remainingPercent,
   resolveUsageLimitsAfterProbe,
+  usageLimitsProbeFailed,
+  usageLimitsUnsupported,
   usageTone,
   type UsageLimits,
   type UsageWindow,
@@ -44,6 +45,35 @@ describe("clampPercent", () => {
   it("reads NaN as nothing used rather than propagating it", () => {
     expect(clampPercent(Number.NaN)).toBe(0);
     expect(clampPercent(50)).toBe(50);
+  });
+});
+
+describe("clampWindowDurationMins", () => {
+  it("holds a length to the positive safe integer the vocabulary promises", () => {
+    expect(clampWindowDurationMins(300)).toBe(300);
+    expect(clampWindowDurationMins(10_079.6)).toBe(10_080);
+    // A twenty-second Codex window divides to a third of a minute: the floor
+    // is what keeps it off the wire schema's `positive` rail.
+    expect(clampWindowDurationMins(20 / 60)).toBe(1);
+    expect(clampWindowDurationMins(0)).toBe(1);
+    expect(clampWindowDurationMins(-5)).toBe(1);
+    expect(clampWindowDurationMins(Number.NaN)).toBe(1);
+    expect(clampWindowDurationMins(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+});
+
+describe("usage limits constructors", () => {
+  it("spells the two unavailable verdicts once, for every source to reuse", () => {
+    expect(usageLimitsProbeFailed(NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [],
+      unavailable: { reason: "probeFailed" },
+    });
+    expect(usageLimitsUnsupported(NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [],
+      unavailable: { reason: "unsupported" },
+    });
   });
 });
 
@@ -120,6 +150,11 @@ describe("formatResetsIn", () => {
       "resets now",
     );
   });
+
+  it("has nothing to say without a usable reset time", () => {
+    expect(formatResetsIn({}, NOW)).toBeNull();
+    expect(formatResetsIn({ resetsAt: "soon" }, NOW)).toBeNull();
+  });
 });
 
 describe("usageTone", () => {
@@ -130,35 +165,18 @@ describe("usageTone", () => {
   });
 
   it("asks for attention at a quarter left, or when spending runs ahead", () => {
+    // A quarter left, whatever the pace says.
     expect(usageTone(window({ usedPercent: 75 }), NOW)).toBe("attention");
-    // Half left, but 60% of the window gone: ahead of even.
+    // Half left with 60% of the window gone: UNDER even pace, and plenty left.
     expect(usageTone(window({ usedPercent: 50 }), NOW)).toBe("normal");
+    // 30% left with 60% of the window gone: ahead of even, and that alone is
+    // the early warning — 30% is above the quarter that would raise it anyway.
     expect(usageTone(window({ usedPercent: 70 }), NOW)).toBe("attention");
   });
 
   it("is ordinary with plenty left and no reading that says otherwise", () => {
     expect(usageTone(window({ usedPercent: 40 }), NOW)).toBe("normal");
     expect(usageTone(window({ usedPercent: 40, resetsAt: undefined }), NOW)).toBe("normal");
-  });
-});
-
-describe("formatCheckedAgo", () => {
-  it("reads under the minute as just now, otherwise as an age", () => {
-    expect(formatCheckedAgo(NOW - 30_000, NOW)).toBe("checked just now");
-    expect(formatCheckedAgo(NOW - 4 * 60_000, NOW)).toBe("checked 4m ago");
-    expect(formatCheckedAgo(NOW - 26 * HOUR, NOW)).toBe("checked 1d 2h ago");
-  });
-});
-
-describe("isUsageStale", () => {
-  it("turns stale at ten minutes, past the probe's own freshness hold", () => {
-    expect(isUsageStale({ checkedAt: NOW - 5 * 60_000 }, NOW)).toBe(false);
-    expect(isUsageStale({ checkedAt: NOW - 10 * 60_000 }, NOW)).toBe(true);
-  });
-
-  it("has nothing to say without a usable reset time", () => {
-    expect(formatResetsIn({}, NOW)).toBeNull();
-    expect(formatResetsIn({ resetsAt: "soon" }, NOW)).toBeNull();
   });
 });
 
@@ -240,21 +258,13 @@ describe("applyUsageLimitsUpdate", () => {
   });
 
   it("clears a failed probe once a turn reports real windows", () => {
-    const failed: UsageLimits = {
-      checkedAt: NOW - HOUR,
-      windows: [],
-      unavailable: { reason: "probeFailed" },
-    };
+    const failed = usageLimitsProbeFailed(NOW - HOUR);
     const next = applyUsageLimitsUpdate(failed, { observedAt: NOW, windows: [window()] });
     expect(next).toEqual({ checkedAt: NOW, windows: [window()] });
   });
 
   it("never grows windows on an unsupported account", () => {
-    const unsupported: UsageLimits = {
-      checkedAt: NOW - HOUR,
-      windows: [],
-      unavailable: { reason: "unsupported" },
-    };
+    const unsupported = usageLimitsUnsupported(NOW - HOUR);
     expect(applyUsageLimitsUpdate(unsupported, { observedAt: NOW, windows: [window()] })).toBe(
       unsupported,
     );
@@ -263,16 +273,8 @@ describe("applyUsageLimitsUpdate", () => {
 
 describe("resolveUsageLimitsAfterProbe", () => {
   const good: UsageLimits = { checkedAt: NOW - HOUR, windows: [window()] };
-  const failed: UsageLimits = {
-    checkedAt: NOW,
-    windows: [],
-    unavailable: { reason: "probeFailed" },
-  };
-  const unsupported: UsageLimits = {
-    checkedAt: NOW,
-    windows: [],
-    unavailable: { reason: "unsupported" },
-  };
+  const failed = usageLimitsProbeFailed(NOW);
+  const unsupported = usageLimitsUnsupported(NOW);
 
   it("keeps the last good read over a failed probe", () => {
     expect(resolveUsageLimitsAfterProbe(good, failed)).toBe(good);

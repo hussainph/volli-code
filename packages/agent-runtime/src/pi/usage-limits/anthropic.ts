@@ -21,6 +21,7 @@
 
 import {
   clampPercent,
+  usageLimitsProbeFailed,
   type UsageLimits,
   type UsageLimitsUpdate,
   type UsageWindow,
@@ -87,7 +88,7 @@ export function anthropicHeadersToUpdate(
  */
 export function anthropicUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return probeFailed(checkedAt);
+    return usageLimitsProbeFailed(checkedAt);
   }
   const windows: UsageWindow[] = [];
   for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
@@ -100,7 +101,7 @@ export function anthropicUsageFromEndpoint(body: unknown, checkedAt: number): Us
     const span = match[1] === "five_hour" ? "5h" : "7d";
     windows.push(anthropicWindow(span, match[2], percent, isoTimestamp(entry.resets_at)));
   }
-  if (windows.length === 0) return probeFailed(checkedAt);
+  if (windows.length === 0) return usageLimitsProbeFailed(checkedAt);
   return { checkedAt, windows: sortWindows(windows) };
 }
 
@@ -139,8 +140,4 @@ function sortWindows(windows: readonly UsageWindow[]): UsageWindow[] {
 function rank(window: UsageWindow): number {
   if (window.kind === "session") return 0;
   return window.id === "seven_day" ? 1 : 2;
-}
-
-function probeFailed(checkedAt: number): UsageLimits {
-  return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
 }

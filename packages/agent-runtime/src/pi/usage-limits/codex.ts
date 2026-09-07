@@ -19,7 +19,13 @@
  * `weekly` because both go through {@link windowShapeForMinutes}.
  */
 
-import type { UsageLimits, UsageLimitsUpdate, UsageWindow } from "@volli/shared";
+import {
+  clampWindowDurationMins,
+  usageLimitsProbeFailed,
+  type UsageLimits,
+  type UsageLimitsUpdate,
+  type UsageWindow,
+} from "@volli/shared";
 
 import {
   epochSecondsToIso,
@@ -62,10 +68,10 @@ export function codexHeadersToUpdate(
  */
 export function codexUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return probeFailed(checkedAt);
+    return usageLimitsProbeFailed(checkedAt);
   }
   const rateLimit = (body as { rate_limit?: unknown }).rate_limit;
-  if (typeof rateLimit !== "object" || rateLimit === null) return probeFailed(checkedAt);
+  if (typeof rateLimit !== "object" || rateLimit === null) return usageLimitsProbeFailed(checkedAt);
   const built: { minutes: number; window: UsageWindow }[] = [];
   for (const slot of SLOTS) {
     const entry = (rateLimit as Record<string, unknown>)[`${slot}_window`];
@@ -84,16 +90,22 @@ export function codexUsageFromEndpoint(body: unknown, checkedAt: number): UsageL
       secondsFromNowToIso(fields.reset_after_seconds, checkedAt);
     built.push({ minutes: seconds / 60, window: codexWindow(seconds / 60, usedPercent, resetsAt) });
   }
-  if (built.length === 0) return probeFailed(checkedAt);
+  if (built.length === 0) return usageLimitsProbeFailed(checkedAt);
   return { checkedAt, windows: sortedWindows(built) };
 }
 
+/**
+ * The length is CLAMPED, not merely rounded. Codex states its window in
+ * seconds, so anything under half a minute would round to zero — and zero is
+ * not a length the vocabulary allows or the wire schema accepts, so one such
+ * window would have cost the whole Model Access snapshot rather than one bar.
+ */
 function codexWindow(
   minutes: number,
   usedPercent: number,
   resetsAt: string | undefined,
 ): UsageWindow {
-  const rounded = Math.round(minutes);
+  const rounded = clampWindowDurationMins(minutes);
   return {
     ...windowShapeForMinutes(rounded),
     usedPercent,
@@ -110,8 +122,4 @@ function codexWindow(
  */
 function sortedWindows(built: readonly { minutes: number; window: UsageWindow }[]): UsageWindow[] {
   return built.toSorted((left, right) => left.minutes - right.minutes).map((entry) => entry.window);
-}
-
-function probeFailed(checkedAt: number): UsageLimits {
-  return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
 }

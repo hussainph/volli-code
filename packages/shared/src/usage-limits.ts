@@ -37,6 +37,12 @@ export interface UsageWindow {
   /**
    * The window's length, in minutes. With {@link resetsAt} it places "now"
    * inside the window, which is what the pace reading needs.
+   *
+   * A POSITIVE SAFE INTEGER when present, and the mappers keep it one through
+   * {@link clampWindowDurationMins}. The wire schema enforces the same thing,
+   * so a length that is not one would cost the whole Model Access snapshot
+   * rather than one bar. A source that states no usable length omits the
+   * field: a window nobody can place draws no hairline, which is honest.
    */
   windowDurationMins?: number;
 }
@@ -182,27 +188,14 @@ export function usageTone(window: UsageWindow, now: number): UsageTone {
   return "normal";
 }
 
-/**
- * How old a reading may be before the surface says so.
- *
- * Twice the on-demand probe's freshness hold: an ordinary inspection inside
- * that hold shows a read up to five minutes old, and that is the normal case,
- * not a stale one. Past ten minutes the account has neither been probed nor
- * heard from on a turn, and a person about to start a long Session should
- * know the bars are a memory.
- */
-export const USAGE_STALE_AFTER_MS = 10 * 60_000;
-
-/** `checked 4m ago`, or `checked just now` under the minute. */
-export function formatCheckedAgo(checkedAt: number, now: number): string {
-  const age = now - checkedAt;
-  if (age < 60_000) return "checked just now";
-  return `checked ${formatDuration(age)} ago`;
+/** An account the runtime knows how to ask about and could not read this time. */
+export function usageLimitsProbeFailed(checkedAt: number): UsageLimits {
+  return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
 }
 
-/** Whether a reading is old enough that the surface should say when it was taken. */
-export function isUsageStale(limits: Pick<UsageLimits, "checkedAt">, now: number): boolean {
-  return now - limits.checkedAt >= USAGE_STALE_AFTER_MS;
+/** An account that is not metered in windows, and never will be. */
+export function usageLimitsUnsupported(checkedAt: number): UsageLimits {
+  return { checkedAt, windows: [], unavailable: { reason: "unsupported" } };
 }
 
 /**
@@ -293,4 +286,18 @@ function sameWindow(left: UsageWindow, right: UsageWindow): boolean {
 export function clampPercent(value: number): number {
   if (Number.isNaN(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+/**
+ * A window length a mapper computed, held to what {@link UsageWindow} promises:
+ * a positive safe integer of minutes.
+ *
+ * A provider states its window in its own unit — Codex in seconds — so a short
+ * one divides to a fraction and rounds to zero. Zero is not a length: it fails
+ * the wire schema, and it would place "now" nowhere. The floor is one minute,
+ * which is the shortest window the countdown can even spell.
+ */
+export function clampWindowDurationMins(minutes: number): number {
+  if (!Number.isFinite(minutes)) return 1;
+  return Math.max(1, Math.round(minutes));
 }

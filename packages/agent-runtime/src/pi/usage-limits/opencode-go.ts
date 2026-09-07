@@ -24,7 +24,12 @@
  * can spend.
  */
 
-import type { UsageLimits, UsageWindow } from "@volli/shared";
+import {
+  clampWindowDurationMins,
+  usageLimitsProbeFailed,
+  type UsageLimits,
+  type UsageWindow,
+} from "@volli/shared";
 
 import { isoTimestamp, percentOf, SESSION_WINDOW_MINS, WEEKLY_WINDOW_MINS } from "./windows";
 
@@ -49,10 +54,10 @@ const WINDOWS = [
  */
 export function opencodeGoUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return probeFailed(checkedAt);
+    return usageLimitsProbeFailed(checkedAt);
   }
   const usage = (body as { usage?: unknown }).usage;
-  if (typeof usage !== "object" || usage === null) return probeFailed(checkedAt);
+  if (typeof usage !== "object" || usage === null) return usageLimitsProbeFailed(checkedAt);
   const windows: UsageWindow[] = [];
   for (const shape of WINDOWS) {
     const entry = (usage as Record<string, unknown>)[shape.key];
@@ -72,7 +77,7 @@ export function opencodeGoUsageFromEndpoint(body: unknown, checkedAt: number): U
       ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
     });
   }
-  if (windows.length === 0) return probeFailed(checkedAt);
+  if (windows.length === 0) return usageLimitsProbeFailed(checkedAt);
   return { checkedAt, windows };
 }
 
@@ -93,11 +98,7 @@ function durationMinutes(key: (typeof WINDOWS)[number]["key"], resetsAt: string 
       const end = new Date(resetsAt);
       const start = new Date(end);
       start.setUTCMonth(start.getUTCMonth() - 1);
-      return Math.round((end.getTime() - start.getTime()) / 60_000);
+      return clampWindowDurationMins((end.getTime() - start.getTime()) / 60_000);
     }
   }
-}
-
-function probeFailed(checkedAt: number): UsageLimits {
-  return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
 }
