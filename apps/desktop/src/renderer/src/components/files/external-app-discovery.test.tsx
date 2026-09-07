@@ -17,11 +17,13 @@ import type { ExternalApp, ExternalAppListResult } from "../../../../ipc/contrac
 import { useUiStore } from "@renderer/stores/ui";
 import {
   ExternalAppsProvider,
-  nextExternalAppDiscovery,
   useExternalAppDiscovery,
   useExternalApps,
-  type ExternalAppDiscovery,
 } from "./external-app-discovery";
+import {
+  nextExternalAppDiscovery,
+  type ExternalAppDiscovery,
+} from "./external-app-discovery-model";
 
 const TERMINAL: ExternalApp = { id: "terminal", label: "Terminal", kind: "terminal" };
 const ZED: ExternalApp = { id: "zed", label: "Zed", kind: "editor" };
@@ -184,6 +186,38 @@ describe("ExternalAppsProvider", () => {
     expect(latest().apps).toEqual([]);
     expect(latest().discovery.status).toBe("failed");
     expect(useUiStore.getState().defaultExternalAppId).toBe("terminal");
+  });
+
+  it("drops a slow scan that a newer rescan has superseded", async () => {
+    // The reducer alone cannot hold this line: a stale `scanned` would replace
+    // a newer answer with an older one. The request token has to drop it, and
+    // the reconcile must not run on the dropped evidence either.
+    const { promise: first, resolve: answerFirst } = Promise.withResolvers<ExternalAppListResult>();
+    const listExternalApps = vi
+      .fn<() => Promise<ExternalAppListResult>>()
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ ok: true, apps: [TERMINAL, ZED] });
+    vi.stubGlobal("api", {
+      files: { listExternalApps },
+      appState: { set: vi.fn(async () => ({ ok: true }) as const) },
+    });
+    useUiStore.setState({ defaultExternalAppId: "zed" });
+
+    const latest = await mount();
+    expect(latest().discovery.status).toBe("scanning");
+    await act(async () => latest().rescan());
+    expect(latest().apps).toEqual([TERMINAL, ZED]);
+    expect(latest().discovery.status).toBe("ready");
+
+    // The boot scan answers late and without Zed. Applied, it would shorten
+    // the menu AND reconcile the saved default away; dropped, neither moves.
+    await act(async () => {
+      answerFirst({ ok: true, apps: [TERMINAL] });
+      await first;
+    });
+    expect(latest().apps).toEqual([TERMINAL, ZED]);
+    expect(latest().discovery.status).toBe("ready");
+    expect(useUiStore.getState().defaultExternalAppId).toBe("zed");
   });
 
   it("reconciles a default whose app a completed scan no longer finds", async () => {

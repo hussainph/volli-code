@@ -252,6 +252,11 @@ export default defineConfig(({ mode }) => ({
         // looked, and the two-layer safety in main would have refused it with a
         // sentence written for a channel rather than for a person.
         "src/components/files/navigator-mutations.ts",
+        // What one external-app scan MEANS for every Files menu and for
+        // Integrations (VC-287): whether a failed look keeps the confirmed
+        // list or replaces it. The shipped defect was exactly a branch here —
+        // a scan that could not run rendered as one that found nothing.
+        "src/components/files/external-app-discovery-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",

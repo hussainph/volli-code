@@ -15,6 +15,7 @@ import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import type { ExternalApp } from "../../../../../ipc/contract";
 
 import { useExternalAppDiscovery } from "@renderer/components/files/external-app-discovery";
+import type { ExternalAppDiscovery } from "@renderer/components/files/external-app-discovery-model";
 import {
   AsyncSection,
   CONTROL_W,
@@ -36,7 +37,7 @@ const ASK_EVERY_TIME_VALUE = "__ask-every-time__";
 
 /** The shared discovery state in this section's four-state vocabulary. */
 function sectionState(
-  discovery: ReturnType<typeof useExternalAppDiscovery>["discovery"],
+  discovery: ExternalAppDiscovery,
   rescan: () => void,
 ): AsyncState<readonly ExternalApp[]> {
   switch (discovery.status) {
