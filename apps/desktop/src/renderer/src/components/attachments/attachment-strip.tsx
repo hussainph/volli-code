@@ -136,11 +136,19 @@ export function AttachmentThumbRow({
             title={`${attachment.label} · ${fileTypeLabel(attachment.originalName, attachment.mime)}`}
             className="flex size-4 items-center justify-center rounded-sm border border-border/70 bg-muted/40 text-muted-foreground"
           >
-            <FileIcon className="size-2.5" />
+            {/* `bold` because this is drawn at 10px: below 12px regular lays
+                down less ink than the label beside it, and coverage is
+                scale-invariant, so no `size-*` could fix it (AGENTS.md). */}
+            <FileIcon weight="bold" className="size-2.5" />
           </span>
         ),
       )}
-      {overflow > 0 ? <span className="text-[10px] text-muted-foreground">+{overflow}</span> : null}
+      {/* `text-label` is the rung below `text-ui` and the only one there is —
+          docs/DESIGN.md bans arbitrary sizes, and a two-character count is
+          exactly the badge treatment that rung is for. */}
+      {overflow > 0 ? (
+        <span className="text-label text-muted-foreground">+{overflow}</span>
+      ) : null}
     </span>
   );
 }
