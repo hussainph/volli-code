@@ -212,9 +212,30 @@ export async function sessionListVerb(
       lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
       ageMs: Math.max(0, now() - record.createdAt),
     };
-    return [Object.assign(row, usageCells(usageById.get(record.sessionId)))];
+    return [
+      Object.assign(row, modelCells(projection), usageCells(usageById.get(record.sessionId))),
+    ];
   });
   return { v: 1, ok: true, data: { sessions: [...projectSessions, ...chatRows] } };
+}
+
+/**
+ * What a chat Session is running, and what it was asked for as (VC-259).
+ *
+ * `model` is the copyable `provider/model` id `model list` prints, `reasoning`
+ * the level beside it, and `tier` the named tier the start resolved them
+ * through — or null for a model chosen by exact id, which is most of them. A
+ * delegating agent reading this list can tell a `fast` Session from one on
+ * the same model that a person pinned, which is the whole reason the tier is
+ * recorded. Null model means the Session has not recorded a policy yet.
+ */
+function modelCells(projection: SessionProjection): Record<string, unknown> {
+  const selection = projection.modelSelection;
+  return {
+    model: selection === null ? null : `${selection.providerId}/${selection.modelId}`,
+    reasoning: selection === null ? null : selection.reasoningLevel,
+    tier: projection.modelTier,
+  };
 }
 
 /**

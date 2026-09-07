@@ -582,6 +582,7 @@ Example: volli session list --ticket VC-12
 Notes:
 - Prints each session's title and short id; session peek takes either type.
 - Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.
+- Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.
 
 ============================================================================
 volli help session peek

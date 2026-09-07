@@ -1054,6 +1054,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Prints each session's title and short id; session peek takes either type.",
       "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+      "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },

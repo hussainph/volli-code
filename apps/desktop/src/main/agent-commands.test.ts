@@ -2058,6 +2058,15 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
+    // A Session that has recorded no model policy says so with nulls rather
+    // than an invented default (VC-259).
+    expect(sessions).toMatchObject({
+      data: {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({ kind: "chat", model: null, reasoning: null, tier: null }),
+        ]),
+      },
+    });
     // A ticketless structured Session identifies against its project root: it
     // has no PTY cwd and no worktree, and that is the directory it runs in.
     expect(identify).toMatchObject({
@@ -2066,6 +2075,87 @@ describe("agent command service", () => {
         session: structured.session.id.slice(0, 8),
         ticket: null,
         worktreePath: "/repo/volli",
+      },
+    });
+  });
+
+  it("names a chat row's model, its level and the tier it was asked for as (VC-259)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+    const tiered = await sessionEngine.createSession({
+      commandId: "create-tiered",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Fast",
+      provenance,
+    });
+    await sessionEngine.submit({
+      commandId: "select-tiered",
+      sessionId: tiered.session.id,
+      intent: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+        tier: "fast",
+      },
+      provenance,
+    });
+    const pinned = await sessionEngine.createSession({
+      commandId: "create-pinned",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Pinned",
+      provenance,
+    });
+    await sessionEngine.submit({
+      commandId: "select-pinned",
+      sessionId: pinned.session.id,
+      intent: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+      },
+      provenance,
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 2_000,
+      sessionEngine,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    // Same model, same level: only the tier tells the delegated Session from
+    // the pinned one, which is exactly what an orchestrator is reading for.
+    expect(sessions).toMatchObject({
+      ok: true,
+      data: {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            title: "Fast",
+            model: "anthropic/haiku-4.5",
+            reasoning: "low",
+            tier: "fast",
+          }),
+          expect.objectContaining({
+            title: "Pinned",
+            model: "anthropic/haiku-4.5",
+            reasoning: "low",
+            tier: null,
+          }),
+        ]),
       },
     });
   });

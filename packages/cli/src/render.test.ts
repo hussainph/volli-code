@@ -346,6 +346,68 @@ describe("renderCliSuccess", () => {
       "fedcba98  chat  working  last 8s  VC-52  ~$1.50  184000  Validate VC-52\n" +
         "0a1b2c3d  chat  waiting on permission  last 7m  VC-53  \u2014  0  Review VC-53\n",
     );
+    // The model cell (VC-259): the tier leads where the start named one, so a
+    // `fast` Session and one a person pinned to the same model read apart.
+    // A row that has recorded no policy has no cell, like a terminal row.
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [
+            {
+              id: "fedcba98",
+              kind: "chat",
+              status: "working",
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-52",
+              model: "anthropic/haiku-4.5",
+              reasoning: "low",
+              tier: "fast",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Scoped fix",
+            },
+            {
+              id: "0a1b2c3d",
+              kind: "chat",
+              status: "idle",
+              lastActivityAgeMs: 8_000,
+              ticket: null,
+              model: "anthropic/haiku-4.5",
+              reasoning: "low",
+              tier: null,
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Pinned by hand",
+            },
+            {
+              id: "11223344",
+              kind: "chat",
+              status: "idle",
+              lastActivityAgeMs: 8_000,
+              ticket: null,
+              model: null,
+              reasoning: null,
+              tier: null,
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "No policy yet",
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBe(
+      "fedcba98  chat  working  last 8s  VC-52  fast · anthropic/haiku-4.5 · low  \u2014  0  Scoped fix\n" +
+        "0a1b2c3d  chat  idle  last 8s  anthropic/haiku-4.5 · low  \u2014  0  Pinned by hand\n" +
+        "11223344  chat  idle  last 8s  \u2014  0  No policy yet\n",
+    );
     expect(
       renderCliSuccess(
         "ticket.events",

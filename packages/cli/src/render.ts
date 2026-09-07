@@ -632,6 +632,22 @@ function renderConflicts(data: Record<string, unknown>): string {
 }
 
 /**
+ * A chat row's model, as one cell: `fast · anthropic/haiku-4.5 · low` where
+ * the start named a tier, `anthropic/haiku-4.5 · low` where a person or an
+ * exact id chose it (VC-259). The tier leads because it is the fact that
+ * tells two rows on the same model apart, and the level trails as it does in
+ * the model.list table. A terminal row, or a chat that has not recorded a
+ * policy yet, has no cell rather than a dash: the cells before the title are
+ * filtered, not padded, and this one follows that rule.
+ */
+function sessionModelCell(session: Record<string, unknown>): string | null {
+  if (typeof session["model"] !== "string") return null;
+  return [session["tier"], session["model"], session["reasoning"]]
+    .filter((value): value is string => typeof value === "string")
+    .join(" · ");
+}
+
+/**
  * One tier row of the model.list table, in the cells the printer aligns.
  *
  * `model` is null for two different reasons and the row must say which: a
@@ -981,6 +997,7 @@ function renderStableLines(command: string, data: unknown): string | null {
                 ? `last ${ageText(session["lastActivityAgeMs"])}`
                 : null,
               session["ticket"],
+              sessionModelCell(session),
             ]
               .filter((value) => value !== null && value !== undefined)
               .map(terminalSafeInline),
