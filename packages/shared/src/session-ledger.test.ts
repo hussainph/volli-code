@@ -398,6 +398,15 @@ describe("observationPayload", () => {
         failure: { code: "spawn_failed", detail: "Unavailable", diagnostic: { retryable: false } },
       },
       {
+        id: "2-exited",
+        sessionId: session.id,
+        occurredAt: 2,
+        provenance,
+        kind: "attachment.exited",
+        attachmentId: attachment.id,
+        exitCode: 0,
+      },
+      {
         id: "2",
         sessionId: session.id,
         occurredAt: 2,
@@ -523,6 +532,11 @@ describe("observationPayload", () => {
       },
     ];
 
+    expect(observationPayload(observations[3]!, attribution)).toEqual({
+      kind: "attachment.exited",
+      attachmentId: attachment.id,
+      exitCode: 0,
+    });
     expect(observationPayload(observations.at(-1)!, attribution)).toEqual({
       kind: "interaction.cancelled",
       attachmentId: attachment.id,
@@ -537,6 +551,7 @@ describe("observationPayload", () => {
       "attachment.opened",
       "attachment.native_referenced",
       "attachment.failed",
+      "attachment.exited",
       "attachment.closed",
       "run.started",
       "run.completed",
