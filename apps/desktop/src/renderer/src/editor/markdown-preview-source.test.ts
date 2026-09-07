@@ -179,6 +179,21 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock("<!-- prettier-ignore -->")).toBe(true);
   });
 
+  it("refuses markup that would fetch on render, so a preview stays offline", () => {
+    // `srcset` is not protocol-checked by the sanitizer, so a remote candidate
+    // would be a network request made by opening a file.
+    expect(renderableHtmlBlock('<img src="a.png" srcset="https://cdn.example/a.png 2x">')).toBe(
+      false,
+    );
+    expect(renderableHtmlBlock('<picture>\n<img src="a.png" alt="x">\n</picture>')).toBe(false);
+  });
+
+  it("refuses a form control typed into a document", () => {
+    // The sanitizer keeps `input` for markdown task lists; a checkbox written
+    // as raw HTML is chrome a read-only page has no use for.
+    expect(renderableHtmlBlock('<p><input type="checkbox" checked></p>')).toBe(false);
+  });
+
   it("refuses a tag the sanitizer would not keep, rather than dropping it silently", () => {
     // `<article>` is not dangerous; it is simply not in the renderer's tag
     // allowlist, so it would vanish along with the structure it carried. A

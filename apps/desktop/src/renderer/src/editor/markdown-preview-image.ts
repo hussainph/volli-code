@@ -125,11 +125,13 @@ export function parsePreviewImageSrc(src: string | undefined): PreviewImageSourc
   return UNRESOLVED;
 }
 
-/** What a refused image says in place of the picture — the app's one wording for it. */
+/**
+ * What a refused image says in place of the picture — the app's one wording for
+ * it, so a chat transcript and a file preview report the same situation with
+ * the same sentence.
+ */
 export function previewImageNotice(kind: "remote" | "unresolved"): string {
-  // Never null for these two: `markdownImageNotice` only answers null for a
-  // resolution that renders, and neither of these does.
-  return markdownImageNotice({ kind }) ?? "";
+  return markdownImageNotice({ kind });
 }
 
 /** A read repository image, as an `<img>` source or as the sentence drawn instead. */

@@ -173,6 +173,14 @@ export function resolveMarkdownImageSrc(
  * inline where a picture would have been, and it names the cause rather than
  * apologising: a person who wrote a URL needs to know the URL is why.
  */
+export function markdownImageNotice(resolution: { kind: "remote" | "unresolved" }): string;
+export function markdownImageNotice(resolution: MarkdownImageResolution): string | null;
+/*
+ * Two signatures, no second implementation: a caller that has already narrowed
+ * to a REFUSAL always gets a sentence, and saying so in the type spares it a
+ * `?? ""` fallback that no test could ever reach (the file Preview's image
+ * path, VC-307). The general signature is unchanged for everyone else.
+ */
 export function markdownImageNotice(resolution: MarkdownImageResolution): string | null {
   switch (resolution.kind) {
     case "render":
