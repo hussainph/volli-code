@@ -85,7 +85,11 @@ import {
 } from "./compaction";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
-import { inspectPiModelAccess, type PiModelAccessSource } from "./model-access";
+import {
+  inspectPiModelAccess,
+  type PiModelAccessSource,
+  type UsageLimitsSource,
+} from "./model-access";
 import type { RefreshableCatalogs } from "./model-catalog";
 import { piOwnedModelAccess } from "./models";
 import {
@@ -93,6 +97,8 @@ import {
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { UsageLimitsHolder } from "./usage-limits/holder";
+import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { piContext, type Context } from "./pi-context";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
@@ -219,6 +225,21 @@ export interface PiRuntimeHostOptions {
    * means disabled — the no-op sink, not an `undefined` check per call.
    */
   observability?: ObservabilitySink;
+  /**
+   * The subscription usage read (VC-263): where each account's windows are
+   * held, and the fetch its on-demand probe uses. Opt-in, and the fetch is
+   * required rather than defaulted: this runtime does not choose its own
+   * transport to a provider endpoint, and a test hands in a fetch that never
+   * reaches the network while main hands in the platform one. The holder is
+   * optional — a fresh one per runtime is right when the host has no opinion.
+   * Absent means the read is off, which is also the safe failure mode for a
+   * host that forgot: a page with no bars rather than a page probing
+   * endpoints nobody asked about.
+   */
+  usageLimits?: {
+    holder?: UsageLimitsHolder;
+    fetch: UsageProbeFetch;
+  };
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
@@ -236,6 +257,11 @@ interface PiRuntimeHost {
   retryBackoffMs: (attempt: number) => number;
   compactionPolicy: () => CompactionPolicy;
   observability: ObservabilitySink;
+  /**
+   * One holder and one schedule per runtime: a hold the endpoint imposed
+   * outlives the inspection. Absent when the host did not opt in.
+   */
+  usageLimits?: UsageLimitsSource;
 }
 
 /**
@@ -282,6 +308,15 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
     observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
+    ...(options.usageLimits === undefined
+      ? {}
+      : {
+          usageLimits: {
+            holder: options.usageLimits.holder ?? new UsageLimitsHolder(),
+            schedule: new UsageProbeSchedule(),
+            fetch: options.usageLimits.fetch,
+          },
+        }),
   };
   return {
     inspectModelAccess: (input) =>
@@ -291,6 +326,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           credentials: host.credentials,
           catalogReady: host.catalogReady,
           catalogs: host.catalogs,
+          usageLimits: host.usageLimits,
         },
         host.now,
         input,
@@ -1656,6 +1692,18 @@ async function attachSession(
         sink: host.observability,
         runId,
         now: host.now,
+        ...(host.usageLimits === undefined
+          ? {}
+          : {
+              // The passive half of the usage read: whatever windows this
+              // response's headers stated fold straight into the holder the
+              // next inspection reads. A sink that throws costs the capture.
+              usageLimits: {
+                record: (providerId, update) => {
+                  host.usageLimits?.holder.apply(providerId, update);
+                },
+              },
+            }),
       }),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",

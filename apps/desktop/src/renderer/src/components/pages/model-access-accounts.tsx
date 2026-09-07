@@ -51,6 +51,7 @@ import {
   type DeepLinkedAction,
   type SignInView,
 } from "@renderer/components/pages/model-access-accounts-model";
+import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage";
 import { Empty, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { Button } from "@renderer/components/ui/button";
@@ -345,6 +346,9 @@ function ProviderAccount({
           </>
         )}
       </PrefRow>
+      {provider.usageLimits === undefined ? null : (
+        <ModelAccessUsage limits={provider.usageLimits} testId={`usage-${provider.id}`} />
+      )}
       {session !== null || view.failure !== null ? (
         <SignInPanel
           view={view}

@@ -915,6 +915,83 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("carries an account's usage limits across the edge, and only the fields it knows", async () => {
+    const fixture = runtimeFixture();
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      inspectModelAccess: async () => ({
+        observedAt: 42,
+        providers: [
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            state: "available" as const,
+            accountLabel: null,
+            billingSource: "subscription" as const,
+            recovery: null,
+            signIn: [],
+            hasStoredCredential: true,
+            usageLimits: {
+              checkedAt: 41,
+              windows: [
+                {
+                  id: "five_hour",
+                  kind: "session" as const,
+                  label: "Session",
+                  usedPercent: 37,
+                  resetsAt: "2026-03-01T14:00:00.000Z",
+                  windowDurationMins: 300,
+                  rawHeaders: { authorization: "leak" },
+                },
+                { id: "seven_day", kind: "weekly" as const, label: "Weekly", usedPercent: 4 },
+              ],
+            },
+          },
+          {
+            id: "openai-codex",
+            label: "OpenAI Codex",
+            state: "available" as const,
+            accountLabel: null,
+            billingSource: "unknown" as const,
+            recovery: null,
+            signIn: [],
+            hasStoredCredential: true,
+            usageLimits: {
+              checkedAt: 40,
+              windows: [],
+              unavailable: { reason: "unsupported" as const },
+            },
+          },
+        ],
+        models: [],
+      }),
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    const access = await caller.modelAccess.inspect({});
+
+    expect(access.providers[0]?.usageLimits).toEqual({
+      checkedAt: 41,
+      windows: [
+        {
+          id: "five_hour",
+          kind: "session",
+          label: "Session",
+          usedPercent: 37,
+          resetsAt: "2026-03-01T14:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        { id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 4 },
+      ],
+    });
+    expect(access.providers[1]?.usageLimits).toEqual({
+      checkedAt: 40,
+      windows: [],
+      unavailable: { reason: "unsupported" },
+    });
+    expect(JSON.stringify(access)).not.toMatch(/leak|rawHeaders/);
+  });
+
   it("reads and writes the per-purpose defaults through an exact safe shape", async () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];

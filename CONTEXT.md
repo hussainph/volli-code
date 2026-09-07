@@ -444,6 +444,22 @@ copied when the operation is recorded rather than joined at read time, so
 deleting a Ticket cannot move its old spend into unticketed Project spend.
 _Avoid_: usage table (understates that it is derived), cost cache, running total
 
+**Usage Window**:
+One metered allowance a provider's SUBSCRIPTION grants an account, and how much
+of it is gone: a share used, when the window resets, and how long the window
+runs. Claude Pro/Max meters a five-hour session window and a seven-day one;
+Codex a session and a weekly one; OpenCode Go a rolling, weekly and monthly one.
+A window is named by its LENGTH, never by the slot a provider happened to put it
+in, and both sources for one provider use the same window id so a reading taken
+mid-turn lands on the row an on-demand read drew. Windows are read two ways: the
+rate-limit headers a Metered operation's response carries, and one on-demand GET
+of the provider's own usage endpoint. Neither is durable. A window is a live
+measurement of someone else's meter, so it is held in memory by the Agent
+Runtime, read through Model Access, and never written to the Session ledger.
+_Avoid_: quota (says nothing about the window), rate limit (that is the refusal,
+not the allowance), usage (that word is already spent — see **Usage projection**,
+which is Volli's own cost accounting and an unrelated fact)
+
 **Cached input share**:
 Cache reads as a fraction of all prompt tokens — `cacheRead / (input + cacheRead
 
