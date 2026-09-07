@@ -124,8 +124,8 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
 }
 
 /**
- * Universal ⌘K destination picker for tickets, open terminals, and durable
- * chats. Tickets lead (VC-205); each section truncates behind a "Show all"
+ * Universal ⌘K destination picker for tickets, open terminals, closed terminal
+ * records, and durable chats. Tickets lead (VC-205); each section truncates behind a "Show all"
  * row; and a completed `@` token — typed, or picked from the rows `@` itself
  * surfaces — narrows the palette to one section.
  */

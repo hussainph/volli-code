@@ -351,7 +351,8 @@ function SessionList({
             }
             editing={editingId === record.id}
             // Only an OPEN terminal drags: the tab is what a pane holds, and a
-            // closed record has none — the same fact that makes it inert below.
+            // closed record has none — the same fact that sends activation to
+            // its saved detail below rather than into a pane.
             drag={
               tabId === undefined
                 ? null
