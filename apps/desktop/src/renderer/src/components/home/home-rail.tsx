@@ -40,7 +40,13 @@ import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { effectiveHarnessId, harnessLabel, venueLooseCount, type Project } from "@volli/shared";
+import {
+  effectiveHarnessId,
+  harnessLabel,
+  modelTierRow,
+  venueLooseCount,
+  type Project,
+} from "@volli/shared";
 
 import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
@@ -284,6 +290,9 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
     return <p className={EMPTY_INLINE}>No session in front</p>;
   }
   const selection = projection?.modelSelection ?? null;
+  // The tier the model resolved from (VC-259), where a start named one; the
+  // same "Fast · haiku-4.5" the composer's pill reads, so the two agree.
+  const tier = projection?.modelTier ?? null;
   const waiting = (projection?.interactions.active.length ?? 0) > 0;
   // `ChatSessionLifecycle` is a subset of the dot's vocabulary by construction
   // (starting/ready/working/error), and `waiting` outranks all of it: an agent
@@ -293,7 +302,12 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
 
   return (
     <dl className="flex flex-col gap-2">
-      <Fact label="Model">{selection?.modelId ?? "—"}</Fact>
+      <Fact label="Model">
+        {tier !== null ? (
+          <span className="text-muted-foreground">{modelTierRow(tier).label} · </span>
+        ) : null}
+        {selection?.modelId ?? "—"}
+      </Fact>
       <Fact label="Effort">{selection?.reasoningLevel ?? "—"}</Fact>
       <Fact label="Activity">
         <span className="flex items-center gap-1">

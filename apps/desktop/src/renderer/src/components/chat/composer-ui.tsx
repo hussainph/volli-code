@@ -138,6 +138,13 @@ export interface SessionComposerProps {
   selection: ComposerModelSelection;
   /** The Session's provider as the catalog names it — see {@link modelPillLabel}. */
   selectionProviderLabel?: string;
+  /**
+   * The tier's label where the Session's model was resolved from a named
+   * tier (VC-259) — "Fast" — and null where it was chosen by exact id. Read
+   * beside the model, never in place of it: the pill's fact is still the
+   * model this Session sends to.
+   */
+  selectionTier?: string | null;
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
   modelChoiceDisabled?: boolean;
@@ -332,6 +339,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   tiers,
   selection,
   selectionProviderLabel,
+  selectionTier = null,
   onSelectionChange,
   modelChoiceDisabled = false,
   working,
@@ -659,6 +667,7 @@ export const SessionComposer = React.memo(function SessionComposer({
               tiers={tiers}
               selection={selection}
               selectionProviderLabel={selectionProviderLabel}
+              selectionTier={selectionTier}
               disabled={modelChoiceDisabled}
               onChange={onSelectionChange}
               open={modelPickerOpen}
@@ -1449,6 +1458,7 @@ export function ModelPill({
   tiers,
   selection,
   selectionProviderLabel,
+  selectionTier = null,
   disabled,
   onChange,
   open: openProp,
@@ -1458,6 +1468,8 @@ export function ModelPill({
   tiers?: readonly ComposerTierRow[];
   selection: ComposerModelSelection;
   selectionProviderLabel?: string;
+  /** The tier the selection resolved from, as its label, or null — see {@link SessionComposerProps}. */
+  selectionTier?: string | null;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
   /** Controlled open, for the caller that opens this list by typing (`/model`). */
@@ -1550,6 +1562,18 @@ export function ModelPill({
               footer wraps instead (see `PromptInputTools` above), so the floor
               is what CHOOSES that break rather than a width that overflows. */}
           <span className="min-w-14 truncate">
+            {/* The tier leads the model where a start named one (VC-259):
+                "Fast · Claude Haiku 4.5". It is a qualifier in the muted ink,
+                in the same "term · name" grammar the provider already uses
+                for an ambiguous name, and it lives inside the one truncating
+                run so the pill stays one fact wide. A model picked by hand
+                after that start carries no tier, because the projection
+                clears it with the pick. */}
+            {selectionTier !== null ? (
+              <span className="text-muted-foreground" data-testid="model-pill-tier">
+                {selectionTier} ·{" "}
+              </span>
+            ) : null}
             {modelPillLabel(models, selection, selectionProviderLabel)}
           </span>
           <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />

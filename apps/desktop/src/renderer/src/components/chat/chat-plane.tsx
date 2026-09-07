@@ -38,6 +38,7 @@ import type {
 import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   errorMessage,
+  modelTierRow,
   offeredComposerVerbs,
   readSkillResources,
   type ComposerVerbMoment,
@@ -282,6 +283,10 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
     session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
+  // The tier the model resolved from (VC-259), as the Settings row names it;
+  // null for the ordinary Session whose model was chosen by exact id.
+  const modelTier = projection?.modelTier ?? null;
+  const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null,
@@ -1126,6 +1131,7 @@ export function ChatPlane({ sessionId, projectId, ticketId, onOpenFile, store }:
               tiers={composerTiers}
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
+              selectionTier={selectionTier}
               onSelectionChange={changeModel}
               modelChoiceDisabled={working}
               working={working}
