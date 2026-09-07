@@ -1,13 +1,67 @@
 /**
- * Streamdown component overrides for session chat markdown.
+ * Streamdown configuration for session chat markdown — the component overrides
+ * and the rehype chain, together.
+ *
  * Resolves images through the app's one image policy, fixes GFM task-list
  * chrome, styles <kbd>, and treats path-like inline code as file mentions.
+ *
+ * BOTH exports here are one decision, which is why they live in one module:
+ * the `img` override cannot judge a source the sanitizer has already deleted,
+ * so a surface that took the components without the plugins would draw the
+ * wrong answer rather than no answer. Both chat Streamdowns — the answer
+ * (`message.tsx`) and the reasoning body (`reasoning.tsx`) — take the pair.
  */
 import * as React from "react";
-import type { Components } from "streamdown";
+import { defaultRehypePlugins, Streamdown, type Components } from "streamdown";
+import { BLOB_URL_SCHEME } from "@volli/shared";
 
 import { MarkdownImage } from "@renderer/components/attachments/markdown-image";
 import { cn } from "@renderer/lib/utils";
+
+/**
+ * Streamdown's own rehype chain, with one protocol added to the sanitizer
+ * (VC-273).
+ *
+ * Streamdown runs `rehype-sanitize` before our `img` component ever sees a
+ * node, and its schema allows `http`/`https` on `src` and nothing else — it
+ * extends `protocols.href` with `tel` and `streamdown` but never touches
+ * `protocols.src`. So a `volli-blob:` image had its `src` deleted upstream, and
+ * `rehype-harden` then reported the srcless node as `[Image blocked]`. Our
+ * override was correct and simply never ran with a source to judge, which is
+ * why the fix had to be here rather than in the component.
+ *
+ * DERIVED from `defaultRehypePlugins` rather than rebuilt: we take whatever
+ * schema Streamdown ships and add to it, so a future release changing its
+ * sanitization is inherited instead of silently overwritten by a stale copy.
+ *
+ * `data` rides along for the same reason it does in the Ticket pipeline, and is
+ * narrowed the same way — the sanitizer admits the scheme, and
+ * `resolveMarkdownImageSrc` in the `img` override still admits only
+ * `data:image/*`.
+ */
+type RehypePlugins = NonNullable<React.ComponentProps<typeof Streamdown>["rehypePlugins"]>;
+
+/** The `src` protocol list inside `rehype-sanitize`'s schema, as much as we read of it. */
+interface SanitizeSchemaLike {
+  protocols?: Record<string, readonly string[] | undefined>;
+}
+
+export const chatRehypePlugins: RehypePlugins = Object.entries(defaultRehypePlugins).map(
+  ([name, pluggable]): RehypePlugins[number] => {
+    if (name !== "sanitize" || !Array.isArray(pluggable)) return pluggable;
+    const [plugin, schema] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
+    return [
+      plugin,
+      {
+        ...schema,
+        protocols: {
+          ...schema.protocols,
+          src: [...(schema.protocols?.["src"] ?? []), BLOB_URL_SCHEME, "data"],
+        },
+      },
+    ] as RehypePlugins[number];
+  },
+);
 
 const FileMentionContext = React.createContext<((path: string) => void) | null>(null);
 

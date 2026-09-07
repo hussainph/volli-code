@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { blobUrl } from "@volli/shared";
 
 import { MessageResponse } from "./message";
+import { ReasoningBody } from "./reasoning";
 
 /*
  * Through `MessageResponse`, not a bare `Streamdown`, because the two do not
@@ -69,6 +70,20 @@ describe("chat markdown overrides", () => {
     const html = render("![shipped pane](/Users/me/shipped.png)");
     expect(html).not.toContain("<img");
     expect(html).toContain("Image unavailable");
+  });
+
+  /*
+   * The reasoning body is the app's OTHER Streamdown, and it took
+   * `chatMarkdownComponents` without the rehype chain they depend on — so the
+   * same picture drew in the answer and reported `[Image blocked]` one block
+   * above it. The two exports now live in one module for this reason; this is
+   * the test that notices if a third surface takes only half of it again.
+   */
+  it("renders an attachment image inside a reasoning body too", () => {
+    const hash = "a".repeat(64);
+    const html = renderToStaticMarkup(<ReasoningBody>{`![shot](${blobUrl(hash)})`}</ReasoningBody>);
+    expect(html).toContain(`src="${blobUrl(hash)}"`);
+    expect(html).not.toContain("Image blocked");
   });
 
   it("still declines a remote image after the sanitizer was widened", () => {

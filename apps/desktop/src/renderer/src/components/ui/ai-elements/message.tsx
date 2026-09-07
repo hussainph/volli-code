@@ -7,10 +7,9 @@ import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { memo, useMemo } from "react";
-import { defaultRehypePlugins, Streamdown } from "streamdown";
-import { BLOB_URL_SCHEME } from "@volli/shared";
+import { Streamdown } from "streamdown";
 
-import { chatMarkdownComponents } from "./chat-markdown";
+import { chatMarkdownComponents, chatRehypePlugins } from "./chat-markdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -52,56 +51,17 @@ export const MessageContent = ({ children, className, ...props }: MessageContent
   </div>
 );
 
-// `plugins` is not a prop here: the fixed set below is the decision to ship
-// code and Mermaid without math, and a caller-supplied map would override it.
-export type MessageResponseProps = Omit<ComponentProps<typeof Streamdown>, "plugins">;
+// Neither `plugins` nor `rehypePlugins` is a prop here: the fixed sets are the
+// decision to ship code and Mermaid without math, and to widen the sanitizer's
+// `src` allowlist to the app's own Blob scheme. Both are set AFTER `{...props}`
+// in the JSX below, so leaving them in this type would advertise a prop that is
+// silently discarded.
+export type MessageResponseProps = Omit<
+  ComponentProps<typeof Streamdown>,
+  "plugins" | "rehypePlugins"
+>;
 
 const streamdownPlugins = { cjk, code, mermaid };
-
-/**
- * Streamdown's own rehype chain, with one protocol added to the sanitizer
- * (VC-273).
- *
- * Streamdown runs `rehype-sanitize` before our `img` component ever sees a
- * node, and its schema allows `http`/`https` on `src` and nothing else — it
- * extends `protocols.href` with `tel` and `streamdown` but never touches
- * `protocols.src`. So a `volli-blob:` image had its `src` deleted upstream, and
- * `rehype-harden` then reported the srcless node as `[Image blocked]`. Our
- * override was correct and simply never ran with a source to judge, which is
- * why the fix had to be here rather than in the component.
- *
- * DERIVED from `defaultRehypePlugins` rather than rebuilt: we take whatever
- * schema Streamdown ships and add to it, so a future release changing its
- * sanitization is inherited instead of silently overwritten by a stale copy.
- *
- * `data` rides along for the same reason it does in the Ticket pipeline, and is
- * narrowed the same way — the sanitizer admits the scheme, and
- * `resolveMarkdownImageSrc` in the `img` override still admits only
- * `data:image/*`.
- */
-type RehypePlugins = NonNullable<ComponentProps<typeof Streamdown>["rehypePlugins"]>;
-
-/** The `src` protocol list inside `rehype-sanitize`'s schema, as much as we read of it. */
-interface SanitizeSchemaLike {
-  protocols?: Record<string, readonly string[] | undefined>;
-}
-
-const rehypePlugins: RehypePlugins = Object.entries(defaultRehypePlugins).map(
-  ([name, pluggable]): RehypePlugins[number] => {
-    if (name !== "sanitize" || !Array.isArray(pluggable)) return pluggable;
-    const [plugin, schema] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
-    return [
-      plugin,
-      {
-        ...schema,
-        protocols: {
-          ...schema.protocols,
-          src: [...(schema.protocols?.["src"] ?? []), BLOB_URL_SCHEME, "data"],
-        },
-      },
-    ] as RehypePlugins[number];
-  },
-);
 
 /**
  * `animated` is not passed, and its absence is the load-bearing part.
@@ -156,7 +116,7 @@ export const MessageResponse = memo(
         {...props}
         className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
         plugins={streamdownPlugins}
-        rehypePlugins={rehypePlugins}
+        rehypePlugins={chatRehypePlugins}
         components={merged}
       />
     );
