@@ -247,13 +247,46 @@ function scroller(): HTMLElement {
   return found;
 }
 
-/** A 300px window over `count` tabs of 100px each, parked at `scrollLeft`. */
-function measureScroller(count: number, scrollLeft = 0): HTMLElement {
-  const element = scroller();
-  let left = scrollLeft;
-  Object.defineProperty(element, "clientWidth", { configurable: true, get: () => 300 });
-  Object.defineProperty(element, "scrollWidth", { configurable: true, get: () => count * 100 });
-  Object.defineProperty(element, "scrollLeft", {
+/** The box the tabs have to fit — the chevrons live inside it. */
+function scrollArea(): HTMLElement {
+  const found = container?.querySelector<HTMLElement>('[data-slot="tab-scroll-area"]');
+  if (found === null || found === undefined) throw new Error("no scroll area");
+  return found;
+}
+
+/** How much width one mounted chevron takes out of the scroller. */
+const AFFORDANCE_WIDTH = 28;
+
+/**
+ * The strip's geometry, INCLUDING the part that made the first attempt wrong:
+ * a chevron takes width out of the scroller, so the scroller's `clientWidth`
+ * has to be a function of how many are mounted right now rather than a fixed
+ * number. Stubbing it as a constant is what let a measurement that fed itself
+ * pass its own tests (VC-288 review).
+ *
+ * The AREA is the box that does not move — 300px of room, chevrons or not — and
+ * `content` is the tabs' own width, which changes when tabs open and close.
+ */
+function layoutStrip(options: { area?: number; content: number; scrollLeft?: number }) {
+  let area = options.area ?? 300;
+  let content = options.content;
+  let left = options.scrollLeft ?? 0;
+  const affordances = (): number =>
+    (container?.querySelectorAll('[data-slot="tab-scroll-affordance"]').length ?? 0) *
+    AFFORDANCE_WIDTH;
+  const port = scroller();
+  Object.defineProperty(scrollArea(), "clientWidth", { configurable: true, get: () => area });
+  Object.defineProperty(port, "clientWidth", {
+    configurable: true,
+    get: () => area - affordances(),
+  });
+  // A scroller's `scrollWidth` never reports less than its own box — the same
+  // floor a browser applies, and the one that made the old rule sticky.
+  Object.defineProperty(port, "scrollWidth", {
+    configurable: true,
+    get: () => Math.max(content, area - affordances()),
+  });
+  Object.defineProperty(port, "scrollLeft", {
     configurable: true,
     get: () => left,
     set: (next: number) => {
@@ -263,13 +296,35 @@ function measureScroller(count: number, scrollLeft = 0): HTMLElement {
   // The gliding path, spelled rather than left to jsdom: whether it implements
   // `scrollTo` is not this test's subject, and the strip prefers it whenever
   // the reader has not asked for reduced motion.
-  Object.defineProperty(element, "scrollTo", {
+  Object.defineProperty(port, "scrollTo", {
     configurable: true,
     value: (options: ScrollToOptions) => {
       left = options.left ?? left;
     },
   });
-  return element;
+  return {
+    port,
+    /** A tab opened or closed. */
+    setContent(next: number): void {
+      content = next;
+    },
+    /** A divider dragged, a rail opened, the window resized. */
+    setArea(next: number): void {
+      area = next;
+    },
+  };
+}
+
+/** A 300px window over `count` tabs of 100px each, parked at `scrollLeft`. */
+function measureScroller(count: number, scrollLeft = 0): HTMLElement {
+  return layoutStrip({ content: count * 100, scrollLeft }).port;
+}
+
+/** Everything a ResizeObserver would have reported, in one go. */
+function resized(): void {
+  act(() => {
+    for (const observer of observers) observer.notify();
+  });
 }
 
 /** A plain strip of `count` tabs, the `active`th one selected. */
@@ -339,8 +394,10 @@ describe("TabStrip overflow", () => {
 
   it("offers a pointer a way to the tabs it cannot see, and only while there are some", () => {
     renderTabs(9, 0);
-    const port = measureScroller(9);
-    act(() => observers[0]?.notify());
+    // 356px of area, so that once the two chevrons have taken 28px each the
+    // scroller is the round 300px window the travel below is reckoned in.
+    const { port } = layoutStrip({ area: 356, content: 900 });
+    resized();
 
     const later = affordance("Later");
     expect(later).not.toBeNull();
@@ -360,6 +417,85 @@ describe("TabStrip overflow", () => {
 
     expect(affordance("Earlier")).toBeNull();
     expect(affordance("Later")).toBeNull();
+  });
+
+  /* THE TRANSITIONS, which is where the first attempt was wrong (VC-288
+     review). Every case above constructs a strip that already overflows or
+     already fits; what a person actually does is close a tab, widen a pane and
+     select something — and the affordances were measured against the very box
+     they shrink, so the strip could neither shed them nor keep its selected tab
+     in view once they had mounted. */
+
+  it("sheds the affordances when the tabs it has left fit again", () => {
+    renderTabs(9, 0);
+    const strip = layoutStrip({ content: 900 });
+    resized();
+    expect(affordance("Later")).not.toBeNull();
+
+    // Six tabs closed: 250px of tabs in a 300px area. They fit — but they do
+    // NOT fit the 244px the two mounted chevrons had left of the scroller, so a
+    // strip measuring itself would keep both of them for ever, over a strip
+    // with nothing out of view.
+    renderTabs(3, 0);
+    strip.setContent(250);
+    resized();
+
+    expect(affordance("Earlier")).toBeNull();
+    expect(affordance("Later")).toBeNull();
+  });
+
+  it("sheds them when the pane widens under the same tabs", () => {
+    renderTabs(9, 0);
+    const strip = layoutStrip({ content: 900 });
+    resized();
+    expect(affordance("Later")).not.toBeNull();
+
+    // A divider dragged, a rail closed: the window never changed, and only the
+    // pane's own observer hears it.
+    strip.setArea(1000);
+    resized();
+
+    expect(affordance("Later")).toBeNull();
+  });
+
+  it("keeps the selected tab in view when the affordances mount over it", () => {
+    renderTabs(9, 0);
+    const strip = layoutStrip({ content: 900 });
+    // The selection lands on the last tab. The reveal that runs with it sees
+    // the whole 300px area: the chevrons do not exist yet, because nothing has
+    // measured the strip.
+    renderTabs(9, 8);
+    expect(strip.port.scrollLeft).toBe(600);
+
+    resized();
+
+    // Now they do, and the last tab is under one of them. 900 - 244 is the
+    // furthest this scroller travels, and the tab's right edge asks for all of
+    // it — without the second look, the tab a person just selected sits behind
+    // the control that appeared to help them reach it.
+    expect(affordance("Later")).not.toBeNull();
+    expect(strip.port.scrollLeft).toBe(656);
+  });
+
+  it("follows the keyboard's tab through a resize, not just the selected one", () => {
+    renderTabs(9, 0);
+    const strip = layoutStrip({ area: 1000, content: 900 });
+    resized();
+    // Everything fits at 1000px, so there is nothing to reach and nothing has
+    // moved. Focus walks to the last tab all the same.
+    const tabs = tabsInStrip();
+    act(() => tabs[8]?.focus());
+    expect(strip.port.scrollLeft).toBe(0);
+
+    // The pane is halved. The SELECTED tab is the first one and is already in
+    // view; the tab under the keyboard is the eighth and is now far out of it.
+    strip.setArea(400);
+    resized();
+
+    expect(document.activeElement).toBe(tabs[8]);
+    // 900 - (400 - 56) is the end of this scroller's travel, which is where the
+    // last tab's right edge and its inset land.
+    expect(strip.port.scrollLeft).toBe(556);
   });
 
   it("keeps the affordances out of the tablist they scroll", () => {

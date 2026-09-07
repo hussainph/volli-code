@@ -193,6 +193,28 @@ function revealTab(tab: HTMLElement, smooth: boolean): void {
 }
 
 /**
+ * Reveal the tab this strip is currently ABOUT — after something moved that is
+ * neither a selection nor a focus (VC-288 review).
+ *
+ * The keyboard's tab wins over the selected one: if focus is inside this strip
+ * then that is the tab a person is working with, and the two differ for the
+ * whole of a walk along the strip with the arrow keys.
+ *
+ * Never smooth. This is called from a resize — the chevrons mounting, a divider
+ * drag, a rail opening — where the layout has already jumped, and a 300ms glide
+ * chasing a drag that is still moving reads as the strip lagging the pointer.
+ */
+function revealCurrentTab(scroller: HTMLElement): void {
+  const focused = document.activeElement;
+  const focusedTab =
+    focused instanceof HTMLElement && scroller.contains(focused)
+      ? focused.closest<HTMLElement>('[role="tab"]')
+      : null;
+  const tab = focusedTab ?? scroller.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (tab !== null) revealTab(tab, false);
+}
+
+/**
  * Write a scroll position, gliding where the platform can and the reader has
  * not asked it not to.
  *
@@ -282,6 +304,10 @@ export function TabStrip({
   // A surface above us already owns the gesture — see TabStripSurfaceContext.
   const inSurface = React.useContext(TabStripSurfaceContext);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
+  // The box the tabs have to fit, chevrons or no chevrons. Measured instead of
+  // the scroller because the scroller's width is something the chevrons change
+  // — see {@link TabOverflowMeasure}.
+  const areaRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -301,10 +327,10 @@ export function TabStrip({
   // WHAT IS OUT OF VIEW, AND WHICH WAY (VC-288). Three things move this and
   // only one of them is a scroll: the strip itself resizing (a split, a rail
   // opening, the window), its CONTENT resizing (a tab opened or closed), and
-  // the person travelling. The observer watches both boxes for that reason —
-  // a strip that only measured itself would keep offering a chevron to a tab
-  // that had since been closed — and it is also why the subscription does not
-  // follow `children`: the tablist's own box IS that fact, and a strip whose
+  // the person travelling. The observer watches all three boxes for that
+  // reason — a strip that only measured itself would keep offering a chevron to
+  // a tab that had since been closed — and it is also why the subscription does
+  // not follow `children`: the tablist's own box IS that fact, and a strip whose
   // tabs are composed from scratch on every render (both of them are, and both
   // re-render on every streamed chat token — see {@link useSteadyIds}) would
   // otherwise tear the observer and the listener down and build them again
@@ -312,7 +338,8 @@ export function TabStrip({
   const [overflow, setOverflow] = React.useState<TabOverflow>(NO_TAB_OVERFLOW);
   React.useEffect(() => {
     const scroller = scrollerRef.current;
-    if (scroller === null) return;
+    const area = areaRef.current;
+    if (scroller === null || area === null) return;
     // Same measurement in, same object out. This runs on every scroll event of
     // a travel — animation-frame rate for the whole of a Shift+wheel — and a
     // fresh object each time is a fresh state value, so every tab in the strip
@@ -320,20 +347,36 @@ export function TabStrip({
     // `sidebar/sidebar-scroll.tsx` bails on its own edge state for exactly this.
     const measure = (): void =>
       setOverflow((current) => {
-        const next = tabOverflow(scroller);
+        const next = tabOverflow({
+          areaWidth: area.clientWidth,
+          clientWidth: scroller.clientWidth,
+          scrollWidth: scroller.scrollWidth,
+          scrollLeft: scroller.scrollLeft,
+        });
         return current.overflowing === next.overflowing &&
           current.atStart === next.atStart &&
           current.atEnd === next.atEnd
           ? current
           : next;
       });
+    // A RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters was put in
+    // view against the width the strip had at the time; the chevrons mounting,
+    // a divider drag, a rail opening and a tab closing all hand it a different
+    // one, and none of them is a selection or a focus, so nothing else in this
+    // file would look again. Not on `scroll`, which is a person travelling and
+    // must never be argued with.
+    const remeasure = (): void => {
+      measure();
+      revealCurrentTab(scroller);
+    };
     measure();
     scroller.addEventListener("scroll", measure, { passive: true });
     // Guarded because jsdom ships no `ResizeObserver`, and half the surfaces in
     // this app draw a strip: a component that threw on mount without one would
     // make all of them untestable to buy nothing. Measured once either way, so
     // a strip in that environment still knows whether it overflows at mount.
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
+    observer?.observe(area);
     observer?.observe(scroller);
     const tablist = scroller.firstElementChild;
     if (tablist !== null) observer?.observe(tablist);
@@ -342,6 +385,18 @@ export function TabStrip({
       scroller.removeEventListener("scroll", measure);
     };
   }, []);
+
+  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288 review). Mounting two
+  // 24px controls at the ends of the strip takes that width out of the
+  // scroller, which can put the tab that was just revealed back under one of
+  // them. A browser reports that as a second `ResizeObserver` callback and the
+  // effect above would catch it — but only a frame later and only where an
+  // observer exists at all, so the strip says it here, in the commit that
+  // changed the layout, rather than waiting to be told about its own edit.
+  React.useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller !== null) revealCurrentTab(scroller);
+  }, [overflow.overflowing]);
 
   // The motion preference is read at the press rather than during the render
   // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
@@ -370,57 +425,69 @@ export function TabStrip({
       )}
       {...props}
     >
-      {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
-          gesture was Shift+wheel and nothing else: a convention a mouse user has
-          to already know, on a strip whose scrollbar is deliberately hidden.
-          The keyboard's way is the arrows it always had — what VC-288 added
-          there is that focus now drags the strip along with it.
-
-          Both ends stay mounted while the strip overflows, with the arrived one
-          disabled rather than removed: a chevron that vanishes at the end of a
-          travel re-lays the tabs out under the pointer that was pressing it. */}
-      {overflow.overflowing ? (
-        <TabScrollAffordance
-          towards="prev"
-          folder={folder}
-          disabled={overflow.atStart}
-          onTravel={() => travel("prev")}
-        />
-      ) : null}
+      {/* THE ROOM THE TABS HAVE, and the one box in here whose width does not
+          answer to what is drawn inside it. `flex-1 min-w-0` against the actions
+          cluster beside it means this is the strip's width minus that cluster,
+          full stop — a chevron mounting cannot change it, which is what lets the
+          chevrons be decided from it without deciding themselves (VC-288
+          review, `tabOverflow`). */}
       <div
-        ref={scrollerRef}
-        data-slot="tab-scroll"
-        className={cn(
-          "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          folder ? "items-end px-2" : "items-center",
-        )}
+        ref={areaRef}
+        data-slot="tab-scroll-area"
+        className={cn("flex min-w-0 flex-1", folder ? "items-end" : "items-center gap-1")}
       >
+        {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
+            gesture was Shift+wheel and nothing else: a convention a mouse user
+            has to already know, on a strip whose scrollbar is deliberately
+            hidden. The keyboard's way is the arrows it always had — what VC-288
+            added there is that focus now drags the strip along with it.
+
+            Both ends stay mounted while the strip overflows, with the arrived
+            one disabled rather than removed: a chevron that vanishes at the end
+            of a travel re-lays the tabs out under the pointer pressing it. */}
+        {overflow.overflowing ? (
+          <TabScrollAffordance
+            towards="prev"
+            folder={folder}
+            disabled={overflow.atStart}
+            onTravel={() => travel("prev")}
+          />
+        ) : null}
         <div
-          role="tablist"
-          aria-label={label}
-          aria-orientation="horizontal"
-          className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+          ref={scrollerRef}
+          data-slot="tab-scroll"
+          className={cn(
+            "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            folder ? "items-end px-2" : "items-center",
+          )}
         >
-          <TabVariantContext.Provider value={variant}>
-            {reorder === undefined ? (
-              children
-            ) : (
-              // Inside the tablist, where the tabs are; the sensors and the
-              // DndContext sit outside it (below) so dnd-kit's two hidden
-              // announcement nodes are not children of a `role="tablist"`.
-              <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
-            )}
-          </TabVariantContext.Provider>
+          <div
+            role="tablist"
+            aria-label={label}
+            aria-orientation="horizontal"
+            className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+          >
+            <TabVariantContext.Provider value={variant}>
+              {reorder === undefined ? (
+                children
+              ) : (
+                // Inside the tablist, where the tabs are; the sensors and the
+                // DndContext sit outside it (below) so dnd-kit's two hidden
+                // announcement nodes are not children of a `role="tablist"`.
+                <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+              )}
+            </TabVariantContext.Provider>
+          </div>
         </div>
+        {overflow.overflowing ? (
+          <TabScrollAffordance
+            towards="next"
+            folder={folder}
+            disabled={overflow.atEnd}
+            onTravel={() => travel("next")}
+          />
+        ) : null}
       </div>
-      {overflow.overflowing ? (
-        <TabScrollAffordance
-          towards="next"
-          folder={folder}
-          disabled={overflow.atEnd}
-          onTravel={() => travel("next")}
-        />
-      ) : null}
       {actions !== undefined ? (
         // The divider is half the separation; vertical alignment is the rest.
         // Tabs sit on the strip's bottom edge because they fuse with the plane
@@ -482,7 +549,10 @@ function TabScrollAffordance({
       onClick={onTravel}
       // A folder strip's tabs stand on its bottom edge; a control that spanned
       // the band would read as one of them, so it sits on the same baseline.
-      className={cn("shrink-0", folder ? "mb-0.5 self-end" : "self-center")}
+      // Flush against that edge rather than lifted off it: `mb-0.5` was 2px
+      // from nowhere on `docs/DESIGN.md`'s ladder, and the next rung up (4px)
+      // would float the caret above the tabs it belongs to.
+      className={cn("shrink-0", folder ? "self-end" : "self-center")}
     >
       {/* `bold` is the ≤12px tier (CLAUDE.md): a caret at this size draws
           lighter than the tab labels beside it at regular. */}

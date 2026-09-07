@@ -136,7 +136,9 @@ describe("tabScrollLeftFor", () => {
 
 describe("tabOverflow", () => {
   it("says a short strip has nothing to reach", () => {
-    expect(tabOverflow({ clientWidth: 300, scrollWidth: 300, scrollLeft: 0 })).toEqual({
+    expect(
+      tabOverflow({ areaWidth: 300, clientWidth: 300, scrollWidth: 300, scrollLeft: 0 }),
+    ).toEqual({
       overflowing: false,
       atStart: true,
       atEnd: true,
@@ -144,7 +146,7 @@ describe("tabOverflow", () => {
   });
 
   it("names which end is out of view, so only the live affordance is drawn", () => {
-    const port = { clientWidth: 300, scrollWidth: 900, scrollLeft: 0 };
+    const port = { areaWidth: 300, clientWidth: 300, scrollWidth: 900, scrollLeft: 0 };
     expect(tabOverflow(port)).toEqual({ overflowing: true, atStart: true, atEnd: false });
     expect(tabOverflow({ ...port, scrollLeft: 300 })).toEqual({
       overflowing: true,
@@ -162,8 +164,41 @@ describe("tabOverflow", () => {
     // Browsers hand back fractional scroll offsets at fractional zoom levels
     // (125%, 150% — exactly the ones this ticket is about), so an exact
     // comparison leaves a chevron lit that scrolls nowhere.
-    expect(tabOverflow({ clientWidth: 300, scrollWidth: 900, scrollLeft: 599.6 }).atEnd).toBe(true);
-    expect(tabOverflow({ clientWidth: 300, scrollWidth: 900, scrollLeft: 0.4 }).atStart).toBe(true);
+    const port = { areaWidth: 300, clientWidth: 300, scrollWidth: 900 };
+    expect(tabOverflow({ ...port, scrollLeft: 599.6 }).atEnd).toBe(true);
+    expect(tabOverflow({ ...port, scrollLeft: 0.4 }).atStart).toBe(true);
+  });
+
+  /* THE FEEDBACK LOOP THIS FUNCTION EXISTS TO NOT HAVE (VC-288 review). The
+     affordances mount inside the strip and take width from the scroller, so a
+     rule measured against the SCROLLER is a rule whose own answer changed the
+     quantity it read. `areaWidth` — the box that holds the scroller and both
+     chevrons — is the same number either way, which is what makes the two
+     cases below decidable at all. */
+  it("asks whether the tabs fit the AREA, not the scroller the chevrons shrank", () => {
+    // 250px of tabs in a 300px area, with both chevrons currently mounted and
+    // therefore a 244px scroller. Measured against the scroller this strip
+    // overflows and keeps the chevrons that made it overflow — for ever.
+    expect(
+      tabOverflow({ areaWidth: 300, clientWidth: 244, scrollWidth: 250, scrollLeft: 0 })
+        .overflowing,
+    ).toBe(false);
+  });
+
+  it("still overflows when the tabs are wider than the area itself", () => {
+    expect(
+      tabOverflow({ areaWidth: 300, clientWidth: 244, scrollWidth: 900, scrollLeft: 0 })
+        .overflowing,
+    ).toBe(true);
+  });
+
+  it("reads travel from the scroller, which is the box that actually scrolls", () => {
+    // The ends belong to the shrunken scroller: with the chevrons mounted the
+    // furthest reachable offset is 900 - 244, and an affordance that disabled
+    // itself at 600 would strand the last tab.
+    const port = { areaWidth: 300, clientWidth: 244, scrollWidth: 900 };
+    expect(tabOverflow({ ...port, scrollLeft: 600 }).atEnd).toBe(false);
+    expect(tabOverflow({ ...port, scrollLeft: 656 }).atEnd).toBe(true);
   });
 });
 

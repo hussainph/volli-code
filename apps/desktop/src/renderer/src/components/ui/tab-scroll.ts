@@ -101,15 +101,43 @@ export interface TabOverflow {
 }
 
 /**
+ * The two boxes an overflow reading is taken from.
+ *
+ * `areaWidth` IS THE POINT, and it is here because of a feedback loop. The edge
+ * affordances mount inside the strip and take their width out of the scroller,
+ * so `scrollWidth > clientWidth` was a rule asking whether the tabs overflow a
+ * box its own answer had just made ~56px smaller. Two failures fell out of that
+ * and neither could be seen in a freshly-constructed state:
+ *
+ *  - a strip could never SHED the chevrons. Close a tab, widen the pane, and
+ *    tabs that fitted the strip still did not fit the scroller the chevrons had
+ *    shrunk, so the measurement kept them alive to keep itself true.
+ *  - the selected tab could be RE-CLIPPED by them. The reveal ran against the
+ *    full width, then two 24px controls mounted over the ends of that width.
+ *
+ * The area is the strip's own `flex-1` box: it holds the scroller and both
+ * chevrons, and its width does not move when they come and go. Deciding
+ * existence from a quantity the decision cannot change is the whole fix.
+ */
+export interface TabOverflowMeasure extends TabScrollport {
+  /** The room the tabs have when the strip draws no affordance at all. */
+  readonly areaWidth: number;
+}
+
+/**
  * What the edge affordances are drawn from: a strip that fits offers none, and
  * an end already in view offers no way to travel further into it.
+ *
+ * Overflow is measured against the AREA (see {@link TabOverflowMeasure}); the
+ * two ends are measured against the SCROLLER, because that is the box that
+ * actually travels and its end moves when a chevron takes width from it.
  */
-export function tabOverflow(scrollport: TabScrollport): TabOverflow {
-  const max = scrollport.scrollWidth - scrollport.clientWidth;
+export function tabOverflow(measure: TabOverflowMeasure): TabOverflow {
+  const max = measure.scrollWidth - measure.clientWidth;
   return {
-    overflowing: max > SCROLL_EPSILON,
-    atStart: scrollport.scrollLeft <= SCROLL_EPSILON,
-    atEnd: scrollport.scrollLeft >= max - SCROLL_EPSILON,
+    overflowing: measure.scrollWidth - measure.areaWidth > SCROLL_EPSILON,
+    atStart: measure.scrollLeft <= SCROLL_EPSILON,
+    atEnd: measure.scrollLeft >= max - SCROLL_EPSILON,
   };
 }
 
