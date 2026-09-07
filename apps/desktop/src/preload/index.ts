@@ -225,6 +225,8 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
   WorktreeOrphansResult,
@@ -1087,12 +1089,20 @@ const api = {
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**
-     * The launch's cached orphan report — the destructive sweep runs once per
-     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
-     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     * The launch's cached orphan SCAN — read-only in every shape (VC-284), so
+     * calling it costs a walk and never a deletion. Pass `{ refresh: true }`
+     * for the Storage pane's Scan, which asks git again.
      */
     orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
       invoke("volli:worktree-orphans", opts ?? {}),
+    /**
+     * The confirmed cleanup: the exact directories to remove and the exact
+     * projects whose stale git metadata to prune, both taken from a scan the
+     * user just confirmed. Main re-checks every target immediately before it
+     * acts and answers with the durable run record.
+     */
+    cleanupOrphans: (input: WorktreeOrphanCleanupInput): Promise<WorktreeOrphanCleanupResult> =>
+      invoke("volli:worktree-orphan-cleanup", input),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       invoke("volli:worktree-orphan-delete", { path }),

@@ -120,7 +120,7 @@ describe("isWorktreeDirty", () => {
       worktreePath: wt,
       branch: "b",
       baseBranch: "main",
-      worktreeEntries: [{ path: wt, branch: "b", locked: true, bare: false }],
+      worktreeEntries: [{ path: wt, branch: "b", locked: true, bare: false, prunable: null }],
     });
     expect(result.dirty).toBe(true);
     expect(result.reason).toMatch(/locked/);

@@ -93,6 +93,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Every member is a non-empty string — the shape a list of paths or ids has to have. */
+function isNonEmptyStringList(value: readonly unknown[]): value is string[] {
+  return value.every((entry) => typeof entry === "string" && entry.length > 0);
+}
+
 /**
  * Whether `value` is a well-formed harness id — a built-in, or a slug a
  * manifest could legally be registered under.
@@ -839,17 +844,33 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   },
   "volli:worktree-orphans": {
     // `opts` is optional on the wire (the existing desktop test suite invokes
-    // this with no argument at all) — both `[]` and `[{ rescan? }]` are valid;
-    // only a present-but-non-boolean `rescan`, or a non-object first arg, rejects.
+    // this with no argument at all) — both `[]` and `[{ refresh? }]` are valid;
+    // only a present-but-non-boolean `refresh`, or a non-object first arg, rejects.
     guard: (args): args is IpcArgs<"volli:worktree-orphans"> => {
       if (args.length === 0) return true;
       if (args.length !== 1) return false;
       const [input] = args;
       return (
-        isRecord(input) && (input["rescan"] === undefined || typeof input["rescan"] === "boolean")
+        isRecord(input) && (input["refresh"] === undefined || typeof input["refresh"] === "boolean")
       );
     },
     invalidError: "Invalid request",
+  },
+  "volli:worktree-orphan-cleanup": {
+    // Two arrays of strings, and at least one thing to do between them: an
+    // empty request would open a cleanup record for a run that changes nothing.
+    // Paths are re-validated against this database's own containers in main —
+    // this guard only says the SHAPE is a cleanup request.
+    guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      const { paths, projectIds } = input;
+      if (!Array.isArray(paths) || !Array.isArray(projectIds)) return false;
+      if (!isNonEmptyStringList(paths) || !isNonEmptyStringList(projectIds)) return false;
+      return paths.length + projectIds.length > 0;
+    },
+    invalidError: "Invalid cleanup request",
   },
   "volli:worktree-orphan-delete": {
     guard: (args): args is IpcArgs<"volli:worktree-orphan-delete"> => {

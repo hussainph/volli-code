@@ -10,7 +10,25 @@ export type { EnsureOutcome } from "./ensure";
 export { remove } from "./remove";
 export type { WorktreeRemoveOptions } from "./remove";
 export { listBranches } from "./state";
-export { sweepOrphans } from "./sweep";
+
+// Orphan worktrees (VC-284): the READ-ONLY scan, and the separate confirmed
+// cleanup with its durable record. Two verbs, never one — inspection may not
+// remove anything, and removal may only act on what a person confirmed.
+export { scanOrphans, readOnlyGit, KEPT_RECENT, KEPT_UNKNOWN_AGE } from "./scan";
+export type { OrphanScanReport } from "./scan";
+export { cleanupOrphans, preservationRules } from "./cleanup";
+export type { OrphanCleanupDeps, OrphanCleanupRequest } from "./cleanup";
+export {
+  CLEANUP_RUNS_KEY,
+  MAX_CLEANUP_RUNS,
+  readCleanupRuns,
+  reconcileInterruptedCleanupRuns,
+} from "./cleanup-log";
+
+// Live work inside a directory — the guard every destructive worktree path
+// asks, shared so the automatic and manual routes cannot answer it differently.
+export { busyRefusal, busySiteWithin } from "./activity";
+export type { BusyWorktreeSite, BusyWorktreeSites } from "./activity";
 
 // What the structured runtime has open inside a worktree: the directory-scoped
 // busy question the destructive guards ask, and the release the destroy runs so
@@ -169,7 +187,6 @@ export type {
   WorktreeDeps,
   WorktreePhase,
   WorktreeResult,
-  SweepReport,
   WorktreeIdentity,
   RunGit,
   RunGitAsync,

@@ -157,13 +157,22 @@ export interface WorktreeListEntry {
   locked: boolean;
   /** The main working tree (the first, non-linked entry). */
   bare: boolean;
+  /**
+   * Git's own reason this ADMIN RECORD is stale (`prunable <reason>`), or
+   * `null`. It is what `git worktree prune` acts on, and reading it here is
+   * what lets the scan name a pending metadata change without running prune at
+   * all — `prune --dry-run` reports on stderr, which this runner only captures
+   * on failure, so the listing is the only read-only source for it.
+   */
+  prunable: string | null;
 }
 
 /**
  * Parses `git worktree list --porcelain` into entries. Blocks are separated by
  * blank lines; within a block, `worktree <path>` opens it, `branch
- * refs/heads/<name>` names the checkout (absent/`detached` → `null`), and a
- * bare `locked`/`locked <reason>` line marks a lock.
+ * refs/heads/<name>` names the checkout (absent/`detached` → `null`), a bare
+ * `locked`/`locked <reason>` line marks a lock, and `prunable <reason>` marks a
+ * record whose directory git can no longer find.
  */
 export function parseWorktreeList(porcelain: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];
@@ -172,7 +181,13 @@ export function parseWorktreeList(porcelain: string): WorktreeListEntry[] {
     const line = rawLine.replace(/\r$/, "");
     if (line.startsWith("worktree ")) {
       if (current) entries.push(current);
-      current = { path: line.slice("worktree ".length), branch: null, locked: false, bare: false };
+      current = {
+        path: line.slice("worktree ".length),
+        branch: null,
+        locked: false,
+        bare: false,
+        prunable: null,
+      };
       continue;
     }
     if (!current) continue;
@@ -180,6 +195,8 @@ export function parseWorktreeList(porcelain: string): WorktreeListEntry[] {
       current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
     } else if (line === "locked" || line.startsWith("locked ")) {
       current.locked = true;
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      current.prunable = line.slice("prunable".length).trim() || "stale worktree record";
     } else if (line === "bare") {
       current.bare = true;
     }

@@ -110,6 +110,8 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteInput,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
@@ -167,15 +169,20 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
-import { orphanReport } from "./orphan-sweep";
+import { invalidateOrphanScan, orphanScanReport } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
   type AgentSiteReleaseReport,
   archiveAndClean,
+  busyRefusal,
+  busySiteWithin,
+  type BusyWorktreeSite,
+  cleanupOrphans,
   commitTicketRemaining,
   ensure,
   getRetentionTtlDays,
   listBranches,
+  readCleanupRuns,
   publishTicketBranch,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -244,52 +251,12 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   return { projects, ticketsByProject, labelsByProject, appState };
 }
 
-/**
- * A directory something is doing work in right now, and which surface is doing
- * it. The surface travels with the directory because the refusal has to name an
- * action the user can actually reach, and stopping an agent and closing a
- * terminal are different doors.
- */
-export interface BusyWorktreeSite {
-  directory: string;
-  surface: "terminal" | "agent";
-}
-
-/**
- * The busy site sitting at or under `target`, or `null`. `isInside`
- * canonicalizes both operands, so a terminal running inside a worktree — or an
- * agent mid-turn in it — blocks a remove/orphan-delete that would pull the
- * directory out from under it.
- *
- * The supplier is already asked about one target, so this is a second filter
- * over an answer that should already be scoped: it is what makes the guard
- * independent of how carefully the supplier reads `target`, and terminals in
- * particular are reported unscoped because a live PTY holds its cwd whatever it
- * is doing.
- */
-function busySiteWithin(
-  target: string,
-  sites: readonly BusyWorktreeSite[],
-): BusyWorktreeSite | null {
-  return sites.find((site) => isInsideWorktreeHome(target, site.directory)) ?? null;
-}
-
-/**
- * Why a destructive worktree action was refused: one line, and one recovery the
- * user can reach from where they are. It never names the act it refused — every
- * caller already frames that ("Couldn't remove worktree: …") — so this says only
- * what is in the way and what clears it.
- *
- * It used to say "Close the live sessions running in this worktree", which named
- * an action that does not exist for a chat: there is no close, and the Session
- * it was talking about was routinely one nobody had ever sent a message to. A
- * chat is stopped (the composer's Stop, or Esc); a terminal is closed.
- */
-function busyRefusal(site: BusyWorktreeSite): string {
-  return site.surface === "agent"
-    ? "An agent is still running in this worktree. Stop it first."
-    : "A terminal is still running in this worktree. Close it first.";
-}
+// `BusyWorktreeSite`, `busySiteWithin` and `busyRefusal` moved into the worktree
+// module (`worktree/activity.ts`) when VC-284 gave the orphan cleanup the same
+// activity protection this file's manual Delete always had: one definition of
+// "something is running in there", asked by every destructive route. The type is
+// re-exported here because index.ts builds the supplier against it.
+export type { BusyWorktreeSite };
 
 /*
  * The renderer's Session listing rows are built by `session-control/listing-row.ts`,
@@ -1230,19 +1197,49 @@ export function registerDataIpcHandlers(
     "volli:worktree-orphans": async (
       opts?: WorktreeOrphansInput,
     ): Promise<WorktreeOrphansResult> => {
-      // The startup sweep is DESTRUCTIVE and runs once per launch (index.ts
-      // kicks it off after first paint); this returns that cached report so a
-      // renderer reload never re-sweeps and races the launch sweep. Only an
-      // explicit Settings → Worktrees rescan (`{ rescan: true }`) re-sweeps.
-      const rescan = opts?.rescan === true;
-      const report = await orphanReport(worktreeDeps(db), { rescan });
+      // READ-ONLY in every shape (VC-284). The launch scan is cached so a
+      // renderer reload doesn't re-walk every project, and `{ refresh: true }`
+      // — the Storage pane's Scan — simply asks again. Nothing here removes a
+      // directory or prunes git metadata; that is `worktree-orphan-cleanup`.
+      const refresh = opts?.refresh === true;
+      const report = await orphanScanReport(worktreeDeps(db), { refresh });
       return {
         ok: true,
-        pruned: report.pruned,
-        removedClean: report.removedClean,
+        scannedAt: report.scannedAt,
+        retentionDays: report.retentionDays,
+        prunable: report.prunable,
+        removable: report.removable,
         keptRecent: report.keptRecent,
         dirty: report.dirty,
+        // The durable history, so Storage can say who removed a directory and
+        // when — and show a run the app never finished.
+        runs: readCleanupRuns(db),
       };
+    },
+
+    "volli:worktree-orphan-cleanup": async (
+      input: WorktreeOrphanCleanupInput,
+    ): Promise<WorktreeOrphanCleanupResult> => {
+      // The confirmed half. Everything the renderer sends was read off a scan
+      // and shown in a confirmation; `cleanupOrphans` still re-checks ownership,
+      // the ticket link, dirtiness, age, and live work for each path
+      // immediately before it touches anything, and records every outcome.
+      const run = await cleanupOrphans(
+        {
+          worktree: worktreeDeps(db),
+          busyWorktreeSites: options.busyWorktreeSites,
+          releaseAgentSites: options.releaseAgentSites,
+        },
+        { paths: input.paths, projectIds: input.projectIds, source: "settings" },
+      );
+      // The cached scan describes a world that no longer exists.
+      invalidateOrphanScan();
+      // Orphans are by definition unlinked from any live ticket, so there is no
+      // ticket to target — untargeted (everyone re-hydrates).
+      if (run.items.some((item) => item.status === "completed")) {
+        broadcastDataChanged({ kind: "worktree" });
+      }
+      return { ok: true, run };
     },
 
     "volli:worktree-orphan-delete": async (
@@ -1289,6 +1286,8 @@ export function registerDataIpcHandlers(
       // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
       await options.releaseAgentSites?.(target);
       await rm(target, { recursive: true, force: true });
+      // The cached scan still lists this directory; the next read must not.
+      invalidateOrphanScan();
       // A dirty orphan left the board's attention list. An orphan is by
       // definition unlinked from any live ticket, so there's no ticket to
       // target — untargeted (everyone re-hydrates).

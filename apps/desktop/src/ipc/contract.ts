@@ -439,9 +439,24 @@ export interface WorktreeCommitInput {
   includeUnstaged?: boolean;
 }
 
-/** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
+/**
+ * `{ refresh: true }` re-runs the READ-ONLY orphan scan (the Storage pane's
+ * Scan); omitted/`false` returns the launch's cached scan. Neither shape
+ * changes anything on disk — cleanup is its own confirmed channel (VC-284).
+ */
 export interface WorktreeOrphansInput {
-  rescan?: boolean;
+  refresh?: boolean;
+}
+
+/**
+ * `{ paths, projectIds }` — the Storage pane's confirmed cleanup: the exact
+ * worktree directories to remove and the exact projects whose stale git
+ * metadata to prune, both taken from a completed scan and both re-checked in
+ * main immediately before anything is touched.
+ */
+export interface WorktreeOrphanCleanupInput {
+  paths: string[];
+  projectIds: string[];
 }
 
 /** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
@@ -728,15 +743,20 @@ export interface VolliDataIpcContract {
   /** A project's local branch names, for the base-branch picker. */
   "volli:worktree-branches": { args: [input: ProjectIdInput]; result: WorktreeBranchesResult };
   /**
-   * The launch's cached orphan report — the destructive sweep runs once per
-   * launch (main), so this never re-sweeps. `{ rescan: true }` forces the
-   * explicit Settings → Worktrees rescan. `opts` is optional on the wire (the
-   * existing test suite invokes this with no argument at all) — the preload
-   * always sends `opts ?? {}`, so both `[]` and `[{ rescan? }]` are live.
+   * The launch's cached orphan SCAN — read-only in every shape (VC-284), so a
+   * renderer reload costs nothing and changes nothing. `{ refresh: true }` runs
+   * the scan again. `opts` is optional on the wire (the existing test suite
+   * invokes this with no argument at all) — the preload always sends `opts ??
+   * {}`, so both `[]` and `[{ refresh? }]` are live.
    */
   "volli:worktree-orphans": {
     args: [opts?: WorktreeOrphansInput];
     result: WorktreeOrphansResult;
+  };
+  /** The confirmed, destructive cleanup of scanned orphans; main re-checks every target first. */
+  "volli:worktree-orphan-cleanup": {
+    args: [input: WorktreeOrphanCleanupInput];
+    result: WorktreeOrphanCleanupResult;
   };
   /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
   "volli:worktree-orphan-delete": {
@@ -3045,7 +3065,7 @@ export interface WorktreeBranchListing {
 /** A project's branch refs — returned by `volli:worktree-branches` for the base-branch pickers. */
 export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
-/** One orphan the sweep refused to remove, for the Settings → Worktrees list. */
+/** One orphan the scan refuses to propose for cleanup, for the Storage list. */
 export interface DirtyWorktreeOrphan {
   path: string;
   projectId?: string;
@@ -3053,24 +3073,27 @@ export interface DirtyWorktreeOrphan {
 }
 
 /**
- * One orphan the sweep DID delete (VC-113). It names the branch the deletion
- * kept, so the Settings list can say what was taken and what survived it — a
- * removal nobody can audit is indistinguishable from work going missing.
+ * One clean, stale orphan a CLEANUP would remove (VC-284). The scan only names
+ * it: every field here is what the confirmation has to show before anything is
+ * touched — which directory, whose project, and the branch that survives it.
  */
-export interface RemovedWorktreeOrphan {
+export interface RemovableWorktreeOrphan {
   path: string;
-  /** The project whose container held it — every sweep tier knows this, so the type says so. */
+  /** The project whose container held it — every scan tier knows this, so the type says so. */
   projectId: string;
-  /** The branch the directory was on; retained in git, so nothing committed is lost. */
+  /** The branch the directory is on; retained by the removal, so nothing committed is lost. */
   branch: string | null;
   /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
   lastTouchedAt: number | null;
+  /** Epoch ms it became eligible — the basis Storage shows for the verdict. */
+  removableAt: number | null;
 }
 
 /**
- * One clean orphan the sweep SPARED because it is still inside the retention
- * window (VC-113). `removableAt` is when it becomes eligible, so the list can
- * say "in 9 days" instead of leaving the user to guess whether it is safe.
+ * One clean orphan the scan KEEPS because it is still inside the retention
+ * window, or because its age can't be read at all (VC-113). `removableAt` is
+ * when it becomes eligible, so the list can say "in 9 days" instead of leaving
+ * the user to guess whether it is safe.
  */
 export interface KeptWorktreeOrphan {
   path: string;
@@ -3078,19 +3101,86 @@ export interface KeptWorktreeOrphan {
   branch: string | null;
   lastTouchedAt: number | null;
   removableAt: number | null;
+  /** Why it stays: `"recently used"` or `"last use unknown"`. */
+  reason: string;
 }
 
 /**
- * A `volli:worktree-orphans` sweep report: metadata pruned per project, stale
- * clean orphan dirs auto-removed (branches retained), clean orphans kept for
- * now, and dirty orphans left in place for the user (§7 — never auto-removed).
+ * Stale git ADMIN data a cleanup's `git worktree prune` would drop for one
+ * project — read out of the `prunable` marker in `git worktree list
+ * --porcelain`, so naming it costs nothing and changes nothing.
+ */
+export interface PrunableWorktreeMetadata {
+  projectId: string;
+  projectPath: string;
+  /** One entry per stale record: the path git can no longer find, and git's own reason. */
+  entries: { path: string; reason: string }[];
+}
+
+/** Who asked for a cleanup. `startup` exists so a launch-time act can never be mislabelled as a user's. */
+export type OrphanCleanupSource = "settings" | "startup";
+
+/** Where one item of a cleanup got to. `pending` is an item the run never reached. */
+export type OrphanCleanupItemStatus = "pending" | "completed" | "skipped" | "failed";
+
+/**
+ * One thing a cleanup was asked to change: a worktree directory, or one
+ * project's stale git metadata. `detail` is the truth about what happened —
+ * what was removed, or the preservation rule that spared it.
+ */
+export interface OrphanCleanupItem {
+  kind: "worktree" | "metadata";
+  /** The worktree directory, or the project path whose metadata was pruned. */
+  path: string;
+  projectId: string | null;
+  branch: string | null;
+  status: OrphanCleanupItemStatus;
+  detail: string | null;
+  finishedAt: number | null;
+}
+
+/**
+ * The durable record of one cleanup (VC-284). Written BEFORE the first change
+ * and updated after every item, so an app that stops mid-run leaves behind a
+ * run whose completed items are still completed and whose untouched items are
+ * still pending — the next launch stamps `interruptedAt` and shows it rather
+ * than silently re-offering work that already happened.
+ */
+export interface OrphanCleanupRun {
+  id: string;
+  source: OrphanCleanupSource;
+  startedAt: number;
+  /** `null` while the run is open — and forever, if it never finished. */
+  finishedAt: number | null;
+  /** Stamped by the first launch that finds an open run. */
+  interruptedAt: number | null;
+  /** The preservation rules in force for this run, recorded with it. */
+  preservation: string[];
+  items: OrphanCleanupItem[];
+}
+
+/**
+ * A `volli:worktree-orphans` SCAN report (VC-284): read-only by construction.
+ * It names what a cleanup would remove, the metadata it would prune, what it
+ * keeps and why, the retention window those verdicts came from, and the
+ * cleanup history that lets Storage label past removals truthfully.
  */
 export type WorktreeOrphansResult = Result<{
-  pruned: string[];
-  removedClean: RemovedWorktreeOrphan[];
+  scannedAt: number;
+  retentionDays: number;
+  prunable: PrunableWorktreeMetadata[];
+  removable: RemovableWorktreeOrphan[];
   keptRecent: KeptWorktreeOrphan[];
   dirty: DirtyWorktreeOrphan[];
+  runs: OrphanCleanupRun[];
 }>;
+
+/**
+ * Ack for a `volli:worktree-orphan-cleanup` — the confirmed, destructive half
+ * of the Storage pane. It answers with the durable run record, so the caller
+ * shows exactly what was removed, what was skipped, and why.
+ */
+export type WorktreeOrphanCleanupResult = Result<{ run: OrphanCleanupRun }>;
 
 /**
  * Ack for a `volli:worktree-orphan-delete` — the Settings list's explicit,

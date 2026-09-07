@@ -1506,9 +1506,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{}])).toBe(true);
     });
 
-    it("accepts an explicit boolean rescan", () => {
-      expect(guard([{ rescan: true }])).toBe(true);
-      expect(guard([{ rescan: false }])).toBe(true);
+    it("accepts an explicit boolean refresh", () => {
+      expect(guard([{ refresh: true }])).toBe(true);
+      expect(guard([{ refresh: false }])).toBe(true);
     });
 
     it("rejects a non-object first argument", () => {
@@ -1516,8 +1516,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([null])).toBe(false);
     });
 
-    it("rejects a present-but-non-boolean rescan", () => {
-      expect(guard([{ rescan: "yes" }])).toBe(false);
+    it("rejects a present-but-non-boolean refresh", () => {
+      expect(guard([{ refresh: "yes" }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1526,6 +1526,41 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:worktree-orphan-cleanup", () => {
+    const { guard, invalidError } = DATA_IPC["volli:worktree-orphan-cleanup"];
+
+    it("accepts paths, projects, or either one alone", () => {
+      expect(guard([{ paths: ["/wt/a"], projectIds: ["p1"] }])).toBe(true);
+      expect(guard([{ paths: ["/wt/a"], projectIds: [] }])).toBe(true);
+      expect(guard([{ paths: [], projectIds: ["p1"] }])).toBe(true);
+    });
+
+    // A cleanup with nothing to do would still open a durable record; refusing
+    // the shape keeps the history a log of acts rather than of clicks.
+    it("rejects a request that would change nothing", () => {
+      expect(guard([{ paths: [], projectIds: [] }])).toBe(false);
+    });
+
+    it("rejects anything that isn't two arrays of non-empty strings", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([{ paths: "/wt/a", projectIds: [] }])).toBe(false);
+      expect(guard([{ paths: ["/wt/a"], projectIds: "p1" }])).toBe(false);
+      expect(guard([{ paths: [1], projectIds: [] }])).toBe(false);
+      expect(guard([{ paths: [""], projectIds: [] }])).toBe(false);
+      expect(guard([{ paths: [], projectIds: [""] }])).toBe(false);
+      expect(guard([{ projectIds: [] }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ paths: ["/wt/a"], projectIds: [] }, {}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid cleanup request");
     });
   });
 
@@ -1848,8 +1883,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 60 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(60);
+    it("covers all 61 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(61);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
