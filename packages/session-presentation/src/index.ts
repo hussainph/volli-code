@@ -21,6 +21,7 @@
  */
 export * from "./activity";
 export * from "./activity-island";
+export * from "./authority";
 export * from "./client";
 export * from "./compaction-boundary";
 export * from "./composer-effort";

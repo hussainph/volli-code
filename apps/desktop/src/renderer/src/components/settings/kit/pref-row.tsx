@@ -29,11 +29,18 @@ export function PrefRow({
   hint?: React.ReactNode;
   /**
    * Prose under the label. **Reserved for trust boundaries** — where the app
-   * takes an irreversible action, which is CLAUDE.md's own carve-out. One use
-   * on both surfaces combined (retention's automatic deletion). If you are
-   * reaching for this to explain a control, you want `hint`.
+   * takes an irreversible action, which is CLAUDE.md's own carve-out. Two uses
+   * on both surfaces combined: retention's automatic deletion, and Authority's
+   * enforcement rows (VC-285), where the audit found the outcome of a posture —
+   * whether calls are refused at all — living in a popover nobody opened. A
+   * boundary a person cannot see is not a boundary they agreed to. If you are
+   * reaching for this to explain an ordinary control, you want `hint`.
+   *
+   * A node rather than a string, so a row can emphasize the sentence that
+   * carries the consequence and keep the qualification quiet beside it. Nothing
+   * here may be a block element: it renders inside a `<p>`.
    */
-  description?: string;
+  description?: React.ReactNode;
   align?: "center" | "start";
   testId?: string;
   children: React.ReactNode;
