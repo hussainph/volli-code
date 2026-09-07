@@ -348,6 +348,25 @@ describe("the cleanup history", () => {
     expect(preservationHistoryRows([run({ preservation: [], items: [item()] })])).toEqual([]);
     expect(preservationHistoryRows([run({ preservation: ["branches"], items: [] })])).toEqual([]);
   });
+
+  it("dates an open run's preservation note from when it was interrupted, not from a finish that never came", () => {
+    const rows = preservationHistoryRows([
+      run({
+        finishedAt: null,
+        interruptedAt: AT + 5_000,
+        preservation: ["branches"],
+        items: [item()],
+      }),
+    ]);
+    expect(rows[0]!.meta).toContain(new Date(AT + 5_000).toLocaleString());
+  });
+
+  it("dates a run with neither a finish nor an interruption stamp from when it started", () => {
+    const rows = preservationHistoryRows([
+      run({ finishedAt: null, interruptedAt: null, preservation: ["branches"], items: [item()] }),
+    ]);
+    expect(rows[0]!.meta).toContain(new Date(AT).toLocaleString());
+  });
 });
 
 describe("an interrupted run", () => {

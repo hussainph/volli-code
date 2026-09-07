@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
-import { readCleanupRuns } from "./cleanup-log";
 import { projectContainerName } from "./containers";
 import { canonicalize } from "./paths";
 import { scanOrphans } from "./scan";
@@ -173,7 +172,12 @@ describe("scanOrphans is read-only", () => {
       expect(issued.some((line) => line.includes("worktree prune"))).toBe(false);
 
       // …and it wrote no cleanup history either: a scan is not an act.
-      expect(readCleanupRuns(ctx.db)).toEqual([]);
+      expect(
+        ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get(),
+      ).toEqual({ n: 0 });
+      expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_facts").get()).toEqual({
+        n: 0,
+      });
 
       // The report still says everything a cleanup would need to act on.
       expect(report.removable.map((entry) => canonicalize(entry.path))).toEqual([
@@ -181,16 +185,21 @@ describe("scanOrphans is read-only", () => {
       ]);
       expect(report.prunable).toEqual([
         {
+          id: `${report.revision}:metadata:0`,
           projectId: "proj-1",
+          projectName: expect.any(String),
           projectPath,
-          entries: [
-            {
-              path: expect.stringContaining("VC-2-deleted-by-hand"),
-              reason: expect.stringMatching(/gitdir|non-existent/i),
-            },
-          ],
+          path: expect.stringContaining("VC-2-deleted-by-hand"),
+          reason: expect.stringMatching(/gitdir|non-existent/i),
         },
       ]);
+      // The plan is the proposal a cleanup command may select from, and it
+      // carries everything that command needs — no client supplies a path.
+      expect(report.plan.map((item) => [item.kind, item.id])).toEqual([
+        ["metadata", `${report.revision}:metadata:0`],
+        ["worktree", `${report.revision}:worktree:0`],
+      ]);
+      expect(report.revision).not.toHaveLength(0);
       expect(report.retentionDays).toBe(14);
       expect(report.scannedAt).toBeGreaterThan(0);
       // Real git: init, commit, remote, push, two worktree adds, then the scan's
@@ -222,7 +231,7 @@ describe("scanOrphans is read-only", () => {
 
       expect(report.removable).toEqual([]);
       expect(report.keptRecent).toEqual([
-        expect.objectContaining({ branch: "volli/VC-3", reason: "recently used" }),
+        expect.objectContaining({ branch: "volli/VC-3", reason: "recently-used" }),
       ]);
       expect(report.keptRecent.map((entry) => canonicalize(entry.path))).toEqual([
         canonicalize(orphan),
@@ -281,27 +290,36 @@ describe("scanOrphans report", () => {
 
     expect(report.removable).toEqual([
       {
+        id: `${report.revision}:worktree:0`,
         path: cleanOrphan,
         projectId: "proj-1",
+        projectName: expect.any(String),
         branch: "orphan-clean",
         lastTouchedAt: NOW - 30 * DAY_MS,
+        // The fixture ages the directory and the tip to the same instant, and
+        // a tie reads as the directory — the report says which either way
+        // (review C6).
+        ageBasis: "directory",
         removableAt: NOW - 30 * DAY_MS + 14 * DAY_MS,
       },
     ]);
     expect(report.prunable).toEqual([
       {
+        id: `${report.revision}:metadata:0`,
         projectId: "proj-1",
+        projectName: expect.any(String),
         projectPath,
-        entries: [
-          {
-            path: join(container, "gone"),
-            reason: "gitdir file points to non-existent location",
-          },
-        ],
+        path: join(container, "gone"),
+        reason: "gitdir file points to non-existent location",
       },
     ]);
     expect(report.dirty).toEqual([
-      { path: dirtyOrphan, projectId: "proj-1", reason: expect.stringMatching(/untracked/) },
+      {
+        path: dirtyOrphan,
+        projectId: "proj-1",
+        projectName: expect.any(String),
+        reason: expect.stringMatching(/untracked/),
+      },
     ]);
     // Read-only, even under the scripted runner: neither `worktree remove` nor
     // `worktree prune` is ever issued — the stale record is READ off the listing.
@@ -399,7 +417,12 @@ describe("scanOrphans report", () => {
 
       expect(report.removable).toEqual([]);
       expect(report.dirty).toEqual([
-        { path: orphan, projectId: "proj-1", reason: expect.stringMatching(testCase.reason) },
+        {
+          path: orphan,
+          projectId: "proj-1",
+          projectName: expect.any(String),
+          reason: expect.stringMatching(testCase.reason),
+        },
       ]);
     });
   }
@@ -436,7 +459,12 @@ describe("scanOrphans report", () => {
 
     expect(report.removable).toEqual([]);
     expect(report.dirty).toEqual([
-      { path: orphan, projectId: "proj-1", reason: expect.stringMatching(/locked/) },
+      {
+        path: orphan,
+        projectId: "proj-1",
+        projectName: expect.any(String),
+        reason: expect.stringMatching(/locked/),
+      },
     ]);
   });
 
@@ -478,10 +506,13 @@ describe("scanOrphans report", () => {
       {
         path: orphan,
         projectId: "proj-1",
+        projectName: expect.any(String),
         branch: "volli/VC-11",
         lastTouchedAt: null,
+        ageBasis: null,
         removableAt: null,
-        reason: "last use unknown",
+        reason: "age-unknown",
+        detail: null,
       },
     ]);
   });
@@ -526,7 +557,7 @@ describe("scanOrphans report", () => {
         path: orphan,
         lastTouchedAt: null,
         removableAt: null,
-        reason: "last use unknown",
+        reason: "age-unknown",
       }),
     ]);
   });
@@ -565,10 +596,14 @@ describe("scanOrphans report", () => {
       {
         path: justPushed,
         projectId: "proj-1",
+        projectName: expect.any(String),
         branch: "volli/VC-7-just-pushed",
         lastTouchedAt: NOW - 2 * DAY_MS,
+        // The folder was touched two days ago, later than the 40-day-old tip.
+        ageBasis: "directory",
         removableAt: NOW - 2 * DAY_MS + 14 * DAY_MS,
-        reason: "recently used",
+        reason: "recently-used",
+        detail: null,
       },
     ]);
   });
@@ -694,13 +729,17 @@ describe("scanOrphans report", () => {
       {
         path: strandedWt,
         projectId: "proj-1",
+        projectName: expect.any(String),
         reason: expect.stringMatching(/ticket still points here/i),
       },
     ]);
     expect(report.removable).toEqual([]);
   });
 
-  it("skips a project whose git can't be read", async () => {
+  // Review C5: a project whose listing fails used to be skipped in silence,
+  // which made every checkout in its container read as "not registered with
+  // git" — a different, and wrong, statement.
+  it("REPORTS a project whose git can't be read instead of skipping it in silence", async () => {
     const home = tempDir("home");
     insertProject(ctx.db, testProject({ id: "proj-1", path: "/repo" }));
     const { git } = scriptedGit((rawArgs) => {
@@ -710,12 +749,248 @@ describe("scanOrphans report", () => {
     });
     const report = await scanOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
     expect(report).toEqual({
+      revision: expect.any(String),
       scannedAt: NOW,
       retentionDays: 14,
       prunable: [],
+      keptMetadata: [],
       removable: [],
       keptRecent: [],
+      unreadableProjects: [
+        {
+          projectId: "proj-1",
+          projectName: expect.any(String),
+          projectPath: "/repo",
+          error: expect.stringContaining("not a git repo"),
+        },
+      ],
       dirty: [],
+      plan: [],
+    });
+  });
+
+  it("does not describe an unreadable project's own checkouts as unregistered", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const orphan = join(container, "VC-13-unknowable");
+    mkdirSync(orphan, { recursive: true });
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+    const { git } = scriptedGit((rawArgs) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") throw new Error("index.lock exists");
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
+
+    expect(report.unreadableProjects).toHaveLength(1);
+    // The container's leaves are NOT re-described as forgotten by git; the one
+    // honest statement is that the project could not be read.
+    expect(report.dirty).toEqual([]);
+    expect(report.removable).toEqual([]);
+  });
+  // Review C5: the sweep's activity guard used to live only in the destructive
+  // half, so a checkout somebody was working in was PROPOSED and then refused
+  // after the confirmation. The report is where that has to be said.
+  describe("live work", () => {
+    function activeFixture() {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      const orphan = join(container, "VC-20-busy");
+      mkdirSync(orphan, { recursive: true });
+      ageDir(orphan, 400);
+      const gitDir = tempDir("gitdir");
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+      const { git } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return (
+            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+            `worktree ${orphan}\nHEAD b\nbranch refs/heads/volli/VC-20\n`
+          );
+        }
+        if (args[0] === "rev-parse") return gitDir;
+        if (args[0] === "log" && args[1] === "-1") return String((NOW - 400 * DAY_MS) / 1000);
+        return "";
+      });
+      return { git, home, orphan };
+    }
+
+    for (const [surface, refusal] of [
+      ["terminal", /terminal/i],
+      ["agent", /agent/i],
+    ] as const) {
+      it(`keeps a stale clean orphan a live ${surface} is standing in, and says so`, async () => {
+        const f = activeFixture();
+
+        const report = await scanOrphans(
+          { db: ctx.db, git: f.git, home: f.home, now, blobsRoot: "unused" },
+          { busyWorktreeSites: async (target) => [{ directory: target, surface }] },
+        );
+
+        expect(report.removable).toEqual([]);
+        expect(report.plan).toEqual([]);
+        expect(report.keptRecent).toEqual([
+          expect.objectContaining({
+            path: f.orphan,
+            reason: "active",
+            detail: expect.stringMatching(refusal),
+          }),
+        ]);
+      });
+    }
+
+    it("keeps a checkout whose occupancy cannot be established", async () => {
+      const f = activeFixture();
+
+      const report = await scanOrphans(
+        { db: ctx.db, git: f.git, home: f.home, now, blobsRoot: "unused" },
+        {
+          busyWorktreeSites: async () => {
+            throw new Error("the runtime is unreadable");
+          },
+        },
+      );
+
+      expect(report.removable).toEqual([]);
+      expect(report.keptRecent[0]).toEqual(
+        expect.objectContaining({ reason: "active", detail: expect.stringMatching(/couldn/i) }),
+      );
+    });
+
+    it("proposes it when nothing is live in it", async () => {
+      const f = activeFixture();
+
+      const report = await scanOrphans(
+        { db: ctx.db, git: f.git, home: f.home, now, blobsRoot: "unused" },
+        { busyWorktreeSites: async () => [] },
+      );
+
+      expect(report.removable.map((entry) => entry.path)).toEqual([f.orphan]);
+    });
+  });
+
+  // Review C2: prunable records were collected before the ownership and ticket
+  // gates the directories go through, so the confirmation could offer to prune
+  // a record that is not this flow's to touch.
+  describe("stale git records", () => {
+    function staleFixture(recordPath: string) {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      mkdirSync(container, { recursive: true });
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+      const { git } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return (
+            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+            `worktree ${recordPath}\nHEAD b\nprunable gitdir file points to non-existent location\n`
+          );
+        }
+        return "";
+      });
+      return { git, home, container, projectPath };
+    }
+
+    it("proposes a stale record inside a container this database owns", async () => {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      const record = join(container, "VC-30-gone");
+      mkdirSync(container, { recursive: true });
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+      const { git } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return (
+            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+            `worktree ${record}\nHEAD b\nprunable gitdir file points to non-existent location\n`
+          );
+        }
+        return "";
+      });
+
+      const report = await scanOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
+
+      expect(report.prunable.map((entry) => entry.path)).toEqual([record]);
+      expect(report.keptMetadata).toEqual([]);
+      expect(report.plan.map((item) => item.kind)).toEqual(["metadata"]);
+    });
+
+    it("keeps a stale record pointing OUTSIDE the containers this database owns", async () => {
+      const personal = tempDir("personal");
+      const f = staleFixture(personal);
+
+      const report = await scanOrphans({
+        db: ctx.db,
+        git: f.git,
+        home: f.home,
+        now,
+        blobsRoot: "unused",
+      });
+
+      expect(report.prunable).toEqual([]);
+      expect(report.plan).toEqual([]);
+      expect(report.keptMetadata).toEqual([
+        expect.objectContaining({ path: personal, reason: "not-owned" }),
+      ]);
+    });
+
+    it("keeps a stale record a ticket still points at", async () => {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      const record = join(container, "VC-31-ticket");
+      mkdirSync(container, { recursive: true });
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+      insertTicket(ctx.db, testTicket("proj-1", { id: "ticket-31", status: "done" }));
+      updateTicketFields(ctx.db, "ticket-31", { worktreePath: record, branch: "volli/VC-31" }, 1);
+      const { git } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return (
+            `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+            `worktree ${record}\nHEAD b\nprunable gitdir file points to non-existent location\n`
+          );
+        }
+        return "";
+      });
+
+      const report = await scanOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
+
+      expect(report.prunable).toEqual([]);
+      expect(report.keptMetadata).toEqual([
+        expect.objectContaining({ path: record, reason: "ticket-linked" }),
+      ]);
     });
   });
 });
