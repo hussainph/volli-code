@@ -320,9 +320,11 @@ export interface SessionsOptions {
    * Async because one rung needs the catalog: `visual`'s fallback holds only
    * when the model it lands on can read images, and only Model Access knows.
    *
-   * `projectId` is `null` only where no project is known — the legacy
-   * model-backfill on `attach`, which holds a bare Session id — and reads as
-   * "global chain only". Every mint passes its project.
+   * `projectId` is `null` where the project rung must not be walked: no
+   * project is known (the legacy model-backfill on `attach`, which holds a
+   * bare Session id), or the caller NAMED a tier and the project's pin is
+   * not an answer to that question — see {@link resolveModelSelection}. It
+   * reads as "the tier ladder only".
    */
   readDefaultModel(tier: ModelTier, projectId: string | null): Promise<ModelSelection | null>;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
@@ -376,6 +378,15 @@ export interface SessionsOptions {
  * tier with a level is the reasoning-only path against that base. A tier that
  * resolves to nothing is the same refusal, naming the tier, and never a walk
  * past it to a model the user chose for something else.
+ *
+ * A named tier also OUTRANKS the project's pinned Session model, exactly as an
+ * exact `model` override already does. VC-112's pin answers "what does this
+ * project run by default"; `tier: "fast"` is a caller answering "what should
+ * THIS Session run", and a pin quietly winning would start a Session on a
+ * model nobody asked for while the door's reply and the Session header still
+ * read `fast` — the silent swap this ticket exists to forbid. The pin still
+ * governs every start that names no tier, which is every start there was
+ * before tiers existed.
  */
 async function resolveModelSelection(
   options: SessionsOptions,
@@ -384,7 +395,10 @@ async function resolveModelSelection(
   projectId: string,
 ): Promise<ModelSelection> {
   const tier = override?.tier;
-  const base = await options.readDefaultModel(tier ?? defaultTierForRole(role), projectId);
+  const base = await options.readDefaultModel(
+    tier ?? defaultTierForRole(role),
+    tier === undefined ? projectId : null,
+  );
   const required = tier === undefined ? DEFAULT_MODEL_REQUIRED : defaultModelRequiredForTier(tier);
   if (
     override === undefined ||

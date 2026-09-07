@@ -1412,6 +1412,11 @@ app.whenReady().then(async () => {
           // holds only when the model it lands on can read images, and only
           // Model Access knows. Every other tier stays a pure walk over
           // stored defaults and pays for no inspection.
+          //
+          // A `null` projectId skips the project rung. The facade passes it
+          // when a caller NAMED a tier: the pin is the project's answer to a
+          // question that start did not ask, and honouring it would run a
+          // Session labelled `fast` on a model nobody chose for `fast`.
           readDefaultModel: async (tier, projectId) => {
             const project = projectId === null ? undefined : getProjectById(sessionDb, projectId);
             const pinned = project?.sessionModel ?? null;

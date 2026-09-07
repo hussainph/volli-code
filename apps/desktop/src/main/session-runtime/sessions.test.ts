@@ -818,14 +818,56 @@ describe("Sessions", () => {
       });
 
       // The tier replaces the Role's rung: one question to the port, in the
-      // tier's name, with the project so its own pin still comes first.
-      expect(asked).toEqual([["fast", "project-1"]]);
+      // tier's name, and with NO project — a named tier outranks the project's
+      // pin, so the port is told to walk the tier ladder only.
+      expect(asked).toEqual([["fast", null]]);
       expect(started.model).toEqual(FAST);
       // The pin is the model. The tier rides beside it as provenance — what
       // the header and `session list` say the model was asked for as.
       expect(commands[1]).toMatchObject({
         command: { kind: "model.select", selection: FAST, tier: "fast" },
       });
+    });
+
+    it("outranks the project's pinned model, which answers a question this start did not ask", async () => {
+      // The port's own contract: a project id means "walk the project rung
+      // first", null means "the tier ladder only". A named tier must arrive as
+      // the second, or a pinned project would run every `tier: "fast"` Session
+      // on its pin while the door's reply and the header still read `fast`.
+      const PINNED = {
+        providerId: "anthropic",
+        modelId: "claude-opus",
+        reasoningLevel: "high",
+      } as const;
+      const asked: Array<[string, string | null]> = [];
+      const { sessions: door } = sessions({
+        readDefaultModel: async (tier, projectId) => {
+          asked.push([tier, projectId]);
+          return projectId === null ? FAST : PINNED;
+        },
+      });
+
+      const started = await door.start({
+        ...startInput("operation-tier-over-pin"),
+        modelOverride: { tier: "fast" },
+      });
+
+      expect(asked).toEqual([["fast", null]]);
+      expect(started.model).toEqual(FAST);
+    });
+
+    it("leaves the project's pin winning when no tier is named", async () => {
+      const asked: Array<[string, string | null]> = [];
+      const { sessions: door } = sessions({
+        readDefaultModel: async (tier, projectId) => {
+          asked.push([tier, projectId]);
+          return MODEL;
+        },
+      });
+
+      await door.start(startInput("operation-no-tier"));
+
+      expect(asked).toEqual([["ticket", "project-1"]]);
     });
 
     it("never inspects Model Access for a bare tier — the row was validated when it was saved", async () => {
