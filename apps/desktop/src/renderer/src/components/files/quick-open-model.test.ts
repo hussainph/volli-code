@@ -148,7 +148,10 @@ describe("quickOpenRows", () => {
     // basename hit above a path-only one instead.
     const rows = quickOpenRows({
       query: "README",
-      index: [indexed(".volli/artifacts/design-audit/audit-motion-perf.md", true), indexed("README.md")],
+      index: [
+        indexed(".volli/artifacts/design-audit/audit-motion-perf.md", true),
+        indexed("README.md"),
+      ],
     });
     expect(rows.map((row) => row.relPath)).toEqual([
       "README.md",
