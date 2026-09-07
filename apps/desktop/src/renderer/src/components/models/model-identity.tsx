@@ -361,20 +361,35 @@ export function ModelName({
 }) {
   const providerLabel = providerLabelProp ?? providerLabelOf(providers, model.providerId);
   const sayProvider = alwaysProvider || needsProvider(models, model);
-  // The run this row would truncate, kept whole as the element's `title`
-  // (VC-288). Every surface that draws this is a fixed-width list or table
-  // rather than a pane, so the truncation here is a column boundary and not a
-  // zoom level — but a name clipped to `Claude Son…` is still a name nobody
-  // asked to have shortened. The pill that names the SELECTED model has the
-  // keyboard's own reveal (`composer-ui.tsx`, `modelIdentityLabel`); this is
-  // the pointer's, for the rows around it.
+  // The whole run, kept as the element's `title` for the pointer (VC-288).
   const full = [model.label, sayProvider ? providerLabel : null, trailing ?? null]
     .filter((term) => term !== null)
     .join(" · ");
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
       <ModelMark model={model} providerLabel={providerLabel} by={by} />
-      <span title={full} className={cn("truncate tabular-nums", muted && "text-muted-foreground")}>
+      {/* IT WRAPS RATHER THAN TRUNCATES (VC-288 review). A `title` was the whole
+          of the way out of a clipped name here, and a `title` is the pointer's
+          alone — on rows a keyboard walks, `Claude Son…` was simply where the
+          fact ended. Every surface drawing this is a row inside a Select or a
+          cmdk list, and both are composite widgets: a focus stop of the kind
+          the venue chips grew (`ui/value-reveal.tsx`) would be a nested
+          interactive control inside a `role="option"`, which breaks the
+          keyboard model of the list to fix the readability of one row in it.
+          A second line costs the list nothing and hides nothing.
+
+          THE ONE PLACE IT STILL CLIPS is the closed Select trigger, because
+          Radix draws the selected ITEM's own children inside a fixed-height
+          control — and that is the one place a reveal already exists: the
+          trigger is focusable and one press opens the list where this same
+          element wraps. */}
+      <span
+        title={full}
+        className={cn(
+          "min-w-0 tabular-nums break-words in-data-[slot=select-trigger]:truncate",
+          muted && "text-muted-foreground",
+        )}
+      >
         {model.label}
         {sayProvider ? (
           <span className="text-muted-foreground in-data-[slot=select-item]:hidden">
