@@ -110,6 +110,13 @@ Redacted values (rows travel, the value does not):
 | `session_events.provenance` / `.payload` | `cwd` key stripped | the same directory, inside a fact |
 | `session_commands.route` | `cwd` key stripped | delivery route, never a live directory |
 
+The redactions cover every value the app **acts on** — a directory it would
+create a worktree in, run a setup command in, or reconnect a terminal to. They
+are not a scrub of every path-shaped string: an agent's tool call that named
+`/Users/you/code/thing` stays in its event payload as the fact it was, and
+transcript files are content-addressed, so a bundle carries them byte for byte.
+A restored profile reuses none of those strings; it also does not hide them.
+
 ## Restore
 
 `restoreBackupBundle` never merges and never overwrites.
