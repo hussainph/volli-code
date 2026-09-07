@@ -46,11 +46,29 @@ interface SanitizeSchemaLike {
   protocols?: Record<string, readonly string[] | undefined>;
 }
 
-export const chatRehypePlugins: RehypePlugins = Object.entries(defaultRehypePlugins).map(
-  ([name, pluggable]): RehypePlugins[number] => {
-    if (name !== "sanitize" || !Array.isArray(pluggable)) return pluggable;
+export const chatRehypePlugins: RehypePlugins = sanitizedRehypePlugins();
+
+/**
+ * The same chain, with `extras` run immediately AFTER sanitization.
+ *
+ * The seam exists for the read-only file Preview (VC-307), which needs one
+ * rewriting pass of its own and needs it in exactly one place: after the
+ * sanitizer, so what it mints cannot have come from the file, and before the
+ * hardening step, which would otherwise replace a repository image path with
+ * its own "blocked" stand-in. Keyed on the SANITIZE entry rather than on what
+ * follows it, because "after sanitization" is the property that matters and the
+ * only one this function can promise.
+ *
+ * A caller passing nothing gets the chat chain, which is how {@link chatRehypePlugins}
+ * is defined — there is one derivation of the widened schema, not two.
+ */
+export function sanitizedRehypePlugins(
+  extras: readonly RehypePlugins[number][] = [],
+): RehypePlugins {
+  return Object.entries(defaultRehypePlugins).flatMap(([name, pluggable]): RehypePlugins => {
+    if (name !== "sanitize" || !Array.isArray(pluggable)) return [pluggable];
     const [plugin, schema] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
-    return [
+    const sanitize = [
       plugin,
       {
         ...schema,
@@ -60,8 +78,9 @@ export const chatRehypePlugins: RehypePlugins = Object.entries(defaultRehypePlug
         },
       },
     ] as RehypePlugins[number];
-  },
-);
+    return [sanitize, ...extras];
+  });
+}
 
 const FileMentionContext = React.createContext<((path: string) => void) | null>(null);
 
