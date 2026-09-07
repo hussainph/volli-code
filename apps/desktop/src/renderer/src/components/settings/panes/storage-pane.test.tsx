@@ -72,10 +72,13 @@ function bridge(
     worktree: {
       orphans: vi.fn(async () => ({
         ok: true as const,
-        pruned: [],
-        removedClean: [],
+        scannedAt: 1_700_000_000_000,
+        retentionDays: 30,
+        prunable: [],
+        removable: [],
         keptRecent: [],
         dirty: [],
+        runs: [],
       })),
       deleteOrphan: vi.fn(async () => ({ ok: true as const })),
     },
@@ -162,5 +165,26 @@ describe("Settings → Storage database section", () => {
     // and setting", which is what made it read as a backup.
     expect(html).not.toContain("every project");
     expect(html.toLowerCase()).not.toContain("backup");
+  });
+});
+
+describe("StoragePane", () => {
+  // A02: the one button on this pane said "Rescan orphaned worktrees" and sent
+  // a request that pruned git metadata and deleted directories. The label a
+  // person reads before pressing it is part of the fix, so it is asserted.
+  it("offers a scan, never a rescan, before anything has loaded", () => {
+    const html = renderToStaticMarkup(<StoragePane />);
+
+    expect(html).toContain("Scan for orphaned worktrees");
+    expect(html).not.toContain("Rescan");
+    // The destructive action is not reachable until a scan has produced one.
+    expect(html).not.toContain("Clean up…");
+  });
+
+  it("says what retention takes and what it keeps, including the Keep exemption", () => {
+    const html = renderToStaticMarkup(<StoragePane />);
+
+    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
+    expect(html).toContain("Keep on a ticket holds its folder");
   });
 });

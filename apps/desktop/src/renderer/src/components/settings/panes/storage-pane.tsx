@@ -1,15 +1,22 @@
 /**
  * Settings → Storage: what Volli keeps on disk, and for how long.
  *
- * Retention and the orphan sweep are ONE subject and now sit in one place. They
+ * Retention and the orphan scan are ONE subject and now sit in one place. They
  * were two categories in two surfaces, which is how a person could set a
  * retention window in Settings → General and then find the folders it governs
  * listed under Settings → Worktrees with nothing connecting them.
  *
  * Both are app-wide by construction: the TTL lives in `app_state`, and
- * `sweepOrphans` walks every project in the db — its disk-vs-git pass reports
+ * `scanOrphans` walks every project in the db — its disk-vs-git pass reports
  * directories git no longer attributes to any project at all, so it cannot be
  * scoped to one. That is why Configure has no copy of this.
+ *
+ * The two halves answer two different questions and stay separate for that
+ * reason (VC-284). Retention governs a TICKET's checkout: automatic reclaim may
+ * take an eligible, clean, inactive folder and keeps the ticket, its branch,
+ * its pull-request link, and its history — archiving stays a user's own action.
+ * An orphan has no ticket to archive, so the only thing that can happen to it
+ * is a reviewed, confirmed folder removal.
  */
 import * as React from "react";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
@@ -27,10 +34,21 @@ import {
 } from "../../../../../data-export-copy";
 import type {
   DirtyWorktreeOrphan,
-  KeptWorktreeOrphan,
   PiSessionOrphanInventory,
-  RemovedWorktreeOrphan,
 } from "../../../../../ipc/contract";
+import {
+  cleanupSummary,
+  describeInterrupted,
+  describeKept,
+  describeMetadata,
+  describeRemovable,
+  historyRows,
+  planCleanup,
+  retentionNote,
+  unfinishedRuns,
+  type CleanupPlan,
+  type OrphansScan,
+} from "./storage-orphans-model";
 import {
   AsyncSection,
   CommitField,
@@ -54,6 +72,8 @@ import {
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
 import { Button } from "@renderer/components/ui/button";
+import { toast } from "sonner";
+
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
@@ -114,7 +134,9 @@ function RetentionSection() {
         // The sanctioned trust-boundary exception, and the reason it stays
         // prose rather than becoming a hint: this governs an automatic
         // deletion, and what gets deleted must not sit behind a disclosure.
-        description="Volli removes the folder and keeps the branch, its commits, and the ticket."
+        // It names Keep because the exemption is only reachable from a ticket,
+        // and a policy whose opt-out is invisible here reads as unconditional.
+        description="Volli removes the folder and keeps the branch, its commits, the pull-request link, and the ticket. Keep on a ticket holds its folder."
       >
         <CommitField
           id="done-ttl-days"
@@ -474,12 +496,6 @@ export function DataExportConfirmBody() {
   );
 }
 
-interface OrphansReport {
-  dirty: DirtyWorktreeOrphan[];
-  removed: RemovedWorktreeOrphan[];
-  kept: KeptWorktreeOrphan[];
-}
-
 /** Truncates a long path to `start…end`, keeping both ends identifiable. */
 function truncateMiddle(value: string, max = 56): string {
   if (value.length <= max) return value;
@@ -488,51 +504,65 @@ function truncateMiddle(value: string, max = 56): string {
 }
 
 /**
- * The orphan list, with what the launch sweep already did beside it.
+ * The orphan list: what a cleanup WOULD do, what it keeps and why, and what
+ * past cleanups actually did.
  *
- * Mount reads the CACHED launch report; only the explicit refresh rescans. The
- * sweep is destructive — it prunes git metadata and removes clean orphan dirs
- * — which is exactly why `orphan-sweep.ts` caches it to once per launch.
- * Rescanning on mount would re-run it every time this category is entered,
- * since the shell unmounts an inactive pane.
+ * Scan and cleanup are two separate acts (VC-284), and this section is where
+ * the difference is visible. Scan asks git questions and changes nothing, so
+ * mount and the Scan button are the same safe read. Removing anything takes the
+ * Clean up button, its confirmation naming every path and record, and a
+ * per-path re-check in main immediately before each change.
+ *
+ * This surface used to be the other way round: its one button said "Rescan" and
+ * sent `{ rescan: true }`, which pruned git metadata and deleted every clean
+ * orphan past the retention window — the same act the app ran, unasked, at
+ * every launch.
  */
 function OrphansSection() {
-  const [state, setState] = React.useState<AsyncState<OrphansReport>>({ status: "loading" });
+  const [state, setState] = React.useState<AsyncState<OrphansScan>>({ status: "loading" });
   const [pendingDelete, setPendingDelete] = React.useState<DirtyWorktreeOrphan | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [confirmCleanup, setConfirmCleanup] = React.useState(false);
+  const [cleaning, setCleaning] = React.useState(false);
   const fetcher = useLatestAsync();
 
   const load = React.useCallback(
-    async (rescan: boolean) => {
+    async (refresh: boolean) => {
       const token = fetcher.claim();
       setBusy(true);
       setState({ status: "loading" });
       try {
-        const result = await window.api.worktree.orphans(rescan ? { rescan: true } : {});
+        const result = await window.api.worktree.orphans(refresh ? { refresh: true } : {});
         if (!fetcher.isCurrent(token)) return;
         if (!result.ok) {
           setState({
             status: "error",
             message: result.error,
-            // Retry the read that FAILED — retrying a failed refresh with the
-            // cached report answers a question nobody asked, and retrying the
-            // mount read with a rescan runs the destructive sweep they didn't
-            // ask for either.
-            onRetry: () => void load(rescan),
+            // Retry the read that FAILED — both shapes are read-only, so the
+            // only thing this choice costs is a repeated walk.
+            onRetry: () => void load(refresh),
           });
           return;
         }
         setState({
           status: "ready",
-          data: { dirty: result.dirty, removed: result.removedClean, kept: result.keptRecent },
+          data: {
+            scannedAt: result.scannedAt,
+            retentionDays: result.retentionDays,
+            prunable: result.prunable,
+            removable: result.removable,
+            keptRecent: result.keptRecent,
+            dirty: result.dirty,
+            runs: result.runs,
+          },
         });
       } catch (error) {
         if (fetcher.isCurrent(token)) {
           setState({
             status: "error",
             message: errorMessage(error),
-            onRetry: () => void load(rescan),
+            onRetry: () => void load(refresh),
           });
         }
       } finally {
@@ -557,7 +587,7 @@ function OrphansSection() {
         return;
       }
       setPendingDelete(null);
-      // A delete invalidates the cached report, so this one re-sweeps.
+      // A delete invalidates the cached scan, so this one re-scans.
       await load(true);
     } catch (error) {
       toastError(`Couldn't delete worktree: ${errorMessage(error)}`);
@@ -566,15 +596,57 @@ function OrphansSection() {
     }
   }
 
+  /**
+   * The confirmed act. It sends exactly the paths and projects the dialog just
+   * listed, and main re-checks each one before touching it — so a skip is a
+   * normal outcome, reported rather than treated as a failure.
+   */
+  async function runCleanup(plan: CleanupPlan): Promise<void> {
+    if (cleaning) return;
+    setCleaning(true);
+    try {
+      const result = await window.api.worktree.cleanupOrphans({
+        paths: plan.paths,
+        projectIds: plan.projectIds,
+      });
+      if (!result.ok) {
+        toastError(`Couldn't clean up: ${result.error}`);
+        return;
+      }
+      setConfirmCleanup(false);
+      toast.success(`Cleanup finished: ${cleanupSummary(result.run)}.`);
+      await load(true);
+    } catch (error) {
+      toastError(`Couldn't clean up: ${errorMessage(error)}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
+  const plan = state.status === "ready" ? planCleanup(state.data) : null;
+  // The window every eligibility date on this list was measured against, read
+  // from the scan rather than re-fetched: the two must be the same number.
+  const retentionDays = state.status === "ready" ? state.data.retentionDays : null;
+
   return (
     <>
       <AsyncSection
         title="Orphaned worktrees"
         icon={TreeStructureIcon}
-        hint={<>Volli never deletes a worktree that has uncommitted work.</>}
+        hint={
+          <>
+            Scanning only looks. Cleanup removes folders you confirm and keeps their branches;
+            anything with uncommitted work, recent use, or a live terminal or agent is left alone.
+            {retentionDays === null ? null : ` ${retentionNote(retentionDays)}`}
+          </>
+        }
+        // One header action, per the kit's header grammar — and it is the SAFE
+        // one. The destructive act is a row below, attached to the summary of
+        // what a scan actually found, so it cannot be pressed by muscle memory
+        // in the place the old "Rescan" button used to sit.
         action={
           <SectionIconAction
-            label="Rescan orphaned worktrees"
+            label="Scan for orphaned worktrees"
             icon={ArrowsClockwiseIcon}
             busy={busy}
             onAct={() => void load(true)}
@@ -582,12 +654,44 @@ function OrphansSection() {
         }
         state={state}
         isEmpty={(report) =>
-          report.dirty.length === 0 && report.removed.length === 0 && report.kept.length === 0
+          report.dirty.length === 0 &&
+          report.removable.length === 0 &&
+          report.keptRecent.length === 0 &&
+          report.prunable.length === 0 &&
+          historyRows(report.runs).length === 0 &&
+          unfinishedRuns(report.runs).length === 0
         }
         empty="No orphaned worktrees."
       >
         {(report) => (
           <>
+            {/*
+             * A cleanup the app never finished. It is stated before anything
+             * else because it is the only row that describes an incomplete act
+             * — and it says what completed, so nothing already removed reads as
+             * still pending.
+             */}
+            {unfinishedRuns(report.runs).map((run) => (
+              <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)} />
+            ))}
+
+            {plan === null || plan.isEmpty ? null : (
+              <ItemRow
+                name="Ready to clean up"
+                meta={`${plan.worktrees.length} folder(s) and ${plan.metadata.length} stale git record(s). Branches are kept.`}
+              >
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy || cleaning}
+                  onClick={() => setConfirmCleanup(true)}
+                >
+                  <TrashIcon />
+                  Clean up…
+                </Button>
+              </ItemRow>
+            )}
+
             {report.dirty.map((orphan) => (
               <ItemRow
                 key={orphan.path}
@@ -610,36 +714,118 @@ function OrphansSection() {
               </ItemRow>
             ))}
 
-            {/*
-             * What the sweep DID, not only what it left behind. A launch that
-             * quietly deleted forty checkouts is indistinguishable from work
-             * going missing unless the app says so somewhere.
-             */}
-            {report.removed.map((entry) => (
+            {/* Candidates: stated as proposals, with the date each became eligible. */}
+            {report.removable.map((entry) => (
               <ItemRow
                 key={entry.path}
                 name={truncateMiddle(entry.path)}
-                meta={
-                  entry.branch === null
-                    ? "Removed at launch. No branch was checked out here."
-                    : `Removed at launch. Branch ${entry.branch} is still in git.`
-                }
+                meta={describeRemovable(entry)}
+              >
+                <RowAction
+                  label={`Reveal ${entry.path} in Finder`}
+                  hint="Reveal in Finder"
+                  icon={FolderOpenIcon}
+                  onAct={() => void reveal(entry.path)}
+                />
+              </ItemRow>
+            ))}
+
+            {report.prunable.flatMap((project) =>
+              project.entries.map((entry) => (
+                <ItemRow
+                  key={`prunable:${entry.path}`}
+                  name={truncateMiddle(entry.path)}
+                  meta={describeMetadata(entry)}
+                />
+              )),
+            )}
+
+            {report.keptRecent.map((entry) => (
+              <ItemRow
+                key={entry.path}
+                name={truncateMiddle(entry.path)}
+                meta={describeKept(entry)}
               />
             ))}
-            {report.kept.map((entry) => (
-              <ItemRow
-                key={entry.path}
-                name={truncateMiddle(entry.path)}
-                meta={
-                  entry.removableAt === null
-                    ? "Kept — Volli can't tell when this was last used."
-                    : `Kept until ${new Date(entry.removableAt).toLocaleDateString()}.`
-                }
-              />
+
+            {/*
+             * What a cleanup DID, from the durable record rather than from this
+             * session's memory — with its real source and time, because a
+             * removal nobody can audit is indistinguishable from work going
+             * missing, and one mislabelled is worse.
+             */}
+            {historyRows(report.runs).map((row) => (
+              <ItemRow key={row.key} name={truncateMiddle(row.path)} meta={row.meta} />
             ))}
           </>
         )}
       </AsyncSection>
+
+      {/*
+       * The confirmation, and the only door to a destructive orphan act. It
+       * names every directory and every git record by hand — no counts standing
+       * in for paths — and states what survives, because this is the moment the
+       * decision is actually made.
+       */}
+      <AlertDialog
+        open={confirmCleanup && plan !== null && !plan.isEmpty}
+        onOpenChange={(open) => {
+          if (!cleaning) setConfirmCleanup(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clean up these worktrees?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                {plan !== null && plan.worktrees.length > 0 ? (
+                  <div className="space-y-1">
+                    <p>Removes {plan.worktrees.length} folder(s):</p>
+                    <ul className="space-y-0.5">
+                      {plan.worktrees.map((entry) => (
+                        <li key={entry.path} className="font-mono text-foreground">
+                          {entry.path}
+                          {entry.branch === null ? "" : ` — keeps branch ${entry.branch}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {plan !== null && plan.metadata.length > 0 ? (
+                  <div className="space-y-1">
+                    <p>Prunes {plan.metadata.length} stale git record(s):</p>
+                    <ul className="space-y-0.5">
+                      {plan.metadata.map((entry) => (
+                        <li key={entry.path} className="font-mono text-foreground">
+                          {entry.path}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <ul className="space-y-0.5">
+                  {(plan?.preservation ?? []).map((rule) => (
+                    <li key={rule}>{rule}</li>
+                  ))}
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cleaning}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={cleaning}
+              onClick={(event) => {
+                event.preventDefault();
+                if (plan !== null) void runCleanup(plan);
+              }}
+            >
+              {cleaning ? "Cleaning up…" : "Clean up"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={pendingDelete !== null}
