@@ -1209,6 +1209,21 @@ export function registerDataIpcHandlers(
         // refused after the confirmation (review C5).
         busyWorktreeSites: options.busyWorktreeSites,
       });
+      // The durable history, so Storage can say who removed a directory and
+      // when — and show a run the app never finished. A record that cannot be
+      // read FAILS this channel rather than answering with an empty list: the
+      // old blob's "unreadable means no history" made a damaged record
+      // indistinguishable from an app that had never deleted anything, which is
+      // the one thing a deletion log must never do.
+      let runs;
+      try {
+        runs = await orphanCleanupEngine(db).recentRuns();
+      } catch (error) {
+        return {
+          ok: false,
+          error: `Couldn't read the cleanup history: ${errorMessage(error)}`,
+        };
+      }
       return {
         ok: true,
         revision: report.revision,
@@ -1220,9 +1235,7 @@ export function registerDataIpcHandlers(
         keptMetadata: report.keptMetadata,
         unreadableProjects: report.unreadableProjects,
         dirty: report.dirty,
-        // The durable history, so Storage can say who removed a directory and
-        // when — and show a run the app never finished.
-        runs: await orphanCleanupEngine(db).recentRuns(),
+        runs,
       };
     },
 

@@ -2440,6 +2440,35 @@ describe("volli:worktree-orphans", () => {
     });
   });
 
+  it("fails loudly when the cleanup history cannot be read, rather than reporting none", async () => {
+    vi.mocked(scanOrphans).mockResolvedValue(report);
+    const engine = orphanCleanupEngine(ctx.db);
+    await engine.accept({
+      commandId: "cmd-damaged",
+      source: "settings",
+      scanRevision: "rev-0",
+      retentionDays: 14,
+      preservation: [],
+      items: [],
+    });
+    // Past the column's json_valid CHECK: damage of this kind comes from
+    // outside SQLite, not from a write this app could make.
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db
+      .prepare("UPDATE worktree_cleanup_facts SET payload = ? WHERE command_id = ?")
+      .run("{not json", "cmd-damaged");
+    ctx.db.pragma("ignore_check_constraints = OFF");
+
+    const result = await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+
+    // An empty history and an unreadable one are different statements, and a
+    // deletion log that confuses them is the failure VC-284 exists to end.
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringContaining("Couldn't read the cleanup history"),
+    });
+  });
+
   it("never removes anything: the channel only ever runs the read-only scan", async () => {
     vi.mocked(scanOrphans).mockResolvedValue(report);
 

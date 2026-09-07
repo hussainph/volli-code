@@ -181,6 +181,25 @@ describe("SqliteOrphanCleanupLedger", () => {
     ).toThrow(/FOREIGN KEY/i);
   });
 
+  // The old design stored history as one JSON blob and answered "no history"
+  // when it could not be parsed — which made a damaged record indistinguishable
+  // from an app that had never deleted anything. A damaged row is now LOUD, and
+  // it is confined to its own command: the rest of the history is unaffected.
+  it("refuses to read a damaged record quietly, and names the row", async () => {
+    await engine.accept({ commandId: "cmd-1", ...ACCEPT, items: [planItem()] });
+    // The column's own CHECK (json_valid) is what keeps this out through
+    // normal writes; damage arrives from outside SQLite (a truncated file, a
+    // restored backup), so the test has to reach past the constraint to
+    // reproduce it.
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db
+      .prepare("UPDATE worktree_cleanup_facts SET payload = ? WHERE command_id = ?")
+      .run("{not json", "cmd-1");
+    ctx.db.pragma("ignore_check_constraints = OFF");
+
+    await expect(engine.run("cmd-1")).rejects.toThrow(/Cleanup fact .* is not readable JSON/);
+  });
+
   it("caps the history it reads back, newest first", async () => {
     for (const id of ["cmd-1", "cmd-2", "cmd-3"]) {
       clock += 10;
