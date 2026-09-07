@@ -367,12 +367,11 @@ export function TabStrip({
           ? current
           : next;
       });
-    // A RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters was put in
-    // view against the width the strip had at the time; the chevrons mounting,
-    // a divider drag, a rail opening and a tab closing all hand it a different
-    // one, and none of them is a selection or a focus, so nothing else in this
-    // file would look again. Not on `scroll`, which is a person travelling and
-    // must never be argued with.
+    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters
+    // was put in view against the width the strip had at the time; the chevrons
+    // mounting, a divider drag, a rail opening and a window resize all hand it a
+    // different one, and none of them is a selection or a focus, so nothing else
+    // in this file would look again.
     const remeasure = (): void => {
       measure();
       revealCurrentTab(scroller);
@@ -383,13 +382,27 @@ export function TabStrip({
     // this app draw a strip: a component that threw on mount without one would
     // make all of them untestable to buy nothing. Measured once either way, so
     // a strip in that environment still knows whether it overflows at mount.
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
-    observer?.observe(area);
-    observer?.observe(scroller);
+    const observe = (): ResizeObserver | null =>
+      typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
+    // TWO OBSERVERS, because the two resizes do not mean the same thing.
+    //
+    // The strip's own box changing is the layout being rebuilt under a person:
+    // there, keeping the selected or focused tab in view is the promise, and
+    // moving the strip is keeping it. Its CONTENT changing is a tab opened, a
+    // tab closed, or — many times a second on a live chat — a title growing a
+    // word as it lands. Revealing on that would drag the strip back to the
+    // active tab under a reader who had deliberately scrolled somewhere else,
+    // which is the same courtesy `tabScrollLeftFor` pays by answering `null`.
+    // So the content is measured and never chased.
+    const viewport = observe();
+    viewport?.observe(area);
+    viewport?.observe(scroller);
+    const content = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     const tablist = scroller.firstElementChild;
-    if (tablist !== null) observer?.observe(tablist);
+    if (tablist !== null) content?.observe(tablist);
     return () => {
-      observer?.disconnect();
+      viewport?.disconnect();
+      content?.disconnect();
       scroller.removeEventListener("scroll", measure);
     };
   }, []);

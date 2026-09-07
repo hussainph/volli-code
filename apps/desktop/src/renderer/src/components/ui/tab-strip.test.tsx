@@ -95,8 +95,12 @@ function renderStrip(onReorder: (movedId: string, ids: readonly string[]) => voi
   });
 }
 
-/** Every fake `ResizeObserver` a render made, so a test can fire one. */
-let observers: { notify(): void }[] = [];
+/**
+ * Every fake `ResizeObserver` a render made, so a test can fire one — with the
+ * elements it watches, because the strip keeps two and they mean different
+ * things: its own box, and the tabs inside it.
+ */
+let observers: { targets: Element[]; notify(): void }[] = [];
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -115,10 +119,13 @@ beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
+      targets: Element[] = [];
       constructor(private readonly callback: () => void) {
-        observers.push(this as unknown as { notify(): void });
+        observers.push(this as unknown as { targets: Element[]; notify(): void });
       }
-      observe(): void {}
+      observe(element: Element): void {
+        this.targets.push(element);
+      }
       // dnd-kit measures with one of these too, and it unobserves as a node
       // detaches; a fake missing the method throws inside React's ref cleanup.
       unobserve(): void {}
@@ -327,6 +334,18 @@ function resized(): void {
   });
 }
 
+/** Only the observer watching the TABS — a title landing, a tab closing. */
+function contentResized(): void {
+  const tablist = container?.querySelector('[role="tablist"]');
+  act(() => {
+    for (const observer of observers) {
+      if (tablist !== null && tablist !== undefined && observer.targets.includes(tablist)) {
+        observer.notify();
+      }
+    }
+  });
+}
+
 /** A plain strip of `count` tabs, the `active`th one selected. */
 function renderTabs(count: number, active: number): void {
   act(() => {
@@ -488,6 +507,31 @@ describe("TabStrip overflow", () => {
     // the control that appeared to help them reach it.
     expect(affordance("Later")).not.toBeNull();
     expect(strip.port.scrollLeft).toBe(656);
+  });
+
+  it("leaves a scrolled strip where the reader put it when a title lands", () => {
+    // A live chat re-titles its tab as the model's own title arrives, which
+    // resizes the tablist several times a second. Chasing THAT would drag the
+    // strip back to the active tab under a reader who had scrolled somewhere
+    // else on purpose — so the content is measured and never chased. The
+    // strip's own box is the resize that means the layout moved.
+    renderTabs(9, 0);
+    const strip = layoutStrip({ content: 900 });
+    resized();
+
+    // The reader travels away from the selected tab, by wheel or by chevron.
+    act(() => {
+      strip.port.scrollLeft = 400;
+      strip.port.dispatchEvent(new Event("scroll"));
+    });
+
+    strip.setContent(950);
+    contentResized();
+
+    expect(strip.port.scrollLeft).toBe(400);
+    // Measured all the same: the affordances still know both ends.
+    expect(affordance("Later")).not.toBeNull();
+    expect(affordance("Earlier")?.disabled).toBe(false);
   });
 
   it("follows the keyboard's tab through a resize, not just the selected one", () => {
