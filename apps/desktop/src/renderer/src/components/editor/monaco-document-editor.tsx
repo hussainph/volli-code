@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { editor } from "monaco-editor";
+import type { NamedBlobLink } from "@volli/shared";
 
 import { documentIdentityKey, type DocumentIdentity } from "@renderer/editor/document-identity";
 import {
@@ -100,6 +101,12 @@ export interface MonacoDocumentEditorProps {
   ariaLabel?: string;
   /** Enables the `@file` picker + chip decorations. Absent, neither appears. */
   fileRefs?: DocumentFileRefs;
+  /**
+   * The document owner's attachments, so an inline `![spec](…)` resolves to the
+   * Blob it names (VC-273). Absent, only already-canonical `volli-blob:` and
+   * `data:image/*` sources render.
+   */
+  attachments?: readonly NamedBlobLink[] | undefined;
 }
 
 type DocumentMonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>;
@@ -187,6 +194,7 @@ export const MonacoDocumentEditor = React.forwardRef<
     className,
     style,
     ariaLabel,
+    attachments,
     fileRefs,
   },
   ref,
@@ -224,6 +232,8 @@ export const MonacoDocumentEditor = React.forwardRef<
   };
   const fileRefsRef = React.useRef(fileRefs);
   fileRefsRef.current = fileRefs;
+  const attachmentsRef = React.useRef(attachments);
+  attachmentsRef.current = attachments;
 
   // The value the model is seeded from at mount, and the baseline for "has the
   // user typed since we deferred an external change?".
@@ -353,7 +363,13 @@ export const MonacoDocumentEditor = React.forwardRef<
 
         attachment = attachDocumentMode(
           { editor: view, model: lease.model, monaco: runtime.monaco },
-          { getFileRefs: () => fileRefsRef.current },
+          {
+            getFileRefs: () => fileRefsRef.current,
+            // Through a ref for the same reason `fileRefs` is: the contribution
+            // outlives any one render, and a captured array would pin the
+            // document to whatever was attached when it mounted.
+            getAttachments: () => attachmentsRef.current,
+          },
         );
         attachmentRef.current = attachment;
 

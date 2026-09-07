@@ -36,7 +36,13 @@
  */
 import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor, IDisposable } from "monaco-editor";
-import { errorMessage } from "@volli/shared";
+import {
+  attachmentHashesByName,
+  errorMessage,
+  markdownImageNotice,
+  resolveMarkdownImageSrc,
+  type NamedBlobLink,
+} from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
 
@@ -66,6 +72,16 @@ const CREATE_ARTIFACT_COMMAND = "volli.documentMode.createArtifact";
 
 /** Height a not-yet-loaded image reserves, so the zone does not pop into being. */
 const IMAGE_ZONE_PLACEHOLDER_PX = 24;
+/**
+ * Height of the one-line notice standing in for a picture.
+ *
+ * A constant rather than a measurement, and that is what keeps the zone out of
+ * a nested `changeViewZones` — Monaco is already inside one when the zone is
+ * built, and a notice is a single line whose height is not worth re-entering
+ * the accessor for. The stylesheet clips to it, so a long alt text ellipses
+ * instead of escaping the box.
+ */
+const IMAGE_ZONE_NOTICE_PX = 28;
 /** A tall image is scrolled inside the document, not allowed to own the viewport. */
 const IMAGE_ZONE_MAX_PX = 420;
 
@@ -76,9 +92,35 @@ const IMAGE_ZONE_MAX_PX = 420;
  */
 const configsByModelUri = new Map<string, () => FileRefsConfig | undefined>();
 
+/**
+ * One image, after its source has been through the app's image policy.
+ *
+ * Resolution happens before the zone is built rather than inside it, because
+ * the zone's identity has to include the ANSWER: attaching the file a body
+ * already references changes `.volli/attachments/spec.png` from unresolvable to
+ * a Blob URL without changing a character of the document, and a key built from
+ * the raw source would keep the stale empty zone on screen.
+ */
+interface ResolvedDocumentImage {
+  readonly afterLineNumber: number;
+  readonly alt: string;
+  /** The loadable URL, or `null` when the source names nothing we can serve. */
+  readonly src: string | null;
+  /** Why there is no picture, for the placeholder. `null` when there is one. */
+  readonly notice: string | null;
+}
+
+/** The placeholder a refused or failed image shows, in place of the picture. */
+function missingImageNode(image: ResolvedDocumentImage, notice: string): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "volli-document-mode-image-missing";
+  box.textContent = image.alt.trim() === "" ? notice : `${notice} — ${image.alt}`;
+  return box;
+}
+
 /** Identity of one image view zone: the same picture on the same line is the same zone. */
-function zoneKey(image: DocumentImage): string {
-  return `${image.afterLineNumber} ${image.src}`;
+function zoneKey(image: ResolvedDocumentImage): string {
+  return `${image.afterLineNumber} ${image.src ?? `!${image.notice ?? ""}`}`;
 }
 
 let globalsRegistered = false;
@@ -186,6 +228,14 @@ export interface DocumentModeContext {
 export interface DocumentModeOptions {
   /** Latest `@file` wiring, or undefined for a document with no ref support. */
   getFileRefs(): FileRefsConfig | undefined;
+  /**
+   * The document owner's attachments, so `![spec](.volli/attachments/spec.png)`
+   * resolves to the Blob it names (VC-273). Read on every projection rather
+   * than captured once: a file attached while the body is open must render
+   * without remounting the editor. Optional — a document with no attachments
+   * still renders already-canonical `volli-blob:` and `data:image/*` sources.
+   */
+  getAttachments?(): readonly NamedBlobLink[] | undefined;
 }
 
 /** What the host keeps hold of: a way to force a rebuild, and teardown. */
@@ -219,8 +269,10 @@ export function attachDocumentMode(
   let checkboxes: ReturnType<typeof renderProjection>["checkboxes"] = [];
   let chips: ReturnType<typeof renderFileRefChips>["chips"] = [];
 
-  // Image view zones, keyed by line+source so a keystroke elsewhere does not
-  // tear down and re-request every image in the document.
+  // Image view zones, keyed by line + RESOLVED source so a keystroke elsewhere
+  // does not tear down and re-request every image in the document — and so that
+  // attaching the file a body already references does replace the zone, since
+  // that changes the resolution without changing the text (see `zoneKey`).
   const zones = new Map<string, { id: string; zone: MonacoEditor.IViewZone }>();
 
   let disposed = false;
@@ -235,7 +287,29 @@ export function attachDocumentMode(
     });
   }
 
-  function syncImageZones(images: readonly DocumentImage[]): void {
+  /**
+   * Puts each projected image through the shared policy (VC-273).
+   *
+   * Document Mode HIDES the `![alt](src)` it replaces, so an unrenderable source
+   * used to leave an unexplained gap where the syntax had been — strictly worse
+   * than the transcript's broken-image glyph, because there was nothing left on
+   * screen to tell you an image had been written at all. Every image therefore
+   * resolves to either a URL or a notice, and both get drawn.
+   */
+  function resolveImages(images: readonly DocumentImage[]): ResolvedDocumentImage[] {
+    const byName = attachmentHashesByName(options.getAttachments?.() ?? []);
+    return images.map((image) => {
+      const resolution = resolveMarkdownImageSrc(image.src, byName);
+      return {
+        afterLineNumber: image.afterLineNumber,
+        alt: image.alt,
+        src: resolution.kind === "render" ? resolution.src : null,
+        notice: markdownImageNotice(resolution),
+      };
+    });
+  }
+
+  function syncImageZones(images: readonly ResolvedDocumentImage[]): void {
     const wanted = new Set(images.map(zoneKey));
     const missing = images.filter((image) => !zones.has(zoneKey(image)));
     const stale = [...zones.keys()].filter((key) => !wanted.has(key));
@@ -250,29 +324,52 @@ export function attachDocumentMode(
       for (const image of missing) {
         const dom = document.createElement("div");
         dom.className = "volli-document-mode-image";
-        const element = new Image();
-        element.src = image.src;
-        element.alt = image.alt;
-        dom.appendChild(element);
+        const key = zoneKey(image);
         const zone: MonacoEditor.IViewZone = {
           afterLineNumber: image.afterLineNumber,
           heightInPx: IMAGE_ZONE_PLACEHOLDER_PX,
           domNode: dom,
         };
+
+        if (image.src === null) {
+          dom.appendChild(missingImageNode(image, image.notice ?? "Image unavailable"));
+          // Sized before it is added: a notice has a known height, and asking
+          // for one would mean re-entering `changeViewZones` from inside it.
+          zone.heightInPx = IMAGE_ZONE_NOTICE_PX;
+          const id = accessor.addZone(zone);
+          zones.set(key, { id, zone });
+          continue;
+        }
+
+        const element = new Image();
+        element.src = image.src;
+        element.alt = image.alt;
+        dom.appendChild(element);
         const id = accessor.addZone(zone);
-        const key = zoneKey(image);
         zones.set(key, { id, zone });
         // The zone reserves space before the bytes arrive, so its real height is
         // only knowable on load; re-laying it out then is what stops a tall
         // image from being clipped to the placeholder.
-        element.addEventListener("load", () => {
+        element.addEventListener("load", () => relayout(id, key, dom, zone));
+        // A `volli-blob:` URL whose bytes have been collected, or a file that
+        // has gone: the zone would otherwise sit at its 24px placeholder
+        // forever, which reads as a rendering glitch rather than a missing file.
+        element.addEventListener("error", () => {
           if (disposed || zones.get(key)?.id !== id) return;
-          zone.heightInPx = Math.min(dom.scrollHeight, IMAGE_ZONE_MAX_PX);
-          editor.changeViewZones((later) => {
-            later.layoutZone(id);
-          });
+          element.remove();
+          dom.appendChild(missingImageNode(image, "Image could not be loaded"));
+          relayout(id, key, dom, zone);
         });
       }
+    });
+  }
+
+  /** Re-measures one zone against its content, bounded so nothing owns the viewport. */
+  function relayout(id: string, key: string, dom: HTMLElement, zone: MonacoEditor.IViewZone): void {
+    if (disposed || zones.get(key)?.id !== id) return;
+    zone.heightInPx = Math.min(dom.scrollHeight, IMAGE_ZONE_MAX_PX);
+    editor.changeViewZones((later) => {
+      later.layoutZone(id);
     });
   }
 
@@ -307,7 +404,7 @@ export function attachDocumentMode(
         options: decoration.options,
       })),
     );
-    syncImageZones(render.images);
+    syncImageZones(resolveImages(render.images));
   }
 
   /** Fold the burst of events one keystroke produces into a single pass. */

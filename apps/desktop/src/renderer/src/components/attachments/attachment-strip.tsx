@@ -84,6 +84,62 @@ export function AttachmentThumb({
   );
 }
 
+/**
+ * The compact thumbnail row a QUEUED message shows (VC-273).
+ *
+ * A queued row is one line inside the composer, beside Steer, Remove and an
+ * actions menu, so it cannot host the 64px tiles the composer strip uses. It
+ * still has to show the files: a message waiting to be sent that draws only its
+ * text reads as a message whose attachments were dropped, and the person has no
+ * way to tell the difference until it lands in the transcript.
+ *
+ * Capped, with a `+N` overflow, because the row's text is the thing being
+ * identified and an unbounded strip would crowd it out.
+ */
+export function AttachmentThumbRow({
+  attachments,
+  max = 3,
+  className,
+}: {
+  attachments: readonly BlobLinkView[];
+  max?: number;
+  className?: string;
+}): React.ReactElement | null {
+  if (attachments.length === 0) return null;
+  const shown = attachments.slice(0, max);
+  const overflow = attachments.length - shown.length;
+  return (
+    <span
+      className={cn("flex shrink-0 items-center gap-1", className)}
+      // One label for the group: a queued row is already read out with its
+      // text, and per-thumb labels would make every attachment a stop.
+      aria-label={`${attachments.length} attachment${attachments.length === 1 ? "" : "s"}`}
+    >
+      {shown.map((attachment) =>
+        thumbKind(attachment.mime) === "image" ? (
+          <img
+            key={attachment.linkId ?? attachment.blobHash}
+            src={blobUrl(attachment.blobHash)}
+            alt={attachment.label}
+            title={attachment.label}
+            className="size-4 rounded-[3px] border border-border/70 object-cover"
+            draggable={false}
+          />
+        ) : (
+          <span
+            key={attachment.linkId ?? attachment.blobHash}
+            title={attachment.label}
+            className="flex size-4 items-center justify-center rounded-[3px] border border-border/70 bg-muted/40 text-[7px] font-medium text-muted-foreground"
+          >
+            {fileTypeLabel(attachment.originalName, attachment.mime).slice(0, 3)}
+          </span>
+        ),
+      )}
+      {overflow > 0 ? <span className="text-[10px] text-muted-foreground">+{overflow}</span> : null}
+    </span>
+  );
+}
+
 export interface AttachmentStripProps {
   attachments: readonly BlobLinkView[];
   onRemove?: (attachment: BlobLinkView) => void;

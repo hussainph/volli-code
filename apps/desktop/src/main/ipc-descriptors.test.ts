@@ -1754,8 +1754,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 58 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(58);
+    it("covers all 59 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(59);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no

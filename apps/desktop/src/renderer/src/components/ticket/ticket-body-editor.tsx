@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import type { Ticket } from "@volli/shared";
+import type { NamedBlobLink, Ticket } from "@volli/shared";
 
 import {
   type DocumentFileRefs,
@@ -44,9 +44,16 @@ export function TicketBodyEditor({
   ticket,
   fileRefs,
   editorRef,
+  attachments,
 }: {
   ticket: Ticket;
   fileRefs?: DocumentFileRefs;
+  /**
+   * The Ticket's materialized attachments, so an inline `![spec](…)` in the
+   * body resolves to the Blob it names (VC-273). Fetched once by the detail
+   * view above and shared with the comment feed, so both agree.
+   */
+  attachments?: readonly NamedBlobLink[] | undefined;
   /** The host's splice-in point for `@` refs attached elsewhere on the view (VC-106). */
   editorRef?: React.Ref<MonacoDocumentEditorHandle>;
 }) {
@@ -189,6 +196,7 @@ export function TicketBodyEditor({
           placeholder="Add description…"
           ariaLabel="Ticket description"
           fileRefs={fileRefs}
+          attachments={attachments}
           className="min-h-32"
           style={clamped ? { maxHeight: BODY_CLAMP_PX } : undefined}
           ref={editorRef}

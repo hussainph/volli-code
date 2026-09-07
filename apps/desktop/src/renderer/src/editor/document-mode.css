@@ -294,6 +294,29 @@
   border-radius: var(--radius-md);
 }
 
+/*
+ * The stand-in for a picture that cannot be drawn (VC-273).
+ *
+ * Document Mode hides the `![alt](src)` it replaces, so without this a refused
+ * or broken image left a silent gap and the author had no way to tell an image
+ * had been written at all. Clipped to one line because the zone reserves a
+ * fixed height for it (`IMAGE_ZONE_NOTICE_PX`) rather than measuring.
+ */
+.volli-document-mode-image-missing {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.15em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* --- @file chips --------------------------------------------------------- */
 
 /*

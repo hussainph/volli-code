@@ -11,4 +11,38 @@ describe("looksLikeFilePath", () => {
     expect(looksLikeFilePath("hello world")).toBe(false);
     expect(looksLikeFilePath("npm")).toBe(false);
   });
+
+  /*
+   * A false positive is not cosmetic: it puts a dotted underline and a dead
+   * click target on a word in the middle of a sentence, which is the "weird
+   * syntax highlighting" VC-273 names. The old `\.[A-Za-z0-9]{1,12}$` rule
+   * matched all of these.
+   */
+  it("leaves numbers, versions and abbreviations as ordinary code", () => {
+    expect(looksLikeFilePath("3.14")).toBe(false);
+    expect(looksLikeFilePath("1.2.3")).toBe(false);
+    expect(looksLikeFilePath("e.g")).toBe(false);
+    expect(looksLikeFilePath("U.S")).toBe(false);
+    expect(looksLikeFilePath("foo.bar")).toBe(false);
+    expect(looksLikeFilePath("self.value")).toBe(false);
+  });
+
+  it("still accepts slash-less names with a real file extension", () => {
+    expect(looksLikeFilePath("vite.config.ts")).toBe(true);
+    expect(looksLikeFilePath("globals.css")).toBe(true);
+    expect(looksLikeFilePath("pnpm-lock.yaml")).toBe(true);
+  });
+
+  it("treats anything with a separator as a path, absolute excepted", () => {
+    expect(looksLikeFilePath("packages/shared/src")).toBe(true);
+    expect(looksLikeFilePath("./local")).toBe(true);
+    // An absolute path is not a project-relative mention this app can open.
+    expect(looksLikeFilePath("/etc/passwd")).toBe(false);
+  });
+
+  it("rejects a bare or trailing dot", () => {
+    expect(looksLikeFilePath(".")).toBe(false);
+    expect(looksLikeFilePath("trailing.")).toBe(false);
+    expect(looksLikeFilePath(".env")).toBe(false); // leading dot, no stem
+  });
 });

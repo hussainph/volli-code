@@ -31,6 +31,7 @@ export * from "./session-activity";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
 export * from "./blob";
+export * from "./markdown-image";
 export * from "./ticket-events";
 export * from "./ticket-await";
 export * from "./untrusted-content";

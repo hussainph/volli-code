@@ -1,11 +1,12 @@
 /**
  * Streamdown component overrides for session chat markdown.
- * Keeps remote images local/data-only, fixes GFM task-list chrome, styles
- * <kbd>, and treats path-like inline code as file mentions.
+ * Resolves images through the app's one image policy, fixes GFM task-list
+ * chrome, styles <kbd>, and treats path-like inline code as file mentions.
  */
 import * as React from "react";
 import type { Components } from "streamdown";
 
+import { MarkdownImage } from "@renderer/components/attachments/markdown-image";
 import { cn } from "@renderer/lib/utils";
 
 const FileMentionContext = React.createContext<((path: string) => void) | null>(null);
@@ -22,43 +23,121 @@ export function FileMentionProvider({
   );
 }
 
-function isAllowedImageSrc(src: string | undefined): boolean {
-  if (!src) return false;
-  if (src.startsWith("data:")) return true;
-  if (src.startsWith("blob:")) return true;
-  // Relative / app-local assets only — no remote https.
-  if (src.startsWith("/") || src.startsWith("./") || src.startsWith("../")) return true;
-  if (src.startsWith("volli-app:") || src.startsWith("file:")) return true;
-  return false;
-}
+/**
+ * File extensions that make a slash-less token a file name.
+ *
+ * A curated list rather than "any 1-12 letters after a dot", which is what the
+ * previous heuristic used and why `` `3.14` `` and `` `e.g` `` rendered as
+ * clickable file mentions in the middle of a sentence — the "weird syntax
+ * highlighting" this ticket names. Anything with a `/` in it is still treated
+ * as a path without consulting this list, because that is already a path.
+ */
+const FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+  "bash",
+  "c",
+  "cc",
+  "cfg",
+  "cjs",
+  "conf",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "d",
+  "dockerfile",
+  "env",
+  "go",
+  "gradle",
+  "graphql",
+  "h",
+  "hpp",
+  "htm",
+  "html",
+  "ini",
+  "java",
+  "jose",
+  "js",
+  "json",
+  "json5",
+  "jsonc",
+  "jsx",
+  "kt",
+  "less",
+  "lock",
+  "log",
+  "lua",
+  "md",
+  "mdx",
+  "mjs",
+  "mts",
+  "php",
+  "pl",
+  "plist",
+  "png",
+  "prisma",
+  "proto",
+  "py",
+  "rb",
+  "rs",
+  "scss",
+  "sh",
+  "sql",
+  "svg",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zsh",
+]);
 
-/** Heuristic for project/file path mentions in inline code. */
+/** A token that is only digits and dots (`3.14`, `1.2.3`) — a version or a number, never a file. */
+const NUMERIC_RE = /^[0-9.]+$/;
+
+/**
+ * Heuristic for project/file path mentions in inline code.
+ *
+ * Deliberately conservative: a false positive puts a dotted underline and a
+ * click target on a word that is not a file, in the middle of prose, and the
+ * click does nothing. A false negative merely leaves an ordinary code span,
+ * which is what the author wrote anyway.
+ *
+ * Known residual: a slash-less token whose extension is a real one is taken at
+ * its word, so `` `Node.js` `` still reads as a file. Telling it from
+ * `` `index.js` `` needs the workspace's file index, not a better regex — the
+ * `@file` chips already resolve against that index, and this is the seam where
+ * chat would do the same.
+ */
 export function looksLikeFilePath(value: string): boolean {
   const text = value.trim();
   if (!text || text.length > 240 || /\s/.test(text)) return false;
-  if (text.startsWith("http://") || text.startsWith("https://")) return false;
   if (text.includes("://")) return false;
-  // extension, nested path, or common project roots
-  if (/^[A-Za-z0-9_./@+-]+\.[A-Za-z0-9]{1,12}$/.test(text)) return true;
-  if (
-    text.startsWith("src/") ||
-    text.startsWith("apps/") ||
-    text.startsWith("packages/") ||
-    text.startsWith("./") ||
-    text.startsWith("../")
-  ) {
-    return true;
+  if (NUMERIC_RE.test(text)) return false;
+
+  // A path is a path: anything with a separator, as long as it is not absolute
+  // (an absolute path is not a project-relative mention this app can open).
+  if (text.includes("/")) {
+    return !text.startsWith("/") && /^[\w./@+-]+$/.test(text);
   }
-  return text.includes("/") && !text.startsWith("/") && /^[\w./@+-]+$/.test(text);
+
+  // No separator: only a known extension makes this a file name.
+  const dot = text.lastIndexOf(".");
+  if (dot <= 0 || dot === text.length - 1) return false;
+  if (!/^[\w.@+-]+$/.test(text)) return false;
+  return FILE_EXTENSIONS.has(text.slice(dot + 1).toLowerCase());
 }
 
 export const chatMarkdownComponents: Components = {
-  em: ({ className, children, ...props }) => (
+  em: ({ className, children, node: _node, ...props }) => (
     <em className={cn("italic", className)} {...props}>
       {children}
     </em>
   ),
-  kbd: ({ className, children, ...props }) => (
+  kbd: ({ className, children, node: _node, ...props }) => (
     <kbd
       className={cn(
         "mx-1 inline-flex min-h-5 items-center rounded-sm border border-border bg-muted px-1 font-mono text-[0.8em] text-foreground",
@@ -69,23 +148,21 @@ export const chatMarkdownComponents: Components = {
       {children}
     </kbd>
   ),
-  img: ({ className, src, alt, ...props }) => {
-    if (!isAllowedImageSrc(typeof src === "string" ? src : undefined)) {
-      return (
-        <span className="inline-flex items-center rounded-sm border border-border bg-muted px-2 py-1 text-ui text-muted-foreground">
-          Image blocked (local/data only)
-        </span>
-      );
-    }
-    return (
-      <img
-        className={cn("my-2 max-h-80 max-w-full rounded-md border border-border", className)}
-        src={src}
-        alt={alt ?? ""}
-        {...props}
-      />
-    );
-  },
+  /*
+   * The previous allowlist here admitted exactly the sources that CANNOT load
+   * on this origin (`/abs`, `./rel`, `file:`) and refused `volli-blob:`, the
+   * one that can — so an agent writing the attachment path it was given in the
+   * brief got a broken-image glyph (VC-273). The decision now lives in
+   * `@volli/shared` and is shared with the Ticket-body pipeline, so the same
+   * markdown renders the same way wherever it is written.
+   */
+  img: ({ className, src, alt }) => (
+    <MarkdownImage
+      src={typeof src === "string" ? src : undefined}
+      alt={alt}
+      className={className}
+    />
+  ),
   ul: ({ className, children, node, ...props }) => {
     const fromNode =
       Array.isArray(node?.properties?.className) &&
@@ -104,7 +181,7 @@ export const chatMarkdownComponents: Components = {
       </ul>
     );
   },
-  li: ({ className, children, ...props }) => {
+  li: ({ className, children, node: _node, ...props }) => {
     const isTask = typeof className === "string" && className.includes("task-list-item");
     return (
       <li
@@ -115,7 +192,7 @@ export const chatMarkdownComponents: Components = {
       </li>
     );
   },
-  input: ({ className, type, ...props }) => {
+  input: ({ className, type, node: _node, ...props }) => {
     if (type === "checkbox") {
       return (
         <input
@@ -128,7 +205,7 @@ export const chatMarkdownComponents: Components = {
     }
     return <input type={type} className={className} {...props} />;
   },
-  inlineCode: ({ className, children, ...props }) => {
+  inlineCode: ({ className, children, node: _node, ...props }) => {
     const text = React.Children.toArray(children)
       .map((child) => (typeof child === "string" ? child : ""))
       .join("");
@@ -141,7 +218,7 @@ export const chatMarkdownComponents: Components = {
     }
     return <FileMentionCode className={className} path={text.trim()} {...props} />;
   },
-  section: ({ className, children, ...props }) => {
+  section: ({ className, children, node: _node, ...props }) => {
     const isFootnotes =
       typeof className === "string" &&
       (className.includes("footnotes") || className.includes("data-footnotes"));
