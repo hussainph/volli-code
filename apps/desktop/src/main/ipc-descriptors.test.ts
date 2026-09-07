@@ -1532,31 +1532,49 @@ describe("DATA_IPC descriptor table", () => {
   describe("volli:worktree-orphan-cleanup", () => {
     const { guard, invalidError } = DATA_IPC["volli:worktree-orphan-cleanup"];
 
-    it("accepts paths, projects, or either one alone", () => {
-      expect(guard([{ paths: ["/wt/a"], projectIds: ["p1"] }])).toBe(true);
-      expect(guard([{ paths: ["/wt/a"], projectIds: [] }])).toBe(true);
-      expect(guard([{ paths: [], projectIds: ["p1"] }])).toBe(true);
+    it("accepts a command id, a scan revision, and the item ids confirmed from it", () => {
+      expect(
+        guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
+      ).toBe(true);
+      expect(
+        guard([
+          {
+            commandId: "cmd-1",
+            scanRevision: "rev-1",
+            itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+          },
+        ]),
+      ).toBe(true);
     });
 
     // A cleanup with nothing to do would still open a durable record; refusing
     // the shape keeps the history a log of acts rather than of clicks.
     it("rejects a request that would change nothing", () => {
-      expect(guard([{ paths: [], projectIds: [] }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [] }])).toBe(false);
     });
 
-    it("rejects anything that isn't two arrays of non-empty strings", () => {
+    // The channel takes ids, never paths: main resolves them against the plan
+    // it minted, so a client cannot name a directory no scan proposed (C1).
+    it("rejects the old path-carrying shape outright", () => {
+      expect(guard([{ paths: ["/wt/a"], projectIds: ["p1"] }])).toBe(false);
+    });
+
+    it("rejects anything that isn't a command id, a revision, and non-empty string ids", () => {
       expect(guard([null])).toBe(false);
-      expect(guard([{ paths: "/wt/a", projectIds: [] }])).toBe(false);
-      expect(guard([{ paths: ["/wt/a"], projectIds: "p1" }])).toBe(false);
-      expect(guard([{ paths: [1], projectIds: [] }])).toBe(false);
-      expect(guard([{ paths: [""], projectIds: [] }])).toBe(false);
-      expect(guard([{ paths: [], projectIds: [""] }])).toBe(false);
-      expect(guard([{ projectIds: [] }])).toBe(false);
+      expect(guard([{ scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "", scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", scanRevision: "", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: "a" }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [1] }])).toBe(false);
+      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [""] }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
-      expect(guard([{ paths: ["/wt/a"], projectIds: [] }, {}])).toBe(false);
+      expect(
+        guard([{ commandId: "c", scanRevision: "r", itemIds: ["i"] }, {}]),
+      ).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {

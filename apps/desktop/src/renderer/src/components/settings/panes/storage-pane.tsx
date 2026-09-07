@@ -37,14 +37,20 @@ import type {
   PiSessionOrphanInventory,
 } from "../../../../../ipc/contract";
 import {
-  cleanupSummary,
+  cleanupOutcome,
+  cleanupRejectionMessage,
   describeInterrupted,
   describeKept,
+  describeKeptMetadata,
   describeMetadata,
   describeRemovable,
+  describeRunFailures,
+  describeUnreadableProject,
   historyRows,
   planCleanup,
+  preservationHistoryRows,
   retentionNote,
+  runsWithFailures,
   unfinishedRuns,
   type CleanupPlan,
   type OrphansScan,
@@ -548,11 +554,14 @@ function OrphansSection() {
         setState({
           status: "ready",
           data: {
+            revision: result.revision,
             scannedAt: result.scannedAt,
             retentionDays: result.retentionDays,
             prunable: result.prunable,
             removable: result.removable,
             keptRecent: result.keptRecent,
+            keptMetadata: result.keptMetadata,
+            unreadableProjects: result.unreadableProjects,
             dirty: result.dirty,
             runs: result.runs,
           },
@@ -597,24 +606,31 @@ function OrphansSection() {
   }
 
   /**
-   * The confirmed act. It sends exactly the paths and projects the dialog just
-   * listed, and main re-checks each one before touching it — so a skip is a
-   * normal outcome, reported rather than treated as a failure.
+   * The confirmed act. It names exactly the scan revision on screen and the
+   * item ids that revision proposed — never a path — and mints a fresh
+   * command id per press so a retried click after a stalled response cannot
+   * double-run (VC-284 review C1). Main re-checks each target before touching
+   * it, so a skip is a normal outcome, reported rather than treated as a
+   * failure — but a FAILED or indeterminate item is not: it gets a warning,
+   * never `toast.success` (review S2).
    */
   async function runCleanup(plan: CleanupPlan): Promise<void> {
     if (cleaning) return;
     setCleaning(true);
     try {
       const result = await window.api.worktree.cleanupOrphans({
-        paths: plan.paths,
-        projectIds: plan.projectIds,
+        commandId: crypto.randomUUID(),
+        scanRevision: plan.scanRevision,
+        itemIds: plan.itemIds,
       });
       if (!result.ok) {
-        toastError(`Couldn't clean up: ${result.error}`);
+        toastError(cleanupRejectionMessage(result.code, result.error));
         return;
       }
       setConfirmCleanup(false);
-      toast.success(`Cleanup finished: ${cleanupSummary(result.run)}.`);
+      const outcome = cleanupOutcome(result.run);
+      if (outcome.kind === "warning") toast.warning(outcome.message);
+      else toast.success(outcome.message);
       await load(true);
     } catch (error) {
       toastError(`Couldn't clean up: ${errorMessage(error)}`);
@@ -637,6 +653,8 @@ function OrphansSection() {
           <>
             Scanning only looks. Cleanup removes folders you confirm and keeps their branches;
             anything with uncommitted work, recent use, or a live terminal or agent is left alone.
+            An orphan has no ticket to archive, so a reviewed folder removal is the only thing that
+            can happen to it here — archiving a ticket stays a separate action, in Retention above.
             {retentionDays === null ? null : ` ${retentionNote(retentionDays)}`}
           </>
         }
@@ -657,9 +675,13 @@ function OrphansSection() {
           report.dirty.length === 0 &&
           report.removable.length === 0 &&
           report.keptRecent.length === 0 &&
+          report.keptMetadata.length === 0 &&
+          report.unreadableProjects.length === 0 &&
           report.prunable.length === 0 &&
           historyRows(report.runs).length === 0 &&
-          unfinishedRuns(report.runs).length === 0
+          preservationHistoryRows(report.runs).length === 0 &&
+          unfinishedRuns(report.runs).length === 0 &&
+          runsWithFailures(report.runs).length === 0
         }
         empty="No orphaned worktrees."
       >
@@ -669,10 +691,29 @@ function OrphansSection() {
              * A cleanup the app never finished. It is stated before anything
              * else because it is the only row that describes an incomplete act
              * — and it says what completed, so nothing already removed reads as
-             * still pending.
+             * still pending. "Scan again" is a real button here, not only a
+             * sentence, per the review's S2.
              */}
             {unfinishedRuns(report.runs).map((run) => (
-              <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)} />
+              <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)}>
+                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
+                  Scan again
+                </Button>
+              </ItemRow>
+            ))}
+
+            {/*
+             * A cleanup that FINISHED but left a failed or indeterminate item
+             * behind — the case the old pane's `toast.success` erased (review
+             * S2). Every failed path and its reason are named, with the same
+             * recovery.
+             */}
+            {runsWithFailures(report.runs).map((run) => (
+              <ItemRow key={`failures:${run.id}`} name="Cleanup finished with problems" meta={describeRunFailures(run)}>
+                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
+                  Scan again
+                </Button>
+              </ItemRow>
             ))}
 
             {plan === null || plan.isEmpty ? null : (
@@ -692,11 +733,20 @@ function OrphansSection() {
               </ItemRow>
             )}
 
+            {/* A project whose worktree listing couldn't even be read — said outright, not hidden. */}
+            {report.unreadableProjects.map((entry) => (
+              <ItemRow
+                key={`unreadable:${entry.projectId}`}
+                name={entry.projectName}
+                meta={describeUnreadableProject(entry)}
+              />
+            ))}
+
             {report.dirty.map((orphan) => (
               <ItemRow
                 key={orphan.path}
                 name={truncateMiddle(orphan.path)}
-                meta={orphan.reason}
+                meta={orphan.projectName ? `${orphan.projectName} — ${orphan.reason}` : orphan.reason}
                 testId="orphan-row"
               >
                 <RowAction
@@ -714,12 +764,12 @@ function OrphansSection() {
               </ItemRow>
             ))}
 
-            {/* Candidates: stated as proposals, with the date each became eligible. */}
+            {/* Candidates: stated as proposals, with the project, date, and basis each became eligible under. */}
             {report.removable.map((entry) => (
               <ItemRow
                 key={entry.path}
                 name={truncateMiddle(entry.path)}
-                meta={describeRemovable(entry)}
+                meta={describeRemovable(entry, { retentionDays: report.retentionDays })}
               >
                 <RowAction
                   label={`Reveal ${entry.path} in Finder`}
@@ -730,15 +780,22 @@ function OrphansSection() {
               </ItemRow>
             ))}
 
-            {report.prunable.flatMap((project) =>
-              project.entries.map((entry) => (
-                <ItemRow
-                  key={`prunable:${entry.path}`}
-                  name={truncateMiddle(entry.path)}
-                  meta={describeMetadata(entry)}
-                />
-              )),
-            )}
+            {report.prunable.map((entry) => (
+              <ItemRow
+                key={`prunable:${entry.id}`}
+                name={truncateMiddle(entry.path)}
+                meta={describeMetadata(entry)}
+              />
+            ))}
+
+            {/* Stale records cleanup will NOT prune, and why. */}
+            {report.keptMetadata.map((entry) => (
+              <ItemRow
+                key={`kept-metadata:${entry.projectId}:${entry.path}`}
+                name={truncateMiddle(entry.path)}
+                meta={describeKeptMetadata(entry)}
+              />
+            ))}
 
             {report.keptRecent.map((entry) => (
               <ItemRow
@@ -752,10 +809,21 @@ function OrphansSection() {
              * What a cleanup DID, from the durable record rather than from this
              * session's memory — with its real source and time, because a
              * removal nobody can audit is indistinguishable from work going
-             * missing, and one mislabelled is worse.
+             * missing, and one mislabelled is worse. Includes pruned METADATA
+             * records, not only removed folders, and never folds two runs'
+             * rows into one (review C6).
              */}
             {historyRows(report.runs).map((row) => (
               <ItemRow key={row.key} name={truncateMiddle(row.path)} meta={row.meta} />
+            ))}
+
+            {/*
+             * The exact preservation policy each completed cleanup ran under,
+             * rendered through the same shared vocabulary the confirmation
+             * uses — never a second, independent description (review S3).
+             */}
+            {preservationHistoryRows(report.runs).map((row) => (
+              <ItemRow key={row.key} name="Preservation applied" meta={row.meta} />
             ))}
           </>
         )}
@@ -783,7 +851,7 @@ function OrphansSection() {
                     <p>Removes {plan.worktrees.length} folder(s):</p>
                     <ul className="space-y-1">
                       {plan.worktrees.map((entry) => (
-                        <li key={entry.path} className="font-mono text-foreground">
+                        <li key={entry.id} className="font-mono text-foreground">
                           {entry.path}
                           {entry.branch === null ? "" : ` — keeps branch ${entry.branch}`}
                         </li>
@@ -796,8 +864,8 @@ function OrphansSection() {
                     <p>Prunes {plan.metadata.length} stale git record(s):</p>
                     <ul className="space-y-1">
                       {plan.metadata.map((entry) => (
-                        <li key={entry.path} className="font-mono text-foreground">
-                          {entry.path}
+                        <li key={entry.id} className="font-mono text-foreground">
+                          {entry.projectName} — {entry.path}
                         </li>
                       ))}
                     </ul>

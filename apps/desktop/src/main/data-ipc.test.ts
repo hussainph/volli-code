@@ -93,7 +93,15 @@ vi.mock("./worktree", async () => ({
   // both are mocked here, and both have their own suites under worktree/.
   scanOrphans: vi.fn(),
   cleanupOrphans: vi.fn(),
-  readCleanupRuns: vi.fn(() => []),
+  // NOT mocked: the cleanup command core and its SQLite ledger are what the
+  // channel's receipts and durable history come from, and a stand-in would
+  // answer a different question than the one production asks (VC-284 S1).
+  ...(await vi.importActual<typeof import("./worktree/cleanup-engine")>(
+    "./worktree/cleanup-engine",
+  )),
+  ...(await vi.importActual<typeof import("./worktree/cleanup-ledger")>(
+    "./worktree/cleanup-ledger",
+  )),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
@@ -128,10 +136,10 @@ import {
   cleanupOrphans,
   ensure,
   listBranches,
-  readCleanupRuns,
   remove as removeWorktree,
   scanOrphans,
 } from "./worktree";
+import { orphanCleanupEngine } from "./worktree-runtime";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
@@ -2325,23 +2333,35 @@ describe("volli:worktree-recreate", () => {
   });
 });
 
+/** The two seams the manual Delete is given; both destructive paths must get them. */
+const noBusySites = async () => [];
+const noAgentSites = async () => ({ released: [], stillOpen: [] });
+
 describe("volli:worktree-orphans", () => {
   const report = {
+    revision: "rev-1",
     scannedAt: 1_000,
     retentionDays: 14,
     prunable: [
       {
+        id: "rev-1:metadata:0",
         projectId: "project-1",
+        projectName: "Volli",
         projectPath: "/repo",
-        entries: [{ path: "/wt/gone", reason: "gitdir file points to non-existent location" }],
+        path: "/wt/gone",
+        reason: "gitdir file points to non-existent location",
       },
     ],
+    keptMetadata: [],
     removable: [
       {
+        id: "rev-1:worktree:0",
         path: "/wt/orphan",
         projectId: "project-1",
+        projectName: "Volli",
         branch: "volli/VC-1-x",
         lastTouchedAt: 1,
+        ageBasis: "directory" as const,
         removableAt: 2,
       },
     ],
@@ -2349,31 +2369,75 @@ describe("volli:worktree-orphans", () => {
       {
         path: "/wt/fresh",
         projectId: "project-1",
+        projectName: "Volli",
         branch: "volli/VC-2-y",
         lastTouchedAt: 2,
+        ageBasis: "commit" as const,
         removableAt: 3,
-        reason: "recently used",
+        reason: "recently-used" as const,
+        detail: null,
       },
     ],
-    dirty: [{ path: "/wt/dirty", projectId: "project-1", reason: "uncommitted work" }],
+    unreadableProjects: [],
+    dirty: [
+      {
+        path: "/wt/dirty",
+        projectId: "project-1",
+        projectName: "Volli",
+        reason: "uncommitted work",
+      },
+    ],
+    plan: [
+      {
+        id: "rev-1:metadata:0",
+        kind: "metadata" as const,
+        path: "/wt/gone",
+        projectId: "project-1",
+        projectName: "Volli",
+        projectPath: "/repo",
+        branch: null,
+        gitReason: "gitdir file points to non-existent location",
+      },
+      {
+        id: "rev-1:worktree:0",
+        kind: "worktree" as const,
+        path: "/wt/orphan",
+        projectId: "project-1",
+        projectName: "Volli",
+        projectPath: "/repo",
+        branch: "volli/VC-1-x",
+        gitReason: null,
+      },
+    ],
   };
+
+  /** The wire shape: the scan minus the plan, which never leaves main. */
+  const wire = (() => {
+    const { plan: _plan, ...rest } = report;
+    return rest;
+  })();
 
   it("wraps the scan report, with the durable cleanup history beside it", async () => {
     vi.mocked(scanOrphans).mockResolvedValue(report);
-    const run = {
-      id: "run-1",
-      source: "settings" as const,
-      startedAt: 5,
-      finishedAt: 6,
-      interruptedAt: null,
-      preservation: ["Branches are kept."],
+    // A real recorded run, through the real command core.
+    const engine = orphanCleanupEngine(ctx.db);
+    await engine.accept({
+      commandId: "cmd-history",
+      source: "settings",
+      scanRevision: "rev-0",
+      retentionDays: 14,
+      preservation: ["branches"],
       items: [],
-    };
-    vi.mocked(readCleanupRuns).mockReturnValue([run]);
+    });
+    await engine.finish({ commandId: "cmd-history" });
 
     const result = await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
 
-    expect(result).toEqual({ ok: true, ...report, runs: [run] });
+    expect(result).toEqual({
+      ok: true,
+      ...wire,
+      runs: [expect.objectContaining({ id: "cmd-history", source: "settings" })],
+    });
   });
 
   it("never removes anything: the channel only ever runs the read-only scan", async () => {
@@ -2383,6 +2447,22 @@ describe("volli:worktree-orphans", () => {
     await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans", { refresh: true });
 
     expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+  });
+
+  it("gives the scan the activity supplier, so an occupied checkout is never proposed", async () => {
+    vi.mocked(scanOrphans).mockResolvedValue(report);
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { busyWorktreeSites: noBusySites, releaseAgentSites: noAgentSites },
+    );
+
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+
+    expect(vi.mocked(scanOrphans)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ busyWorktreeSites: noBusySites }),
+    );
   });
 
   it("returns the cached scan without re-walking on a second call within a launch", async () => {
@@ -2404,87 +2484,156 @@ describe("volli:worktree-orphans", () => {
 
     expect(vi.mocked(scanOrphans)).toHaveBeenCalledTimes(2);
   });
-});
 
-/** The two seams the manual Delete is given; the cleanup channel must get both. */
-const noBusySites = async () => [];
-const noAgentSites = async () => ({ released: [], stillOpen: [] });
+  /** The plan a scan minted, as the cleanup channel must resolve it. */
+  async function scanOnce(): Promise<void> {
+    vi.mocked(scanOrphans).mockResolvedValue(report);
+    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+  }
 
-describe("volli:worktree-orphan-cleanup", () => {
-  const run = {
-    id: "run-1",
-    source: "settings" as const,
-    startedAt: 1,
-    finishedAt: 2,
-    interruptedAt: null,
-    preservation: ["Branches are kept."],
-    items: [
-      {
-        kind: "worktree" as const,
-        path: "/wt/orphan",
-        projectId: "project-1",
-        branch: "volli/VC-1-x",
-        status: "completed" as const,
-        detail: "Removed the folder.",
-        finishedAt: 2,
-      },
-    ],
-  };
-
-  it("hands the confirmed paths and projects to the cleanup, with the activity guard attached", async () => {
-    vi.mocked(cleanupOrphans).mockResolvedValue(run);
-    // The same two seams the manual Delete is given: a cleanup that could not
-    // see live work would be exactly the sweep VC-284 is replacing.
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { busyWorktreeSites: noBusySites, releaseAgentSites: noAgentSites },
-    );
-
-    const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
-      "volli:worktree-orphan-cleanup",
-      { paths: ["/wt/orphan"], projectIds: ["project-1"] },
-    );
-
-    expect(result).toEqual({ ok: true, run });
-    expect(vi.mocked(cleanupOrphans)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        busyWorktreeSites: noBusySites,
-        releaseAgentSites: noAgentSites,
-      }),
-      { paths: ["/wt/orphan"], projectIds: ["project-1"], source: "settings" },
-    );
-  });
-
-  it("drops the cached scan so the next read cannot list a directory that is gone", async () => {
-    vi.mocked(scanOrphans).mockResolvedValue({
-      scannedAt: 1,
+  describe("volli:worktree-orphan-cleanup", () => {
+    const run = {
+      id: "cmd-1",
+      source: "settings" as const,
+      scanRevision: "rev-1",
+      startedAt: 1,
+      finishedAt: 2,
+      interruptedAt: null,
+      preservation: ["branches"],
       retentionDays: 14,
-      prunable: [],
-      removable: [],
-      keptRecent: [],
-      dirty: [],
+      items: [
+        {
+          id: "rev-1:worktree:0",
+          kind: "worktree" as const,
+          path: "/wt/orphan",
+          projectId: "project-1",
+          projectName: "Volli",
+          branch: "volli/VC-1-x",
+          state: "completed" as const,
+          detail: "Removed the folder.",
+          startedAt: 1,
+          settledAt: 2,
+        },
+      ],
+    };
+    const receipt = {
+      id: "receipt-1",
+      commandId: "cmd-1",
+      status: "completed" as const,
+      code: null,
+      detail: null,
+      recordedAt: 2,
+    };
+
+    it("resolves the confirmed item ids into main's own plan, with the activity guard attached", async () => {
+      vi.mocked(cleanupOrphans).mockResolvedValue({ run, receipt });
+      // The same two seams the manual Delete is given: a cleanup that could not
+      // see live work would be exactly the sweep VC-284 is replacing.
+      handlers.clear();
+      registerDataIpcHandlers(
+        { ok: true, db: ctx.db },
+        { busyWorktreeSites: noBusySites, releaseAgentSites: noAgentSites },
+      );
+      await scanOnce();
+
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        {
+          commandId: "cmd-1",
+          scanRevision: "rev-1",
+          itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+        },
+      );
+
+      expect(result).toEqual({ ok: true, run, receipt });
+      expect(vi.mocked(cleanupOrphans)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          busyWorktreeSites: noBusySites,
+          releaseAgentSites: noAgentSites,
+          engine: expect.anything(),
+        }),
+        {
+          commandId: "cmd-1",
+          scanRevision: "rev-1",
+          source: "settings",
+          // Main's own plan items — paths the renderer never supplied, in the
+          // order the proposal listed them.
+          items: report.plan,
+        },
+      );
     });
-    vi.mocked(cleanupOrphans).mockResolvedValue(run);
 
-    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
-    await invoke<Promise<WorktreeOrphanCleanupResult>>("volli:worktree-orphan-cleanup", {
-      paths: ["/wt/orphan"],
-      projectIds: [],
+    it("refuses a revision it no longer holds, and says how to recover", async () => {
+      await scanOnce();
+
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        { commandId: "cmd-2", scanRevision: "some-older-scan", itemIds: ["rev-1:worktree:0"] },
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        code: "scan-superseded",
+        error: expect.stringContaining("Scan again"),
+      });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+      // The refusal is durable: a request to delete against a scan we no longer
+      // hold is exactly what an audit wants to find.
+      const rejected = ctx.db
+        .prepare("SELECT status, code FROM worktree_cleanup_receipts WHERE command_id = ?")
+        .get("cmd-2");
+      expect(rejected).toEqual({ status: "rejected", code: "scan-superseded" });
     });
-    await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
 
-    expect(vi.mocked(scanOrphans)).toHaveBeenCalledTimes(2);
-  });
+    it("refuses an item id the scan never proposed", async () => {
+      await scanOnce();
 
-  it("rejects a request that would change nothing", async () => {
-    const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
-      "volli:worktree-orphan-cleanup",
-      { paths: [], projectIds: [] },
-    );
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        { commandId: "cmd-3", scanRevision: "rev-1", itemIds: ["rev-1:worktree:99"] },
+      );
 
-    expect(result).toEqual({ ok: false, error: "Invalid cleanup request" });
-    expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        ok: false,
+        code: "unknown-items",
+        error: expect.stringContaining("Scan again"),
+      });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
+
+    it("refuses any cleanup before a scan has ever run", async () => {
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        { commandId: "cmd-4", scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] },
+      );
+
+      expect(result).toEqual({ ok: false, code: "scan-superseded", error: expect.any(String) });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
+
+    it("drops the cached scan so the next read cannot list a directory that is gone", async () => {
+      vi.mocked(cleanupOrphans).mockResolvedValue({ run, receipt });
+      await scanOnce();
+
+      await invoke<Promise<WorktreeOrphanCleanupResult>>("volli:worktree-orphan-cleanup", {
+        commandId: "cmd-1",
+        scanRevision: "rev-1",
+        itemIds: ["rev-1:worktree:0"],
+      });
+      await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
+
+      expect(vi.mocked(scanOrphans)).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects a request that names no items at all", async () => {
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        { commandId: "cmd-5", scanRevision: "rev-1", itemIds: [] },
+      );
+
+      expect(result).toEqual({ ok: false, error: "Invalid cleanup request" });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
   });
 });
 
