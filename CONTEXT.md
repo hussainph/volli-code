@@ -102,8 +102,18 @@ parked on it, and stopping the parent stops its children. In the parent's chat
 its children show in the Activity Island's agents cluster (VC-269): one chip per
 child, working / done / failed / stopped, where a row peeks the child's
 transcript read-only in an overlay, opens it as a full tab, or stops it as the
-person (`sessions.stop`, recorded with the `user` actor). Write-capable children
-in a shared tree are VC-266's question.
+person (`sessions.stop`, recorded with the `user` actor). That cluster is the
+only place a child is a ROW: a Subagent Session never appears in a Session
+listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
+Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
+about how the agents worked, not about what the person started. Only the
+listings drop them; the durable records keep every child, which is what the
+cluster reads, what usage counts, and what `volli session list` still prints
+with its Role beside it for an orchestrator reading its own fleet. A working
+child still lights its Ticket's board ring — that is work happening there — but
+a child's wait never draws the `waiting` ring, which would send a person to a
+Ticket holding no row they could answer. Write-capable children in a shared
+tree are VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 

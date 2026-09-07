@@ -35,6 +35,20 @@
  * trades continuous Run presence for a ring whose every appearance has a
  * useful meaning.
  *
+ * ── SUBAGENTS COUNT, BUT NEVER ASK ────────────────────────────────────────
+ * A delegated child is not a listable Session (VC-279) and yet it is work
+ * happening on this ticket, so it still lights a card — a parent that
+ * delegated and ended its own turn sits `idle` while its children run, and a
+ * board that went dark there would be wrong about the one thing it says.
+ *
+ * What it may NOT say is `waiting`. That word means "a person is blocked here,
+ * go and look", and there is nothing on this ticket for them to look at: the
+ * child has no row in any listing, and the island chip that DOES represent it
+ * folds the same wait into "working" (VC-269 — a child holds no `ask_user`, so
+ * its waits are narrow runtime trips rather than a question addressed to
+ * anyone). A ring louder than the surface that owns the fact sends a reader to
+ * a ticket to find nothing.
+ *
  * ── THE TWO SOURCES ───────────────────────────────────────────────────────
  * Terminal panes are read from the live sessions store, through the same
  * `sessionActivityState` every other surface derives a pane's word from — its
@@ -52,6 +66,7 @@
 import { WORKING_WINDOW_MS } from "@renderer/stores/sessions";
 import { sessionActivityState, sessionPanes } from "@renderer/stores/sessions";
 import type { SessionContainer } from "@renderer/stores/sessions";
+import { isSubagentSession } from "@volli/shared";
 import type { ChatSessionRecord, SessionActivityState, SessionHarnessState } from "@volli/shared";
 
 /** What a card can say. A ticket with nothing running is simply absent from the map. */
@@ -130,10 +145,19 @@ export function buildBoardSessionActivity(
   for (const record of input.chatSessions) {
     // A ticketless chat is a Board Session; it has no card to light.
     if (record.ticketId === null) continue;
-    mark(record.ticketId, record.activity);
+    mark(record.ticketId, boardChatActivity(record));
   }
 
   return Object.keys(byTicket).length === 0 && nextBoundaryAt === null
     ? EMPTY
     : { byTicket, nextBoundaryAt };
+}
+
+/**
+ * The word one chat Session contributes to its card — its own, except that a
+ * subagent's `waiting` reads as `working`. See "Subagents count, but never
+ * ask" above; this is the whole of that rule.
+ */
+function boardChatActivity(record: ChatSessionRecord): SessionActivityState {
+  return record.activity === "waiting" && isSubagentSession(record) ? "working" : record.activity;
 }

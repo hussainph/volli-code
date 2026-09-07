@@ -256,6 +256,39 @@ export type SessionListingIdentity =
   | { kind: "chat"; record: ChatSessionRecord };
 
 /**
+ * Whether this Session is a Subagent one — the durable child a parent's
+ * `session_delegate` call created (CONTEXT.md "Session Role").
+ *
+ * **A Subagent Session is never a row in a Session listing** (VC-279): not in
+ * the project sidebar's two bands, the ticket rail's roster, Home's Sessions
+ * page, or ⌘K. A subagent is a detail of the turn that delegated it — a
+ * parent may open several at once and several parents may run at once — so
+ * listing them top-level makes the number of rows a function of how the agents
+ * chose to work rather than of what the person started. Its door is the chat
+ * that delegated it, whose Activity Island peeks, promotes and stops each one
+ * (`use-island-agents.ts`), so the rule hides no Session from the person who
+ * owns it; it stops one surface answering a question another answers better.
+ *
+ * **A listing that drops these rows must still hold them.** The renderer's
+ * Session caches (`stores/project-sessions.ts`,
+ * `stores/ticket-session-records.ts`) stay complete — the island reads exactly
+ * those rows, and the usage blocks count every Session that spent money. This
+ * is a predicate a listing applies to what it DRAWS, never a filter on what
+ * main returns.
+ *
+ * Takes the Role alone rather than a whole record, because the callers hold
+ * different shapes of the same fact and none of them should have to build
+ * another's to ask one question. It reads only a {@link ChatSessionRecord}
+ * because that is the only listing shape carrying a Role at all:
+ * {@link SessionRecord} is the terminal projection and has none, which costs
+ * nothing here — a subagent has no door in any surface that opens a terminal,
+ * so it never becomes one.
+ */
+export function isSubagentSession(record: Pick<ChatSessionRecord, "role">): boolean {
+  return record.role === "subagent";
+}
+
+/**
  * Which harness a session is to be JUDGED by: what announced itself, falling
  * back to what the session launched with.
  *

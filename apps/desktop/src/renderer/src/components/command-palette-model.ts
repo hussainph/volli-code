@@ -1,6 +1,7 @@
 import {
   automationOwnership,
   displayTicketId,
+  isSubagentSession,
   sessionProvenanceOf,
   type Automation,
   type AutomationOwnership,
@@ -51,6 +52,13 @@ export interface CommandPaletteItems {
  * Builds the universal command surface from planning state, open terminal
  * tabs, and durable chat rows. Terminal history is not a destination until
  * resume exists; a durable chat is directly reopenable and belongs here.
+ *
+ * A Subagent Session does not (VC-279). This is the app's one GLOBAL Session
+ * listing — every project's, in one list — which makes it the surface a turn's
+ * delegated helpers would flood first, and the one place a reader cannot
+ * narrow away from them by leaving a ticket. They are reached from the chat
+ * that delegated them, whose Activity Island peeks, promotes and stops each
+ * one.
  */
 export function buildCommandPaletteItems(
   projects: readonly Project[],
@@ -122,6 +130,7 @@ export function buildCommandPaletteItems(
     }
   }
   for (const record of chatSessions) {
+    if (isSubagentSession(record)) continue;
     const project = projectById.get(record.projectId);
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);

@@ -11,6 +11,7 @@ import {
   isSessionActivityState,
   isSessionLaunchKind,
   isSessionPlacement,
+  isSubagentSession,
   SESSION_ACTIVITY_STATES,
   SESSION_LAUNCH_KINDS,
   SESSION_PLACEMENTS,
@@ -24,6 +25,17 @@ import type {
   SessionHarnessState,
   SessionRecord,
 } from "./session";
+
+describe("isSubagentSession", () => {
+  it("is true for the Role a delegated child holds", () => {
+    expect(isSubagentSession({ role: "subagent" })).toBe(true);
+  });
+
+  it("is false for both root Roles, so a listing keeps every Session a person started", () => {
+    expect(isSubagentSession({ role: "ticket" })).toBe(false);
+    expect(isSubagentSession({ role: "project" })).toBe(false);
+  });
+});
 
 describe("SESSION_ACTIVITY_STATES", () => {
   it("lists working, waiting, idle, parked, exited in order", () => {

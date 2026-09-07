@@ -18,6 +18,13 @@
  * Session listing returned: ended terminals, chats past the window, live panes
  * nobody has touched in half an hour.
  *
+ * **A Subagent Session is never a row here** (VC-279). It is a child of one
+ * turn in one chat, reached from that chat's Activity Island; a band that
+ * listed it would grow by however many helpers the agents happened to open,
+ * which is the one number a navigator must not be a function of. The INPUT is
+ * filtered rather than the store, because the island reads the same rows — see
+ * `isSubagentSession`.
+ *
  * **Terminal quiet stamps are volatile.** `lastOutputAt` lives in the renderer
  * store and dies with the window, so after a relaunch a genuinely busy terminal
  * has no stamp at all. The stamp chain therefore ends in a deliberate bias
@@ -32,6 +39,7 @@
  */
 import {
   HARNESS_EVENT_GRACE_MS,
+  isSubagentSession,
   sessionActivitySource,
   sessionProvenanceOf,
   type ChatSessionRecord,
@@ -440,6 +448,10 @@ export interface BuildActiveSessionListingInput {
    * attachment. They carry their own activity and recency, so they join both
    * bands on the same terms a terminal does; optional, and absent reads as
    * none. Defaults to `[]`.
+   *
+   * Handed over WHOLE, subagents included: dropping them is this module's rule
+   * to apply (see the module comment), and a caller that had to pre-filter
+   * would be a caller that could forget to.
    */
   chatSessions?: readonly ChatSessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
@@ -724,7 +736,10 @@ export function buildActiveSessionListing(
   const now = input.now;
   const filter = input.filter ?? DEFAULT_FILTER;
   const statusEnteredAt = input.statusEnteredAt ?? EMPTY_STATUS_ENTERED_AT;
-  const chatSessions = input.chatSessions ?? [];
+  // The one place the navigator's "no Subagent rows" rule is applied — before
+  // anything is grouped, dated or sorted, so a child cannot reach a band, a
+  // count, or a boundary the caller then waits on (VC-279).
+  const chatSessions = (input.chatSessions ?? []).filter((record) => !isSubagentSession(record));
   const recordsById = new Map(input.records.map((record) => [record.id, record]));
   const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
   /**

@@ -2,6 +2,7 @@ import {
   canResumeHarness,
   effectiveHarnessId,
   harnessLabel,
+  isSubagentSession,
   shortSessionId,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
@@ -57,6 +58,12 @@ export interface TicketSessionRow {
  * A chat row has none of that — no PTY and no launch — so its source is simply
  * `Chat`. Whether its executor is attached remains a functional grouping fact,
  * not source metadata to display.
+ *
+ * The Subagent arm is the one answer no listing currently asks for: since
+ * VC-279 every Session listing drops those rows (`isSubagentSession`), so the
+ * words below are what a surface WOULD be told, not what one is showing. It
+ * stays because naming a Session's source and deciding which Sessions a list
+ * draws are different questions, and this function only answers the first.
  */
 // Takes the identity half, not a whole row: naming a Session's source has
 // nothing to do with what it spent, and demanding a usage summary would make
@@ -370,11 +377,24 @@ export interface TicketChatSessionRow {
   isOpen: boolean;
 }
 
-/** Chat Sessions for a ticket, named and grouped the same way a terminal record's rail row is. */
+/**
+ * Chat Sessions for a ticket, named and grouped the same way a terminal
+ * record's rail row is.
+ *
+ * A Subagent Session inherits its parent's Ticket, so the ticket's own listing
+ * returns it — and this roster drops it (VC-279). It is a child of one turn in
+ * one chat and is reached from that chat's Activity Island; a rail that listed
+ * it would grow by however many helpers the ticket's agents happened to open,
+ * and "History" would fill with the trace of one Session's fan-out rather than
+ * with the Sessions someone worked in. The cached listing behind this keeps
+ * them, which is what the rail's usage block counts.
+ */
 export function buildTicketChatSessionRows(
   records: readonly ChatSessionRecord[],
 ): TicketChatSessionRow[] {
-  return records.map((record) => ({ record, title: record.title, isOpen: record.live }));
+  return records
+    .filter((record) => !isSubagentSession(record))
+    .map((record) => ({ record, title: record.title, isOpen: record.live }));
 }
 
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */

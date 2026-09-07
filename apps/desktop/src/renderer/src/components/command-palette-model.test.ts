@@ -249,6 +249,36 @@ describe("buildCommandPaletteItems", () => {
       expect(result.sessions[0]?.provenance).toBe(PERSON_STARTED);
     });
   });
+
+  // The one GLOBAL Session listing is also the one a reader cannot narrow away
+  // from by leaving a ticket, so it is where a turn's delegated helpers would
+  // flood first (VC-279). They are reached from the chat that delegated them.
+  it("leaves Subagent Sessions out, whatever project or ticket they inherited", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
+
+    const result = buildCommandPaletteItems([alpha], { [alpha.id]: [linked] }, {}, alpha.id, [
+      chat({ sessionId: "parent", title: "The chat that delegated" }),
+      chat({
+        sessionId: "child",
+        title: "Find the auth refresh",
+        role: "subagent",
+        parentSessionId: "parent",
+      }),
+      // A Board chat's child inherits no ticket, so it would have entered
+      // through the ticketless arm instead.
+      chat({
+        sessionId: "board-child",
+        title: "Read the release notes",
+        ticketId: null,
+        bornTicketless: true,
+        role: "subagent",
+        parentSessionId: "board-parent",
+      }),
+    ]);
+
+    expect(result.sessions.map((item) => item.sessionId)).toEqual(["parent"]);
+  });
 });
 
 function automation(overrides: Partial<Automation> = {}): Automation {
