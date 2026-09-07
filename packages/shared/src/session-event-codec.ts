@@ -263,6 +263,18 @@ const codecs = {
     }),
     scrub: (payload) => payload,
   },
+  // The observed process status (VC-290). Product vocabulary, so it crosses to
+  // the renderer whole — unlike the adapter's native reference, which is
+  // scrubbed. `readInteger` rather than a nullable read: an exit fact with no
+  // number is not a weaker fact, it is a fact nobody should have written.
+  "attachment.exited": {
+    decode: (record, context) => ({
+      kind: "attachment.exited",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      exitCode: readInteger(record.exitCode, `${context}.exitCode`),
+    }),
+    scrub: (payload) => payload,
+  },
   "run.started": {
     decode: (record, context) => ({
       kind: "run.started",

@@ -49,7 +49,6 @@ import type { CommandRunOutcome } from "./command-run";
 import { ParkController } from "./park-controller";
 import {
   createDesktopSessionEngine,
-  terminalExitDetail,
   terminalNativeReference,
   terminalSessionRecord,
   type TerminalAttachmentDetail,
@@ -836,21 +835,20 @@ export class PtyManager {
   }
 
   /**
-   * Stamps the exit code the PTY just reported onto the attachment's durable
-   * native detail, before the close that ends it (VC-290).
+   * Reports the status the PTY just gave us, before the close that ends the
+   * attachment (VC-290).
    *
    * The close records an OUTCOME — completed or failed — which cannot tell `0`
-   * from "nobody was watching", and the boot sweep's own closes are exactly the
-   * second case. So the number itself is written, or nothing is: a session
+   * from "nobody was watching", and the relaunch sweep's own closes are exactly
+   * the second case. So the number itself is observed, or nothing is: a session
    * detail that says "Exit status unavailable" is honest about a code nobody
-   * observed, while a fabricated `0` would report success for a process that
-   * may have crashed.
+   * saw, while a fabricated `0` would report success for a process that may
+   * have crashed.
    *
-   * `terminalExitDetail` merges the code into whatever detail the attachment
-   * holds NOW rather than into `session.terminalDetail`, which is only the
-   * launch snapshot: hooks and the CLI socket link newer harness evidence onto
-   * this attachment while it runs, and replaying the snapshot would roll that
-   * back on the way out.
+   * The adapter only EMITS the fact. It reads no projection, merges nothing,
+   * and writes no adapter payload: `attachment.exited` is product vocabulary
+   * the Session ledger owns and projects once, so there is no window in which a
+   * harness link recorded between a read and a write could be lost.
    *
    * Its own try/catch, and awaited before the close rather than raced with it:
    * the close is the fact that makes the Session navigable as history, so a
@@ -864,17 +862,14 @@ export class PtyManager {
     occurredAt: number,
   ): Promise<void> {
     try {
-      const projection = await sessionEngine.getSession({ sessionId });
-      const detail = terminalExitDetail(projection, session.attachmentId, exitCode);
-      if (detail === null) return;
       await sessionEngine.observe({
         id: randomUUID(),
-        kind: "attachment.native_referenced",
+        kind: "attachment.exited",
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
         provenance: terminalAdapterProvenance(),
-        native: terminalNativeReference(detail),
+        exitCode,
       });
     } catch (error) {
       console.error(

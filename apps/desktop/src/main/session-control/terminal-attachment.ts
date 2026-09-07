@@ -7,7 +7,15 @@ import type {
 import type { HarnessId, SessionLaunchKind, SessionPlacement, SessionRecord } from "@volli/shared";
 import { isSessionLaunchKind, isSessionPlacement, parseHarnessId } from "@volli/shared";
 
-/** The terminal adapter's opaque native payload. It never becomes a Session column. */
+/**
+ * The terminal adapter's opaque native payload. It never becomes a Session
+ * column.
+ *
+ * Adapter correlation and launch metadata ONLY. How the process ended is not
+ * in here: an exit status is product vocabulary the Session ledger owns
+ * (`attachment.exited`, VC-290), and a client that had to reparse this object
+ * to learn it would be reimplementing one host's private encoding.
+ */
 export interface TerminalAttachmentDetail {
   readonly [key: string]: SessionNativeDetail;
   kind: "volli.terminal.v1";
@@ -17,7 +25,6 @@ export interface TerminalAttachmentDetail {
   harnessSessionId: string | null;
   launchKind: SessionLaunchKind;
   placement: SessionPlacement;
-  exitCode: number | null;
 }
 
 export function terminalNativeReference(detail: TerminalAttachmentDetail): SessionNativeReference {
@@ -43,12 +50,13 @@ export function readTerminalAttachmentDetail(
     (activeHarnessId === null && value.activeHarnessId !== null) ||
     (value.harnessSessionId !== null && typeof value.harnessSessionId !== "string") ||
     !isSessionLaunchKind(value.launchKind) ||
-    !isSessionPlacement(value.placement) ||
-    (value.exitCode !== null &&
-      (!Number.isInteger(value.exitCode) || !Number.isFinite(value.exitCode)))
+    !isSessionPlacement(value.placement)
   ) {
     return null;
   }
+  // Named fields only, so a key an older build wrote (an `exitCode` that never
+  // carried a value, before the exit became a Session fact) is dropped rather
+  // than carried forward as a second answer about how the terminal ended.
   return {
     kind: "volli.terminal.v1",
     cwd: value.cwd,
@@ -57,7 +65,6 @@ export function readTerminalAttachmentDetail(
     harnessSessionId: value.harnessSessionId,
     launchKind: value.launchKind,
     placement: value.placement,
-    exitCode: value.exitCode === null ? null : (value.exitCode as number),
   };
 }
 
@@ -94,48 +101,13 @@ export function terminalSessionRecord(projection: SessionProjection): SessionRec
     cwd: detail?.cwd ?? "",
     createdAt: projection.session.createdAt,
     endedAt: attachment.status === "open" ? null : attachment.closedAt,
-    exitCode: detail?.exitCode ?? null,
+    // The ledger's own answer, carried along and not re-derived: `null` is an
+    // exit nothing observed, and it must never be softened by the close's
+    // completed/failed outcome (VC-290).
+    exitCode: attachment.exitCode,
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
   };
-}
-
-/**
- * The native detail to re-reference when a PTY exits with `exitCode`, or `null`
- * when there is nothing honest to write (VC-290).
- *
- * The exit code is the one fact about a terminal's ending that only the PTY
- * observes, and it used to reach the live renderer and nothing else: the ledger
- * recorded a completed/failed OUTCOME, so a closed record read back
- * `exitCode: null` — the same answer a boot sweep leaves for a process nobody
- * saw end. Two different facts, one indistinguishable null, and a session-detail
- * view that could only ever say "unavailable".
- *
- * It re-emits the attachment's CURRENT detail with the code stamped on, never
- * the launch snapshot: hooks and the `volli` CLI socket link a newer harness id
- * and harness session id onto this same attachment while it runs, and replaying
- * the snapshot would roll that evidence back on the way out
- * (`agent-dispatch/harness-verbs.ts` takes the same care, for the same reason).
- *
- * `null` covers every case where writing would be a guess or a lie: no
- * projection, an attachment that is not this one, one the ledger has already
- * closed, a native detail this build cannot parse, and the code already being
- * recorded — the last of which keeps a re-observed exit from appending an event
- * that changes nothing.
- */
-export function terminalExitDetail(
-  projection: SessionProjection | null,
-  attachmentId: string,
-  exitCode: number,
-): TerminalAttachmentDetail | null {
-  if (projection === null) return null;
-  const attachment = projection.attachments.find(
-    (candidate) => candidate.id === attachmentId && candidate.adapterId === "terminal",
-  );
-  if (attachment === undefined || attachment.status !== "open") return null;
-  const detail = readTerminalAttachmentDetail(attachment.native);
-  if (detail === null || detail.exitCode === exitCode) return null;
-  return { ...detail, exitCode };
 }
 
 export function latestTerminalAttachment(

@@ -1380,12 +1380,12 @@ describe("ticket sessions", () => {
              FROM session_events
             WHERE session_id = ?
               AND json_extract(payload, '$.kind') IN
-                ('attachment.native_referenced', 'attachment.closed')
+                ('attachment.exited', 'attachment.closed')
             ORDER BY sequence ASC`,
         )
         .all(result.sessionId) as { sequence: number; kind: string }[];
       expect(exitEvents.map(({ kind }) => kind)).toEqual([
-        "attachment.native_referenced",
+        "attachment.exited",
         "attachment.closed",
       ]);
       expect(exitEvents[0]!.sequence).toBeLessThan(exitEvents[1]!.sequence);

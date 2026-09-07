@@ -22,7 +22,6 @@ export { createSqliteSessionLedger, SqliteSessionLedger } from "./sqlite-ledger"
 export {
   latestTerminalAttachment,
   readTerminalAttachmentDetail,
-  terminalExitDetail,
   terminalNativeReference,
   terminalSessionRecord,
 } from "./terminal-attachment";

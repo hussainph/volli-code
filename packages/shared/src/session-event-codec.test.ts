@@ -173,6 +173,11 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       failure: { code: "spawn", detail: null, diagnostic: null },
     },
     { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+    // The executor's process status (VC-290). `0` is a value like any other
+    // here: a round trip that turned it into an absence would be the exact
+    // confusion the fact exists to end.
+    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
+    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 137 },
     { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
     { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
     { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
@@ -1533,6 +1538,10 @@ describe("the renderer-safe scrub", () => {
       { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
       { kind: "session.signaled", signal: "done", reason: null },
       { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+      // Product vocabulary, not adapter correlation: the exit code crosses to
+      // the renderer whole, which is what lets a client show it without
+      // reparsing an adapter's opaque native detail.
+      { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
       { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
       { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
       { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },

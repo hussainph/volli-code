@@ -3,7 +3,6 @@ import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 import {
   readTerminalAttachmentDetail,
-  terminalExitDetail,
   terminalNativeReference,
   terminalSessionRecord,
 } from "./terminal-attachment";
@@ -62,6 +61,7 @@ const terminalAttachment: SessionAttachmentProjection = {
   closedAt: 42,
   outcome: "failed",
   failure: { code: "terminal_start_failed", detail: null, diagnostic: null },
+  exitCode: null,
 };
 
 describe("readTerminalAttachmentDetail", () => {
@@ -154,94 +154,70 @@ describe("readTerminalAttachmentDetail", () => {
 });
 
 /**
- * The exit code the PTY observed, on its way into the durable record (VC-290).
- * Before this, `onExit` sent the number to the live renderer and saved only a
- * completed/failed outcome, so every CLOSED terminal read back `exitCode: null`
- * — indistinguishable from a boot sweep that never saw the process at all.
+ * The exit code the PTY observed, on its way out of the durable record
+ * (VC-290).
+ *
+ * Before this, `onExit` sent the number to the live renderer and the ledger
+ * saved only a completed/failed outcome, so every CLOSED terminal read back
+ * `exitCode: null` — indistinguishable from a boot sweep that never saw the
+ * process at all. The code is now the ledger's own `attachment.exited` fact and
+ * this DTO only carries the projection's answer along; nothing here reparses an
+ * adapter's native payload to find it.
  */
-describe("terminalExitDetail", () => {
-  const openTerminal: SessionAttachmentProjection = {
+describe("terminalSessionRecord exit code", () => {
+  const closedTerminal: SessionAttachmentProjection = {
     ...terminalAttachment,
-    status: "open",
+    status: "closed",
     openedAt: 10,
-    closedAt: null,
-    outcome: null,
+    closedAt: 42,
+    outcome: "completed",
     failure: null,
   };
 
-  it("stamps the observed code onto the attachment's current native detail", () => {
-    expect(terminalExitDetail(projectionWith([openTerminal]), "attachment", 137)).toEqual({
-      kind: "volli.terminal.v1",
-      cwd: "/repo",
-      harnessId: "claude-code",
-      activeHarnessId: null,
-      harnessSessionId: null,
-      launchKind: "agent",
-      placement: "tab",
-      exitCode: 137,
-    });
-  });
-
-  it("records a clean exit as the number 0, not as an absence", () => {
-    expect(terminalExitDetail(projectionWith([openTerminal]), "attachment", 0)).toMatchObject({
-      exitCode: 0,
-    });
-  });
-
-  // The launch snapshot is NOT what gets re-emitted: hooks and the CLI socket
-  // may have linked a newer harness id to this attachment since it opened, and
-  // stamping an exit code must not roll that evidence back.
-  it("preserves harness evidence linked after launch", () => {
-    const linked: SessionAttachmentProjection = {
-      ...openTerminal,
-      native: terminalNativeReference({
-        kind: "volli.terminal.v1",
-        cwd: "/repo",
-        harnessId: "claude-code",
-        activeHarnessId: "codex",
-        harnessSessionId: "harness-uuid",
-        launchKind: "agent",
-        placement: "tab",
-        exitCode: null,
-      }),
-    };
-
-    expect(terminalExitDetail(projectionWith([linked]), "attachment", 1)).toMatchObject({
-      activeHarnessId: "codex",
-      harnessSessionId: "harness-uuid",
-      exitCode: 1,
-    });
-  });
-
-  it("writes nothing when the code it would record is already there", () => {
-    const stamped: SessionAttachmentProjection = {
-      ...openTerminal,
-      native: terminalNativeReference({
-        kind: "volli.terminal.v1",
-        cwd: "/repo",
-        harnessId: "claude-code",
-        activeHarnessId: null,
-        harnessSessionId: null,
-        launchKind: "agent",
-        placement: "tab",
-        exitCode: 2,
-      }),
-    };
-
-    expect(terminalExitDetail(projectionWith([stamped]), "attachment", 2)).toBeNull();
-  });
-
-  it("writes nothing for a Session, attachment or detail it cannot read", () => {
-    expect(terminalExitDetail(null, "attachment", 0)).toBeNull();
-    expect(terminalExitDetail(projectionWith([openTerminal]), "other-attachment", 0)).toBeNull();
+  it("reports a clean exit as the number 0, not as an absence", () => {
     expect(
-      terminalExitDetail(projectionWith([{ ...openTerminal, native: null }]), "attachment", 0),
-    ).toBeNull();
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: 0 }])),
+    ).toMatchObject({ endedAt: 42, exitCode: 0 });
   });
 
-  // An attachment the ledger has already closed is history. Re-referencing its
-  // native detail would be writing to a finished record.
-  it("writes nothing for an attachment that is no longer open", () => {
-    expect(terminalExitDetail(projectionWith([terminalAttachment]), "attachment", 0)).toBeNull();
+  it("reports a non-zero code exactly", () => {
+    expect(
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: 137 }])),
+    ).toMatchObject({ endedAt: 42, exitCode: 137 });
+  });
+
+  // The relaunch sweep closes attachments whose process nobody watched end.
+  // That record must stay unavailable rather than borrow the close's outcome.
+  it("leaves an unobserved exit null however the attachment was closed", () => {
+    expect(
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: null }])),
+    ).toMatchObject({ endedAt: 42, exitCode: null });
+  });
+
+  // The projection is the only source. A stale `exitCode` inside an adapter's
+  // native detail is not product vocabulary and must not be read back as one.
+  it("ignores an exit code left in the adapter's native detail", () => {
+    const withNativeExit: SessionAttachmentProjection = {
+      ...closedTerminal,
+      native: {
+        id: null,
+        detail: {
+          kind: "volli.terminal.v1",
+          cwd: "/repo",
+          harnessId: "claude-code",
+          activeHarnessId: null,
+          harnessSessionId: null,
+          launchKind: "agent",
+          placement: "tab",
+          exitCode: 3,
+        },
+      },
+      exitCode: null,
+    };
+
+    expect(terminalSessionRecord(projectionWith([withNativeExit]))).toMatchObject({
+      cwd: "/repo",
+      exitCode: null,
+    });
   });
 });
