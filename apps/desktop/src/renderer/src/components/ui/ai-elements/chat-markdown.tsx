@@ -65,10 +65,14 @@ export const chatRehypePlugins: RehypePlugins = sanitizedRehypePlugins();
 export function sanitizedRehypePlugins(
   extras: readonly RehypePlugins[number][] = [],
 ): RehypePlugins {
-  return Object.entries(defaultRehypePlugins).flatMap(([name, pluggable]): RehypePlugins => {
-    if (name !== "sanitize" || !Array.isArray(pluggable)) return [pluggable];
+  const chain: RehypePlugins = [];
+  for (const [name, pluggable] of Object.entries(defaultRehypePlugins)) {
+    if (name !== "sanitize" || !Array.isArray(pluggable)) {
+      chain.push(pluggable);
+      continue;
+    }
     const [plugin, schema] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
-    const sanitize = [
+    chain.push([
       plugin,
       {
         ...schema,
@@ -77,9 +81,10 @@ export function sanitizedRehypePlugins(
           src: [...(schema.protocols?.["src"] ?? []), BLOB_URL_SCHEME, "data"],
         },
       },
-    ] as RehypePlugins[number];
-    return [sanitize, ...extras];
-  });
+    ] as RehypePlugins[number]);
+    chain.push(...extras);
+  }
+  return chain;
 }
 
 const FileMentionContext = React.createContext<((path: string) => void) | null>(null);

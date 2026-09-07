@@ -44,7 +44,7 @@ describe("resolveMarkdownFileView", () => {
   });
 
   it("honours a remembered Preview choice for the file that refused Document", () => {
-    const refusal = documentViewRefusal("<p align=\"center\">\n  <b>hi</b>\n</p>\n");
+    const refusal = documentViewRefusal('<p align="center">\n  <b>hi</b>\n</p>\n');
     expect(resolveMarkdownFileView({ preferred: "preview", refusal })).toBe("preview");
   });
 

@@ -54,9 +54,9 @@ describe("previewImageSource — repository paths", () => {
 
   it("refuses a path that climbs out of the checkout", () => {
     expect(fromReadme("../secrets/id_rsa.png")).toEqual({ kind: "unresolved" });
-    expect(previewImageSource({ markdownRelPath: "docs/guide.md", src: "../../etc/x.png" })).toEqual(
-      { kind: "unresolved" },
-    );
+    expect(
+      previewImageSource({ markdownRelPath: "docs/guide.md", src: "../../etc/x.png" }),
+    ).toEqual({ kind: "unresolved" });
   });
 
   it("refuses an absolute path: a file preview reads the checkout, not the disk", () => {
@@ -166,7 +166,11 @@ describe("previewImageDisplay", () => {
     // without changing what opening the .svg file does.
     const display = previewImageDisplay({
       relPath: "apps/desktop/build/icon-source.svg",
-      content: { type: "text", text: "<svg xmlns='http://www.w3.org/2000/svg'/>", truncated: false },
+      content: {
+        type: "text",
+        text: "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        truncated: false,
+      },
     });
     expect(display).toEqual({
       kind: "src",

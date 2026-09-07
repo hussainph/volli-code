@@ -48,7 +48,14 @@ export function Segmented<Key extends string>({
   ariaLabel: string;
   testId?: string;
   value: Key;
-  options: readonly { key: Key; label: string; icon?: PhosphorIcon }[];
+  /**
+   * The closed set, in order. A member may be `disabled` on its own — the
+   * markdown file band needs it (VC-307): Document view is unavailable for a
+   * file with raw HTML while Source and Preview beside it are live, and hiding
+   * the segment would answer a question the person never got to ask. This is a
+   * segment that is not available, not a new axis of the control.
+   */
+  options: readonly { key: Key; label: string; icon?: PhosphorIcon; disabled?: boolean }[];
   /**
    * The pill scale's two settings rungs (`docs/DESIGN.md`): `sm` where the
    * control trails a section header, `default` where it is the surface's own
@@ -84,7 +91,7 @@ export function Segmented<Key extends string>({
             variant={active ? "secondary" : "ghost"}
             aria-pressed={active}
             data-choice={option.key}
-            disabled={disabled}
+            disabled={disabled === true || option.disabled === true}
             onClick={() => {
               if (!active) onChange(option.key);
             }}

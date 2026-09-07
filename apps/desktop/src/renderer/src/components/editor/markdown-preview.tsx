@@ -44,7 +44,10 @@
 import * as React from "react";
 import { Streamdown, type Components } from "streamdown";
 
-import { chatMarkdownComponents, sanitizedRehypePlugins } from "@renderer/components/ui/ai-elements/chat-markdown";
+import {
+  chatMarkdownComponents,
+  sanitizedRehypePlugins,
+} from "@renderer/components/ui/ai-elements/chat-markdown";
 import {
   parsePreviewImageSrc,
   previewImageDisplay,
@@ -102,7 +105,6 @@ export function MarkdownPreview({ projectId, ticketId, relPath, text }: Markdown
               // Position IS the identity here: the segments are a pure function
               // of the text, and a re-render with different text replaces the
               // whole list rather than reordering it.
-              // eslint-disable-next-line react/no-array-index-key
               key={`markdown-${String(index)}`}
               rehypePlugins={rehypePlugins}
               components={PREVIEW_COMPONENTS}
@@ -111,7 +113,6 @@ export function MarkdownPreview({ projectId, ticketId, relPath, text }: Markdown
               {segment.text}
             </Streamdown>
           ) : (
-            // eslint-disable-next-line react/no-array-index-key
             <OmittedHtmlBlock key={`omitted-${String(index)}`} line={segment.line} />
           ),
         )}
@@ -128,8 +129,11 @@ export function MarkdownPreview({ projectId, ticketId, relPath, text }: Markdown
  * its dotted underline announces a click target, and in a preview there is
  * nothing to click: this surface opens no files.
  */
-const { inlineCode: _chatFileMention, img: _chatAttachmentImage, ...sharedComponents } =
-  chatMarkdownComponents;
+const {
+  inlineCode: _chatFileMention,
+  img: _chatAttachmentImage,
+  ...sharedComponents
+} = chatMarkdownComponents;
 
 const PREVIEW_COMPONENTS: Components = {
   ...sharedComponents,
@@ -189,7 +193,8 @@ function PreviewImage({
     };
   }, [file, relPath]);
 
-  if (source.kind === "inline") return <PreviewImageElement src={source.src} alt={alt} className={className} />;
+  if (source.kind === "inline")
+    return <PreviewImageElement src={source.src} alt={alt} className={className} />;
   if (source.kind !== "repo-file") {
     return <PreviewImageNotice notice={previewImageNotice(source.kind)} alt={alt} />;
   }

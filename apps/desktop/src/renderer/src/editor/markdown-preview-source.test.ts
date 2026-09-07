@@ -109,7 +109,7 @@ describe("previewSegments — HTML that cannot be rendered safely", () => {
   });
 
   it("marks every unsafe block, never just the first", () => {
-    const text = "<script>a()</script>\n\nMiddle.\n\n<iframe src=\"https://evil\"></iframe>\n";
+    const text = '<script>a()</script>\n\nMiddle.\n\n<iframe src="https://evil"></iframe>\n';
     expect(omissionLines(previewSegments(text))).toEqual([1, 5]);
   });
 
@@ -133,9 +133,9 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock('<iframe src="https://evil.example"></iframe>')).toBe(false);
     expect(renderableHtmlBlock('<object data="x.swf"></object>')).toBe(false);
     expect(renderableHtmlBlock('<embed src="x.swf">')).toBe(false);
-    expect(renderableHtmlBlock('<form action="https://evil.example"><button>Go</button></form>')).toBe(
-      false,
-    );
+    expect(
+      renderableHtmlBlock('<form action="https://evil.example"><button>Go</button></form>'),
+    ).toBe(false);
     expect(renderableHtmlBlock('<svg><use href="#x" /></svg>')).toBe(false);
     expect(renderableHtmlBlock("<style>body{display:none}</style>")).toBe(false);
     expect(renderableHtmlBlock('<link rel="stylesheet" href="https://evil.example/x.css">')).toBe(
@@ -173,9 +173,9 @@ describe("renderableHtmlBlock", () => {
     // The sanitizer deletes comment nodes, so what is inside one cannot reach
     // the page — and refusing the whole block over the word `script` inside a
     // comment would hide the div a person actually wrote.
-    expect(renderableHtmlBlock("<div>\n<!-- <script>alert(1)</script> -->\n<b>hi</b>\n</div>")).toBe(
-      true,
-    );
+    expect(
+      renderableHtmlBlock("<div>\n<!-- <script>alert(1)</script> -->\n<b>hi</b>\n</div>"),
+    ).toBe(true);
     expect(renderableHtmlBlock("<!-- prettier-ignore -->")).toBe(true);
   });
 

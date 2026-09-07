@@ -126,7 +126,11 @@ describe("MarkdownPreview — the README the ticket started from", () => {
     const view = await preview(README);
 
     expect(read.mock.calls.map((call) => call[0])).toEqual([
-      { projectId: "project-1", ticketId: undefined, relPath: "apps/desktop/build/icon-source.svg" },
+      {
+        projectId: "project-1",
+        ticketId: undefined,
+        relPath: "apps/desktop/build/icon-source.svg",
+      },
       {
         projectId: "project-1",
         ticketId: undefined,
@@ -165,7 +169,9 @@ describe("MarkdownPreview — the README the ticket started from", () => {
 
 describe("MarkdownPreview — markdown a document view cannot show", () => {
   it("keeps a <details>/<summary> disclosure readable", async () => {
-    const view = await preview("<details>\n<summary>More</summary>\n\nHidden body.\n\n</details>\n");
+    const view = await preview(
+      "<details>\n<summary>More</summary>\n\nHidden body.\n\n</details>\n",
+    );
 
     expect(view.querySelector("details")).not.toBeNull();
     expect(view.querySelector("summary")?.textContent).toBe("More");
@@ -192,14 +198,12 @@ describe("MarkdownPreview — markdown a document view cannot show", () => {
 
 describe("MarkdownPreview — hostile input", () => {
   it("replaces a script block with a visible marker and runs nothing", async () => {
-    const view = await preview(
-      "# Title\n\n<script>globalThis.__pwned = true;</script>\n\nAfter.\n",
-    );
+    const view = await preview("# Title\n\n<script>globalThis.pwned = true;</script>\n\nAfter.\n");
 
     expect(view.textContent).toContain("HTML block not rendered");
     expect(view.querySelector("script")).toBeNull();
-    expect(view.innerHTML).not.toContain("__pwned");
-    expect((globalThis as { __pwned?: boolean }).__pwned).toBeUndefined();
+    expect(view.innerHTML).not.toContain("pwned");
+    expect((globalThis as { pwned?: boolean }).pwned).toBeUndefined();
     // The prose on both sides of it survives — an omission, not a truncation.
     expect(view.querySelector("h1")?.textContent).toBe("Title");
     expect(view.textContent).toContain("After.");
@@ -209,7 +213,7 @@ describe("MarkdownPreview — hostile input", () => {
     for (const markup of [
       '<iframe src="https://evil.example/"></iframe>',
       '<object data="x.swf">\n</object>',
-      "<svg>\n<script>globalThis.__pwned = true;</script>\n</svg>",
+      "<svg>\n<script>globalThis.pwned = true;</script>\n</svg>",
       '<form action="https://evil.example/">\n<button>Go</button>\n</form>',
     ]) {
       const view = await preview(`${markup}\n`);
@@ -219,7 +223,7 @@ describe("MarkdownPreview — hostile input", () => {
       expect(view.querySelector("svg")).toBeNull();
       expect(view.querySelector("form")).toBeNull();
     }
-    expect((globalThis as { __pwned?: boolean }).__pwned).toBeUndefined();
+    expect((globalThis as { pwned?: boolean }).pwned).toBeUndefined();
   });
 
   it("sanitizes INLINE html, which is not a block and never was", async () => {
@@ -227,27 +231,27 @@ describe("MarkdownPreview — hostile input", () => {
     // a paragraph, not structure, so there is no block to mark. It still goes
     // through the same sanitizer, which is what keeps it inert.
     const view = await preview(
-      'A sentence with <marquee onclick="globalThis.__pwned = true">markup</marquee> in it.\n',
+      'A sentence with <marquee onclick="globalThis.pwned = true">markup</marquee> in it.\n',
     );
 
     expect(view.textContent).toContain("A sentence with");
     expect(view.innerHTML).not.toContain("onclick");
     expect(view.querySelector("marquee")).toBeNull();
-    expect((globalThis as { __pwned?: boolean }).__pwned).toBeUndefined();
+    expect((globalThis as { pwned?: boolean }).pwned).toBeUndefined();
   });
 
   it("strips an event handler rather than drawing a live one", async () => {
-    const view = await preview('<div onclick="globalThis.__pwned = true">Click me</div>\n');
+    const view = await preview('<div onclick="globalThis.pwned = true">Click me</div>\n');
 
     expect(view.innerHTML).not.toContain("onclick");
     expect(view.textContent).toContain("HTML block not rendered");
   });
 
   it("neutralises a javascript: link inside otherwise ordinary markup", async () => {
-    const view = await preview("[run](javascript:globalThis.__pwned=1)\n");
+    const view = await preview("[run](javascript:globalThis.pwned=1)\n");
 
     expect(view.innerHTML).not.toContain("javascript:");
-    expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
+    expect((globalThis as { pwned?: number }).pwned).toBeUndefined();
   });
 
   it("does not let an author mint the preview's own image scheme", async () => {

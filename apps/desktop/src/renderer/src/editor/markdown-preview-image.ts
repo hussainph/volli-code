@@ -27,12 +27,9 @@
  *
  * Pure: no reads, no DOM, no `window`. The component beside it does the asking.
  */
-import {
-  dirNameOf,
-  imageMimeType,
-  markdownImageNotice,
-  type FileContent,
-} from "@volli/shared";
+import { dirNameOf, imageMimeType, markdownImageNotice } from "@volli/shared";
+
+import type { FileContent } from "../../../ipc/contract";
 
 /** How one markdown image source is to be drawn — or why it will not be. */
 export type PreviewImageSource =
@@ -136,9 +133,7 @@ export function previewImageNotice(kind: "remote" | "unresolved"): string {
 }
 
 /** A read repository image, as an `<img>` source or as the sentence drawn instead. */
-export type PreviewImageDisplay =
-  | { kind: "src"; src: string }
-  | { kind: "notice"; notice: string };
+export type PreviewImageDisplay = { kind: "src"; src: string } | { kind: "notice"; notice: string };
 
 /**
  * What main's answer for a repository image can actually be displayed as.
