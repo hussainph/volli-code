@@ -30,9 +30,12 @@ function layout(element: Element): DOMRect {
   // Leaving scrollLeft out here makes a partly clipped tab look fully visible
   // and lets the test pass while asserting the opposite of browser geometry.
   const scrollLeft = element.closest<HTMLElement>('[data-slot="tab-scroll"]')?.scrollLeft ?? 0;
+  const contentLeft = Number(
+    element.getAttribute("data-test-left") ?? indexOfTab(element) * TAB_WIDTH,
+  );
   const box =
     role === "tab"
-      ? { left: indexOfTab(element) * TAB_WIDTH - scrollLeft, width: TAB_WIDTH }
+      ? { left: contentLeft - scrollLeft, width: TAB_WIDTH }
       : { left: 0, width: 1000 };
   return {
     x: box.left,
@@ -97,8 +100,8 @@ function renderStrip(onReorder: (movedId: string, ids: readonly string[]) => voi
 
 /**
  * Every fake `ResizeObserver` a render made, so a test can fire one — with the
- * elements it watches, because the strip keeps two and they mean different
- * things: its own box, and the tabs inside it.
+ * elements it watches, because a test may need to report only the tabs changing
+ * while the strip's viewport stays put.
  */
 let observers: { targets: Element[]; notify(): void }[] = [];
 
@@ -470,7 +473,10 @@ describe("TabStrip overflow", () => {
     // with nothing out of view.
     renderTabs(3, 0);
     strip.setContent(250);
-    resized();
+    // Closing tabs resizes the tablist, not the viewport. This must pass from
+    // the content observer alone or the transition test is propped up by an
+    // event the browser would not send.
+    contentResized();
 
     expect(affordance("Earlier")).toBeNull();
     expect(affordance("Later")).toBeNull();
@@ -509,29 +515,28 @@ describe("TabStrip overflow", () => {
     expect(strip.port.scrollLeft).toBe(656);
   });
 
-  it("leaves a scrolled strip where the reader put it when a title lands", () => {
-    // A live chat re-titles its tab as the model's own title arrives, which
-    // resizes the tablist several times a second. Chasing THAT would drag the
-    // strip back to the active tab under a reader who had scrolled somewhere
-    // else on purpose — so the content is measured and never chased. The
-    // strip's own box is the resize that means the layout moved.
-    renderTabs(9, 0);
-    const strip = layoutStrip({ content: 900 });
+  it("re-reveals the focused tab when content before it grows", () => {
+    // A title landing before the focused tab moves that tab without changing
+    // the pane or scroller width. Measuring content without re-revealing here
+    // leaves the keyboard on a tab that has just moved out of view.
+    renderTabs(9, 2);
+    const strip = layoutStrip({ area: 400, content: 900 });
     resized();
+    const tabs = tabsInStrip();
+    act(() => tabs[2]?.focus());
+    expect(strip.port.scrollLeft).toBe(0);
 
-    // The reader travels away from the selected tab, by wheel or by chevron.
-    act(() => {
-      strip.port.scrollLeft = 400;
-      strip.port.dispatchEvent(new Event("scroll"));
-    });
-
-    strip.setContent(950);
+    // Simulate a preceding title growing: the focused tab's content-relative
+    // left edge moves from 200 to 500 while the viewport remains 400px. Only
+    // the tablist observer reports this change.
+    tabs[2]?.setAttribute("data-test-left", "500");
+    strip.setContent(1200);
     contentResized();
 
-    expect(strip.port.scrollLeft).toBe(400);
-    // Measured all the same: the affordances still know both ends.
-    expect(affordance("Later")).not.toBeNull();
-    expect(affordance("Earlier")?.disabled).toBe(false);
+    expect(document.activeElement).toBe(tabs[2]);
+    // The two 28px affordances leave a 344px scroller. The moved tab's right
+    // edge plus the 8px reveal inset therefore lands at 264.
+    expect(strip.port.scrollLeft).toBe(500 + 100 + 8 - (400 - 56));
   });
 
   it("follows the keyboard's tab through a resize, not just the selected one", () => {
@@ -588,7 +593,7 @@ describe("TabStrip overflow", () => {
     expect(wheel.defaultPrevented).toBe(true);
   });
 
-  it("shows a clipped label in full on focus, and on hover, not only to AT", () => {
+  it("shows a clipped label in full on focus, and Escape closes without moving focus", () => {
     // VC-288 review. `aria-label` answers a screen reader; a sighted person
     // arrowing along a narrow strip was left with `Rewrite the workt…` and no
     // way to see the rest — file tabs do not even carry a `title`. The reveal
@@ -612,6 +617,32 @@ describe("TabStrip overflow", () => {
     // for a sweep along a row of controls — so this is the keyboard's reveal,
     // synchronously, in the frame the focus landed.
     expect(revealText()).toBe(`${label} · src`);
+
+    press(tab!, "Escape", "Escape");
+    expect(revealText()).toBeNull();
+    expect(document.activeElement).toBe(tab);
+  });
+
+  it("shows the full label on hover even when the tab has no title", async () => {
+    const label = "src/components/a-file-name-that-is-too-long-for-the-tab.tsx";
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label={label} active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    clipLabel(tab!);
+    expect(tab?.hasAttribute("title")).toBe(false);
+
+    await act(async () => {
+      tab?.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+      // The strip's own provider uses the product's 500ms hover delay.
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+
+    expect(revealText()).toBe(label);
   });
 
   it("stays quiet for a label the tab draws whole", () => {

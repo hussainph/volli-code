@@ -382,27 +382,18 @@ export function TabStrip({
     // this app draw a strip: a component that threw on mount without one would
     // make all of them untestable to buy nothing. Measured once either way, so
     // a strip in that environment still knows whether it overflows at mount.
-    const observe = (): ResizeObserver | null =>
-      typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
-    // TWO OBSERVERS, because the two resizes do not mean the same thing.
     //
-    // The strip's own box changing is the layout being rebuilt under a person:
-    // there, keeping the selected or focused tab in view is the promise, and
-    // moving the strip is keeping it. Its CONTENT changing is a tab opened, a
-    // tab closed, or — many times a second on a live chat — a title growing a
-    // word as it lands. Revealing on that would drag the strip back to the
-    // active tab under a reader who had deliberately scrolled somewhere else,
-    // which is the same courtesy `tabScrollLeftFor` pays by answering `null`.
-    // So the content is measured and never chased.
-    const viewport = observe();
-    viewport?.observe(area);
-    viewport?.observe(scroller);
-    const content = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    // The tablist belongs here too. Content can move the focused/selected tab
+    // without changing either viewport box — a preceding title grows, a tab
+    // opens or closes — and the promise is about keeping that tab visible, not
+    // merely about keeping the chevrons accurate.
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
+    resize?.observe(area);
+    resize?.observe(scroller);
     const tablist = scroller.firstElementChild;
-    if (tablist !== null) content?.observe(tablist);
+    if (tablist !== null) resize?.observe(tablist);
     return () => {
-      viewport?.disconnect();
-      content?.disconnect();
+      resize?.disconnect();
       scroller.removeEventListener("scroll", measure);
     };
   }, []);

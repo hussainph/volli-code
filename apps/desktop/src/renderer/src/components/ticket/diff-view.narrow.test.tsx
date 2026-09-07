@@ -28,15 +28,25 @@ import { useUiStore } from "@renderer/stores/ui";
 
 /** Every presentation Monaco has been asked to draw, in order. */
 const drawn: string[] = [];
+const editorLifecycle = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 
-vi.mock("@renderer/components/editor/monaco-diff-editor", () => ({
-  MonacoDiffEditor: ({ presentation }: { presentation: string }) => {
-    drawn.push(presentation);
-    return <div data-testid="fake-monaco" data-presentation={presentation} />;
-  },
-  releaseDiffLeases: () => undefined,
-  diffEditorInitFailureMessage: () => "no",
-}));
+vi.mock("@renderer/components/editor/monaco-diff-editor", async () => {
+  const React = await import("react");
+  return {
+    MonacoDiffEditor: ({ presentation }: { presentation: string }) => {
+      React.useEffect(() => {
+        editorLifecycle.mounts += 1;
+        return () => {
+          editorLifecycle.unmounts += 1;
+        };
+      }, []);
+      drawn.push(presentation);
+      return <div data-testid="fake-monaco" data-presentation={presentation} />;
+    },
+    releaseDiffLeases: () => undefined,
+    diffEditorInitFailureMessage: () => "no",
+  };
+});
 
 const lease = {
   model: { getValue: () => "b\n" },
@@ -60,6 +70,8 @@ let root: Root | null = null;
 
 beforeEach(() => {
   drawn.length = 0;
+  editorLifecycle.mounts = 0;
+  editorLifecycle.unmounts = 0;
   observers = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
@@ -240,6 +252,10 @@ describe("a side-by-side diff in a pane that cannot hold two columns", () => {
     expect(drawn.at(-3)).toBe("side-by-side");
     expect(drawn.at(-2)).toBe("inline");
     expect(drawn.at(-1)).toBe("side-by-side");
+    // A query count alone would be vacuous: React can replace one editor with
+    // another and still leave exactly one node. Count the component lifecycle
+    // so preserving selection and scroll is what this assertion really proves.
+    expect(editorLifecycle).toEqual({ mounts: 1, unmounts: 0 });
     expect(container?.querySelectorAll('[data-testid="fake-monaco"]')).toHaveLength(1);
   });
 });
