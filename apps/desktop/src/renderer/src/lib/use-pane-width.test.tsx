@@ -73,7 +73,9 @@ afterEach(() => {
 function Probe({ mounted = true }: { mounted?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const measured = usePaneWidth(ref, [mounted]);
-  return mounted ? <div ref={ref}>{measured === null ? "unmeasured" : String(measured)}</div> : null;
+  return mounted ? (
+    <div ref={ref}>{measured === null ? "unmeasured" : String(measured)}</div>
+  ) : null;
 }
 
 function reported(): string | undefined {

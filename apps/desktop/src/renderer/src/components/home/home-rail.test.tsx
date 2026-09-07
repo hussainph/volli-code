@@ -130,7 +130,9 @@ describe("HomeRail", () => {
     expect(markup).toContain(
       'aria-label="Worktree · /Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane"',
     );
-    expect(markup).toContain('aria-label="Branch · volli/VC-288-narrow-pane-follow-ups-beyond-vc-264"');
+    expect(markup).toContain(
+      'aria-label="Branch · volli/VC-288-narrow-pane-follow-ups-beyond-vc-264"',
+    );
     // Both reveals are buttons — focus stops Radix opens on focus as well as
     // on hover — rather than the text elements they were.
     const venueCard = markup.slice(markup.indexOf("Venue"));

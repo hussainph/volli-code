@@ -303,12 +303,30 @@ export function TabStrip({
   // opening, the window), its CONTENT resizing (a tab opened or closed), and
   // the person travelling. The observer watches both boxes for that reason —
   // a strip that only measured itself would keep offering a chevron to a tab
-  // that had since been closed.
+  // that had since been closed — and it is also why the subscription does not
+  // follow `children`: the tablist's own box IS that fact, and a strip whose
+  // tabs are composed from scratch on every render (both of them are, and both
+  // re-render on every streamed chat token — see {@link useSteadyIds}) would
+  // otherwise tear the observer and the listener down and build them again
+  // once per token, to observe the element it was already observing.
   const [overflow, setOverflow] = React.useState<TabOverflow>(NO_TAB_OVERFLOW);
   React.useEffect(() => {
     const scroller = scrollerRef.current;
     if (scroller === null) return;
-    const measure = (): void => setOverflow(tabOverflow(scroller));
+    // Same measurement in, same object out. This runs on every scroll event of
+    // a travel — animation-frame rate for the whole of a Shift+wheel — and a
+    // fresh object each time is a fresh state value, so every tab in the strip
+    // would re-render to say that nothing about the ends had changed.
+    // `sidebar/sidebar-scroll.tsx` bails on its own edge state for exactly this.
+    const measure = (): void =>
+      setOverflow((current) => {
+        const next = tabOverflow(scroller);
+        return current.overflowing === next.overflowing &&
+          current.atStart === next.atStart &&
+          current.atEnd === next.atEnd
+          ? current
+          : next;
+      });
     measure();
     scroller.addEventListener("scroll", measure, { passive: true });
     // Guarded because jsdom ships no `ResizeObserver`, and half the surfaces in
@@ -323,7 +341,7 @@ export function TabStrip({
       observer?.disconnect();
       scroller.removeEventListener("scroll", measure);
     };
-  }, [children]);
+  }, []);
 
   // The motion preference is read at the press rather than during the render
   // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of

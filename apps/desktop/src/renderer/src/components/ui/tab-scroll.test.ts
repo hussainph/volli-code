@@ -107,7 +107,9 @@ describe("tabScrollLeftFor", () => {
     // 420 + 100 = 520, past the 300px window: scroll so its right edge lands an
     // inset short of the port's, which leaves the neighbour beyond it half
     // drawn and therefore visibly there.
-    expect(tabScrollLeftFor(port, { left: 420, width: 100 })).toBe(420 + 100 + TAB_REVEAL_INSET - 300);
+    expect(tabScrollLeftFor(port, { left: 420, width: 100 })).toBe(
+      420 + 100 + TAB_REVEAL_INSET - 300,
+    );
   });
 
   it("brings a tab clipped on the left back to the same inset", () => {

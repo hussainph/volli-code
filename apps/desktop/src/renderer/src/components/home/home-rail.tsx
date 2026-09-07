@@ -237,9 +237,7 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
   return (
     <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
       <VenueValue term={venueKindLabel(venue.venue)} full={venue.venue.path}>
-        <span className="min-w-0 truncate text-foreground">
-          {venuePathTail(venue.venue.path)}
-        </span>
+        <span className="min-w-0 truncate text-foreground">{venuePathTail(venue.venue.path)}</span>
       </VenueValue>
       <div className="flex items-center justify-between gap-2">
         {/* A detached HEAD has no branch to reveal — `detached` IS the whole

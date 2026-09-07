@@ -288,9 +288,7 @@ function renderTabs(count: number, active: number): void {
 }
 
 function affordance(towards: "Earlier" | "Later"): HTMLButtonElement | null {
-  return (
-    container?.querySelector<HTMLButtonElement>(`[aria-label="${towards} tabs"]`) ?? null
-  );
+  return container?.querySelector<HTMLButtonElement>(`[aria-label="${towards} tabs"]`) ?? null;
 }
 
 /**
@@ -368,6 +366,46 @@ describe("TabStrip overflow", () => {
     const tablist = container?.querySelector('[role="tablist"]');
     expect(tablist?.contains(affordance("Later"))).toBe(false);
     expect(affordance("Later")?.tabIndex).toBe(0);
+  });
+
+  it("still claims Shift+wheel, the gesture the affordances stand beside", () => {
+    // The chevrons are the discoverable way to a clipped tab, not a replacement
+    // for the one a hand already on the wheel has: the strip's own native
+    // listener still has to claim the gesture and move the scroller with it.
+    renderTabs(9, 0);
+    const port = measureScroller(9);
+    const wheel = new WheelEvent("wheel", {
+      deltaY: 120,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    act(() => {
+      port.dispatchEvent(wheel);
+    });
+
+    expect(port.scrollLeft).toBe(120);
+    expect(wheel.defaultPrevented).toBe(true);
+  });
+
+  it("keeps a label the tab is too narrow to draw whole in its accessible name", () => {
+    // The label is `max-w-40 truncate`, so a long one is drawn with an ellipsis
+    // and `title` would offer the rest to a pointer and to nothing else. The
+    // accessible name is where the whole string stays reachable, which is what
+    // makes the truncation a drawing decision rather than a loss of content.
+    const label = "Rewrite the worktree archive path so a reopened ticket finds it";
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label={label} active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+
+    expect(tab?.getAttribute("aria-label")).toBe(label);
+    expect(tab?.querySelector("span")?.className).toContain("truncate");
   });
 
   it("keeps a hint that a narrow strip stops drawing in the tab's own name", () => {

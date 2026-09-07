@@ -801,7 +801,7 @@ describe("the footer at a pane's narrowest", () => {
     );
     const walked = order(html, ["Cancel request", "Skip", "Reject"]);
     expect(walked.every((at) => at > 0)).toBe(true);
-    expect([...walked].sort((a, b) => a - b)).toEqual([...walked]);
+    expect(walked.toSorted((a, b) => a - b)).toEqual([...walked]);
   });
 
   it("gives a wrapped footer the same rhythm down as across", () => {
