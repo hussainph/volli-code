@@ -118,8 +118,18 @@ export function SessionDetailPanel({
 }
 
 /**
- * A record this window cannot produce — the listing has not answered yet, or
- * the Session is genuinely not in it.
+ * The project's Session listing has not answered yet.
+ *
+ * Its own state rather than a shrug, for the reason Home's tab restore keeps
+ * `pending` separate from `settled`: "not read yet" is not "gone", and a
+ * baseline fetch in flight must never be reported as a missing record.
+ */
+export function SessionDetailPending() {
+  return <p className="text-ui text-muted-foreground">Loading this session’s record…</p>;
+}
+
+/**
+ * The listing answered and this Session is not in it.
  *
  * It says so, which is the whole point of the ticket: the behaviour this
  * replaces answered a Session it could not show by opening a different one, so

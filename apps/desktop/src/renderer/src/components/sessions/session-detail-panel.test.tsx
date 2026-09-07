@@ -3,7 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SessionRecord, Ticket } from "@volli/shared";
 
 import { buildTerminalSessionDetail } from "./session-detail-model";
-import { SessionDetailPanel, SessionDetailUnknown } from "./session-detail-panel";
+import {
+  SessionDetailPanel,
+  SessionDetailPending,
+  SessionDetailUnknown,
+} from "./session-detail-panel";
 
 const noop = (): void => {};
 
@@ -195,5 +199,14 @@ describe("SessionDetailUnknown", () => {
     const html = renderToStaticMarkup(<SessionDetailUnknown />);
 
     expect(html).toContain("This session’s record could not be found.");
+  });
+
+  // "Not read yet" is not "gone" — the same distinction Home's tab restore
+  // draws about a persisted Session id.
+  it("does not call a listing that has not answered yet a missing record", () => {
+    const html = renderToStaticMarkup(<SessionDetailPending />);
+
+    expect(html).toContain("Loading this session’s record…");
+    expect(html).not.toContain("could not be found");
   });
 });

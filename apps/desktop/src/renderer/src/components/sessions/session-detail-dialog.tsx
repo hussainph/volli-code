@@ -25,7 +25,11 @@ import { useShallow } from "zustand/react/shallow";
 
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { buildTerminalSessionDetail } from "./session-detail-model";
-import { SessionDetailPanel, SessionDetailUnknown } from "./session-detail-panel";
+import {
+  SessionDetailPanel,
+  SessionDetailPending,
+  SessionDetailUnknown,
+} from "./session-detail-panel";
 import { resumeTicketSession, startProjectTerminal, startTicketTerminal } from "./session-create";
 import { canResumeSession } from "@renderer/components/ticket/session-history";
 import { useBoardStore } from "@renderer/stores/board";
@@ -83,6 +87,10 @@ function SessionDetailBody({
   const record = useProjectSessionsStore(
     (state) => state.byProject[projectId]?.terminal.find((row) => row.id === sessionId) ?? null,
   );
+  // Whether the project's baseline read has landed at all. `undefined` rows are
+  // a fetch in flight, not an answer — the same distinction `resolveHomeTabs`
+  // draws before it writes a persisted Session id off as stale.
+  const listed = useProjectSessionsStore((state) => state.byProject[projectId] !== undefined);
   const project = useProjectsStore(
     useShallow((state) => state.projects.find((candidate) => candidate.id === projectId) ?? null),
   );
@@ -101,7 +109,7 @@ function SessionDetailBody({
     return (
       <>
         <DialogTitle className="sr-only">Session</DialogTitle>
-        <SessionDetailUnknown />
+        {listed && project !== null ? <SessionDetailUnknown /> : <SessionDetailPending />}
       </>
     );
   }
