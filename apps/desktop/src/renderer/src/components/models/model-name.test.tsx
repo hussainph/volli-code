@@ -45,9 +45,7 @@ describe("ModelName in a list row", () => {
     const markup = renderToStaticMarkup(
       <ModelName model={MODEL} models={[MODEL]} providerLabel="Anthropic" alwaysProvider />,
     );
-    expect(markup).toContain(
-      'title="Claude Opus 4.5 (very long name, as they get) · Anthropic"',
-    );
+    expect(markup).toContain('title="Claude Opus 4.5 (very long name, as they get) · Anthropic"');
   });
 
   it("still clips to one line where Radix copies it into a closed trigger", () => {

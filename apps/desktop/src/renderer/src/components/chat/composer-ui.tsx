@@ -1417,7 +1417,12 @@ export function modelPillLabel(
 export function modelIdentityLabel(
   models: readonly ComposerModel[],
   selection: ComposerModelSelection,
-  said: {
+  /**
+   * What the CALLER knows that the catalog does not: the tier a Session was
+   * started from, and the provider's label for a model the catalog no longer
+   * lists. Both are facts about this selection that cannot be looked up.
+   */
+  known: {
     /** The tier the selection resolved from, as its label (VC-259). */
     tier?: string | null;
     /** The Session's provider as the catalog names it, for a model no longer listed. */
@@ -1427,8 +1432,8 @@ export function modelIdentityLabel(
   const model = selectedModel(models, selection);
   const name = model?.label ?? selection.modelId;
   if (!name) return "Model";
-  const provider = model?.providerLabel ?? said.providerLabel ?? selection.providerId;
-  return [said.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
+  const provider = model?.providerLabel ?? known.providerLabel ?? selection.providerId;
+  return [known.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
 }
 
 /**
@@ -1671,22 +1676,22 @@ export function ModelPill({
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            data-testid="model-pill"
-            aria-disabled
-            aria-label={`Model: ${identity}`}
-            className={cn(MODEL_PILL_GIVE, "text-muted-foreground opacity-50")}
-          >
-            <ModelPillFace
-              models={models}
-              selection={selection}
-              selectionTier={selectionTier}
-              selectionProviderLabel={selectionProviderLabel}
-            />
-          </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              data-testid="model-pill"
+              aria-disabled
+              aria-label={`Model: ${identity}`}
+              className={cn(MODEL_PILL_GIVE, "text-muted-foreground opacity-50")}
+            >
+              <ModelPillFace
+                models={models}
+                selection={selection}
+                selectionTier={selectionTier}
+                selectionProviderLabel={selectionProviderLabel}
+              />
+            </Button>
           </TooltipTrigger>
           {/* Wrapping, and wide enough for a real name: the bubble is the
               reveal, and a reveal that truncates is the thing it was opened to

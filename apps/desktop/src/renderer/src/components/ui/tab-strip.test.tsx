@@ -298,8 +298,8 @@ function layoutStrip(options: { area?: number; content: number; scrollLeft?: num
   // the reader has not asked for reduced motion.
   Object.defineProperty(port, "scrollTo", {
     configurable: true,
-    value: (options: ScrollToOptions) => {
-      left = options.left ?? left;
+    value: (to: ScrollToOptions) => {
+      left = to.left ?? left;
     },
   });
   return {
