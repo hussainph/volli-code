@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import type { VenueSnapshot } from "@volli/shared";
+import type { VenueReading, VenueSnapshot } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
 import { VenueChips } from "./venue-chips";
@@ -30,12 +30,16 @@ function draw(node: React.ReactElement): string {
 /**
  * A live mount, for the cases that read a store state set by the test: a
  * static render reads zustand's initial snapshot and would draw the empty
- * store whatever was seeded. The venue door is stubbed to a read that never
- * answers, so the mount-time refresh cannot overwrite the seeded entry.
+ * store whatever was seeded. The venue door answers the mount-time refresh
+ * with `reading` — the same answer the seeded entry came from — so the read
+ * settles (nothing is left in flight on the singleton for a later test to
+ * inherit) and lands on the state the test drew.
  */
 let mounted: { root: Root; host: HTMLElement } | null = null;
-function mount(node: React.ReactElement): string {
-  Object.assign(window, { api: { venue: { snapshot: vi.fn(() => new Promise(() => {})) } } });
+function mount(node: React.ReactElement, reading: VenueReading): string {
+  Object.assign(window, {
+    api: { venue: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
+  });
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -44,8 +48,13 @@ function mount(node: React.ReactElement): string {
   return host.innerHTML;
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (mounted !== null) {
+    // Let the mount-time read settle before the store is reset, so its answer
+    // cannot land in the next test's store.
+    await act(async () => {
+      await Promise.resolve();
+    });
     act(() => mounted?.root.unmount());
     mounted.host.remove();
     mounted = null;
@@ -162,7 +171,7 @@ describe("ChatEmptyState", () => {
       },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />);
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
 
     expect(markup).toContain('data-venue-state="resolving"');
     expect(markup).not.toContain("Main checkout");
@@ -175,7 +184,10 @@ describe("ChatEmptyState", () => {
       byScope: { [venueKey("p1", "t1")]: { status: "ready", venue: venue() } },
     });
 
-    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />);
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "measured",
+      venue: venue(),
+    });
 
     expect(markup).toContain('data-empty-visual="venue"');
     expect(markup).toContain("Worktree");
