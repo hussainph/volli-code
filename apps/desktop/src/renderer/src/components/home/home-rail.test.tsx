@@ -136,7 +136,10 @@ describe("HomeRail", () => {
     };
     useChatSessionsStore.getInitialState().sessions = { s1: slice };
 
-    expect(draw("chat:s1").replace(/<[^>]+>/g, "")).toContain("Fast · haiku-4.5");
+    // Split rather than `replace`: the tags are separators here, not
+    // something being sanitized away, and a lone `replace` of a tag pattern
+    // reads to a scanner as a half-written sanitizer.
+    expect(draw("chat:s1").split(/<[^>]+>/).join("")).toContain("Fast · haiku-4.5");
   });
 
   it("says there is no Session in front when the Board tab is", () => {
