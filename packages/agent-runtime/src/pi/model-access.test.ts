@@ -733,8 +733,11 @@ describe("inspectPiModelAccess usage limits", () => {
       unavailable: { reason: "probeFailed" },
     });
 
+    // Refreshing, because it is the FOLD under test here and not the schedule:
+    // the failed attempt above earned the same five-minute hold a good one
+    // does, and the next test is the one that pins that.
     status = 200;
-    const good = await inspect(2);
+    const good = await inspect(2, true);
     const goodLimits = providersById(good.providers).anthropic?.usageLimits;
     expect(goodLimits?.windows).toHaveLength(2);
 

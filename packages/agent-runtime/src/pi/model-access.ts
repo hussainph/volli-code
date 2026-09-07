@@ -1,13 +1,14 @@
 import { getSupportedThinkingLevels, type Model, type Models } from "@earendil-works/pi-ai";
-import type {
-  ModelAccessBillingSource,
-  ModelAccessModel,
-  ModelAccessProvider,
-  ModelAccessRecovery,
-  ModelAccessSnapshot,
-  ModelAccessState,
-  ModelCatalogRefreshReport,
-  UsageLimits,
+import {
+  usageLimitsProbeFailed,
+  type ModelAccessBillingSource,
+  type ModelAccessModel,
+  type ModelAccessProvider,
+  type ModelAccessRecovery,
+  type ModelAccessSnapshot,
+  type ModelAccessState,
+  type ModelCatalogRefreshReport,
+  type UsageLimits,
 } from "@volli/shared";
 
 import { contextWindowOf } from "./compaction";
@@ -405,11 +406,12 @@ function probeProvider(
  * One provider's subscription windows, settled into the holder.
  *
  * Providers with no usage endpoint never reach the probe machinery at all —
- * there are forty of them and two with a read, and a bounded probe per
- * provider for a question with a static answer would be forty timers for
- * nothing. For the two, the probe runs under the same bound the provider probe
- * gets, and a timeout is folded as a failed probe: the holder keeps the last
- * good read, which is what a person should see when the endpoint is slow.
+ * dozens of them have none, and only the few in {@link USAGE_PROBE_PROVIDER_IDS}
+ * have a read. A bounded probe per provider for a question with a static
+ * answer would be dozens of timers for nothing. For those few, the probe runs
+ * under the same bound the provider probe gets, and a timeout is folded as a
+ * failed probe: the holder keeps the last good read, which is what a person
+ * should see when the endpoint is slow.
  */
 function probeUsage(
   source: UsageLimitsSource | undefined,
@@ -437,8 +439,8 @@ function probeUsage(
     },
     () =>
       source.holder.settle(providerId, {
-        kind: "read",
-        limits: { checkedAt: now(), windows: [], unavailable: { reason: "probeFailed" } },
+        kind: "verdict",
+        limits: usageLimitsProbeFailed(now()),
       }),
     input.signal,
     timeoutMs,

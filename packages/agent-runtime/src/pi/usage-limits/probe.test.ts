@@ -2,7 +2,6 @@ import type { AuthCheck, AuthResult } from "@earendil-works/pi-ai";
 import type { UsageLimits } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { UsageLimitsHolder } from "./holder";
 import {
   chatgptAccountId,
   probeUsageLimits,
@@ -107,7 +106,7 @@ describe("probeUsageLimits", () => {
   it("has nothing to say for a provider with no usage endpoint", async () => {
     const { fetch, calls } = scripted(() => json({}));
     expect(await probeUsageLimits(input({ providerId: "openai", fetch }))).toEqual({
-      kind: "none",
+      kind: "cleared",
     });
     expect(calls).toEqual([]);
   });
@@ -115,7 +114,7 @@ describe("probeUsageLimits", () => {
   it("has nothing to say for a provider with no credential", async () => {
     const { fetch, calls } = scripted(() => json({}));
     const outcome = await probeUsageLimits(input({ models: models(undefined, undefined), fetch }));
-    expect(outcome).toEqual({ kind: "none" });
+    expect(outcome).toEqual({ kind: "cleared" });
     expect(calls).toEqual([]);
   });
 
@@ -125,7 +124,7 @@ describe("probeUsageLimits", () => {
       input({ models: models(apiKey, { auth: { apiKey: "sk-ant-api" } }), fetch }),
     );
     expect(outcome).toEqual({
-      kind: "read",
+      kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "unsupported" } },
     });
     expect(calls).toEqual([]);
@@ -144,7 +143,7 @@ describe("probeUsageLimits", () => {
         },
       },
     ]);
-    expect(outcome.kind).toBe("read");
+    expect(outcome.kind).toBe("verdict");
     const limits = (outcome as { limits: UsageLimits }).limits;
     expect(limits.unavailable).toBeUndefined();
     expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
@@ -208,19 +207,20 @@ describe("probeUsageLimits", () => {
       }),
     );
     expect(outcome).toEqual({
-      kind: "read",
+      kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "unsupported" } },
     });
-    // A refresh still asks: the fold has made the verdict final, not the schedule.
-    expect(schedule.allows("opencode-go", NOW + 1, false)).toBe(true);
+    // No 429, so nothing is on the unskippable cooldown; the attempt's own
+    // hold is what stands, and an explicit Refresh still gets through it.
+    expect(schedule.allows("opencode-go", NOW + 1, true)).toBe(true);
   });
 
-  it("keeps a 403 on an OAuth-only reader as a failed attempt, not a verdict", async () => {
+  it("keeps a 403 on an OAuth-only reader as a failed attempt, not a verdict about the account", async () => {
     const outcome = await probeUsageLimits(
       input({ fetch: scripted(() => new Response("{}", { status: 403 })).fetch }),
     );
     expect(outcome).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
   });
@@ -259,7 +259,7 @@ describe("probeUsageLimits", () => {
       input({ models: models(oauth, { auth: {}, source: "OAuth" }), fetch }),
     );
     expect(outcome).toEqual({
-      kind: "read",
+      kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
     });
     expect(calls).toEqual([]);
@@ -273,7 +273,7 @@ describe("probeUsageLimits", () => {
     );
     expect(JSON.stringify(rejected)).not.toContain("secret");
     expect(rejected).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
   });
@@ -290,7 +290,7 @@ describe("probeUsageLimits", () => {
       }),
     );
     expect(outcome).toEqual({
-      kind: "read",
+      kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
     });
   });
@@ -304,14 +304,14 @@ describe("probeUsageLimits", () => {
       }),
     );
     expect(refused).toEqual({
-      kind: "read",
+      kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
     });
     const html = await probeUsageLimits(
       input({ fetch: scripted(() => new Response("<html>", { status: 200 })).fetch }),
     );
     expect(html).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
     const oversized = await probeUsageLimits(
@@ -321,7 +321,7 @@ describe("probeUsageLimits", () => {
       }),
     );
     expect(oversized).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
     const network = await probeUsageLimits(
@@ -332,7 +332,7 @@ describe("probeUsageLimits", () => {
       }),
     );
     expect(network).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
   });
@@ -344,7 +344,7 @@ describe("probeUsageLimits", () => {
     );
     const first = await probeUsageLimits(input({ fetch, schedule }));
     expect(first).toMatchObject({
-      kind: "read",
+      kind: "verdict",
       limits: { unavailable: { reason: "probeFailed" } },
     });
     expect(calls).toHaveLength(1);
@@ -356,8 +356,14 @@ describe("probeUsageLimits", () => {
       await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 119_000, force: true })),
     ).toEqual({ kind: "held" });
     expect(calls).toHaveLength(1);
-    // Past it, the next inspection asks again.
-    await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 121_000 }));
+    // Past the stated two minutes the cooldown is spent — but the attempt's own
+    // five-minute hold outlives it, so an ordinary inspection still asks
+    // nothing and a Refresh is what gets through.
+    expect(await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 121_000 }))).toEqual({
+      kind: "held",
+    });
+    expect(calls).toHaveLength(1);
+    await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 121_000, force: true }));
     expect(calls).toHaveLength(2);
   });
 
@@ -384,7 +390,7 @@ describe("probeUsageLimits", () => {
     const forced = await probeUsageLimits(
       input({ fetch, schedule, now: () => NOW + 60_000, force: true }),
     );
-    expect(forced.kind).toBe("read");
+    expect(forced.kind).toBe("verdict");
     expect(calls).toHaveLength(2);
     await probeUsageLimits(
       input({ fetch, schedule, now: () => NOW + 60_000 + USAGE_PROBE_FRESH_MS }),
@@ -392,11 +398,68 @@ describe("probeUsageLimits", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it("does not treat a failed read as fresh", async () => {
+  it("holds a FAILED attempt on the same terms, so a broken endpoint is not hammered", async () => {
     const schedule = new UsageProbeSchedule();
+    // A 200 whose body is not this endpoint's shape: a failure with no status
+    // to hold on, which is the case an inspection loop used to re-ask forever.
     const { fetch, calls } = scripted(() => json({ unexpected: true }));
     await probeUsageLimits(input({ fetch, schedule }));
-    await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 1_000 }));
+    expect(calls).toHaveLength(1);
+
+    // Every ordinary inspection inside the hold — chat plane mount, Session
+    // start, auto-title — costs the endpoint nothing.
+    for (const at of [NOW + 1_000, NOW + 60_000, NOW + USAGE_PROBE_FRESH_MS - 1]) {
+      expect(await probeUsageLimits(input({ fetch, schedule, now: () => at }))).toEqual({
+        kind: "held",
+      });
+    }
+    expect(calls).toHaveLength(1);
+
+    // An ordinary inspection asks again once the hold is out.
+    await probeUsageLimits(input({ fetch, schedule, now: () => NOW + USAGE_PROBE_FRESH_MS }));
+    expect(calls).toHaveLength(2);
+
+    // And the surface says "Refresh to try again", so a Refresh must try again
+    // whatever the hold says — only a 429's cooldown outranks a person.
+    const forced = await probeUsageLimits(
+      input({ fetch, schedule, now: () => NOW + USAGE_PROBE_FRESH_MS + 1, force: true }),
+    );
+    expect(forced.kind).toBe("verdict");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("sends one request when several inspections start at once, and answers them all", async () => {
+    const schedule = new UsageProbeSchedule();
+    const release = Promise.withResolvers<void>();
+    const { fetch, calls } = scripted(async () => {
+      await release.promise;
+      return json(ANTHROPIC_BODY);
+    });
+
+    // A Session start, a chat plane mount and the CLI, all in one tick. The
+    // hold cannot help here: it is only set once a reply comes back.
+    const together = Promise.all([
+      probeUsageLimits(input({ fetch, schedule })),
+      probeUsageLimits(input({ fetch, schedule })),
+      probeUsageLimits(input({ fetch, schedule, force: true })),
+    ]);
+    // Let the one running read get as far as the endpoint.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toHaveLength(1);
+
+    release.resolve();
+    const outcomes = await together;
+    expect(calls).toHaveLength(1);
+    // Every caller is answered, and with the same reading — the very same
+    // object, which is what makes joining safe.
+    for (const outcome of outcomes) expect(outcome).toBe(outcomes[0]);
+    const shared = (outcomes[0] as { limits: UsageLimits }).limits;
+    expect(shared.unavailable).toBeUndefined();
+    expect(shared.windows.map((window) => window.id)).toEqual(["five_hour", "seven_day"]);
+
+    // The slot is given back rather than pinned to the finished read: a later
+    // Refresh opens a new request instead of being handed the old answer.
+    await probeUsageLimits(input({ fetch, schedule, now: () => NOW + 60_000, force: true }));
     expect(calls).toHaveLength(2);
   });
 });
@@ -432,73 +495,5 @@ describe("chatgptAccountId", () => {
     expect(
       chatgptAccountId(codexToken({ "https://api.openai.com/auth": { chatgpt_account_id: "" } })),
     ).toBeUndefined();
-  });
-});
-
-describe("UsageLimitsHolder", () => {
-  const good: UsageLimits = {
-    checkedAt: NOW,
-    windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 37 }],
-  };
-  const failed: UsageLimits = {
-    checkedAt: NOW + 1,
-    windows: [],
-    unavailable: { reason: "probeFailed" },
-  };
-
-  it("publishes a first sighting from the turn stream and tells its listeners", () => {
-    const holder = new UsageLimitsHolder();
-    const told: [string, UsageLimits | undefined][] = [];
-    holder.subscribe((providerId, limits) => told.push([providerId, limits]));
-    expect(holder.apply("anthropic", { observedAt: NOW, windows: good.windows })).toBe(true);
-    expect(holder.get("anthropic")).toEqual(good);
-    expect(told).toEqual([["anthropic", good]]);
-  });
-
-  it("is silent about an update that changes nothing", () => {
-    const holder = new UsageLimitsHolder();
-    holder.apply("anthropic", { observedAt: NOW, windows: good.windows });
-    const told: unknown[] = [];
-    holder.subscribe((...args) => told.push(args));
-    expect(holder.apply("anthropic", { observedAt: NOW + 5, windows: good.windows })).toBe(false);
-    expect(holder.apply("anthropic", { observedAt: NOW + 5, windows: [] })).toBe(false);
-    expect(told).toEqual([]);
-  });
-
-  it("settles a read against what is held, keeping a good read over a failed probe", () => {
-    const holder = new UsageLimitsHolder();
-    expect(holder.settle("anthropic", { kind: "read", limits: good })).toBe(good);
-    expect(holder.settle("anthropic", { kind: "read", limits: failed })).toBe(good);
-    expect(holder.get("anthropic")).toBe(good);
-  });
-
-  it("answers a held probe with what is published, and clears on none", () => {
-    const holder = new UsageLimitsHolder();
-    const told: unknown[] = [];
-    holder.subscribe((...args) => told.push(args));
-    expect(holder.settle("anthropic", { kind: "held" })).toBeUndefined();
-    holder.settle("anthropic", { kind: "read", limits: good });
-    expect(holder.settle("anthropic", { kind: "held" })).toBe(good);
-    expect(holder.settle("anthropic", { kind: "none" })).toBeUndefined();
-    expect(holder.get("anthropic")).toBeUndefined();
-    // A second `none` has nothing to clear and says nothing.
-    holder.settle("anthropic", { kind: "none" });
-    expect(told).toEqual([
-      ["anthropic", good],
-      ["anthropic", undefined],
-    ]);
-  });
-
-  it("lets a listener leave, and survives one that throws", () => {
-    const holder = new UsageLimitsHolder();
-    const told: unknown[] = [];
-    holder.subscribe(() => {
-      throw new Error("listener bug");
-    });
-    const leave = holder.subscribe((...args) => told.push(args));
-    holder.settle("anthropic", { kind: "read", limits: good });
-    leave();
-    holder.settle("anthropic", { kind: "none" });
-    expect(told).toEqual([["anthropic", good]]);
   });
 });

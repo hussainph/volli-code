@@ -21,11 +21,19 @@
  *   is honoured for `Retry-After` when stated and five minutes otherwise, and
  *   the attempt reports `probeFailed` — which the fold reads as "keep the last
  *   good read". It is never retried inside one inspection.
- * - **A good read is fresh for five minutes.** Model Access is inspected far
- *   more often than a person opens it — every chat plane mount, every Session
- *   start — and each of those would otherwise be a request to a rate-limited
- *   endpoint. Within the freshness hold the probe says nothing new and the
- *   holder's value stands; an explicit Refresh skips the hold.
+ * - **Every completed attempt stands for five minutes**, not only a good one.
+ *   Model Access is inspected far more often than a person opens it — every
+ *   chat plane mount, every Session start, every auto-title — and each of
+ *   those would otherwise be a request to a rate-limited endpoint. A FAILED
+ *   attempt holds on the same terms as a good one: an endpoint that is down
+ *   is exactly the one a loop of inspections must not hammer. An explicit
+ *   Refresh skips this hold, which is what makes the surface's "Refresh to
+ *   try again" true; nothing skips a 429's cooldown.
+ * - **One read per provider at a time.** Nothing serializes the callers of
+ *   `inspectModelAccess` — a Session start, a chat plane mount and the CLI can
+ *   all land in the same tick — and the hold above cannot help, because it is
+ *   only set once a reply comes back. A second caller joins the read already
+ *   in flight instead of opening a second one.
  *
  * `fetch` is injected so no test reaches the network, and every request is
  * bounded by the caller's signal — `inspectPiModelAccess` runs each probe
@@ -33,7 +41,7 @@
  */
 
 import type { Models } from "@earendil-works/pi-ai";
-import type { UsageLimits } from "@volli/shared";
+import { usageLimitsProbeFailed, usageLimitsUnsupported, type UsageLimits } from "@volli/shared";
 
 import { anthropicUsageFromEndpoint } from "./anthropic";
 import { codexUsageFromEndpoint } from "./codex";
@@ -41,7 +49,7 @@ import { opencodeGoUsageFromEndpoint } from "./opencode-go";
 
 /** How long a 429 holds the endpoint off when it names no `Retry-After`. */
 export const USAGE_PROBE_COOLDOWN_MS = 5 * 60_000;
-/** How long a good read is trusted before an ordinary inspection asks again. */
+/** How long one completed attempt stands before an ordinary inspection asks again. */
 export const USAGE_PROBE_FRESH_MS = 5 * 60_000;
 /**
  * The most a `Retry-After` may hold the endpoint off. A header that asks for
@@ -62,42 +70,76 @@ export type UsageProbeFetch = (
 ) => Promise<Response>;
 
 /**
- * Per-provider holds on the endpoint: the cooldown a 429 imposes, which nothing
- * skips, and the freshness a good read earns, which an explicit refresh does.
+ * What each provider's endpoint is owed, and what is already on its way there.
+ *
+ * Two holds and one gate. The COOLDOWN is what a 429 imposed, and nothing
+ * skips it — the endpoint has told us a number and we obey it. The ASKED hold
+ * is what one completed attempt earns, and an explicit Refresh skips it,
+ * because a person waiting on the page is not the traffic the hold exists to
+ * stop. The gate is single-flight: concurrent inspections share one read.
  *
  * One per runtime, shared across inspections, because a limit the endpoint
  * stated on one inspection is still in force on the next.
  */
 export class UsageProbeSchedule {
   readonly #cooldownUntil = new Map<string, number>();
-  readonly #freshUntil = new Map<string, number>();
+  readonly #askedUntil = new Map<string, number>();
+  readonly #inFlight = new Map<string, Promise<UsageProbeOutcome>>();
 
-  /** Whether a read may go out now. `force` skips the freshness hold, never the cooldown. */
+  /** Whether a read may go out now. `force` skips the asked hold, never the cooldown. */
   allows(providerId: string, now: number, force: boolean): boolean {
     const cooldown = this.#cooldownUntil.get(providerId);
     if (cooldown !== undefined && now < cooldown) return false;
     if (force) return true;
-    const fresh = this.#freshUntil.get(providerId);
-    return fresh === undefined || now >= fresh;
+    const asked = this.#askedUntil.get(providerId);
+    return asked === undefined || now >= asked;
   }
 
   holdOff(providerId: string, untilMs: number): void {
     this.#cooldownUntil.set(providerId, untilMs);
   }
 
-  markFresh(providerId: string, untilMs: number): void {
-    this.#freshUntil.set(providerId, untilMs);
+  markAsked(providerId: string, untilMs: number): void {
+    this.#askedUntil.set(providerId, untilMs);
+  }
+
+  /**
+   * Runs one read per provider at a time; a caller arriving mid-read gets the
+   * one already going.
+   *
+   * The outcome is an immutable value, so sharing it is safe. The joiner does
+   * inherit the first caller's bound and signal — but a read it shares is a
+   * read that happened, where a second request would have been one more call
+   * on an endpoint that rate-limits us independently of chat.
+   */
+  coalesce(
+    providerId: string,
+    start: () => Promise<UsageProbeOutcome>,
+  ): Promise<UsageProbeOutcome> {
+    const existing = this.#inFlight.get(providerId);
+    if (existing !== undefined) return existing;
+    const run = start();
+    this.#inFlight.set(providerId, run);
+    // An unconditional delete, because the slot can only ever hold this run: a
+    // caller arriving before this settles joins it rather than replacing it,
+    // and one arriving after finds the slot already empty.
+    void run.finally(() => this.#inFlight.delete(providerId));
+    return run;
   }
 }
 
 /** What one probe of one provider concluded. */
 export type UsageProbeOutcome =
-  /** A read happened, or a verdict that needs none: fold it. */
-  | { kind: "read"; limits: UsageLimits }
+  /** What the probe concluded — from a read, or from a fact that needed none. */
+  | { kind: "verdict"; limits: UsageLimits }
   /** The schedule held the read; whatever is published stands. */
   | { kind: "held" }
-  /** Nothing to show for this provider: no read exists, or no credential to read with. */
-  | { kind: "none" };
+  /**
+   * This provider has nothing to show and any held reading is now wrong: it
+   * has no usage endpoint, or nobody is signed in to it. The holder CLEARS on
+   * this, so it is not the outcome for a read that merely failed.
+   */
+  | { kind: "cleared" };
 
 export interface UsageProbeInput {
   providerId: string;
@@ -172,20 +214,32 @@ export const USAGE_PROBE_PROVIDER_IDS: readonly string[] = Object.keys(READERS);
  * out — a provider's error body can echo the request that caused it, and a
  * request here carries a bearer token.
  */
-export async function probeUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcome> {
+export function probeUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcome> {
+  return input.schedule.coalesce(input.providerId, () => readUsageLimits(input));
+}
+
+async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcome> {
   const reader = READERS[input.providerId];
-  if (reader === undefined) return { kind: "none" };
+  if (reader === undefined) return { kind: "cleared" };
   const checkedAt = input.now();
   try {
     const check = await input.models.checkAuth(input.providerId, { signal: input.signal });
-    if (check === undefined) return { kind: "none" };
+    if (check === undefined) return { kind: "cleared" };
     if (check.type !== "oauth" && !reader.acceptsApiKey) {
-      return { kind: "read", limits: unsupported(checkedAt) };
+      return { kind: "verdict", limits: usageLimitsUnsupported(checkedAt) };
     }
     if (!input.schedule.allows(input.providerId, checkedAt, input.force)) return { kind: "held" };
+    // Past the gate, so this attempt counts whatever it returns. Recorded here
+    // rather than on the way out so that a throw, an abort and a refused token
+    // hold the endpoint off exactly as a good read does: the loop of ordinary
+    // inspections is the traffic worth stopping, and a broken endpoint is the
+    // case where stopping it matters most.
+    input.schedule.markAsked(input.providerId, input.now() + USAGE_PROBE_FRESH_MS);
     const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
     const accessToken = resolved?.auth.apiKey;
-    if (accessToken === undefined) return { kind: "read", limits: probeFailed(checkedAt) };
+    if (accessToken === undefined) {
+      return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
+    }
     const response = await input.fetch(reader.url, {
       method: "GET",
       headers: {
@@ -201,20 +255,16 @@ export async function probeUsageLimits(input: UsageProbeInput): Promise<UsagePro
         input.providerId,
         input.now() + (retryAfterMs ?? USAGE_PROBE_COOLDOWN_MS),
       );
-      return { kind: "read", limits: probeFailed(checkedAt) };
+      return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
     }
     if (response.status === reader.noSubscriptionStatus) {
-      return { kind: "read", limits: unsupported(checkedAt) };
+      return { kind: "verdict", limits: usageLimitsUnsupported(checkedAt) };
     }
-    if (!response.ok) return { kind: "read", limits: probeFailed(checkedAt) };
+    if (!response.ok) return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
     const body = await readJson(response);
-    const limits = reader.parse(body, checkedAt);
-    if (limits.unavailable === undefined) {
-      input.schedule.markFresh(input.providerId, input.now() + USAGE_PROBE_FRESH_MS);
-    }
-    return { kind: "read", limits };
+    return { kind: "verdict", limits: reader.parse(body, checkedAt) };
   } catch {
-    return { kind: "read", limits: probeFailed(checkedAt) };
+    return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
   }
 }
 
@@ -268,12 +318,4 @@ async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (text.length > MAX_BODY_BYTES) throw new Error("usage body too large");
   return JSON.parse(text);
-}
-
-function probeFailed(checkedAt: number): UsageLimits {
-  return { checkedAt, windows: [], unavailable: { reason: "probeFailed" } };
-}
-
-function unsupported(checkedAt: number): UsageLimits {
-  return { checkedAt, windows: [], unavailable: { reason: "unsupported" } };
 }

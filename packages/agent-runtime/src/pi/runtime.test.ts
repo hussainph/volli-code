@@ -7736,12 +7736,13 @@ describe("usage limits", () => {
     ]);
   });
 
-  it("builds its own holder and platform fetch when the host opts in with nothing", async () => {
+  it("builds its own holder when the host opts in without one, and carries the read onto the row", async () => {
     const runtime = createPiAgentRuntime({
       sessionDataDir: fixture().sessionDataDir,
       // The faux provider resolves an API-key credential, so the read answers
-      // `unsupported` without a request and the platform fetch is never
-      // reached — the opt-in itself is what this exercises.
+      // `unsupported` before any request — which is why `unusedFetch` is never
+      // reached. What this pins is that opting in with no holder still
+      // produces one, and that its verdict reaches `ModelAccessProvider`.
       models: modelsWithStream(scriptedStream([])),
       usageLimits: { fetch: unusedFetch },
     });
