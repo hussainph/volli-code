@@ -2408,10 +2408,16 @@ export type SessionRpcEventChannelIsDeclared = Assert<
 export type UiZoomCommand = "in" | "out" | "reset";
 
 /**
- * A coarse hint at WHAT a {@link DataChangedEvent} touched — advisory only
- * (diagnostics, possible future routing). Readers decide whether to refire from
- * `ticketId`, never from this. Kept a small closed union so every producer names
- * its change.
+ * A coarse hint at WHAT a {@link DataChangedEvent} touched. Readers decide
+ * whether to re-hydrate from `ticketId`, never from this. Kept a small closed
+ * union so every producer names its change.
+ *
+ * One reader does act on it (VC-286): `worktree` is the kind that can move a
+ * ticket's CHECKOUT — materialized, removed, recreated, scope switched — and
+ * the renderer's venue boundary (`lib/boot.ts`) discards the ticket's cached
+ * venue reading on it. So a producer whose change moves a checkout MUST name
+ * `worktree`; one that omits `kind` re-hydrates the board but leaves the venue
+ * where it was.
  */
 export type DataChangeKind = "ticket" | "comment" | "session" | "worktree" | "retention";
 
@@ -2435,7 +2441,10 @@ export interface DataChangedEvent {
   ticketId?: string;
   /** The project the change belongs to, when the producer knows it. */
   projectId?: string;
-  /** Advisory hint at what changed — never the basis of a reader's refire decision. */
+  /**
+   * Hint at what changed. Never the basis of whether a reader re-hydrates — but
+   * `worktree` is load-bearing for the venue boundary; see {@link DataChangeKind}.
+   */
   kind?: DataChangeKind;
 }
 
