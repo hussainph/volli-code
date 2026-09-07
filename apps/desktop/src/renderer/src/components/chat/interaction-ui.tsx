@@ -399,10 +399,15 @@ function DecisionCard({
     emptyInteractionDraft(interaction),
   );
   const [step, setStep] = React.useState(0);
-  const { failed, send } = useDelivery(interaction.id, onResolve);
+  const { failed, send, commit } = useDelivery(interaction.id, onResolve);
   const reducedMotion = useReducedMotion() ?? false;
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
+  // Through the same latch the verdict takes, so a withdrawal and a decision
+  // racing each other still end this request exactly once. No receipt: this
+  // card is replaced by the harness's own reply and has no sentence of its own
+  // to leave, but the latch is the same one whatever the card says afterwards.
+  const withdraw = onWithdraw ? () => commit(null, () => onWithdraw()) : undefined;
   const asked = questions[carousel?.index ?? 0];
   const refusable = needsOwnRefusal(interaction);
   const submission = interactionSubmission(interaction, draft);
@@ -425,7 +430,7 @@ function DecisionCard({
         event.preventDefault();
         submit();
       }}
-      onKeyDown={withdrawOnEscape(onWithdraw, resolving)}
+      onKeyDown={withdrawOnEscape(withdraw, resolving)}
       className={cn(
         "pointer-events-auto overflow-hidden outline-none",
         COMPOSER_STACK_SHELL,
@@ -500,14 +505,14 @@ function DecisionCard({
             weight of the exit it is — below the verdict beside it, which is
             what the card actually asked for. Two controls at one weight said an
             interrupt and a refusal were the same kind of act. */}
-        {onWithdraw ? (
+        {withdraw ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
             disabled={resolving}
-            onClick={onWithdraw}
+            onClick={withdraw}
           >
             <XCircleIcon className="size-3.5" />
             {withdrawLabel(interaction)}

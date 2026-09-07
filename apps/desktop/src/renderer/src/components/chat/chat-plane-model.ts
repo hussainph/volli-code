@@ -111,6 +111,14 @@ export async function answerInteraction(
  * answer the question, and an interaction leaves the projection only when it is
  * resolved or cancelled. It holds the same in-flight latch a decision does, so a
  * second click lands on a disabled Stop rather than on a second withdrawal.
+ *
+ * Reports whether the question actually went away, which is the cancellation's
+ * landing and not the interrupt's: a turn that would not stop still leaves an
+ * interaction the cancel can end, and a cancel that was refused leaves the
+ * question standing whatever the interrupt did. The client never throws for a
+ * refusal — it toasts and resolves `false` — so this boolean is the only word
+ * the card gets, and a card that latched shut on "Withdrew question" over a
+ * refused cancel would be reporting an act that did not happen.
  */
 export async function withdrawInteraction(
   interactionId: string,
@@ -119,11 +127,11 @@ export async function withdrawInteraction(
     cancel(interactionId: string): Promise<boolean>;
     resolving(interactionId: string, active: boolean): void;
   },
-): Promise<void> {
+): Promise<boolean> {
   acts.resolving(interactionId, true);
   try {
     await acts.interrupt();
-    await acts.cancel(interactionId);
+    return await acts.cancel(interactionId);
   } finally {
     acts.resolving(interactionId, false);
   }

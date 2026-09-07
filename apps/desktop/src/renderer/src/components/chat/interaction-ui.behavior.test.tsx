@@ -46,6 +46,36 @@ function askPrompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionIn
   };
 }
 
+const PERMISSION_OPTIONS = [
+  { id: "once", label: "Allow once", description: null },
+  { id: "always", label: "Allow always", description: null },
+  { id: "reject", label: "Reject", description: null },
+];
+
+/** A permission: drawn on the verdict card, where a row's click is the press. */
+function permission(): RendererSessionInteraction {
+  return {
+    id: "permission:p1",
+    attachmentId: "attach-1",
+    kind: "permission",
+    title: "rm -rf node_modules",
+    detail: "bash",
+    options: PERMISSION_OPTIONS,
+    multiple: false,
+    prompts: [
+      {
+        id: "prompt:0",
+        label: "rm -rf node_modules",
+        detail: "bash",
+        options: PERMISSION_OPTIONS,
+        multiple: false,
+        custom: false,
+      },
+    ],
+    native: { id: null, detail: null },
+  };
+}
+
 /** A harness question: encoded ids, so none of them can read as a declared no. */
 function ask(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
   return {
@@ -94,6 +124,15 @@ function row(host: HTMLElement, label: string): HTMLButtonElement {
     ...host.querySelectorAll<HTMLButtonElement>("[role='radio'],[role='checkbox']"),
   ].find((option) => option.textContent?.includes(label));
   if (found === undefined) throw new Error(`no option row labelled ${label}`);
+  return found;
+}
+
+/** A verdict card's row: a native radio, whose click is the whole decision. */
+function verdict(host: HTMLElement, label: string): HTMLInputElement {
+  const found = [...host.querySelectorAll<HTMLInputElement>("input[type='radio']")].find((input) =>
+    input.closest("label")?.textContent?.includes(label),
+  );
+  if (found === undefined) throw new Error(`no verdict row labelled ${label}`);
   return found;
 }
 
@@ -146,6 +185,20 @@ async function settle(): Promise<void> {
   });
 }
 
+/**
+ * Lets every promise a press queued land inside `act`.
+ *
+ * A delivery that has already settled still reports two promises downstream
+ * (the latch's `then`, then `useDelivery`'s), so a synchronous press over one
+ * sets state after `act` has left and React says so. A macrotask is past every
+ * microtask that chain can queue.
+ */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 /** Controlled-input typing: the native setter, then the event React listens for. */
 function type(node: HTMLTextAreaElement, text: string): void {
   const setter = Object.getOwnPropertyDescriptor(
@@ -181,8 +234,14 @@ function slowResolver(): {
     land: async (outcome) => {
       await act(async () => {
         delivery.resolve(outcome);
+        // The card hears the landing two promises downstream of this one —
+        // the latch's `then`, and then `useDelivery`'s over it — so waiting on
+        // the delivery alone left `act` before the state it set, and the
+        // assertions after it were racing the renderer (React said so). A
+        // macrotask is past every microtask the chain can queue.
         await delivery.promise;
       });
+      await flush();
     },
   };
 }
@@ -386,6 +445,11 @@ describe("the one submission latch, from the chair", () => {
     press(control(host, "Send answer"));
     expect(harness.calls).toHaveLength(2);
     expect(harness.calls[1]?.optionIds).toEqual(["question:0:ZGV0YWlsZWQ"]);
+    // The same delivery, still refused: the card is given back again, with the
+    // draft it was retried from.
+    await flush();
+    expect(host.querySelector("[role='alert']")?.textContent).toContain("Not delivered");
+    expect(row(host, "Detailed").getAttribute("aria-checked")).toBe("true");
   });
 });
 
@@ -434,6 +498,11 @@ describe("the receipt the card leaves in its own place", () => {
   });
 
   it("withdraws once, whether by control or by Escape", () => {
+    // Inside one commit, or the test proves nothing: pressed and then keyed,
+    // the first press has already re-rendered the card as a receipt with no
+    // key handler on it, and Escape would find nothing to reach whether or not
+    // a latch stood in the way. In one `act` the form is still the form, the
+    // key still lands on it, and only the latch says no.
     const withdrawals: string[] = [];
     const host = mount(
       <InteractionCard
@@ -444,15 +513,81 @@ describe("the receipt the card leaves in its own place", () => {
         }}
       />,
     );
-    const form = host.querySelector("form");
+    const form = host.querySelector("form")!;
+    const withdraw = control(host, "Withdraw question");
 
-    press(control(host, "Withdraw question"));
-    act(() => {
-      form?.dispatchEvent(
-        new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-    });
+    burst(
+      () => withdraw.click(),
+      () =>
+        form.dispatchEvent(
+          new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+    );
 
     expect(withdrawals).toEqual(["withdrawn"]);
+  });
+});
+
+describe("the verdict card, on the same latch", () => {
+  it("ends a permission once when a verdict and a withdrawal race", async () => {
+    // The same footer, the same latch: a permission's row sends on the click
+    // that chooses it, and a withdrawal pressed in the same commit — by the
+    // control or by Escape — finds that click already holding the request.
+    const harness = slowResolver();
+    const withdrawn: string[] = [];
+    const host = mount(
+      <InteractionCard
+        interaction={permission()}
+        onResolve={harness.resolve}
+        onWithdraw={() => {
+          withdrawn.push("withdrawn");
+        }}
+      />,
+    );
+    const form = host.querySelector("form")!;
+    const allow = verdict(host, "Allow once");
+    const withdraw = control(host, "Withdraw request");
+
+    burst(
+      () => allow.click(),
+      () => withdraw.click(),
+      () =>
+        form.dispatchEvent(
+          new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        ),
+    );
+
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0]?.optionIds).toEqual(["once"]);
+    expect(withdrawn).toEqual([]);
+    await harness.land(true);
+    expect(withdrawn).toEqual([]);
+  });
+
+  it("lets a refused withdrawal be pressed again", async () => {
+    // A cancel the client refused resolves `false` rather than throwing, and
+    // that `false` is what gives the latch back: the request is still standing,
+    // so the control must be too.
+    const outcomes = [false, true];
+    const attempts: number[] = [];
+    const host = mount(
+      <InteractionCard
+        interaction={permission()}
+        onResolve={() => undefined}
+        onWithdraw={() => {
+          attempts.push(attempts.length);
+          return Promise.resolve(outcomes[attempts.length - 1]);
+        }}
+      />,
+    );
+
+    press(control(host, "Withdraw request"));
+    await flush();
+    expect(host.querySelector("[role='alert']")?.textContent).toContain("Not delivered");
+
+    press(control(host, "Withdraw request"));
+    await flush();
+    expect(attempts).toEqual([0, 1]);
+    expect(host.querySelector("[role='alert']")).toBeNull();
   });
 });

@@ -810,6 +810,31 @@ describe("withdrawInteraction", () => {
       ["permission:1", false],
     ]);
   });
+
+  it("reports the cancellation's landing, not the interrupt's", async () => {
+    // The client never throws for a refusal — it toasts and resolves `false` —
+    // so this boolean is the only word the card gets. A refused cancel leaves
+    // the question standing, and a card that latched shut on "Withdrew
+    // question" over it would be claiming an act that did not happen, with
+    // nothing left on it to press.
+    const acts = { resolving: () => undefined };
+    await expect(
+      withdrawInteraction("question:1", {
+        ...acts,
+        interrupt: () => Promise.resolve(true),
+        cancel: () => Promise.resolve(false),
+      }),
+    ).resolves.toBe(false);
+    // And a turn that would not stop is not a question that would not go:
+    // the cancel is what ends the interaction, whatever the interrupt did.
+    await expect(
+      withdrawInteraction("question:1", {
+        ...acts,
+        interrupt: () => Promise.resolve(false),
+        cancel: () => Promise.resolve(true),
+      }),
+    ).resolves.toBe(true);
+  });
 });
 
 describe("resolvingWith", () => {

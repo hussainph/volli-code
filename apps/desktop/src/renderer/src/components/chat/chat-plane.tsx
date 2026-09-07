@@ -957,9 +957,11 @@ export function ChatPlane({
    * Withdrawing the request, reported back to the card that asked for it.
    *
    * The boolean is what releases the card's submission latch when nothing
-   * happened: an interrupt that never reached the runtime leaves the question
-   * standing, and a card that had latched shut on "Withdrew question" would be
-   * claiming an act that did not occur — with no way to press anything again.
+   * happened: a cancellation the client refused (it toasts and resolves
+   * `false`, never throws) leaves the question standing, and a card that had
+   * latched shut on "Withdrew question" would be claiming an act that did not
+   * occur — with no way to press anything again. The rejection arm is for the
+   * one road that could still throw, and reads the same way.
    */
   const withdraw = React.useCallback(
     (interactionId: string): Promise<boolean> =>
@@ -968,7 +970,7 @@ export function ChatPlane({
         cancel: cancelInteraction,
         resolving: (id, active) => setResolving((current) => resolvingWith(current, id, active)),
       }).then(
-        () => true,
+        (landed) => landed,
         () => false,
       ),
     [cancelInteraction, interrupt],
