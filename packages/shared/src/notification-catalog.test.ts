@@ -15,6 +15,7 @@ import {
   notificationProducerPolicy,
   notificationTargetMatches,
   operationalNotificationProducers,
+  parseNotificationTarget,
   producersForNotificationEvent,
   type NotificationTarget,
 } from "./notification-catalog";
@@ -163,5 +164,80 @@ describe("notificationTargetMatches", () => {
     expect(notificationTargetMatches(null, session("s1"))).toBe(false);
     expect(notificationTargetMatches(session("s1"), null)).toBe(false);
     expect(notificationTargetMatches(null, null)).toBe(false);
+  });
+});
+
+describe("parseNotificationTarget", () => {
+  it("keeps a whole Session target, and only this vocabulary", () => {
+    expect(
+      parseNotificationTarget({
+        kind: "session",
+        projectId: "p1",
+        ticketId: "t1",
+        sessionId: "s1",
+        interactionId: "i1",
+        attentionId: "a1",
+        smuggled: "drop me",
+      }),
+    ).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: "t1",
+      sessionId: "s1",
+      interactionId: "i1",
+      attentionId: "a1",
+    });
+  });
+
+  it("reads a Board Session, which has no ticket and no open question", () => {
+    expect(parseNotificationTarget({ kind: "session", projectId: "p1", sessionId: "s1" })).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "s1",
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("reads ticket and update targets", () => {
+    expect(parseNotificationTarget({ kind: "ticket", projectId: "p1", ticketId: "t1" })).toEqual({
+      kind: "ticket",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+    expect(parseNotificationTarget({ kind: "update" })).toEqual({ kind: "update" });
+  });
+
+  it("answers null for anything that is not one", () => {
+    expect(parseNotificationTarget(null)).toBeNull();
+    expect(parseNotificationTarget("session")).toBeNull();
+    expect(parseNotificationTarget({ kind: "inbox" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "session", projectId: "p1" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "session", projectId: "", sessionId: "s1" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "session", projectId: "p1", sessionId: "" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "session", projectId: 7, sessionId: "s1" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "ticket", projectId: "p1" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "ticket", projectId: "p1", ticketId: "" })).toBeNull();
+    expect(parseNotificationTarget({ kind: "ticket", projectId: "", ticketId: "t1" })).toBeNull();
+  });
+
+  it("drops an id that is present but empty rather than storing a blank", () => {
+    expect(
+      parseNotificationTarget({
+        kind: "session",
+        projectId: "p1",
+        ticketId: "",
+        sessionId: "s1",
+        interactionId: 7,
+      }),
+    ).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "s1",
+      interactionId: null,
+      attentionId: null,
+    });
   });
 });

@@ -15,7 +15,18 @@
  * when the Automation record moves to an account this does not go with it: it
  * names a host.
  *
- * ── THERE IS NO WRITER HERE YET, AND THAT IS THE POINT ────────────────────
+ * ── THE WRITER VC-75 LEFT FOR LATER, ADDED IN VC-295 ──────────────────────
+ * The seam below shipped read-only, with the note that VC-75 would "add the
+ * write (as an ordinary durable command per docs/BOUNDARIES.md rule 5 …), point
+ * `settings/panes/notifications-pane.tsx` at it, and every existing
+ * `notificationAllowed` call site starts honouring the switches". That is what
+ * VC-295 did, and {@link writeNotificationPreferences} is the storage half of
+ * it: still just this key, with the validated command and the view living in
+ * `notifications/settings.ts` where a product decision belongs.
+ *
+ * The paragraph below is kept as the record of why the read shipped alone.
+ *
+ * ── THERE WAS NO WRITER HERE, AND THAT WAS THE POINT ──────────────────────
  * VC-133 needs to READ a preference so its rule is not a second, parallel
  * setting; it does not need to write one, and writing one would be building
  * VC-75's Settings surface inside a ticket about Automations. So this is a
@@ -38,7 +49,7 @@ import {
   type NotificationPreferences,
 } from "@volli/shared";
 
-import { getAppState } from "./db/app-state-repo";
+import { getAppState, setAppState } from "./db/app-state-repo";
 
 /**
  * The `app_state` key. A frozen string: it names a durable row, so changing it
@@ -64,4 +75,23 @@ export function readNotificationPreferences(db: Database.Database): Notification
   } catch {
     return DEFAULT_NOTIFICATION_PREFERENCES;
   }
+}
+
+/**
+ * Stores this machine's preferences (VC-295).
+ *
+ * The WHOLE record every time, never a patch: the reader parses field by field
+ * and fills anything missing with `true`, so a partial write would be read as
+ * "switch the rest back on". Callers compose the next record from the tolerant
+ * read above, which is also what heals a row an older or broken build left.
+ *
+ * The validated command that decides WHAT may be written lives in
+ * `notifications/settings.ts`; this is the row and nothing else.
+ */
+export function writeNotificationPreferences(
+  db: Database.Database,
+  preferences: NotificationPreferences,
+  now: number,
+): void {
+  setAppState(db, NOTIFICATION_PREFERENCES_KEY, JSON.stringify(preferences), now);
 }

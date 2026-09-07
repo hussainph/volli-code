@@ -209,6 +209,50 @@ export type NotificationTarget =
   | { kind: "update" };
 
 /**
+ * One target as it arrives from a client, or `null` when it is not one.
+ *
+ * The renderer reports what it is showing over IPC, so this crosses a trust
+ * boundary in the direction that matters: a malformed or foreign payload must
+ * become "no target" rather than an object that later compares equal to
+ * something. Strict about the fields it keeps — an unknown kind, a missing id,
+ * or a non-string id is refused outright — and it never carries extra keys
+ * through, so what is stored is always exactly this vocabulary.
+ */
+export function parseNotificationTarget(raw: unknown): NotificationTarget | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const candidate = raw as Record<string, unknown>;
+  const optionalId = (value: unknown): string | null =>
+    typeof value === "string" && value.length > 0 ? value : null;
+  switch (candidate["kind"]) {
+    case "session": {
+      const projectId = candidate["projectId"];
+      const sessionId = candidate["sessionId"];
+      if (typeof projectId !== "string" || typeof sessionId !== "string") return null;
+      if (projectId.length === 0 || sessionId.length === 0) return null;
+      return {
+        kind: "session",
+        projectId,
+        ticketId: optionalId(candidate["ticketId"]),
+        sessionId,
+        interactionId: optionalId(candidate["interactionId"]),
+        attentionId: optionalId(candidate["attentionId"]),
+      };
+    }
+    case "ticket": {
+      const projectId = candidate["projectId"];
+      const ticketId = candidate["ticketId"];
+      if (typeof projectId !== "string" || typeof ticketId !== "string") return null;
+      if (projectId.length === 0 || ticketId.length === 0) return null;
+      return { kind: "ticket", projectId, ticketId };
+    }
+    case "update":
+      return { kind: "update" };
+    default:
+      return null;
+  }
+}
+
+/**
  * Whether an alert's target is the target a window is already showing.
  *
  * Deliberately NARROW, which is the whole of VC-295's rule 5:
