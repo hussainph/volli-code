@@ -25,6 +25,17 @@ import {
   type NotificationPreferences,
 } from "./notification-preferences";
 
+/** A Session target, for the identity cases below. */
+const session = (sessionId: string, extra: Record<string, unknown> = {}): NotificationTarget => ({
+  kind: "session",
+  projectId: "p1",
+  ticketId: "t1",
+  sessionId,
+  interactionId: null,
+  attentionId: null,
+  ...extra,
+});
+
 const prefs = (overrides: Partial<NotificationPreferences["events"]> = {}, enabled = true) => ({
   enabled,
   events: { ...DEFAULT_NOTIFICATION_PREFERENCES.events, ...overrides },
@@ -32,8 +43,8 @@ const prefs = (overrides: Partial<NotificationPreferences["events"]> = {}, enabl
 
 describe("producer catalog", () => {
   it("gives every producer exactly one policy", () => {
-    expect(Object.keys(NOTIFICATION_PRODUCER_POLICY).sort()).toEqual(
-      [...NOTIFICATION_PRODUCERS].sort(),
+    expect(Object.keys(NOTIFICATION_PRODUCER_POLICY).toSorted()).toEqual(
+      [...NOTIFICATION_PRODUCERS].toSorted(),
     );
     for (const producer of NOTIFICATION_PRODUCERS) {
       expect(notificationProducerPolicy(producer)).toBe(NOTIFICATION_PRODUCER_POLICY[producer]);
@@ -113,19 +124,6 @@ describe("notificationProducerAllowed", () => {
 });
 
 describe("notificationTargetMatches", () => {
-  const session = (
-    sessionId: string,
-    extra: Partial<NotificationTarget> = {},
-  ): NotificationTarget => ({
-    kind: "session",
-    projectId: "p1",
-    ticketId: "t1",
-    sessionId,
-    interactionId: null,
-    attentionId: null,
-    ...extra,
-  });
-
   it("matches the same Session regardless of which question the alert named", () => {
     expect(notificationTargetMatches(session("s1", { interactionId: "i1" }), session("s1"))).toBe(
       true,

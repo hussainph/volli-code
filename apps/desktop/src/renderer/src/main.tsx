@@ -17,6 +17,7 @@ import {
 } from "./components/automations/armed-run";
 import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
+import { activateNotificationTarget } from "./lib/notification-activation";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData } from "./lib/boot";
@@ -156,6 +157,26 @@ async function main() {
       },
     });
   });
+
+  // A clicked native alert (VC-295). Main has already brought this window
+  // forward; what the target MEANS on screen — select the Session, then reveal
+  // the question or failure it named, or say why that item is gone — is the
+  // renderer's own knowledge, so the routing lives here.
+  //
+  // Subscribe FIRST, then collect anything parked: a click that arrived with
+  // every window closed opened this one, and its target has been waiting in
+  // main ever since. Ordering the other way would drop a push that landed
+  // between the read and the listener.
+  window.api.notifications.onActivated((target) => activateNotificationTarget(target));
+  window.api.notifications
+    .pendingActivation()
+    .then((pending) => {
+      if (pending.ok && pending.target !== null) activateNotificationTarget(pending.target);
+    })
+    .catch(() => {
+      // A click whose target could not be collected leaves the window open on
+      // whatever it was showing — which is where the click brought it anyway.
+    });
 
   // Self-update state (VC-59): subscribe FIRST, then prime with a one-time
   // read — a download that finished before this window existed must still

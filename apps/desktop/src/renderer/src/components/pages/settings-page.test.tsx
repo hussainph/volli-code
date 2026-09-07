@@ -106,13 +106,29 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("Current version");
   });
 
-  it("says plainly that a designed-but-unplumbed pane does not work yet", () => {
+  it("offers the notification switches as controls, not as a preview", () => {
+    // This pane was the app's example of a designed-but-unplumbed surface for
+    // two tickets. VC-295 gave it a write, so the `Unavailable` banner and the
+    // inert preview are gone — and a switch here now stands for a producer.
     const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="notifications" />);
 
-    // The rule from kit/unavailable.tsx: the notice comes FIRST and in words.
-    // Someone who reads one thing must read the one that stops them waiting.
-    expect(html).toContain("aren&#x27;t available yet");
-    expect(html).toContain("System Settings");
+    expect(html).not.toContain("aren&#x27;t available yet");
+    expect(html).toContain('id="notify-me"');
+    expect(html).toContain('id="notify-needs-you"');
+    // The renamed row: nothing ever posted "a session finishes", and a merged
+    // pull request is the completion this app genuinely observes.
+    expect(html).toContain("A pull request merges");
+    expect(html).not.toContain("A session finishes");
+  });
+
+  it("shows the notification switches off and disabled until the stored record answers", () => {
+    // Never a position the database has not confirmed: the switches are read
+    // back from the row, so before the read lands there is nothing to show.
+    const html = renderToStaticMarkup(<SettingsPage initialCategoryKey="notifications" />);
+
+    expect(html).toContain('aria-checked="false"');
+    expect(html).toContain('id="notify-me"');
+    expect(html).toContain('disabled=""');
   });
 });
 

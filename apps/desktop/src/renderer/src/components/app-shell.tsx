@@ -27,6 +27,7 @@ import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectRootsSync } from "@renderer/hooks/use-project-roots-sync";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useNotificationTargetReport } from "@renderer/hooks/use-notification-target";
 import { useBootNotice, useCliLaunchNotice } from "@renderer/hooks/use-startup-notices";
 import { useZoomCommands } from "@renderer/hooks/use-zoom-commands";
 import { cn } from "@renderer/lib/utils";
@@ -135,6 +136,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useZoomCommands();
   useBootNotice();
   useCliLaunchNotice();
+  // What this window is showing, reported to main so an alert for a Session or
+  // ticket already in front of the person is not also posted by the OS (VC-295).
+  useNotificationTargetReport();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const pinChoice = useUiStore((state) => state.sidebarPinned);

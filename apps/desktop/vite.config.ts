@@ -347,6 +347,14 @@ export default defineConfig(({ mode }) => ({
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.
         "src/lib/chat-open-target.ts",
+        // Where a notification click lands, and what this window reports as
+        // "already on screen" (VC-295). Enrolled because both answers are
+        // invisible until they are wrong: a target read too widely silences an
+        // alert nobody saw, and a route that disagrees with it opens somewhere
+        // the suppression rule was never talking about. The store work that
+        // carries the decision out (`notification-activation.ts`) stays outside,
+        // like every other glue module.
+        "src/lib/notification-target.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         // The split chords (VC-202 §5), in the gate for the same reason the
@@ -420,6 +428,17 @@ export default defineConfig(({ mode }) => ({
         // reason the IPC handlers are: a missed branch is a privacy or a
         // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
         // `index.ts`: it is transport bootstrap around an SDK.
+        // The notification delivery boundary (VC-295). Enrolled for the same
+        // reason the IPC handlers are: a missed branch here is an alert that
+        // escapes a preference, a click that opens nothing, or a suppression
+        // that silences work a person is waiting on. `runtime.ts` stays
+        // outside, like `otlp.ts` and `index.ts`: it is Electron wiring around
+        // these parts, with no decision of its own.
+        "**/src/main/notifications/active-targets.ts",
+        "**/src/main/notifications/activation.ts",
+        "**/src/main/notifications/dispatch.ts",
+        "**/src/main/notifications/ipc.ts",
+        "**/src/main/notifications/settings.ts",
         "**/src/main/observability/genai.ts",
         "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",

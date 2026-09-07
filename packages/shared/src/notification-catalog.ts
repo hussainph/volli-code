@@ -208,6 +208,11 @@ export type NotificationTarget =
   | { kind: "ticket"; projectId: string; ticketId: string }
   | { kind: "update" };
 
+/** A non-empty string id, or `null` for anything else — including `""`. */
+function optionalId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 /**
  * One target as it arrives from a client, or `null` when it is not one.
  *
@@ -221,8 +226,6 @@ export type NotificationTarget =
 export function parseNotificationTarget(raw: unknown): NotificationTarget | null {
   if (typeof raw !== "object" || raw === null) return null;
   const candidate = raw as Record<string, unknown>;
-  const optionalId = (value: unknown): string | null =>
-    typeof value === "string" && value.length > 0 ? value : null;
   switch (candidate["kind"]) {
     case "session": {
       const projectId = candidate["projectId"];
