@@ -45,7 +45,7 @@ export interface SessionDetailPanelProps {
 /** One `label: value` line of the record. */
 function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-baseline gap-3">
+    <div className="flex items-baseline gap-2">
       <dt className="w-24 shrink-0 text-ui text-muted-foreground">{label}</dt>
       <dd
         className={`min-w-0 flex-1 truncate text-ui text-foreground${mono === true ? " font-mono" : ""}`}
@@ -89,7 +89,7 @@ export function SessionDetailPanel({
         {detail.cwd !== null ? <DetailRow label="Folder" value={detail.cwd} mono /> : null}
       </dl>
 
-      <div className="flex flex-col gap-1 rounded-container border border-border bg-muted/40 p-3">
+      <div className="flex flex-col gap-1 rounded-container border border-border bg-muted/30 p-4">
         <p className="text-ui text-muted-foreground">{TERMINAL_OUTPUT_NOT_SAVED}</p>
         <p className="text-ui text-muted-foreground">{TERMINAL_LAST_COMMAND_NOT_RECORDED}</p>
       </div>
@@ -138,4 +138,16 @@ export function SessionDetailPending() {
  */
 export function SessionDetailUnknown() {
   return <p className="text-ui text-muted-foreground">This session’s record could not be found.</p>;
+}
+
+/** A settled read failure is neither loading nor proof that the record is gone. */
+export function SessionDetailLoadFailed({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <p className="text-ui text-muted-foreground">This session’s record could not be loaded.</p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  );
 }

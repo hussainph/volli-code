@@ -111,6 +111,7 @@ describe("project-sessions store", () => {
       // cost this map nothing (VC-131).
       provenance: {},
     });
+    expect(store.getState().listingState.p1).toBe("loaded");
   });
 
   // VC-131. The map is keyed by the id each row's own shape answers to, so both
@@ -191,6 +192,7 @@ describe("project-sessions store", () => {
       expect.anything(),
     );
     expect(store.getState().byProject.p1).toBeUndefined();
+    expect(store.getState().listingState.p1).toBe("failed");
   });
 
   it("surfaces a thrown listing read the same way as a refused one", async () => {
@@ -205,6 +207,23 @@ describe("project-sessions store", () => {
       expect.anything(),
     );
     expect(store.getState().byProject.p1).toBeUndefined();
+    expect(store.getState().listingState.p1).toBe("failed");
+  });
+
+  it("marks the baseline as loading until its read settles", async () => {
+    let resolve!: (result: { ok: true; sessions: SessionListingRow[] }) => void;
+    const list = vi.fn(
+      () => new Promise<{ ok: true; sessions: SessionListingRow[] }>((done) => (resolve = done)),
+    );
+    Object.assign(globalThis, { window: { api: { sessions: { list } } } });
+    const store = createProjectSessionsStore();
+
+    const pending = store.getState().refresh("p1");
+    expect(store.getState().listingState.p1).toBe("loading");
+
+    resolve({ ok: true, sessions: [] });
+    await pending;
+    expect(store.getState().listingState.p1).toBe("loaded");
   });
 
   it("upserts a pushed row over the fetched one, in either shape", async () => {

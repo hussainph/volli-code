@@ -1360,15 +1360,38 @@ describe("ticket sessions", () => {
     expect(second.result.session.title).toBe("Session 2");
   });
 
-  it("closes the terminal attachment when a ticket session exits", async () => {
-    const { result, pty } = await createTicketSession("tk1");
-    if (!result.ok) throw new Error(`expected session, got ${result.error}`);
+  it.each([0, 7])(
+    "persists terminal exit code %i before closing the attachment",
+    async (exitCode) => {
+      const { result, pty } = await createTicketSession("tk1");
+      if (!result.ok) throw new Error(`expected session, got ${result.error}`);
 
-    pty.emitExit(0);
+      pty.emitExit(exitCode);
 
-    await vi.waitFor(() => expect(listTicketSessions(testDb.db, "tk1")[0]?.endedAt).not.toBeNull());
-    expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
-  });
+      await vi.waitFor(() =>
+        expect(getSession(testDb.db, result.sessionId)).toMatchObject({
+          endedAt: expect.any(Number),
+          exitCode,
+        }),
+      );
+      const exitEvents = testDb.db
+        .prepare(
+          `SELECT sequence, json_extract(payload, '$.kind') AS kind
+             FROM session_events
+            WHERE session_id = ?
+              AND json_extract(payload, '$.kind') IN
+                ('attachment.native_referenced', 'attachment.closed')
+            ORDER BY sequence ASC`,
+        )
+        .all(result.sessionId) as { sequence: number; kind: string }[];
+      expect(exitEvents.map(({ kind }) => kind)).toEqual([
+        "attachment.native_referenced",
+        "attachment.closed",
+      ]);
+      expect(exitEvents[0]!.sequence).toBeLessThan(exitEvents[1]!.sequence);
+      expect(listTicketEvents(testDb.db, "tk1")).toEqual([]);
+    },
+  );
 
   it("fails with a surfaced error (never resurrecting the root) when the project folder is gone", async () => {
     // A project whose root path is within a registered root but does not exist

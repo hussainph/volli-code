@@ -4,6 +4,7 @@ import type { SessionRecord, Ticket } from "@volli/shared";
 
 import { buildTerminalSessionDetail } from "./session-detail-model";
 import {
+  SessionDetailLoadFailed,
   SessionDetailPanel,
   SessionDetailPending,
   SessionDetailUnknown,
@@ -192,7 +193,7 @@ describe("SessionDetailPanel", () => {
   });
 });
 
-describe("SessionDetailUnknown", () => {
+describe("Session detail resolution states", () => {
   // The one thing the old behaviour could never say. A record this window
   // cannot find is named as missing — not answered with a different tab.
   it("says the record could not be found instead of opening something else", () => {
@@ -207,6 +208,15 @@ describe("SessionDetailUnknown", () => {
     const html = renderToStaticMarkup(<SessionDetailPending />);
 
     expect(html).toContain("Loading this session’s record…");
+    expect(html).not.toContain("could not be found");
+  });
+
+  it("does not leave a settled read failure looking like an in-flight request", () => {
+    const html = renderToStaticMarkup(<SessionDetailLoadFailed onRetry={noop} />);
+
+    expect(html).toContain("This session’s record could not be loaded.");
+    expect(html).toContain("Try again");
+    expect(html).not.toContain("Loading");
     expect(html).not.toContain("could not be found");
   });
 });

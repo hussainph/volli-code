@@ -372,9 +372,11 @@ function SessionList({
             // answer a click the same way.
             onActivate={
               tabId === undefined
-                ? () => {
-                    useUiStore.getState().openSessionDetail(projectId, record.id);
-                  }
+                ? record.endedAt === null
+                  ? null
+                  : () => {
+                      useUiStore.getState().openSessionDetail(projectId, record.id);
+                    }
                 : () => {
                     onActivateSession(tabId);
                     setActivePane(ticketId, tabId, record.id);

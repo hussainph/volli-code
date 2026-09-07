@@ -387,7 +387,22 @@ describe("buildCommandPaletteItems", () => {
       expect(result.sessions).toEqual([]);
     });
 
-    it("drops a closed terminal whose project or ticket is no longer there", () => {
+    it("drops a closed terminal only when its project is no longer tracked", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", projectId: "gone", ticketId: null })],
+      );
+
+      expect(result.sessions).toEqual([]);
+    });
+
+    it("keeps an unavailable Ticket Session without relabelling it as project-scoped", () => {
       const result = buildCommandPaletteItems(
         [alpha],
         { [alpha.id]: [linked] },
@@ -397,12 +412,17 @@ describe("buildCommandPaletteItems", () => {
         {},
         {},
         [
-          terminal({ id: "s1", projectId: "gone", ticketId: null }),
-          terminal({ id: "s2", ticketId: "missing-ticket" }),
+          terminal({ id: "s1", ticketId: "missing-ticket", bornTicketless: false }),
+          // The database uses ON DELETE SET NULL, so this is the ordinary
+          // deleted-ticket shape: only the immutable birth fact survives.
+          terminal({ id: "s2", ticketId: null, bornTicketless: false }),
         ],
       );
 
-      expect(result.sessions).toEqual([]);
+      expect(result.sessions).toEqual([
+        expect.objectContaining({ sessionId: "s1", scope: { kind: "unavailable" } }),
+        expect.objectContaining({ sessionId: "s2", scope: { kind: "unavailable" } }),
+      ]);
     });
 
     it("marks a closed terminal a Run started, like every other row", () => {

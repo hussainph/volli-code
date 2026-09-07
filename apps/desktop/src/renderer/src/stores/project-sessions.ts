@@ -69,6 +69,9 @@ export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
   provenance: {},
 };
 
+/** Whether a project's baseline listing is still in flight, usable, or failed. */
+export type ProjectSessionListingState = "loading" | "loaded" | "failed";
+
 /**
  * The Sessions one Session started (VC-183's `session_start`, VC-9's
  * `delegate`), read off the listing's provenance: a child is a row whose
@@ -105,6 +108,8 @@ function rowSessionId(row: SessionListingRow): string {
 
 interface ProjectSessionsState {
   byProject: Readonly<Record<string, ProjectSessionRows>>;
+  /** Baseline outcome by project; absent means no listing has been requested. */
+  listingState: Readonly<Record<string, ProjectSessionListingState>>;
   /**
    * Reads the whole listing for one project and replaces its rows.
    *
@@ -170,12 +175,19 @@ export function createProjectSessionsStore() {
 
   return create<ProjectSessionsState>()((set, get) => ({
     byProject: {},
+    listingState: {},
 
     async refresh(projectId) {
+      set((state) => ({
+        listingState: { ...state.listingState, [projectId]: "loading" },
+      }));
       try {
         const result = await window.api.sessions.list({ projectId });
         if (!result.ok) {
           toastError(`Couldn't load sessions: ${result.error}`);
+          set((state) => ({
+            listingState: { ...state.listingState, [projectId]: "failed" },
+          }));
           return;
         }
         const provenance: Record<string, SessionProvenance> = {};
@@ -190,9 +202,15 @@ export function createProjectSessionsStore() {
           chat: result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
           provenance,
         };
-        set((state) => ({ byProject: { ...state.byProject, [projectId]: rows } }));
+        set((state) => ({
+          byProject: { ...state.byProject, [projectId]: rows },
+          listingState: { ...state.listingState, [projectId]: "loaded" },
+        }));
       } catch (error) {
         toastError(`Couldn't load sessions: ${errorMessage(error)}`);
+        set((state) => ({
+          listingState: { ...state.listingState, [projectId]: "failed" },
+        }));
       }
     },
 

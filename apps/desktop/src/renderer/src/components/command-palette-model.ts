@@ -23,28 +23,15 @@ export interface CommandPaletteTicketItem {
   updatedAt: number;
 }
 
-export interface CommandPaletteSessionItem {
+interface CommandPaletteSessionBase {
   kind: "session";
   projectId: string;
   projectName: string;
   sessionId: string;
   sessionKind: "terminal" | "chat";
   title: string;
-  scope: SessionScope;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
-  /**
-   * What selecting this row opens (VC-290): the Session's own live `tab`, or
-   * the `detail` of a saved record whose tab is gone.
-   *
-   * On the row rather than inferred at the click, because the two are decided
-   * from different evidence and only this build step holds both: a terminal is
-   * a `tab` row exactly while the open-tab store still has it, and a `detail`
-   * row exactly when the durable listing is all that is left. A palette that
-   * guessed from `sessionKind` would have to pick one for every terminal, and
-   * picking `tab` is how a closed Session comes to activate somebody else's.
-   */
-  destination: "tab" | "detail";
   /**
    * Who started this Session (VC-131). The palette is the app's one GLOBAL
    * Session listing — every project's, in one list — so it is the surface where
@@ -54,6 +41,24 @@ export interface CommandPaletteSessionItem {
    */
   provenance: SessionProvenance;
 }
+
+/**
+ * What selecting a Session row opens (VC-290), paired with the scope evidence
+ * that destination can honestly carry.
+ *
+ * A live tab always has a current project/ticket scope. A durable detail may
+ * instead belong to a Ticket that is no longer available: `bornTicketless`
+ * distinguishes that orphan from a Session that was project-scoped at birth,
+ * and `unavailable` keeps the palette from relabelling it as a Board Session.
+ */
+export type CommandPaletteSessionItem = CommandPaletteSessionBase &
+  (
+    | { destination: "tab"; scope: SessionScope }
+    | {
+        destination: "detail";
+        scope: SessionScope | { kind: "unavailable" };
+      }
+  );
 
 export interface CommandPaletteItems {
   tickets: CommandPaletteTicketItem[];
@@ -164,9 +169,6 @@ export function buildCommandPaletteItems(
     const project = projectById.get(record.projectId);
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);
-    // A record naming a ticket the board no longer has cannot be placed in a
-    // scope, and this row is not the surface for explaining that.
-    if (record.ticketId !== null && linked === undefined) continue;
     sessions.push({
       kind: "session",
       projectId: project.id,
@@ -175,9 +177,11 @@ export function buildCommandPaletteItems(
       sessionKind: "terminal",
       title: record.title,
       scope:
-        record.ticketId === null
-          ? { kind: "project", projectId: project.id }
-          : { kind: "ticket", projectId: project.id, ticketId: record.ticketId },
+        record.ticketId !== null && linked !== undefined
+          ? { kind: "ticket", projectId: project.id, ticketId: record.ticketId }
+          : record.ticketId === null && record.bornTicketless
+            ? { kind: "project", projectId: project.id }
+            : { kind: "unavailable" },
       ticketDisplayId:
         linked === undefined
           ? null

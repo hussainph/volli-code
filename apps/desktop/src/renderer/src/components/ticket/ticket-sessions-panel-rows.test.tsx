@@ -103,8 +103,19 @@ const fixture = vi.hoisted(() => {
     lastActivityAt: 3,
     bornTicketless: false,
   };
+  // A startup listing may briefly contain an open durable attachment before
+  // recovery settles it, while this renderer has no live tab for it. It is not
+  // a closed record yet and must not borrow the detail destination.
+  const recoveringTerminal: SessionRecord = {
+    ...closedTerminal,
+    id: "terminal-recovering",
+    title: "Recovering shell",
+    endedAt: null,
+    exitCode: null,
+  };
   const rows: SessionListingRow[] = [
     { kind: "terminal", record: closedTerminal, usage: unmetered, provenance: personStarted },
+    { kind: "terminal", record: recoveringTerminal, usage: unmetered, provenance: personStarted },
     { kind: "chat", record, usage: unmetered, provenance: personStarted },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
     {
@@ -124,7 +135,7 @@ const fixture = vi.hoisted(() => {
       },
     },
   ];
-  return { record, ended, byRun, byAgent, closedTerminal, rows };
+  return { record, ended, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
 });
 
 vi.mock("@renderer/stores/ticket-session-records", async () => {
@@ -239,6 +250,14 @@ describe("TicketSessionsPanel rows", () => {
     // `ListRow` renders an activatable row as a button and an inert one as a
     // div, so the element the title sits in IS the assertion.
     expect(html.lastIndexOf("<button", at)).toBeGreaterThan(html.lastIndexOf("<div", at));
+  });
+
+  it("does not offer details for a durable record that has not closed", () => {
+    const html = panel();
+    const at = html.indexOf(fixture.recoveringTerminal.title);
+
+    expect(at).toBeGreaterThan(-1);
+    expect(html.lastIndexOf("<div", at)).toBeGreaterThan(html.lastIndexOf("<button", at));
   });
 
   it("keeps a stopped chat visibly stopped after it moves to History", () => {

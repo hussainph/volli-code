@@ -26,6 +26,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { buildTerminalSessionDetail } from "./session-detail-model";
 import {
+  SessionDetailLoadFailed,
   SessionDetailPanel,
   SessionDetailPending,
   SessionDetailUnknown,
@@ -78,6 +79,7 @@ function SessionDetailBody({
   onDone: () => void;
 }) {
   const ensure = useProjectSessionsStore((state) => state.ensure);
+  const refresh = useProjectSessionsStore((state) => state.refresh);
   React.useEffect(() => {
     void ensure(projectId);
   }, [ensure, projectId]);
@@ -91,6 +93,7 @@ function SessionDetailBody({
   // a fetch in flight, not an answer — the same distinction `resolveHomeTabs`
   // draws before it writes a persisted Session id off as stale.
   const listed = useProjectSessionsStore((state) => state.byProject[projectId] !== undefined);
+  const listingState = useProjectSessionsStore((state) => state.listingState[projectId]);
   const project = useProjectsStore(
     useShallow((state) => state.projects.find((candidate) => candidate.id === projectId) ?? null),
   );
@@ -106,10 +109,16 @@ function SessionDetailBody({
   const starting = useSessionsStore(useShallow((state) => state.starting));
 
   if (record === null || project === null) {
+    let content: React.ReactNode = <SessionDetailPending />;
+    if (project !== null && listingState === "failed") {
+      content = <SessionDetailLoadFailed onRetry={() => void refresh(projectId)} />;
+    } else if (listed && project !== null && listingState !== "loading") {
+      content = <SessionDetailUnknown />;
+    }
     return (
       <>
         <DialogTitle className="sr-only">Session</DialogTitle>
-        {listed && project !== null ? <SessionDetailUnknown /> : <SessionDetailPending />}
+        {content}
       </>
     );
   }
@@ -133,6 +142,12 @@ function SessionDetailBody({
     if (recreate === null) return;
     onDone();
     if (recreate.kind === "project") {
+      // A detail can open over any project surface (or over a ticket reached
+      // from ⌘K). `startProjectTerminal` selects the fresh Home tab but does
+      // not change the surface, because its ordinary callers already live on
+      // Home. Move there first so this app-wide door cannot create the new PTY
+      // behind Files, Configure, or a ticket workspace.
+      useWorkspaceStore.getState().openHome(projectId);
       void startProjectTerminal(projectId);
       return;
     }
