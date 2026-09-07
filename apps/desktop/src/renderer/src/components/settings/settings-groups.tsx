@@ -20,6 +20,7 @@ import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { MODEL_TIER_ROWS } from "@volli/shared";
 
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
@@ -169,9 +170,11 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "sign in",
             "account",
             "accounts",
-            "board chats",
-            "ticket sessions",
-            "utility",
+            // Every tier row's label, read off the shared list rather than
+            // retyped (VC-259): the pane draws its rows from `MODEL_TIER_ROWS`,
+            // and a label that reached the pane without reaching this index is
+            // a setting a person can see and cannot search for.
+            ...MODEL_TIER_ROWS.map((row) => row.label.toLowerCase()),
             "default models",
             "automatic compaction",
             "catalog",
