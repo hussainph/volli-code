@@ -1,3 +1,4 @@
+import { terminalHistoryScope, type TerminalHistoryScope } from "@volli/session-presentation";
 import {
   automationOwnership,
   displayTicketId,
@@ -12,6 +13,18 @@ import {
 } from "@volli/shared";
 
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
+
+/**
+ * The contract's scope answer, carrying the project id a palette row needs to
+ * navigate. The two shapes differ only in that id: the decision is not remade.
+ */
+function paletteSessionScope(
+  scope: TerminalHistoryScope,
+  projectId: string,
+): SessionScope | { kind: "unavailable" } {
+  if (scope.kind === "ticket") return { kind: "ticket", projectId, ticketId: scope.ticketId };
+  return scope.kind === "project" ? { kind: "project", projectId } : { kind: "unavailable" };
+}
 
 export interface CommandPaletteTicketItem {
   kind: "ticket";
@@ -176,12 +189,15 @@ export function buildCommandPaletteItems(
       sessionId: record.id,
       sessionKind: "terminal",
       title: record.title,
-      scope:
-        record.ticketId !== null && linked !== undefined
-          ? { kind: "ticket", projectId: project.id, ticketId: record.ticketId }
-          : record.ticketId === null && record.bornTicketless
-            ? { kind: "project", projectId: project.id }
-            : { kind: "unavailable" },
+      // The scope decision is the Session Presentation Contract's, not this
+      // row's: the same record's detail asks `terminalHistoryScope` the same
+      // question, and a second copy here is how a palette row comes to call an
+      // orphaned Ticket Session a Board Session while its detail calls it
+      // unavailable. Only the navigation `projectId` is added on top.
+      scope: paletteSessionScope(
+        terminalHistoryScope(record, linked?.ticket ?? null, project.ticketPrefix),
+        project.id,
+      ),
       ticketDisplayId:
         linked === undefined
           ? null

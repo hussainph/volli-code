@@ -173,7 +173,16 @@ export function canResumeTerminalRecord(
   );
 }
 
-function scopeOf(
+/**
+ * Whose terminal this was — the scope decision on its own, for a surface that
+ * needs the answer without the whole summary.
+ *
+ * Exported because ⌘K asks the same question about the same records and must
+ * not answer it separately: a row that called an orphaned Ticket Session a
+ * Board Session, while its detail called it unavailable, would be one client
+ * disagreeing with itself about one durable record.
+ */
+export function terminalHistoryScope(
   record: SessionRecord,
   ticket: TerminalHistoryTicket | null,
   ticketPrefix: string,
@@ -222,7 +231,7 @@ export function buildTerminalHistoryDetail(
   input: TerminalHistoryDetailInput,
 ): TerminalHistoryDetail {
   const { record, ticket, ticketPrefix, harnesses } = input;
-  const scope = scopeOf(record, ticket, ticketPrefix);
+  const scope = terminalHistoryScope(record, ticket, ticketPrefix);
   const exit = exitOf(record);
   const recreate = recreateOf(scope);
   return {
