@@ -156,8 +156,9 @@ describe("the model tiers in Model Access", () => {
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
 
     for (const tier of ["fast", "deep", "visual", "utility"]) {
-      expect(document.querySelector(`[data-testid="default-model-${tier}"] [aria-label^="About"]`))
-        .not.toBeNull();
+      expect(
+        document.querySelector(`[data-testid="default-model-${tier}"] [aria-label^="About"]`),
+      ).not.toBeNull();
     }
     expect(rowText("fast")).not.toContain("Quick, low-cost tasks.");
     expect(rowText("global")).toBe("Board chatsChoose a model");
