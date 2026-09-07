@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionProjection } from "@volli/shared";
 
+import type { NotificationRequest } from "../notifications/dispatch";
 import { createSessionWatchdog } from "./session-watchdog";
 import type { SessionWatchdogPorts } from "./session-watchdog";
 
@@ -47,7 +48,7 @@ function harness(input: {
   stopSession?: SessionWatchdogPorts["stopSession"];
 }) {
   const submits: unknown[] = [];
-  const notifications: { title: string; body: string }[] = [];
+  const notifications: NotificationRequest[] = [];
   const errors: unknown[] = [];
   const byId = new Map(input.projections.map((entry) => [entry.session.id, entry]));
   // Runtime observations, not durable ledger facts, are the watchdog clock.
@@ -98,8 +99,19 @@ describe("createSessionWatchdog", () => {
     });
     expect(h.notifications).toEqual([
       {
+        producer: "session-watchdog",
         title: "Session may be wedged",
         body: "Implementer has an open turn with no runtime progress for 10m.",
+        // A click opens the Session whose turn stopped moving (VC-295); the
+        // blocked signal recorded above is what it will be showing.
+        target: {
+          kind: "session",
+          projectId: "project-1",
+          ticketId: null,
+          sessionId: SESSION,
+          interactionId: null,
+          attentionId: null,
+        },
       },
     ]);
   });

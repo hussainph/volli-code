@@ -34,6 +34,8 @@ import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, sessionWedge, shortSessionId } fro
 import type { SessionProjection } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
+import type { NotificationRequest } from "../notifications/dispatch";
+
 /** How often the scan runs. Coarse on purpose: the verdict is minutes-grained. */
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 
@@ -44,8 +46,13 @@ export interface SessionWatchdogPorts {
   projection(sessionId: string): Promise<SessionProjection>;
   /** The durable door the blocked signal goes through. */
   submit: SessionEngine["submit"];
-  /** The person's channel. Absent means no notification is raised. */
-  notify?: (input: { title: string; body: string }) => void;
+  /**
+   * The one delivery path (VC-295). Absent means no notification is raised.
+   * The wedge report is `needs-you`: a turn that has stopped making progress is
+   * an agent blocked on a person, and the switch is read where every other
+   * alert's is.
+   */
+  notify?: (request: NotificationRequest) => void;
   /**
    * Self-termination, deliberately optional and shipped unwired: when
    * present, a trip stops the Session after recording its signal. The port
@@ -108,8 +115,20 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       },
     });
     ports.notify?.({
+      producer: "session-watchdog",
       title: "Session may be wedged",
       body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m.`,
+      // The Session itself, and the blocked signal this scan just recorded is
+      // an Attention the renderer will show once the Session is open. No
+      // interaction id: nothing was asked, the turn simply stopped moving.
+      target: {
+        kind: "session",
+        projectId: projection.session.projectId,
+        ticketId: projection.session.ticketId,
+        sessionId,
+        interactionId: null,
+        attentionId: null,
+      },
     });
     if (ports.stopSession !== undefined) {
       await ports.stopSession({ sessionId, silentForMs: verdict.silentForMs });

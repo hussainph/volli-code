@@ -13,6 +13,7 @@ import {
   setTicketRetentionKeep,
   updateTicketFields,
 } from "../db/tickets-repo";
+import type { NotificationRequest } from "../notifications/dispatch";
 import type { RunNet } from "./net";
 import { setRetentionTtlDays } from "./retention";
 import { netFailure, scriptedNet } from "./scripted-net";
@@ -54,10 +55,7 @@ function cleanGit(wt: string) {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-interface Notified {
-  title: string;
-  body: string;
-}
+type Notified = NotificationRequest;
 
 /** Poll deps over the test db: scripted net + fixed clock + notify/onChange spies. */
 function makeDeps(
@@ -72,7 +70,7 @@ function makeDeps(
       db: ctx.db,
       net: run,
       now: () => now,
-      notify: (title, body) => notifications.push({ title, body }),
+      notify: (request) => notifications.push(request),
       onChange: () => {
         changes.n += 1;
       },
@@ -204,6 +202,14 @@ describe("pollRetention — merge", () => {
     expect(merged[0]!.actor).toBe("automation");
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Pull request merged");
+    // The completion the `finished` switch actually governs (VC-295), pointing
+    // at the ticket it merged for.
+    expect(notifications[0]!.producer).toBe("pull-request-merged");
+    expect(notifications[0]!.target).toEqual({
+      kind: "ticket",
+      projectId: "p1",
+      ticketId: "t1",
+    });
     // Broadcast only on the cycle that changed things.
     expect(changes.n).toBe(1);
   });
@@ -342,8 +348,12 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
 
     expect(notifications).toEqual([
       {
+        producer: "worktree-reclaimed",
         title: "Worktree removed",
         body: expect.stringContaining("Branch volli/VC-1-x is kept, so you can recreate it"),
+        // A click opens the ticket whose folder went away — its branch is kept,
+        // and the ticket is where recreating it starts (VC-295).
+        target: { kind: "ticket", projectId: "p1", ticketId: "t1" },
       },
     ]);
     // The board has to re-hydrate: a card's worktree just stopped existing.
@@ -587,6 +597,10 @@ describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and
     // — the only user-visible surface a background poll has.
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Couldn't save discovered PR");
+    // Operational: a durable write that did not land is a fault with no other
+    // surface, so no preference can silence it and it opens nothing.
+    expect(notifications[0]!.producer).toBe("worktree-record-failed");
+    expect(notifications[0]!.target).toBeNull();
     // Retry path: the write never landed, so pr_url is still null — DISCOVER
     // tries the stamp again next poll.
     expect(getTicketRow(ctx.db, "t1")!.pr_url).toBeNull();

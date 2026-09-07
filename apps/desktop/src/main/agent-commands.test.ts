@@ -789,7 +789,7 @@ describe("agent command service", () => {
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => `ticket-${++id}`,
-      notify: (title, message) => notifications.push({ title, message }),
+      notify: ({ title, body }) => notifications.push({ title, message: body }),
     });
     const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, session?: string) =>
       service.execute({
@@ -2461,7 +2461,7 @@ describe("agent command service", () => {
         observed.push({ sessionId: id, lines });
         return { status: "idle", output: "line one\nline two" };
       },
-      notify: (title, message) => notifications.push({ title, message }),
+      notify: ({ title, body }) => notifications.push({ title, message: body }),
     });
 
     const peek = await service.execute({
@@ -3735,7 +3735,7 @@ describe("agent command service", () => {
       const notified: string[] = [];
       const { hook } = hookService({
         onHarnessEvent: (notice) => notices.push(notice),
-        notify: (title: string) => notified.push(title),
+        notify: ({ title }) => notified.push(title),
       });
       endSession(ctx.db, sessionId, 5000, 0);
 
@@ -3857,7 +3857,7 @@ describe("agent command service", () => {
     it("notifies when a human is blocking the agent, naming the ticket", async () => {
       const notices: [string, string][] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: ({ title, body }) => notices.push([title, body]) },
         "ticket-blocked",
       );
 
@@ -3869,7 +3869,7 @@ describe("agent command service", () => {
     it("stays quiet for telemetry, and for the twin event riding the same native signal", async () => {
       const notices: [string, string][] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: ({ title, body }) => notices.push([title, body]) },
         "ticket-quiet",
       );
 
@@ -3888,7 +3888,7 @@ describe("agent command service", () => {
       const registered = "my-harness" as HarnessId;
       const notices: [string, string][] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: ({ title, body }) => notices.push([title, body]) },
         "ticket-registered",
         registered,
       );
@@ -3924,7 +3924,7 @@ describe("agent command service", () => {
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: ({ title, body }) => notices.push([title, body]),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-cursor",
@@ -3949,7 +3949,7 @@ describe("agent command service", () => {
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: ({ title, body }) => notices.push([title, body]),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-typed",
@@ -3983,7 +3983,7 @@ describe("agent command service", () => {
       const notices: [string, string][] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: ({ title, body }) => notices.push([title, body]),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-nameless",
@@ -4002,7 +4002,7 @@ describe("agent command service", () => {
     it("notifies for the harness that is running, not the one that launched", async () => {
       const notices: [string, string][] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: ({ title, body }) => notices.push([title, body]) },
         "ticket-replaced",
         "opencode",
       );
@@ -4054,7 +4054,7 @@ describe("agent command service", () => {
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: ({ title, body }) => notices.push([title, body]),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-unknown",
@@ -4074,7 +4074,7 @@ describe("agent command service", () => {
       it("withholds the notification a stale input.needed would fire", async () => {
         const notices: [string, string][] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: ({ title, body }) => notices.push([title, body]) },
           "ticket-raced",
         );
 
@@ -4087,7 +4087,7 @@ describe("agent command service", () => {
       it("still notifies for a wait fired in the same millisecond as the newest event", async () => {
         const notices: [string, string][] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: ({ title, body }) => notices.push([title, body]) },
           "ticket-tied",
         );
 
@@ -4103,7 +4103,7 @@ describe("agent command service", () => {
       it("keeps believing an unstamped delivery after a stamped one", async () => {
         const notices: [string, string][] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: ({ title, body }) => notices.push([title, body]) },
           "ticket-unstamped",
         );
 
@@ -4183,7 +4183,7 @@ describe("agent command service", () => {
       it("keeps one session's watermark out of another's", async () => {
         const notices: [string, string][] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: ({ title, body }) => notices.push([title, body]) },
           "ticket-two-sessions",
         );
         const other = "99999999-3456-7890-abcd-ef1234567890";

@@ -6,7 +6,6 @@ import {
   ipcMain,
   nativeTheme,
   net,
-  Notification,
   protocol,
   session,
   shell,
@@ -122,7 +121,8 @@ import {
   type PendingArmedRunCoordinator,
 } from "./automations/pending-armed-runs";
 import { createRunAttentionWatch } from "./automations/run-attention";
-import { readNotificationPreferences } from "./notification-preferences";
+import { registerNotificationIpcHandlers } from "./notifications/ipc";
+import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -811,6 +811,17 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // The ONE notification door (VC-295). Every native alert this process posts —
+  // this file's five, the retention watch's three — goes through `deliver`,
+  // which is what makes "no alert escapes the preferences" structural rather
+  // than a convention. Built here, right after the database handle is known,
+  // because the run-attention watch below is the first thing that needs it; the
+  // window opener is bound later, when the window factory exists.
+  //
+  // Deliberately built even for a degraded database: with no stored
+  // preferences the all-on default applies, so a broken db costs the app its
+  // settings, never its voice.
+  const notifications = createNotificationRuntime({ db: watchedDb });
   // The Notification rule (VC-112, VC-133): an unattended Run that enters
   // `waiting` or `error` says so, and nothing else does. It hangs off the
   // activity watch below because that is the one place every durable Session
@@ -819,11 +830,9 @@ app.whenReady().then(async () => {
     watchedDb !== null
       ? createRunAttentionWatch({
           attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
-          // Re-read per notification rather than captured at boot, so switching
-          // notifications off takes effect on the next one instead of the next
-          // launch. It is one indexed `app_state` read.
-          preferences: () => readNotificationPreferences(watchedDb),
-          notify: ({ title, body }) => new Notification({ title, body }).show(),
+          // The preference is read per alert inside the delivery path, so this
+          // observer names the producer and the target and nothing else.
+          notify: (request) => notifications.deliver(request),
         })
       : null;
   // The runtime is composed from the watched Engine below, so this reader is
@@ -1897,6 +1906,29 @@ app.whenReady().then(async () => {
       ? undefined
       : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
   );
+  // Settings → Notifications (VC-295), and the second half of a notification
+  // click. Its own door rather than the generic `app_state` write, so the
+  // category vocabulary is validated in one place (docs/BOUNDARIES.md rule 5).
+  registerNotificationIpcHandlers({
+    settings: notifications.settings,
+    takePendingActivation: () => notifications.takePendingActivation(),
+    ...(dbHandle.ok
+      ? {}
+      : {
+          unavailableReason: `Notification settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+        }),
+  });
+  // What each window is showing, for the focused-target rule. A `send`: it
+  // flips on every navigation, needs no reply, and main's copy is advisory —
+  // a report that never arrives costs one duplicate alert.
+  ipcMain.on(
+    "volli:notification-active-target" satisfies VolliIpcChannel,
+    (event, ...args: unknown[]): void => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window === null) return;
+      notifications.reportActiveTarget(window.id, args[0]);
+    },
+  );
   // The session watchdog (VC-86): every executor this process holds open is
   // scanned on a coarse clock, and an open turn silent past the app-wide
   // threshold self-reports — one durable blocked signal naming the watchdog
@@ -1911,7 +1943,7 @@ app.whenReady().then(async () => {
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
-          notify: ({ title, body }) => new Notification({ title, body }).show(),
+          notify: (request) => notifications.deliver(request),
         })
       : null;
   sessionWatchdog?.start();
@@ -2708,8 +2740,18 @@ app.whenReady().then(async () => {
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
     window.once("closed", () => browserTabs.closeAll());
+    // And a closed window is showing nothing: its last reported target must not
+    // linger and suppress an alert nobody can see (VC-295).
+    const windowId = window.id;
+    window.once("closed", () => notifications.forgetWindow(windowId));
     return window;
   };
+  // A notification clicked with every window closed asks for one (macOS keeps
+  // the app alive), and the renderer collects the parked target as it
+  // subscribes. Bound here because this is where the factory exists.
+  notifications.bindWindowOpener(() => {
+    if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
+  });
   const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
     // The probe converts shell failure to a kept outcome. Keep an explicit
@@ -2776,7 +2818,7 @@ app.whenReady().then(async () => {
     updater: autoUpdater,
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
     currentVersion: app.getVersion(),
-    notify: (title, body) => new Notification({ title, body }).show(),
+    notify: (request) => notifications.deliver(request),
     log: (line) => console.info(line),
     onStateChange: broadcastUpdateState,
     // The double-notify guard: with a window open the sidebar badge/dialog
@@ -3160,7 +3202,7 @@ app.whenReady().then(async () => {
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
           readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
-          notify: (title, message) => new Notification({ title, body: message }).show(),
+          notify: (request) => notifications.deliver(request),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
@@ -3348,10 +3390,15 @@ app.whenReady().then(async () => {
     // used for lifecycle notices) surfaces it instead of only a console line
     // no one but a developer will ever see.
     console.error("[volli] failed to start agent socket:", errorMessage(error));
-    new Notification({
+    // Operational (VC-295): a fault about Volli itself, whose only alternative
+    // is a console line, so no preference is consulted and there is nothing to
+    // open — the CLI is what is broken, not a screen.
+    notifications.deliver({
+      producer: "cli-socket-failed",
       title: "Volli CLI unavailable",
       body: "The agent socket failed to start. CLI commands won't work this launch.",
-    }).show();
+      target: null,
+    });
   }
 
   // Background user-space CLI + skills install (VC-52): no dialog, no admin

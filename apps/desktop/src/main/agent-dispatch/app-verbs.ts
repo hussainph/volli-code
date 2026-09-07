@@ -145,7 +145,13 @@ function parseDoctorObservation(request: AgentRequest): DoctorObservation | null
   };
 }
 
-/** `volli notify` — a native notification to the user. */
+/**
+ * `volli notify` — a native notification to the user.
+ *
+ * Operational rather than preference-controlled (VC-295): an agent was told to
+ * say exactly these words, and Volli is the messenger. And free-form, so it
+ * carries no target — there is nothing here to open that would not be invented.
+ */
 export async function notifyVerb(
   context: AgentCommandContext,
   request: AgentRequest,
@@ -167,7 +173,7 @@ export async function notifyVerb(
     label: `Native notification ${JSON.stringify(title.trim())}`,
   });
   if (preview !== null) return preview;
-  options.notify?.(title, message);
+  options.notify?.({ producer: "agent-notify", title, body: message, target: null });
   return { v: 1, ok: true, data: { notified: true } };
 }
 
