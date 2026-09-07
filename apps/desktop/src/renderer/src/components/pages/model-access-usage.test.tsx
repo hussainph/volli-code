@@ -9,6 +9,10 @@
  * window still to come (so it meets the fill's edge when pace is on), the
  * fill's colour follows the tone rule, and a window with no reset still
  * renders a row rather than vanishing.
+ *
+ * The reading's own age is deliberately NOT on the surface and not in the
+ * title: the numbers are refreshed on every open and Refresh, so a caption
+ * about their age would be prose the control does not need.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
@@ -81,21 +85,21 @@ describe("ModelAccessUsage", () => {
     expect(html).not.toContain("bg-primary");
   });
 
-  it("carries the row's facts in the bar's label, and the age in its title", () => {
+  it("carries the row's facts in the bar's label and its title, and nothing else", () => {
     const html = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW} />);
     expect(html).toContain('aria-label="Session: 40% left, 40% of the window left, resets in 2h"');
-    expect(html).toContain(
-      'title="Session: 40% left, 40% of the window left, resets in 2h · checked 1m ago"',
-    );
+    expect(html).toContain('title="Session: 40% left, 40% of the window left, resets in 2h"');
   });
 
-  it("says when it was checked on the surface only once the reading is old", () => {
-    const fresh = renderToStaticMarkup(<ModelAccessUsage limits={LIMITS} now={NOW} />);
-    expect(fresh).not.toContain(">checked 1m ago<");
-    const stale = renderToStaticMarkup(
+  it("never says how old the reading is, however old it is", () => {
+    const ancient = renderToStaticMarkup(
       <ModelAccessUsage limits={{ ...LIMITS, checkedAt: NOW - 23 * 60_000 }} now={NOW} />,
     );
-    expect(stale).toContain(">checked 23m ago<");
+    expect(ancient).not.toContain("checked");
+    expect(ancient).not.toContain("ago");
+    // Still a whole row, drawn from the same numbers as a fresh one.
+    expect(ancient).toContain("40% left");
+    expect(ancient).toContain("resets in 2h");
   });
 
   it("prints whole points however precisely the provider spoke", () => {

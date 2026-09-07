@@ -38,7 +38,7 @@ import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage"
 
 export const title = "Usage limits (VC-263)";
 export const note =
-  "Remaining bar, elapsed hairline, tone by colour — healthy, ahead, stale, unsupported";
+  "Remaining bar, elapsed hairline, tone by colour — healthy, ahead, spent, unsupported";
 
 /** One moment, so every countdown and pace reading is exact. */
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -142,10 +142,9 @@ const OPENCODE_GO: UsageLimits = {
 
 /**
  * The edges: a session window fully spent with time left (no fill at all,
- * hairline standing alone), one whose reset has passed with nothing newer
- * reported yet (`resets now`, hairline at the left edge), and the whole
- * reading old enough — forty minutes — that the account says when it was
- * checked. All of it must still read as the same control.
+ * hairline standing alone) and one whose reset has passed with nothing newer
+ * reported yet (`resets now`, hairline at the left edge). Both must still read
+ * as the same control as a healthy account's.
  */
 const EDGES: UsageLimits = {
   checkedAt: NOW - 40 * 60_000,
@@ -221,7 +220,7 @@ export default function UsageLimitsScratch() {
       <Frame label="Three windows · OpenCode Go">
         <ModelAccessUsage limits={OPENCODE_GO} now={NOW} />
       </Frame>
-      <Frame label="Spent · reset passed · stale">
+      <Frame label="Spent · reset passed">
         <ModelAccessUsage limits={EDGES} now={NOW} />
       </Frame>
       <Frame label="Unsupported / couldn't read">

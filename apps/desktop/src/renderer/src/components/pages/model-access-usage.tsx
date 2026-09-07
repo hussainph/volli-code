@@ -28,23 +28,18 @@
  * across a Refresh, and a fresh `resetsAt` read against the clock as it stood
  * when the page opened would be wrong by however long the page had been open.
  *
- * A reading that is old says so. Every bar's title carries when it was
- * checked; once it is older than the probe's own freshness the account gets
- * one line on the surface, because a person about to start a long Session
- * should know the bars are a memory rather than a measurement.
- *
  * No prose. The label is the window's own name, `N% left` is the number, and
- * the only sentences on the surface are the reset and, when it applies, the
- * age — the same rule the rest of Model Access already obeys. The one line an
+ * the only sentence on the surface is the reset — the same rule the rest of
+ * Model Access already obeys. There is no "checked N ago" line: the numbers
+ * are refreshed whenever the page is opened or Refreshed, and a caption about
+ * their age would be the surface apologising for itself. The one line an
  * account with nothing to show earns is a state, not an explanation, and the
  * failed one names its retry: the page's Refresh.
  */
 import * as React from "react";
 import {
   elapsedShare,
-  formatCheckedAgo,
   formatResetsIn,
-  isUsageStale,
   remainingPercent,
   usageTone,
   type UsageLimits,
@@ -66,7 +61,7 @@ export function ModelAccessUsage({
 }) {
   if (limits.unavailable !== undefined) {
     return (
-      <p data-testid={testId} className="mb-3 -mt-2 text-ui text-muted-foreground last:mb-0">
+      <p data-testid={testId} className="-mt-2 mb-4 text-ui text-muted-foreground last:mb-0">
         {limits.unavailable.reason === "unsupported"
           ? "No subscription usage windows on this account."
           : "Usage limits couldn't be read. Refresh to try again."}
@@ -92,30 +87,19 @@ function UsageWindows({
 }) {
   // Taken once, before anything draws, and held for this snapshot's life.
   const [at] = React.useState(() => now ?? Date.now());
-  const checkedAgo = formatCheckedAgo(limits.checkedAt, at);
   return (
     // Tucked under its PrefRow's bottom padding, and the last account's block
     // ends the section flush the way a lone PrefRow's `last:pb-0` would have.
-    <div data-testid={testId} className="mb-3 -mt-2 flex flex-col gap-3 last:mb-0">
+    // Every step is on the spacing ladder (docs/DESIGN.md): 2 up, 4 below.
+    <div data-testid={testId} className="-mt-2 mb-4 flex flex-col gap-2 last:mb-0">
       {limits.windows.map((window) => (
-        <UsageWindowRow key={window.id} window={window} now={at} checkedAgo={checkedAgo} />
+        <UsageWindowRow key={window.id} window={window} now={at} />
       ))}
-      {isUsageStale(limits, at) ? (
-        <span className="text-ui tabular-nums text-muted-foreground">{checkedAgo}</span>
-      ) : null}
     </div>
   );
 }
 
-function UsageWindowRow({
-  window,
-  now,
-  checkedAgo,
-}: {
-  window: UsageWindow;
-  now: number;
-  checkedAgo: string;
-}) {
+function UsageWindowRow({ window, now }: { window: UsageWindow; now: number }) {
   // Whole points on the surface. The mappers hand through what the provider
   // said — a header's `0.29` becomes `28.999999999999996` — and a bar labelled
   // to fourteen places would be precision the reading does not have.
@@ -155,12 +139,7 @@ function UsageWindowRow({
           it above and below: a tick that only spans the fill's height reads
           as a seam in the fill where they overlap, and disappears altogether
           at the track's far edge. */}
-      <span
-        role="img"
-        aria-label={summary}
-        title={`${summary} · ${checkedAgo}`}
-        className="relative h-4 w-full"
-      >
+      <span role="img" aria-label={summary} title={summary} className="relative h-4 w-full">
         <span aria-hidden className="absolute inset-x-0 inset-y-1 rounded-full bg-muted" />
         {remaining > 0 ? (
           <span
