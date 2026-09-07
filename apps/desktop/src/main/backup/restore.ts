@@ -337,6 +337,26 @@ function moveInto(from: string, to: string, names: readonly string[]): void {
 }
 
 /**
+ * The swap, and the only moment the live profile changes.
+ *
+ * Two renames with a window between them, so the window is what this function
+ * exists to handle: if the staged profile cannot be moved into place after the
+ * old one has been set aside, the old one is moved back before the failure is
+ * reported. That is the difference between "the restore did not happen" and a
+ * profile directory with nothing in it.
+ */
+function activateProfile(profileRoot: string, staging: string, replacedPath: string): void {
+  moveInto(profileRoot, replacedPath, PROFILE_ENTRIES);
+  try {
+    moveInto(staging, profileRoot, PROFILE_ENTRIES);
+  } catch (error) {
+    moveInto(replacedPath, profileRoot, PROFILE_ENTRIES);
+    rmSync(replacedPath, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/**
  * Reads, checks, stages, verifies, and only then activates.
  *
  * Returns a report or a list of problems; it never throws for a bundle a
@@ -409,8 +429,7 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     db = null;
 
     const replacedPath = join(request.profileRoot, `.volli-replaced-${request.now}`);
-    moveInto(request.profileRoot, replacedPath, PROFILE_ENTRIES);
-    moveInto(staging, request.profileRoot, PROFILE_ENTRIES);
+    activateProfile(request.profileRoot, staging, replacedPath);
     rmSync(staging, { recursive: true, force: true });
 
     return {
@@ -428,12 +447,15 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
   } catch (error) {
     db?.close();
     rmSync(staging, { recursive: true, force: true });
+    // Truthful either way: everything before the swap writes only into the
+    // staging directory removed above, and the swap itself puts the previous
+    // profile back before it rethrows.
     return {
       ok: false,
       problems: [
         problem(
           "verify",
-          `The restore could not be prepared and nothing was changed: ${
+          `The restore did not happen and the current profile is unchanged: ${
             error instanceof Error ? error.message : String(error)
           }`,
         ),

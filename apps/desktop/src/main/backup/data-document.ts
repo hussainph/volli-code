@@ -140,6 +140,13 @@ interface ColumnInfo {
   pk: number;
 }
 
+function hasTable(db: Database.Database, table: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !==
+    undefined
+  );
+}
+
 function columnsOf(db: Database.Database, table: string): ColumnInfo[] {
   return db.prepare("SELECT name, pk FROM pragma_table_info(?)").all(table) as ColumnInfo[];
 }
@@ -194,9 +201,13 @@ export function buildBackupDataDocument(
       ),
     };
   }
-  const coverage = db
-    .prepare("SELECT metered_from FROM session_usage_coverage WHERE id = 1")
-    .get() as { metered_from: number } | undefined;
+  // Migration 027 introduced the coverage row; a profile older than that has
+  // no boundary to carry, and `0` is what it means — every window complete.
+  const coverage = hasTable(db, "session_usage_coverage")
+    ? (db.prepare("SELECT metered_from FROM session_usage_coverage WHERE id = 1").get() as
+        | { metered_from: number }
+        | undefined)
+    : undefined;
   return {
     format: BACKUP_DATA_FORMAT,
     dataVersion: BACKUP_DATA_VERSION,

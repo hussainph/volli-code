@@ -442,6 +442,30 @@ describe("restoreBackupBundle — refusals", () => {
     expectUntouched(target.root, before);
   });
 
+  it("refuses a bundle with a missing artifact before touching the profile", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+    const before = readFileSync(join(target.root, "volli.db"));
+    const withoutBlob = packArchive(
+      unpackArchive(bytes).filter(
+        (entry) => entry.path !== `artifacts/blobs/${source.blobHashes.session}`,
+      ),
+    );
+
+    const result = await restoreBackupBundle({
+      bundle: withoutBlob,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems[0]?.kind).toBe("artifact-missing");
+    expect(result.problems[0]?.message).toContain(source.blobHashes.session);
+    expectUntouched(target.root, before);
+  });
+
   it("refuses a corrupt bundle before touching the profile", async () => {
     const bytes = bundleBytes();
     const target = targetProfile();
