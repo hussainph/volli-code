@@ -230,11 +230,11 @@ import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
-  reconcileInterruptedCleanupRuns,
+  reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
 } from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -2791,17 +2791,23 @@ app.whenReady().then(async () => {
   if (dbHandle.ok) {
     const db = dbHandle.db;
     mainWindow.webContents.once("did-finish-load", () => {
-      try {
-        for (const run of reconcileInterruptedCleanupRuns(db, Date.now())) {
-          const done = run.items.filter((item) => item.status === "completed").length;
-          console.log(
-            `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
-          );
-        }
-      } catch (error) {
-        console.error("[worktree] cleanup history unreadable:", errorMessage(error));
-      }
-      startOrphanScan(worktreeDeps(db))
+      // Each announced-but-unsettled item is asked of git and disk before the
+      // run is stamped, so an already-removed folder is recorded as removed
+      // rather than described as work nobody attempted (review C3). Read-only,
+      // and never fatal to a launch.
+      void reconcileInterruptedCleanups({ worktree: worktreeDeps(db), engine: orphanCleanupEngine(db) })
+        .then((runs) => {
+          for (const run of runs) {
+            const done = run.items.filter((item) => item.state === "completed").length;
+            console.log(
+              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+        });
+      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
             `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,

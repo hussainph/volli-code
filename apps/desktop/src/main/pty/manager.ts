@@ -37,7 +37,13 @@ import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
-import { createSetupRun, ensure, runGitCapturing } from "../worktree";
+import {
+  createSetupRun,
+  ensure,
+  isUnderDeletion,
+  runGitCapturing,
+  UNDER_DELETION_REFUSAL,
+} from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
@@ -485,6 +491,16 @@ export class PtyManager {
         await recordAttachmentFailure(new Error("cwd is outside known projects"), cwd);
         return { ok: false, error: "cwd is outside known projects" };
       }
+    }
+
+    // A directory a destructive worktree act is holding right now (VC-284
+    // review C4). The orphan cleanup takes a lease over the exact path it is
+    // about to remove and keeps it across its awaits, so a terminal cannot be
+    // born inside a checkout that is mid-deletion — the race no re-check placed
+    // before the removal could close, because it opens after that check.
+    if (isUnderDeletion(cwd)) {
+      await recordAttachmentFailure(new Error(UNDER_DELETION_REFUSAL), cwd);
+      return { ok: false, error: UNDER_DELETION_REFUSAL };
     }
 
     // The harness config that cannot live under `<userData>` — cursor's

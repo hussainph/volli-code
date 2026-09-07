@@ -1,20 +1,31 @@
+/**
+ * The confirmed cleanup, held to what it promises: it acts only on the plan it
+ * was handed, re-asks every question immediately before it changes anything,
+ * serializes against work starting in the directory it is removing, and records
+ * an immutable outcome per item.
+ */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import type { OrphanCleanupPlanItem } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { cleanupOrphans } from "./cleanup";
-import { readCleanupRuns } from "./cleanup-log";
+import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
+import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
 import { projectContainerName } from "./containers";
+import { acquireDeletionLease, isUnderDeletion, resetDeletionLeasesForTest } from "./deletion-lease";
 import { scriptedGit } from "./scripted-git";
 import type { WorktreeDeps } from "./types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
+let engine: OrphanCleanupEngine;
+let minted = 0;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 7, 19, 12, 0, 0);
@@ -24,10 +35,18 @@ const now = () => NOW;
 
 beforeEach(() => {
   ctx = openTestDb();
+  minted = 0;
+  engine = createOrphanCleanupEngine({
+    ledger: new SqliteOrphanCleanupLedger(ctx.db),
+    now,
+    nextId: () => `id-${(minted += 1)}`,
+  });
+  resetDeletionLeasesForTest();
 });
 
 afterEach(() => {
   ctx.cleanup();
+  resetDeletionLeasesForTest();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
 });
@@ -66,15 +85,50 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
   });
 }
 
+/** A plan item for one worktree directory, as a scan would have minted it. */
+function worktreeItem(
+  path: string,
+  projectPath: string,
+  branch: string | null,
+  index = 0,
+): OrphanCleanupPlanItem {
+  return {
+    id: `rev1:worktree:${index}`,
+    kind: "worktree",
+    path,
+    projectId: "proj-1",
+    projectName: "Volli",
+    projectPath,
+    branch,
+    gitReason: null,
+  };
+}
+
+/** A plan item for one exact stale git record. */
+function metadataItem(path: string, projectPath: string, index = 0): OrphanCleanupPlanItem {
+  return {
+    id: `rev1:metadata:${index}`,
+    kind: "metadata",
+    path,
+    projectId: "proj-1",
+    projectName: "Volli",
+    projectPath,
+    branch: null,
+    gitReason: "gitdir file points to non-existent location",
+  };
+}
+
 /**
- * One project, its owned container, and a stale clean orphan inside it — the
+ * One project, its owned container, and stale clean orphans inside it — the
  * fixture every cleanup case starts from. `script` overrides the git answers a
- * case needs to change (a dirty probe, a failing remove).
+ * case needs to change (a dirty probe, a failing remove); `stale` names the
+ * paths the listing reports as prunable records.
  */
 function fixture(
   opts: {
     script?: (args: readonly string[], cwd: string) => string | undefined;
     orphans?: string[];
+    stale?: string[];
   } = {},
 ) {
   const projectPath = tempDir("proj");
@@ -86,6 +140,7 @@ function fixture(
     mkdirSync(path, { recursive: true });
     ageDir(path, 400);
   }
+  const stale = opts.stale ?? [join(container, "VC-9-gone")];
   const gitDir = tempDir("gitdir");
 
   insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
@@ -97,8 +152,8 @@ function fixture(
     const scripted = opts.script?.(args, cwd);
     if (scripted !== undefined) return scripted;
     if (args[0] === "worktree" && args[1] === "prune") {
-      if (!args.includes("--dry-run")) pruned.push(cwd);
-      return "Removing worktrees/gone: gitdir file points to non-existent location\n";
+      pruned.push(cwd);
+      return "";
     }
     if (args[0] === "worktree" && args[1] === "list") {
       return (
@@ -107,6 +162,12 @@ function fixture(
           .map(
             (path, index) =>
               `worktree ${path}\nHEAD b${index}\nbranch refs/heads/volli/${names[index]}\n`,
+          )
+          .join("") +
+        stale
+          .map(
+            (path) =>
+              `worktree ${path}\nHEAD c\nprunable gitdir file points to non-existent location\n`,
           )
           .join("")
       );
@@ -121,17 +182,23 @@ function fixture(
   });
 
   const deps: WorktreeDeps = { db: ctx.db, git, home, now, blobsRoot: "unused" };
-  return { projectPath, home, container, paths, deps, removed, pruned, calls };
+  return { projectPath, home, container, paths, stale, deps, removed, pruned, calls };
+}
+
+/** The standard request wrapper — one command id per call unless a case reuses one. */
+function request(items: OrphanCleanupPlanItem[], commandId = "cmd-1") {
+  return { commandId, scanRevision: "rev1", items, source: "settings" as const };
 }
 
 describe("cleanupOrphans", () => {
-  it("removes the confirmed orphan, keeps its branch, prunes the confirmed project's metadata, and records both", async () => {
+  it("removes the confirmed orphan, keeps its branch, prunes the confirmed record, and records both", async () => {
     const f = fixture();
+    const items = [
+      metadataItem(f.stale[0]!, f.projectPath),
+      worktreeItem(f.paths[0]!, f.projectPath, "volli/VC-1-stale"),
+    ];
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: ["proj-1"], source: "settings" },
-    );
+    const { run, receipt } = await cleanupOrphans({ worktree: f.deps, engine }, request(items));
 
     expect(f.removed).toEqual(f.paths);
     expect(f.pruned).toEqual([f.projectPath]);
@@ -139,59 +206,76 @@ describe("cleanupOrphans", () => {
     expect(
       f.calls.some((call) => call.args.includes("--force") || call.args.includes("branch")),
     ).toBe(false);
+    expect(receipt.status).toBe("completed");
+    expect(run.id).toBe("cmd-1");
+    expect(run.scanRevision).toBe("rev1");
     expect(run.source).toBe("settings");
-    expect(run.startedAt).toBe(NOW);
     expect(run.finishedAt).toBe(NOW);
-    expect(run.items).toEqual([
-      {
-        kind: "metadata",
-        path: f.projectPath,
-        projectId: "proj-1",
-        branch: null,
-        status: "completed",
-        detail: "Pruned stale worktree metadata.",
-        finishedAt: NOW,
-      },
-      {
-        kind: "worktree",
-        path: f.paths[0],
-        projectId: "proj-1",
-        branch: "volli/VC-1-stale",
-        status: "completed",
-        detail: "Removed the folder. Branch volli/VC-1-stale is still in git.",
-        finishedAt: NOW,
-      },
+    expect(run.items.map((item) => [item.kind, item.path, item.state])).toEqual([
+      ["metadata", f.stale[0], "completed"],
+      ["worktree", f.paths[0], "completed"],
     ]);
+    expect(run.items[1]?.detail).toBe(
+      "Removed the folder. Branch volli/VC-1-stale is still in git.",
+    );
+    // The rules it ran under are recorded with it, as ids.
+    expect(run.preservation).toContain("branches");
+    expect(run.preservation).toContain("active");
     // The same record is durable, not only returned.
-    expect(readCleanupRuns(ctx.db)).toEqual([run]);
+    expect((await engine.recentRuns())[0]).toEqual(run);
   });
 
-  it("writes the record BEFORE the first change, with every item still pending", async () => {
-    const seenWhileRemoving: unknown[] = [];
+  it("records the accepted plan BEFORE the first change, with every item pending", async () => {
+    const seen: unknown[] = [];
     const f = fixture({
       script: (args) => {
         if (args[0] === "worktree" && args[1] === "remove") {
-          seenWhileRemoving.push(structuredClone(readCleanupRuns(ctx.db)));
+          seen.push(structuredClone(runSnapshot));
           return "";
         }
         return undefined;
       },
     });
+    let runSnapshot: unknown = null;
+    // Read the durable run the instant before the mutation lands.
+    const original = f.deps.git;
+    const deps: WorktreeDeps = {
+      ...f.deps,
+      git: (args, cwd) => {
+        if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") {
+          // Synchronous read of what the ledger already holds.
+          runSnapshot = ctx.db
+            .prepare("SELECT kind FROM worktree_cleanup_facts ORDER BY rowid")
+            .all();
+        }
+        return original(args, cwd);
+      },
+    };
 
     await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: [], source: "settings" },
+      { worktree: deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
     );
 
-    expect(seenWhileRemoving).toHaveLength(1);
-    expect(seenWhileRemoving[0]).toEqual([
-      expect.objectContaining({
-        finishedAt: null,
-        items: [expect.objectContaining({ path: f.paths[0], status: "pending" })],
-        // What this run promised to preserve, recorded with the run itself.
-        preservation: expect.arrayContaining([expect.stringMatching(/branch/i)]),
-      }),
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual([
+      { kind: "command.recorded" },
+      { kind: "cleanup.accepted" },
+      { kind: "command.receipt.recorded" },
+      // Announced before the mutation, so an interruption inside it is legible.
+      { kind: "cleanup.item.started" },
     ]);
+  });
+
+  it("replays the same command id instead of removing twice", async () => {
+    const f = fixture();
+    const items = [worktreeItem(f.paths[0]!, f.projectPath, "volli/VC-1-stale")];
+
+    await cleanupOrphans({ worktree: f.deps, engine }, request(items));
+    const second = await cleanupOrphans({ worktree: f.deps, engine }, request(items));
+
+    expect(f.removed).toEqual(f.paths);
+    expect(second.run.items[0]?.state).toBe("completed");
   });
 
   it("rechecks each path immediately before the change and skips one that went dirty since the scan", async () => {
@@ -199,21 +283,24 @@ describe("cleanupOrphans", () => {
     const [first, second] = f.paths as [string, string];
     // The second path picks up an edit between the scan and the confirm.
     const dirtied = new Set([second]);
-    const deps = {
+    const deps: WorktreeDeps = {
       ...f.deps,
-      git: ((args: readonly string[], cwd: string) => {
+      git: (args, cwd) => {
         if (verb(args)[0] === "status" && dirtied.has(cwd)) return " M src/app.ts\n";
         return f.deps.git(args, cwd);
-      }) as WorktreeDeps["git"],
+      },
     };
 
-    const run = await cleanupOrphans(
-      { worktree: deps },
-      { paths: [first, second], projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: deps, engine },
+      request([
+        worktreeItem(first, f.projectPath, "volli/VC-1-stale", 0),
+        worktreeItem(second, f.projectPath, "volli/VC-2-went-dirty", 1),
+      ]),
     );
 
     expect(f.removed).toEqual([first]);
-    expect(run.items.map((item) => [item.path, item.status, item.detail])).toEqual([
+    expect(run.items.map((item) => [item.path, item.state, item.detail])).toEqual([
       [first, "completed", expect.stringContaining("Removed")],
       [second, "skipped", expect.stringMatching(/uncommitted or untracked changes/)],
     ]);
@@ -228,22 +315,104 @@ describe("cleanupOrphans", () => {
   ] as const) {
     it(`skips a path a live ${surface} is standing in — the same protection manual Delete uses`, async () => {
       const f = fixture();
-      const path = f.paths[0]!;
 
-      const run = await cleanupOrphans(
+      const { run } = await cleanupOrphans(
         {
           worktree: f.deps,
+          engine,
           // Reported one level DOWN, the way a PTY reports its own cwd: the
           // guard has to see a directory inside the target as blocking it.
           busyWorktreeSites: async (target) => [{ directory: join(target, "src"), surface }],
         },
-        { paths: [path], projectIds: [], source: "settings" },
+        request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
       );
 
       expect(f.removed).toEqual([]);
-      expect(run.items[0]).toEqual(expect.objectContaining({ status: "skipped", detail: refusal }));
+      expect(run.items[0]).toEqual(expect.objectContaining({ state: "skipped", detail: refusal }));
     });
   }
+
+  it("catches work that starts DURING the release await, before it removes anything", async () => {
+    const f = fixture();
+    // Nothing is live when the first check runs; a terminal appears while the
+    // agent bindings are being released. The re-check after every await is what
+    // has to see it (review C4).
+    let releaseHappened = false;
+    const { run } = await cleanupOrphans(
+      {
+        worktree: f.deps,
+        engine,
+        busyWorktreeSites: async (target) =>
+          releaseHappened ? [{ directory: target, surface: "terminal" as const }] : [],
+        releaseAgentSites: async () => {
+          releaseHappened = true;
+          return { released: [], stillOpen: [] };
+        },
+      },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
+    );
+
+    expect(f.removed).toEqual([]);
+    expect(run.items[0]).toEqual(
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/terminal/i) }),
+    );
+  });
+
+  it("refuses to remove a checkout whose agent binding would not close", async () => {
+    const f = fixture();
+
+    const { run } = await cleanupOrphans(
+      {
+        worktree: f.deps,
+        engine,
+        releaseAgentSites: async () => ({ released: [], stillOpen: ["session-7"] }),
+      },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
+    );
+
+    expect(f.removed).toEqual([]);
+    expect(run.items[0]).toEqual(
+      expect.objectContaining({
+        state: "skipped",
+        detail: expect.stringMatching(/still bound/i),
+      }),
+    );
+  });
+
+  it("holds a deletion lease across the removal, and skips a path something else already holds", async () => {
+    const f = fixture();
+    const path = f.paths[0]!;
+    let leasedDuringRelease = false;
+
+    await cleanupOrphans(
+      {
+        worktree: f.deps,
+        engine,
+        releaseAgentSites: async (directory) => {
+          // The lease is what stops a terminal being born in this directory
+          // while the release is still running.
+          leasedDuringRelease = isUnderDeletion(join(directory, "src"));
+          return { released: [], stillOpen: [] };
+        },
+      },
+      request([worktreeItem(path, f.projectPath, null)]),
+    );
+    expect(leasedDuringRelease).toBe(true);
+    // And it is given back once the item settles.
+    expect(isUnderDeletion(path)).toBe(false);
+
+    // A path another act is already holding is skipped, not waited on.
+    const held = acquireDeletionLease(path);
+    expect(held).not.toBeNull();
+    const second = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(path, f.projectPath, null)], "cmd-2"),
+    );
+    expect(second.run.items[0]).toEqual(
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/already/i) }),
+    );
+    held?.release();
+  });
 
   it("ends the structured bindings rooted in a checkout before removing it", async () => {
     const released: string[] = [];
@@ -252,12 +421,13 @@ describe("cleanupOrphans", () => {
     await cleanupOrphans(
       {
         worktree: f.deps,
+        engine,
         releaseAgentSites: async (directory) => {
           released.push(directory);
           return { released: [], stillOpen: [] };
         },
       },
-      { paths: f.paths, projectIds: [], source: "settings" },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
     );
 
     expect(released).toEqual(f.paths);
@@ -268,14 +438,14 @@ describe("cleanupOrphans", () => {
     const path = f.paths[0]!;
     utimesSync(path, NOW / 1000, NOW / 1000); // touched a moment ago
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: [path], projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(path, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
     expect(run.items[0]).toEqual(
-      expect.objectContaining({ status: "skipped", detail: expect.stringMatching(/recently/i) }),
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/recently/i) }),
     );
   });
 
@@ -287,15 +457,15 @@ describe("cleanupOrphans", () => {
       },
     });
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
     expect(run.items[0]).toEqual(
       expect.objectContaining({
-        status: "skipped",
+        state: "skipped",
         detail: expect.stringMatching(/could not read git status/),
       }),
     );
@@ -309,14 +479,14 @@ describe("cleanupOrphans", () => {
       },
     });
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
     expect(run.items[0]).toEqual(
-      expect.objectContaining({ status: "skipped", detail: expect.stringMatching(/last used/i) }),
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/last used/i) }),
     );
   });
 
@@ -324,17 +494,14 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     const elsewhere = tempDir("personal");
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: [elsewhere], projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(elsewhere, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
     expect(run.items[0]).toEqual(
-      expect.objectContaining({
-        status: "skipped",
-        detail: expect.stringMatching(/outside/i),
-      }),
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/outside/i) }),
     );
   });
 
@@ -342,29 +509,29 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     ageDir(f.container, 400);
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: [f.container], projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.container, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
-    expect(run.items[0]).toEqual(expect.objectContaining({ status: "skipped" }));
+    expect(run.items[0]).toEqual(expect.objectContaining({ state: "skipped" }));
   });
 
-  it("refuses a path a ticket still points at", async () => {
+  it("refuses a path a ticket started pointing at after the scan", async () => {
     const f = fixture();
     const path = f.paths[0]!;
     insertTicket(ctx.db, testTicket("proj-1", { id: "ticket-1", status: "done" }));
     updateTicketFields(ctx.db, "ticket-1", { worktreePath: path, branch: "volli/VC-1-stale" }, 1);
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: [path], projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(path, f.projectPath, null)]),
     );
 
     expect(f.removed).toEqual([]);
     expect(run.items[0]).toEqual(
-      expect.objectContaining({ status: "skipped", detail: expect.stringMatching(/ticket/i) }),
+      expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/ticket/i) }),
     );
   });
 
@@ -376,39 +543,123 @@ describe("cleanupOrphans", () => {
       },
     });
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: [], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath, null)]),
     );
 
     expect(run.items[0]).toEqual(
-      expect.objectContaining({ status: "failed", detail: expect.stringContaining("git said no") }),
+      expect.objectContaining({ state: "failed", detail: expect.stringContaining("git said no") }),
     );
-    expect(readCleanupRuns(ctx.db)[0]?.items[0]?.status).toBe("failed");
+    expect((await engine.recentRuns())[0]?.items[0]?.state).toBe("failed");
   });
 
-  it("records a failed prune without abandoning the worktree items behind it", async () => {
+  it("records a failed prune per confirmed record without abandoning the worktree behind it", async () => {
     const f = fixture({
       script: (args) => {
-        if (args[0] === "worktree" && args[1] === "prune" && !args.includes("--dry-run")) {
-          throw new Error("not a git repo");
-        }
+        if (args[0] === "worktree" && args[1] === "prune") throw new Error("not a git repo");
         return undefined;
       },
     });
 
-    const run = await cleanupOrphans(
-      { worktree: f.deps },
-      { paths: f.paths, projectIds: ["proj-1"], source: "settings" },
+    const { run } = await cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([
+        metadataItem(f.stale[0]!, f.projectPath),
+        worktreeItem(f.paths[0]!, f.projectPath, null),
+      ]),
     );
 
-    expect(run.items.map((item) => item.status)).toEqual(["failed", "completed"]);
+    expect(run.items.map((item) => item.state)).toEqual(["failed", "completed"]);
     expect(f.removed).toEqual(f.paths);
   });
 
-  // The interruption case: the app stops mid-run. What survives has to say
-  // which items were done and which were never attempted — a run that reads as
-  // "all pending" on the next launch would re-offer work already carried out.
+  describe("stale git records", () => {
+    it("skips every confirmed record when the project's stale set grew since the scan", async () => {
+      const f = fixture({ stale: [] });
+      const container = f.container;
+      // Confirmed one record; the repo now reports a second one as well, so a
+      // repo-wide prune would take something nobody confirmed.
+      const deps: WorktreeDeps = {
+        ...f.deps,
+        git: (args, cwd) => {
+          if (verb(args)[0] === "worktree" && verb(args)[1] === "list") {
+            return (
+              `worktree ${f.projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+              `worktree ${join(container, "VC-9-gone")}\nHEAD c\nprunable gitdir file points to non-existent location\n` +
+              `worktree ${join(container, "VC-10-appeared")}\nHEAD d\nprunable gitdir file points to non-existent location\n`
+            );
+          }
+          return f.deps.git(args, cwd);
+        },
+      };
+
+      const { run } = await cleanupOrphans(
+        { worktree: deps, engine },
+        request([metadataItem(join(container, "VC-9-gone"), f.projectPath)]),
+      );
+
+      expect(f.pruned).toEqual([]);
+      expect(run.items[0]).toEqual(
+        expect.objectContaining({
+          state: "skipped",
+          detail: expect.stringMatching(/changed since the scan/i),
+        }),
+      );
+    });
+
+    it("skips a record that is no longer stale at all", async () => {
+      const f = fixture({ stale: [] });
+
+      const { run } = await cleanupOrphans(
+        { worktree: f.deps, engine },
+        request([metadataItem(join(f.container, "VC-9-gone"), f.projectPath)]),
+      );
+
+      expect(f.pruned).toEqual([]);
+      expect(run.items[0]).toEqual(
+        expect.objectContaining({
+          state: "skipped",
+          detail: expect.stringMatching(/no longer stale/i),
+        }),
+      );
+    });
+
+    it("gives every confirmed record of one project its own recorded result", async () => {
+      const f = fixture({
+        stale: [join(tempDir("home2"), "a"), join(tempDir("home3"), "b")],
+      });
+      const [first, second] = f.stale as [string, string];
+
+      const { run } = await cleanupOrphans(
+        { worktree: f.deps, engine },
+        request([metadataItem(first, f.projectPath, 0), metadataItem(second, f.projectPath, 1)]),
+      );
+
+      // One prune, two records, two outcomes — never one lumped "project" row.
+      expect(f.pruned).toEqual([f.projectPath]);
+      expect(run.items.map((item) => [item.path, item.state])).toEqual([
+        [first, "completed"],
+        [second, "completed"],
+      ]);
+    });
+
+    it("skips a record whose project is no longer tracked", async () => {
+      const f = fixture();
+      ctx.db.prepare("DELETE FROM projects WHERE id = ?").run("proj-1");
+
+      const { run } = await cleanupOrphans(
+        { worktree: f.deps, engine },
+        request([metadataItem(f.stale[0]!, f.projectPath)]),
+      );
+
+      expect(f.pruned).toEqual([]);
+      expect(run.items[0]).toEqual(
+        expect.objectContaining({ state: "skipped", detail: expect.stringMatching(/no longer/i) }),
+      );
+    });
+  });
+
   // The whole act, against real git: what the branch looks like afterwards is
   // the claim that matters, and no scripted runner can make it.
   it(
@@ -439,7 +690,7 @@ describe("cleanupOrphans", () => {
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
       const { git } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
 
-      const run = await cleanupOrphans(
+      const { run } = await cleanupOrphans(
         {
           worktree: {
             db: ctx.db,
@@ -449,11 +700,12 @@ describe("cleanupOrphans", () => {
             now: () => Date.now() + 400 * DAY_MS,
             blobsRoot: "unused",
           },
+          engine,
         },
-        { paths: [orphan], projectIds: ["proj-1"], source: "settings" },
+        request([worktreeItem(orphan, projectPath, "volli/VC-5-finished")]),
       );
 
-      expect(run.items.map((item) => item.status)).toEqual(["completed", "completed"]);
+      expect(run.items.map((item) => item.state)).toEqual(["completed"]);
       expect(existsSync(orphan)).toBe(false);
       // The branch, its commit, and the remote link all survive the removal.
       expect(runRepoGit(projectPath, ["branch", "--list", "volli/VC-5-finished"])).toContain(
@@ -464,7 +716,7 @@ describe("cleanupOrphans", () => {
     REAL_GIT_TIMEOUT_MS,
   );
 
-  it("leaves a durable record of completed and never-attempted items when the run is interrupted", async () => {
+  it("leaves completed and never-attempted items legible when the run is interrupted between items", async () => {
     const f = fixture({ orphans: ["VC-1-first", "VC-2-second", "VC-3-third"] });
     const [first, second, third] = f.paths as [string, string, string];
 
@@ -472,23 +724,30 @@ describe("cleanupOrphans", () => {
       cleanupOrphans(
         {
           worktree: f.deps,
+          engine,
           busyWorktreeSites: async (target) => {
             // Stands in for the process going away between two items.
             if (target === second) throw new Error("app exited");
             return [];
           },
         },
-        { paths: [first, second, third], projectIds: [], source: "settings" },
+        request([
+          worktreeItem(first, f.projectPath, null, 0),
+          worktreeItem(second, f.projectPath, null, 1),
+          worktreeItem(third, f.projectPath, null, 2),
+        ]),
       ),
     ).rejects.toThrow("app exited");
 
     expect(f.removed).toEqual([first]);
-    const [persisted] = readCleanupRuns(ctx.db);
+    const [persisted] = await engine.recentRuns();
     expect(persisted?.finishedAt).toBeNull();
-    expect(persisted?.items.map((item) => [item.path, item.status])).toEqual([
+    expect(persisted?.items.map((item) => [item.path, item.state])).toEqual([
       [first, "completed"],
       [second, "pending"],
       [third, "pending"],
     ]);
+    // And the lease the interrupted item held is not stranded.
+    expect(isUnderDeletion(second)).toBe(false);
   });
 });

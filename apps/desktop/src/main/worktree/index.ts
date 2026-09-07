@@ -14,16 +14,29 @@ export { listBranches } from "./state";
 // Orphan worktrees (VC-284): the READ-ONLY scan, and the separate confirmed
 // cleanup with its durable record. Two verbs, never one — inspection may not
 // remove anything, and removal may only act on what a person confirmed.
-export { scanOrphans, readOnlyGit, KEPT_RECENT, KEPT_UNKNOWN_AGE } from "./scan";
-export type { OrphanScanReport } from "./scan";
-export { cleanupOrphans, preservationRules } from "./cleanup";
+export { scanOrphans, readOnlyGit, lastTouchedAt } from "./scan";
+export type { OrphanScanOptions, OrphanScanReport, WorktreeAge } from "./scan";
+export { cleanupOrphans, preservationRuleIds, OrphanCleanupRefused } from "./cleanup";
 export type { OrphanCleanupDeps, OrphanCleanupRequest } from "./cleanup";
+// The destructive act's durable core: a UUID-keyed command, an acceptance
+// receipt, immutable per-item facts, and one projection over them (review S1).
+export { createOrphanCleanupEngine, foldCleanupRun, RECENT_CLEANUP_RUNS } from "./cleanup-engine";
+export type {
+  OrphanCleanupEngine,
+  OrphanCleanupFact,
+  OrphanCleanupIntent,
+  OrphanCleanupLedger,
+} from "./cleanup-engine";
+export { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
+export { reconcileInterruptedCleanups } from "./cleanup-recovery";
+// The serialization between a removal and anything that would start work in
+// the directory it is removing (review C4).
 export {
-  CLEANUP_RUNS_KEY,
-  MAX_CLEANUP_RUNS,
-  readCleanupRuns,
-  reconcileInterruptedCleanupRuns,
-} from "./cleanup-log";
+  acquireDeletionLease,
+  isUnderDeletion,
+  resetDeletionLeasesForTest,
+  UNDER_DELETION_REFUSAL,
+} from "./deletion-lease";
 
 // Live work inside a directory — the guard every destructive worktree path
 // asks, shared so the automatic and manual routes cannot answer it differently.

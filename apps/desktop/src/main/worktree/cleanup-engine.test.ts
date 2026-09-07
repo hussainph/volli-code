@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { OrphanCleanupPlanItem } from "@volli/shared";
 
 import { createOrphanCleanupEngine, foldCleanupRun } from "./cleanup-engine";

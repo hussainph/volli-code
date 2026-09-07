@@ -169,7 +169,7 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
-import { invalidateOrphanScan, orphanScanReport } from "./orphan-scan";
+import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
   type AgentSiteReleaseReport,
@@ -182,7 +182,7 @@ import {
   ensure,
   getRetentionTtlDays,
   listBranches,
-  readCleanupRuns,
+  OrphanCleanupRefused,
   publishTicketBranch,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -202,7 +202,7 @@ import {
   isInside as isInsideWorktreeHome,
 } from "./worktree/paths";
 import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
-import { worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
@@ -1202,44 +1202,85 @@ export function registerDataIpcHandlers(
       // — the Storage pane's Scan — simply asks again. Nothing here removes a
       // directory or prunes git metadata; that is `worktree-orphan-cleanup`.
       const refresh = opts?.refresh === true;
-      const report = await orphanScanReport(worktreeDeps(db), { refresh });
+      const report = await orphanScanReport(worktreeDeps(db), {
+        refresh,
+        // Read-only, and the same supplier the destructive paths use: an
+        // occupied checkout is reported as KEPT rather than proposed and then
+        // refused after the confirmation (review C5).
+        busyWorktreeSites: options.busyWorktreeSites,
+      });
       return {
         ok: true,
+        revision: report.revision,
         scannedAt: report.scannedAt,
         retentionDays: report.retentionDays,
         prunable: report.prunable,
         removable: report.removable,
         keptRecent: report.keptRecent,
+        keptMetadata: report.keptMetadata,
+        unreadableProjects: report.unreadableProjects,
         dirty: report.dirty,
         // The durable history, so Storage can say who removed a directory and
         // when — and show a run the app never finished.
-        runs: readCleanupRuns(db),
+        runs: await orphanCleanupEngine(db).recentRuns(),
       };
     },
 
     "volli:worktree-orphan-cleanup": async (
       input: WorktreeOrphanCleanupInput,
     ): Promise<WorktreeOrphanCleanupResult> => {
-      // The confirmed half. Everything the renderer sends was read off a scan
-      // and shown in a confirmation; `cleanupOrphans` still re-checks ownership,
-      // the ticket link, dirtiness, age, and live work for each path
-      // immediately before it touches anything, and records every outcome.
-      const run = await cleanupOrphans(
-        {
-          worktree: worktreeDeps(db),
-          busyWorktreeSites: options.busyWorktreeSites,
-          releaseAgentSites: options.releaseAgentSites,
-        },
-        { paths: input.paths, projectIds: input.projectIds, source: "settings" },
-      );
+      // The confirmed half, and a transport adapter over a command — nothing
+      // more (review S1). The renderer names a scan revision and item ids; main
+      // resolves them against the proposal IT minted, so no client can point
+      // this channel at a directory no completed scan offered (review C1).
+      const plan = await resolveCleanupPlan({
+        scanRevision: input.scanRevision,
+        itemIds: input.itemIds,
+      });
+      if (!plan.ok) {
+        // Refused requests are durable too: "something asked to delete against a
+        // scan we no longer hold" is exactly what an audit wants to find.
+        await orphanCleanupEngine(db).reject({
+          commandId: input.commandId,
+          scanRevision: input.scanRevision,
+          code: plan.code,
+          error: plan.error,
+        });
+        return { ok: false, error: plan.error, code: plan.code };
+      }
+      // `cleanupOrphans` re-checks ownership, the ticket link, dirtiness, age,
+      // and live work for each path immediately before it touches anything,
+      // holds a deletion lease across its awaits, and records every outcome.
+      let outcome;
+      try {
+        outcome = await cleanupOrphans(
+          {
+            worktree: worktreeDeps(db),
+            engine: orphanCleanupEngine(db),
+            busyWorktreeSites: options.busyWorktreeSites,
+            releaseAgentSites: options.releaseAgentSites,
+          },
+          {
+            commandId: input.commandId,
+            scanRevision: input.scanRevision,
+            items: plan.items,
+            source: "settings",
+          },
+        );
+      } catch (error) {
+        if (error instanceof OrphanCleanupRefused) {
+          return { ok: false, error: error.message, code: error.code };
+        }
+        throw error;
+      }
       // The cached scan describes a world that no longer exists.
       invalidateOrphanScan();
       // Orphans are by definition unlinked from any live ticket, so there is no
       // ticket to target — untargeted (everyone re-hydrates).
-      if (run.items.some((item) => item.status === "completed")) {
+      if (outcome.run.items.some((item) => item.state === "completed")) {
         broadcastDataChanged({ kind: "worktree" });
       }
-      return { ok: true, run };
+      return { ok: true, run: outcome.run, receipt: outcome.receipt };
     },
 
     "volli:worktree-orphan-delete": async (

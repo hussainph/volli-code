@@ -857,18 +857,20 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     invalidError: "Invalid request",
   },
   "volli:worktree-orphan-cleanup": {
-    // Two arrays of strings, and at least one thing to do between them: an
-    // empty request would open a cleanup record for a run that changes nothing.
-    // Paths are re-validated against this database's own containers in main —
-    // this guard only says the SHAPE is a cleanup request.
+    // A command id, the scan revision it was confirmed against, and at least
+    // one item id from that scan's plan. NO PATHS: main resolves ids against
+    // the proposal it minted itself (VC-284 review C1), so this guard only has
+    // to say the shape is a cleanup command — whether the revision is current
+    // and the ids are real is a question only the plan can answer.
     guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input)) return false;
-      const { paths, projectIds } = input;
-      if (!Array.isArray(paths) || !Array.isArray(projectIds)) return false;
-      if (!isNonEmptyStringList(paths) || !isNonEmptyStringList(projectIds)) return false;
-      return paths.length + projectIds.length > 0;
+      const { commandId, scanRevision, itemIds } = input;
+      if (typeof commandId !== "string" || commandId.length === 0) return false;
+      if (typeof scanRevision !== "string" || scanRevision.length === 0) return false;
+      if (!Array.isArray(itemIds) || itemIds.length === 0) return false;
+      return isNonEmptyStringList(itemIds);
     },
     invalidError: "Invalid cleanup request",
   },
