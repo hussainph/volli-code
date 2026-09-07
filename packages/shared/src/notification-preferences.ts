@@ -39,20 +39,30 @@
  * today with nothing consulted in between, so anything other than on-by-default
  * would make this ticket silently switch off notifications people already get.
  * A preference nobody has expressed must reproduce today's behaviour exactly.
+ *
+ * ── WHAT VC-295 ADDED, AND WHERE ──────────────────────────────────────────
+ * The write half now exists (`main/notifications/settings.ts`, reached through
+ * its own validated IPC command rather than the generic `appState.set`), and
+ * every alert this app posts goes through one delivery path that consults
+ * {@link notificationAllowed} for it. This module is unchanged in shape: the
+ * vocabulary, the defaults and the combining rule were already the right ones.
  */
 
 /**
  * The notification events a person can govern — what main genuinely posts.
  *
- * Keep this honest as call sites are added, the way the pane's own comment
- * asked while it held the list: an id here with no `notificationAllowed` caller
- * behind it is a switch that silently does nothing.
+ * Honesty is no longer a promise kept by hand: `notification-catalog.ts` maps
+ * every producer in the build to one of these ids or to an operational policy,
+ * and its test fails if any id here has no producer behind it. A switch that
+ * silently does nothing is a broken test rather than a bug report (VC-295).
  *
- *  - `needs-you` — an agent is blocked on a person. VC-133's unattended Run
- *    entering `waiting` or `error` is this event, and so is VC-86's wedge
- *    report.
- *  - `finished` — a session finished.
- *  - `swept` — Volli reclaimed a worktree (the retention watch).
+ *  - `needs-you` — an agent is blocked on a person: an unattended Run entering
+ *    `waiting` or `error` (VC-133), VC-86's wedge report, and a verified harness
+ *    hook reporting that input is needed.
+ *  - `finished` — a completion Volli observed: a merged pull request. It is NOT
+ *    "a session finishes", which nothing has ever posted; see the catalog for
+ *    why the id was kept while the wording changed.
+ *  - `swept` — worktree maintenance: Volli reclaimed a worktree (VC-113).
  *  - `update` — a staged update is ready.
  */
 export const NOTIFICATION_EVENTS = ["needs-you", "finished", "swept", "update"] as const;
