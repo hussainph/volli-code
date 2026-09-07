@@ -204,10 +204,12 @@ function recreateOf(scope: TerminalHistoryScope): TerminalHistoryRecreate {
 }
 
 function exitOf(record: SessionRecord): TerminalHistoryExit {
-  if (record.endedAt === null) return { kind: "running" };
-  return record.exitCode === null
-    ? { kind: "unavailable" }
-    : { kind: "code", code: record.exitCode };
+  // An observed status is proof the process ended, so it outranks a missing end
+  // stamp: the exit and the attachment's close are two separate durable facts,
+  // and a close that failed to record must not turn a code somebody watched
+  // arrive into "Still running".
+  if (record.exitCode !== null) return { kind: "code", code: record.exitCode };
+  return record.endedAt === null ? { kind: "running" } : { kind: "unavailable" };
 }
 
 function exitLabelOf(exit: TerminalHistoryExit): string {

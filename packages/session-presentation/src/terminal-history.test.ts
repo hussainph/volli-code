@@ -128,6 +128,16 @@ describe("buildTerminalHistoryDetail exit", () => {
     expect(view.exitLabel).toBe("Still running");
     expect(view.closed).toBe(false);
   });
+
+  // The exit and the attachment's close are two separate durable facts, and the
+  // close is best-effort. A code somebody watched arrive is proof the process
+  // ended, whatever the missing end stamp implies.
+  it("believes an observed code over a close that was never recorded", () => {
+    const view = detail({ record: record({ id: "s1", endedAt: null, exitCode: 3 }) });
+
+    expect(view.exit).toEqual({ kind: "code", code: 3 });
+    expect(view.exitLabel).toBe("Exit code 3");
+  });
 });
 
 describe("buildTerminalHistoryDetail record", () => {
