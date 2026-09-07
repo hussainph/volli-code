@@ -99,6 +99,14 @@ describe("runtimeLabel", () => {
     ).toBe("claude-opus · high");
   });
 
+  it("names a tier by its Settings row, not by the model that row holds today", () => {
+    // A tier Runtime used to fall through to "Unreadable runtime" — a valid
+    // record reading as a corrupt one. It says the row it names; what the row
+    // resolved to is a fact about each Run.
+    expect(runtimeLabel({ kind: "tier", tier: "fast" })).toBe("Fast");
+    expect(runtimeLabel({ kind: "tier", tier: "ticket" })).toBe("Ticket Sessions");
+  });
+
   it("says a corrupt stored Runtime is unreadable instead of reading it as inherit", () => {
     // The whole reason `InvalidAutomationRuntime` exists: coercing it to null
     // would silently change a saved Automation's execution policy.

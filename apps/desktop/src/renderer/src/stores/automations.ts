@@ -23,7 +23,7 @@ import {
   armedAutomationFor,
   effectiveArmedAutomationFor,
   errorMessage,
-  isAutomationRuntimePin,
+  isValidAutomationRuntime,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
   type Automation,
@@ -477,10 +477,13 @@ export function createAutomationsStore() {
           // the record, so the copy is offered wherever its Trigger names and
           // fires nowhere until a column arms it (VC-128).
           trigger: automation.trigger,
-          // An unreadable stored Runtime is not copied as itself — the copy
+          // The Runtime is copied whole — a pin, or a named tier (VC-259).
+          // Only an UNREADABLE stored Runtime is not copied as itself: the copy
           // inherits instead, which is the only Runtime we can promise is
-          // valid. Its source keeps the corrupt row, visible on the page.
-          runtime: isAutomationRuntimePin(automation.runtime) ? automation.runtime : null,
+          // valid, and its source keeps the corrupt row, visible on the page.
+          // A tier coerced to inherit here would be a copy that quietly runs
+          // on a different model than the record it was made from.
+          runtime: isValidAutomationRuntime(automation.runtime) ? automation.runtime : null,
         });
         if (!result.ok) {
           toastError(`Couldn't duplicate automation: ${result.error}`);

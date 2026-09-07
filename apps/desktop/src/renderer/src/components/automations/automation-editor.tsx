@@ -25,7 +25,12 @@ import {
   automationTriggerSchedule,
   errorMessage,
   hostTimeZone,
+  AGENT_MODEL_TIERS,
   isAutomationRuntimePin,
+  isAutomationRuntimeTier,
+  isModelTier,
+  isValidAutomationRuntime,
+  modelTierRow,
   NO_AUTOMATION_TRIGGER,
   SCHEDULE_WEEKDAY_LABELS,
   SCHEDULE_WEEKDAYS,
@@ -35,9 +40,9 @@ import {
   type AutomationSchedule,
   type AutomationSchedulePreset,
   type AutomationTrigger,
-  type ModelSelection,
   type ScheduleWeekday,
   type TicketStatus,
+  type ValidAutomationRuntime,
 } from "@volli/shared";
 import { reclampEffort } from "@volli/session-presentation";
 
@@ -55,7 +60,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
@@ -275,15 +282,34 @@ function modelValue(model: Pick<ComposerModel, "providerId" | "modelId">): strin
   return `${model.providerId}/${model.modelId}`;
 }
 
+/** The Select value that names a tier, kept apart from every model id. */
+const TIER_VALUE_PREFIX = "tier:";
+
+/**
+ * The Runtime control: inherit, one of the user's named tiers, or an exact
+ * pin (VC-259).
+ *
+ * The three sit in ONE Select rather than behind the composer pill's All
+ * models / Defaults switch, because this control is a Select and a segmented
+ * toggle inside a Select's content would be a second control the keyboard has
+ * to cross to reach the list. The tiers are their own group, named Defaults
+ * after the pill's view, so the two surfaces offer the same short list under
+ * the same word.
+ *
+ * A tier draws NO reasoning control: a tier carries its model and level
+ * together by reference, and a level authored here would be a level the
+ * Settings row would then contradict.
+ */
 function RuntimeFields({
   models,
-  pin,
+  runtime,
   onChange,
 }: {
   models: readonly ComposerModel[];
-  pin: ModelSelection | null;
-  onChange(pin: ModelSelection | null): void;
+  runtime: ValidAutomationRuntime;
+  onChange(runtime: ValidAutomationRuntime): void;
 }) {
+  const pin = isAutomationRuntimePin(runtime) ? runtime : null;
   const selectedModel =
     pin === null
       ? undefined
@@ -292,7 +318,12 @@ function RuntimeFields({
         );
   const unavailableValue =
     pin !== null && selectedModel === undefined ? `unavailable:${modelValue(pin)}` : null;
-  const value = pin === null ? "inherit" : (selectedModel?.id ?? unavailableValue!);
+  const value =
+    runtime === null
+      ? "inherit"
+      : isAutomationRuntimeTier(runtime)
+        ? `${TIER_VALUE_PREFIX}${runtime.tier}`
+        : (selectedModel?.id ?? unavailableValue!);
   const levels = selectedModel?.reasoningLevels ?? [];
 
   return (
@@ -302,6 +333,11 @@ function RuntimeFields({
         onValueChange={(next) => {
           if (next === "inherit") {
             onChange(null);
+            return;
+          }
+          if (next.startsWith(TIER_VALUE_PREFIX)) {
+            const tier = next.slice(TIER_VALUE_PREFIX.length);
+            if (isModelTier(tier)) onChange({ kind: "tier", tier });
             return;
           }
           const model = models.find((candidate) => candidate.id === next);
@@ -322,6 +358,18 @@ function RuntimeFields({
             <CpuIcon />
             Project default
           </SelectItem>
+          {/* The tier's own label, never the model it currently resolves to:
+              the record names a Settings row, and a Run is where the model it
+              landed on is recorded. */}
+          <SelectGroup>
+            <SelectLabel>Defaults</SelectLabel>
+            {AGENT_MODEL_TIERS.map((tier) => (
+              <SelectItem key={tier} value={`${TIER_VALUE_PREFIX}${tier}`}>
+                <CpuIcon />
+                {modelTierRow(tier).label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
           {/* Model rows are the same drawing as the composer's picker and the
               Settings rows: the mark, the name, the provider only where the
               name alone is ambiguous. */}
@@ -386,8 +434,11 @@ export function AutomationEditorPanel({
   const [ownership, setOwnership] = React.useState<OwnershipChoice>(
     automation === null || automation.projectId !== null ? "project" : "global",
   );
-  const [pin, setPin] = React.useState<ModelSelection | null>(
-    automation !== null && isAutomationRuntimePin(automation.runtime) ? automation.runtime : null,
+  // The record's Runtime whole, so reopening an Automation that names a tier
+  // does not silently rewrite it to inherit on the next save. Only the invalid
+  // row is dropped — it is the one shape a save may not carry.
+  const [runtime, setRuntime] = React.useState<ValidAutomationRuntime>(
+    automation !== null && isValidAutomationRuntime(automation.runtime) ? automation.runtime : null,
   );
   const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(() =>
     automation === null || automation.trigger.kind === "none" ? "none" : automation.trigger.kind,
@@ -469,7 +520,7 @@ export function AutomationEditorPanel({
               name,
               instructions,
               trigger,
-              runtime: pin,
+              runtime,
             })
           : await update({
               commandId: commandId.current,
@@ -477,7 +528,7 @@ export function AutomationEditorPanel({
               name,
               instructions,
               trigger,
-              runtime: pin,
+              runtime,
             });
       if (refusal === null) {
         commandId.current = crypto.randomUUID();
@@ -669,7 +720,7 @@ export function AutomationEditorPanel({
 
           <section className="flex flex-col gap-2 p-4">
             <SectionLabel>Runtime</SectionLabel>
-            <RuntimeFields models={models} pin={pin} onChange={setPin} />
+            <RuntimeFields models={models} runtime={runtime} onChange={setRuntime} />
           </section>
         </aside>
       </div>

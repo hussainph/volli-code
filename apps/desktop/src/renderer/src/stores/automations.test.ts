@@ -657,6 +657,14 @@ describe("duplicate", () => {
 
     await store.getState().duplicate("p1", automation({ runtime: { kind: "invalid", raw: "?" } }));
     expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ runtime: null }));
+
+    // A tier is copied whole too (VC-259). Coercing it to inherit would make
+    // the copy run on a different model than the record it was made from,
+    // which is the one thing Duplicate must not do.
+    await store.getState().duplicate("p1", automation({ runtime: { kind: "tier", tier: "deep" } }));
+    expect(create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runtime: { kind: "tier", tier: "deep" } }),
+    );
   });
 
   it("toasts a refusal and a transport failure, and opens no editor", async () => {
