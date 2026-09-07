@@ -1341,13 +1341,27 @@ function isAutomationRunTargetShape(value: unknown): boolean {
   return false;
 }
 
+/**
+ * A transported Runtime's shape: inherit, a whole pin, or a tier (VC-259).
+ *
+ * The tier arm judges the wire grammar only — `{ kind: "tier", tier: <string> }`
+ * — exactly as the Trigger guard above leaves column names to the shared
+ * parser: whether the word names a tier this build knows is the service's
+ * refusal on the way into the record, so this guard never has to be kept in
+ * step with the tier table.
+ */
+function isAutomationRuntimeShape(value: unknown): boolean {
+  if (value === null || isModelSelectionShape(value)) return true;
+  return isRecord(value) && value["kind"] === "tier" && typeof value["tier"] === "string";
+}
+
 /** The editable fields every automation write carries, shape-checked once. */
 function isAutomationDraftShape(value: Record<string, unknown>): boolean {
   return (
     typeof value["name"] === "string" &&
     typeof value["instructions"] === "string" &&
     isAutomationTriggerShape(value["trigger"]) &&
-    (value["runtime"] === null || isModelSelectionShape(value["runtime"]))
+    isAutomationRuntimeShape(value["runtime"])
   );
 }
 

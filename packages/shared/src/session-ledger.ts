@@ -11,6 +11,7 @@ import type {
   SessionRole,
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import type { ModelTier } from "./model-access-policy";
 import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 import type { SessionUsageEntry } from "./session-usage-report";
@@ -505,7 +506,14 @@ export type SessionEventPayload =
   | { kind: "session.created"; session: Session }
   | { kind: "session.archived" }
   | { kind: "session.retitled"; title: string | null }
-  | { kind: "model.selected"; selection: ModelSelection }
+  /**
+   * The model policy now in force. `tier` (VC-259) is the tier the selection
+   * was RESOLVED FROM at a Session start that named one — provenance for the
+   * pin, never the policy itself: the Session runs `selection`, and a later
+   * Settings change to that tier moves nothing here. Absent on every
+   * selection a person or a caller made by exact id.
+   */
+  | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier }
   | { kind: "session.input.recorded"; input: SessionInput }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
@@ -954,7 +962,8 @@ export type SessionCommandIntent =
   | { kind: "session.signal"; signal: "done" | "blocked"; reason: string | null }
   /** End this Session's work, recording who did it (VC-86). Completes in-engine like a signal. */
   | { kind: "session.stop"; reason: string | null; by: SessionStopActor }
-  | { kind: "model.select"; selection: ModelSelection }
+  /** `tier`: which named tier this selection resolved from, if a start named one (VC-259). */
+  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier }
   | { kind: "executor.start"; adapterId: string; continuity: SessionAttachmentContinuity }
   | { kind: "executor.stop"; attachmentId: string }
   /** A non-destructive adapter interrupt (for example terminal Esc); the attachment remains live. */
@@ -1201,6 +1210,12 @@ export interface SessionProjection {
   stopped: { at: number; reason: string | null; by: SessionStopActor } | null;
   /** Latest accepted product model policy, durable across attachment and relaunch. */
   modelSelection: ModelSelection | null;
+  /**
+   * The tier `modelSelection` resolved from, or null when it was chosen by
+   * exact id (VC-259). Follows the selection: a later pick from the composer
+   * clears it, because the model then running is no longer the tier's.
+   */
+  modelTier: ModelTier | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
   turnActive: boolean;
   /**
@@ -1269,6 +1284,7 @@ export function projectSession(
   let signal: SessionProjection["signal"] = null;
   let stopped: SessionProjection["stopped"] = null;
   let modelSelection: ModelSelection | null = null;
+  let modelTier: ModelTier | null = null;
   let turnActive = false;
   let lastTurnOutcome: SessionTurnOutcome | null = null;
   let authorityDenials = 0;
@@ -1322,6 +1338,7 @@ export function projectSession(
         break;
       case "model.selected":
         modelSelection = event.payload.selection;
+        modelTier = event.payload.tier ?? null;
         break;
       case "session.input.recorded":
         break;
@@ -1523,6 +1540,7 @@ export function projectSession(
     signal,
     stopped,
     modelSelection,
+    modelTier,
     turnActive,
     lastTurnOutcome,
     authorityDenials,

@@ -2976,6 +2976,26 @@ describe("AUTOMATION_IPC descriptor table", () => {
       ).toBe(false);
     });
 
+    it("judges a tier Runtime's wire GRAMMAR, and leaves the tier's meaning to the service", () => {
+      // `{ kind: "tier", tier: <string> }` passes whatever the word is — whether
+      // it names a tier this build knows is the service's refusal (VC-259).
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { kind: "tier", tier: "fast" } }])).toBe(
+        true,
+      );
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { kind: "tier", tier: "turbo" } }])).toBe(
+        true,
+      );
+      // The grammar itself is held: a tier that is not a word, or a kind that
+      // is not "tier", is not a Runtime.
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { kind: "tier", tier: 7 } }])).toBe(
+        false,
+      );
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { kind: "tier" } }])).toBe(false);
+      expect(guard([{ projectId: "p1", ...DRAFT, runtime: { kind: "pin", tier: "fast" } }])).toBe(
+        false,
+      );
+    });
+
     it("judges the Trigger's wire GRAMMAR, and leaves its meaning to the parser", () => {
       expect(guard([{ projectId: "p1", ...DRAFT, trigger: { kind: "none" } }])).toBe(true);
       // OMITTED is refused. "Only when I run it" is a complete answer with a

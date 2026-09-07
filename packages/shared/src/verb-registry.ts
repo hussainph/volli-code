@@ -40,6 +40,7 @@
 import { REASONING_LEVELS } from "./agent-runtime";
 import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
+import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
 import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
@@ -283,6 +284,22 @@ export function cliVerbName(key: string): string {
 const COLUMN_VALUES = `valid: ${COLUMN_VOCABULARY}`;
 const HARNESS_VALUES = `valid: ${HARNESS_VOCABULARY}`;
 const REASONING_VALUES = `valid: ${REASONING_LEVELS.join(", ")}`;
+const MODEL_TIER_VALUES = `valid: ${AGENT_MODEL_TIERS.join(", ")}`;
+
+/**
+ * The `tier` field's description, written once from the tier table (VC-259).
+ *
+ * Each tier's one-line job is the SAME line its Settings row's (i) carries and
+ * `volli model list` prints — read off `modelTierRow`, not restated — so a
+ * model choosing between `fast` and `deep` reads the words the person who
+ * filled those rows read. The first sentence is the rule the door enforces:
+ * a tier and an exact model are alternatives, never a pair.
+ */
+const MODEL_TIER_DESCRIPTION = [
+  "Run the Session on one of the user's configured model tiers instead of `model`; pass one or the other, never both.",
+  "The tier's stored reasoning level comes with it unless `reasoning` is given.",
+  ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
+].join(" ");
 
 /**
  * Every agent-facing verb, in the order the socket projection has always had.
@@ -953,6 +970,10 @@ export const VERB_REGISTRY = [
     notes: [
       "Copy a printed <provider/model> verbatim into session start --model.",
       "Shows only models this profile can run.",
+      // The tier table (VC-259): one entry per tier with `tier, label, hint,
+      // resolvedFrom, model, reasoning` under `data.tiers`, so an agent can
+      // name a KIND of work instead of copying an id.
+      "Prints the model tier table below the catalog: each tier, what it is for, and the model and reasoning it resolves to (or which tier it falls back to when unset). Name one with session start --tier.",
     ],
     options: [],
   },
@@ -1033,6 +1054,7 @@ export const VERB_REGISTRY = [
     notes: [
       "Prints each session's title and short id; session peek takes either type.",
       "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+      "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
     options: [
       { name: "--project", kind: "value", placeholder: "<p>", help: "Filter by project." },
@@ -1136,6 +1158,7 @@ export const VERB_REGISTRY = [
       "Runs in the app: attended-only, never headless; the board does not move.",
       "Submits a kickoff turn; a supplied message replaces the default kickoff text and names the Session.",
       "An explicit title is permanent; a model or reasoning override replaces the app default for this Session alone.",
+      `A tier names a kind of work (${AGENT_MODEL_TIERS.join(", ")}) and resolves to the model configured for it in Settings; a tier and a model are alternatives.`,
     ],
     effects: {
       durableWrites: [
@@ -1208,6 +1231,12 @@ export const VERB_REGISTRY = [
           ],
         },
         {
+          name: "tier",
+          type: "enum",
+          values: AGENT_MODEL_TIERS,
+          description: MODEL_TIER_DESCRIPTION,
+        },
+        {
           name: "reasoning",
           type: "enum",
           values: REASONING_LEVELS,
@@ -1239,6 +1268,18 @@ export const VERB_REGISTRY = [
         kind: "value",
         placeholder: "<provider/model>",
         help: "Model override.",
+      },
+      // Documentation parity with the tool's `tier` field (VC-259), and only
+      // that: `session.start` has had no shell door since VC-163, so this row
+      // is what the reference prints beside `--model`, never argv the shell
+      // will parse. The rule it mirrors is the door's: a tier and a model are
+      // alternatives.
+      {
+        name: "--tier",
+        kind: "value",
+        placeholder: "<tier>",
+        values: MODEL_TIER_VALUES,
+        help: "Model tier override; an alternative to --model.",
       },
       {
         name: "--reasoning",

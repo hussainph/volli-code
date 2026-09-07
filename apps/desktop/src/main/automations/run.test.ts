@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
+  defaultModelRequiredForTier,
   expandCommandInvocation,
   NO_AUTOMATION_TRIGGER,
   SKILL_POLICY_DEFAULT,
@@ -11,6 +12,7 @@ import type {
   PromptResource,
   PromptTemplate,
   SkillReference,
+  ValidAutomationRuntime,
 } from "@volli/shared";
 
 import { createAutomationEngine } from "./engine";
@@ -210,7 +212,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
 
 async function savedAutomation(
   h: Harness,
-  patch: Partial<{ name: string; instructions: string; runtime: ModelSelection | null }> = {},
+  patch: Partial<{ name: string; instructions: string; runtime: ValidAutomationRuntime }> = {},
 ) {
   const created = await h.engine.create({
     commandId: randomUUID(),
@@ -365,6 +367,116 @@ describe("createAutomationRunner", () => {
       // And recorded rather than validated: see the unavailable-pin case below.
       whenUnavailable: "record",
     });
+  });
+
+  it("stores a tier Runtime through the ledger and reads it back as a tier (VC-259)", async () => {
+    const h = harness();
+    const automation = await savedAutomation(h, { runtime: { kind: "tier", tier: "fast" } });
+
+    expect(automation.runtime).toEqual({ kind: "tier", tier: "fast" });
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "fast" });
+
+    const updated = await h.engine.update({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      name: automation.name,
+      instructions: automation.instructions,
+      trigger: NO_AUTOMATION_TRIGGER,
+      runtime: { kind: "tier", tier: "deep" },
+    });
+    expect(updated.ok).toBe(true);
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "deep" });
+  });
+
+  it("hands a tier Runtime to the Session by name, to be resolved at mint (VC-259)", async () => {
+    // A tier is resolved when the Run STARTS, never when the record was saved:
+    // the plan carries the tier the way it carries inherit as `null`, the
+    // Session reads the row current at mint, and the Run row — not the plan —
+    // records the model that came out. Recorded rather than validated, for the
+    // same reason a pin is (the unavailable-pin case above).
+    const h = harness();
+    const automation = await savedAutomation(h, { runtime: { kind: "tier", tier: "fast" } });
+
+    const commandId = randomUUID();
+    const outcome = await h.runner.run({
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    expect(h.creates[0]?.modelOverride).toEqual({ tier: "fast", whenUnavailable: "record" });
+    expect((await h.engine.runPlan(commandId))?.runtime).toEqual({ kind: "tier", tier: "fast" });
+    const [run] = listRunsForTicket(ctx.db, h.ticketId);
+    expect(run?.model).toEqual(RESOLVED);
+
+    // The per-invocation override still outranks the record's tier, exactly
+    // as it outranks a pin: one Run spent differently, and the tier untouched.
+    const overridden = await h.runner.run({
+      commandId: randomUUID(),
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    expect(overridden.ok).toBe(true);
+    expect(h.creates[1]?.modelOverride).toEqual({
+      model: { providerId: "openai", modelId: "gpt-5" },
+      reasoningLevel: "low",
+      whenUnavailable: "record",
+    });
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "fast" });
+  });
+
+  it("refuses a tier that resolves to nothing with MODEL_REQUIRED, naming the tier, durably (VC-259)", async () => {
+    // No silent fallback: an empty Fast row with an empty ladder under it is
+    // the existing missing-default refusal with the tier named, and it is a
+    // terminal receipt on the plan — the path inherit already takes — so a
+    // lost reply replays the refusal instead of trying again.
+    const h = harness({
+      sessions: {
+        create: async (input) => {
+          if (input.modelOverride?.tier !== undefined) {
+            throw new StructuredSessionsError(
+              "DEFAULT_MODEL_REQUIRED",
+              defaultModelRequiredForTier(input.modelOverride.tier),
+            );
+          }
+          throw new Error("unexpected override shape");
+        },
+        attach: async () => ({
+          sessionId: "never",
+          state: "ready",
+          receipt: null,
+          throughSequence: 0,
+        }),
+      },
+    });
+    const automation = await savedAutomation(h, { runtime: { kind: "tier", tier: "fast" } });
+
+    const commandId = randomUUID();
+    const request = {
+      commandId,
+      target: { kind: "automation", automationId: automation.id },
+      ticketId: h.ticketId,
+      modelOverride: null,
+      attendance: "unattended",
+    } as const;
+    await expect(h.runner.run(request)).resolves.toMatchObject({
+      ok: false,
+      code: "MODEL_REQUIRED",
+      error: expect.stringMatching(/Choose a default model in Settings.*fast tier/),
+    });
+    await expect(h.runner.run(request)).resolves.toMatchObject({
+      ok: false,
+      code: "MODEL_REQUIRED",
+      receipt: { commandId, status: "rejected" },
+    });
+    expect(listRunsForTicket(ctx.db, h.ticketId)).toEqual([]);
   });
 
   it("persists the first-message intent before success and resumes it after a ready recovery attach", async () => {

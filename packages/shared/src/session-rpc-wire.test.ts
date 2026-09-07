@@ -27,6 +27,8 @@ describe("Session RPC wire protocol", () => {
       "modelAccess.setHiddenModels",
       "modelAccess.compactionPolicy",
       "modelAccess.setCompactionPolicy",
+      "modelAccess.pickerView",
+      "modelAccess.setPickerView",
       "sessions.create",
       "sessions.attach",
       "session.snapshot",

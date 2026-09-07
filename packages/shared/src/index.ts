@@ -19,6 +19,7 @@ export * from "./automation";
 export * from "./automation-schedule";
 export * from "./automation-schedule-pass";
 export * from "./model-access-policy";
+export * from "./model-mark-color";
 export * from "./model-access-sign-in";
 export * from "./usage-limits";
 export * from "./compaction-policy";

@@ -136,6 +136,25 @@ describe("the page editor hierarchy", () => {
   });
 });
 
+describe("a tier Runtime", () => {
+  it("survives a reopen and rides the save whole", async () => {
+    // The editor used to hold a `ModelSelection | null`, so opening an
+    // Automation that names a tier reset the control to inherit and the next
+    // save rewrote the record to a policy nobody chose (VC-259).
+    const update = vi.fn(async () => null);
+    useAutomationsStore.setState({ update });
+    await mountEditor(automation({ runtime: { kind: "tier", tier: "fast" } }));
+
+    await act(async () => {
+      buttonContaining("Save changes").click();
+    });
+
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: { kind: "tier", tier: "fast" } }),
+    );
+  });
+});
+
 describe("the schedule time field", () => {
   it("uses a content-sized themed trigger and editable numeric parts", async () => {
     await mountEditor();

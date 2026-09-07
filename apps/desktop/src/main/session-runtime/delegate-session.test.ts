@@ -103,6 +103,7 @@ function projection(id: string, overrides: Partial<SessionProjection> = {}): Ses
     signal: null,
     stopped: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: true,
     lastTurnOutcome: null,
     authorityDenials: 0,

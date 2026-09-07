@@ -16,6 +16,7 @@ import {
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  MODEL_PICKER_VIEWS,
   MODEL_PURPOSES,
   REASONING_LEVELS,
   SESSION_ROLES,
@@ -25,6 +26,7 @@ import {
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
+  type ModelPickerView,
   type ModelPurpose,
   type ReasoningLevel,
   type RendererSessionEvent,
@@ -135,6 +137,9 @@ export interface SessionRouterContext {
   writeCompactionPolicy?: (
     policy: CompactionPolicy,
   ) => CompactionPolicy | Promise<CompactionPolicy>;
+  /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
+  readModelPickerView?: () => ModelPickerView;
+  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
   /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
   createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
@@ -357,11 +362,13 @@ const modelOverrideSchema = z
   })
   .optional();
 const modelPurposeSchema = z.enum(MODEL_PURPOSES);
-const modelAccessDefaultsSchema = z.object({
-  global: modelSelectionSchema.nullable(),
-  ticket: modelSelectionSchema.nullable(),
-  utility: modelSelectionSchema.nullable(),
-});
+// One nullable selection per tier, keyed off the shared list so a tier added
+// there cannot be silently stripped at this edge (z.object drops unknown keys).
+const modelAccessDefaultsSchema = z.object(
+  Object.fromEntries(
+    MODEL_PURPOSES.map((tier) => [tier, modelSelectionSchema.nullable()]),
+  ) as Record<ModelPurpose, z.ZodNullable<typeof modelSelectionSchema>>,
+);
 /**
  * A hidden-model entry is an identity pair, never a whole model row: the list
  * is user curation persisted app-wide, and anything beyond the two ids would
@@ -379,6 +386,7 @@ const hiddenModelsSchema = z
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
+const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 /**
  * One account's subscription windows (VC-263). Every field is a number the
@@ -738,6 +746,20 @@ export function createSessionRouter() {
           }
           return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
         }),
+      pickerView: instrumentedProcedure.query(({ ctx }) => {
+        if (!ctx.readModelPickerView) {
+          unavailable("Model Access preferences are unavailable on this transport");
+        }
+        return modelPickerViewSchema.parse(ctx.readModelPickerView());
+      }),
+      setPickerView: instrumentedProcedure
+        .input(modelPickerViewSchema)
+        .mutation(async ({ ctx, input }) => {
+          if (!ctx.writeModelPickerView) {
+            unavailable("Model Access preferences are unavailable on this transport");
+          }
+          return modelPickerViewSchema.parse(await ctx.writeModelPickerView(input));
+        }),
     }),
     session: t.router({
       snapshot: instrumentedProcedure
@@ -960,6 +982,7 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   }
   if (source.signal !== undefined) projection.signal = source.signal;
   if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
+  if (source.modelTier !== undefined) projection.modelTier = source.modelTier;
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;

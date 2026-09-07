@@ -85,6 +85,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  ValidAutomationRuntime,
   VenueSnapshot,
   WorkspaceDependenciesStatus,
 } from "@volli/shared";
@@ -1736,8 +1737,12 @@ export interface AutomationCreateInput {
    * member for it, which is why `none` exists at all.
    */
   trigger: AutomationTrigger;
-  /** The pinned selection, whole, or `null` to inherit. */
-  runtime: ModelSelection | null;
+  /**
+   * The pinned selection, whole; a named tier to resolve when each Run starts
+   * (VC-259); or `null` to inherit. Never the invalid row — that shape is read
+   * off a record that needs repairing, never authored into one.
+   */
+  runtime: ValidAutomationRuntime;
 }
 
 /** An update rewrites the editable fields; Ownership is identity and never moves. */
@@ -1749,7 +1754,7 @@ export interface AutomationUpdateInput {
   instructions: string;
   /** Rewritten whole like every other editable field, and present like it too. */
   trigger: AutomationTrigger;
-  runtime: ModelSelection | null;
+  runtime: ValidAutomationRuntime;
 }
 
 /**

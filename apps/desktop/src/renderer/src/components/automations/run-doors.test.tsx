@@ -222,6 +222,8 @@ const MODEL_ACCESS = {
   setHiddenModels: vi.fn(),
   compactionPolicy: vi.fn(),
   setCompactionPolicy: vi.fn(),
+  pickerView: vi.fn(),
+  setPickerView: vi.fn(),
   beginSignIn: vi.fn(),
   signOut: vi.fn(),
 } as unknown as React.ComponentProps<typeof ModelAccessProvider>["client"];

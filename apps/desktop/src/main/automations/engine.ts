@@ -14,10 +14,10 @@ import type {
   AutomationTrigger,
   ColumnArming,
   ColumnAutomationOrder,
-  ModelSelection,
   PromptResource,
   ResolvedAutomationModel,
   TicketStatus,
+  ValidAutomationRuntime,
 } from "@volli/shared";
 
 import { sessionCreateCommandId } from "../session-runtime/sessions";
@@ -38,7 +38,7 @@ export type AutomationCommandIntent =
       name: string;
       instructions: string;
       trigger: AutomationTrigger;
-      runtime: ModelSelection | null;
+      runtime: ValidAutomationRuntime;
     }
   | {
       kind: "automation.update";
@@ -46,7 +46,7 @@ export type AutomationCommandIntent =
       name: string;
       instructions: string;
       trigger: AutomationTrigger;
-      runtime: ModelSelection | null;
+      runtime: ValidAutomationRuntime;
     }
   | { kind: "automation.delete"; automationId: string }
   /**
@@ -204,13 +204,19 @@ export interface AutomationRunPlan {
    */
   ticketId: string | null;
   /**
-   * The whole pin this Run starts under, or inherit — captured when the Run was
-   * requested. It is the Automation's own Runtime unless the invocation
-   * overrode it (VC-112's per-invocation override), and the plan deliberately
-   * does not record which of the two it was: what a Run owes the future is the
-   * model it RESOLVED, and that lands on the Run itself.
+   * What this Run starts under — a whole pin, a tier (VC-259), or inherit —
+   * captured when the Run was requested. It is the Automation's own Runtime
+   * unless the invocation overrode it (VC-112's per-invocation override), and
+   * the plan deliberately does not record which of the two it was: what a Run
+   * owes the future is the model it RESOLVED, and that lands on the Run
+   * itself.
+   *
+   * A tier is carried BY NAME here, exactly as inherit is carried as `null`:
+   * both are resolved by the Session at mint, so a plan replayed after a crash
+   * resolves against the Settings current when the Session is actually born,
+   * and the Run row — not the plan — is what says which model that was.
    */
-  runtime: ModelSelection | null;
+  runtime: ValidAutomationRuntime;
   /**
    * What the CALLER asked for, beside what this plan resolved (VC-129): an
    * Unbound Run's own Instructions, and this invocation's model override.
@@ -368,7 +374,7 @@ export interface AutomationEngine {
     name: string;
     instructions: string;
     trigger: AutomationTrigger;
-    runtime: ModelSelection | null;
+    runtime: ValidAutomationRuntime;
   }): Promise<AutomationCommandOutcome<Automation>>;
   update(input: {
     commandId: string;
@@ -376,7 +382,7 @@ export interface AutomationEngine {
     name: string;
     instructions: string;
     trigger: AutomationTrigger;
-    runtime: ModelSelection | null;
+    runtime: ValidAutomationRuntime;
   }): Promise<AutomationCommandOutcome<Automation>>;
   delete(input: {
     commandId: string;
@@ -421,8 +427,8 @@ export interface AutomationEngine {
     commandId: string;
     /** The Automation being run, or `null` for an Unbound Run. */
     automation: Pick<Automation, "id" | "name"> | null;
-    /** The resolved Runtime for this invocation — an override, a pin, or inherit. */
-    runtime: ModelSelection | null;
+    /** The Runtime this invocation starts under — an override, a pin, a tier, or inherit. */
+    runtime: ValidAutomationRuntime;
     /** What the caller asked for, which is what a retry is compared against. */
     request: AutomationRunRequestIdentity;
     projectId: string;

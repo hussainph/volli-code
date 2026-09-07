@@ -11,10 +11,14 @@
 
 import { promptBaseline } from "@volli/agent-runtime";
 import {
+  acceptsImageInputIn,
   doctorSummary,
   errorMessage,
+  MODEL_TIERS,
+  modelTierRow,
   REQUIRABLE_SESSION_ENV_TOOLS,
   resolveDefaultModel,
+  resolveModelTier,
   roleVerbBundle,
   runDoctorChecks,
 } from "@volli/shared";
@@ -219,7 +223,7 @@ export async function doctorVerb(
   };
 }
 
-/** `volli model list` — available providers, model ids, reasoning levels. */
+/** `volli model list` — available providers, model ids, reasoning levels, and the tier table. */
 export async function modelListVerb(
   context: AgentCommandContext,
   _request: AgentRequest,
@@ -286,23 +290,50 @@ export async function modelListVerb(
   // A stored default is not itself proof of access, though: the credential
   // might have expired or been signed out since it was saved, so suppress a
   // default whose model is absent from the available slice as well.
-  const selection = resolveDefaultModel(readModelAccessDefaults(options.db), "ticket");
-  const defaultModel =
-    selection !== null &&
+  const defaults = readModelAccessDefaults(options.db);
+  const isShown = (candidate: { providerId: string; modelId: string }): boolean =>
     shownModels.some(
-      (model) => model.providerId === selection.providerId && model.modelId === selection.modelId,
-    )
+      (model) => model.providerId === candidate.providerId && model.modelId === candidate.modelId,
+    );
+  const selection = resolveDefaultModel(defaults, "ticket");
+  const defaultModel =
+    selection !== null && isShown(selection)
       ? {
           model: `${selection.providerId}/${selection.modelId}`,
           reasoning: selection.reasoningLevel,
         }
       : null;
+  // The whole tier table (VC-259), one row per tier in Settings order, so a
+  // delegating Session can read which model `session start --tier fast` will
+  // run before asking for it. `resolvedFrom` names the rung that supplied the
+  // model — an unset Fast row that inherits the Ticket default says `ticket`,
+  // which is the fallback the Settings row itself states, never a substitute.
+  // A tier no rung configures is null across the board: the table reports the
+  // refusal a Session start would meet, not a guess. The model cell follows
+  // the same suppression rule as `default`: a stored choice whose provider has
+  // since signed out keeps its rung and loses its model, so the reader can
+  // tell "configured but signed out" from "never configured".
+  const sees = acceptsImageInputIn(snapshot.models);
+  const tiers = MODEL_TIERS.map((tier) => {
+    const { label, hint } = modelTierRow(tier);
+    const resolved = resolveModelTier(defaults, tier, sees);
+    const shown = resolved !== null && isShown(resolved.selection) ? resolved.selection : null;
+    return {
+      tier,
+      label,
+      hint,
+      resolvedFrom: resolved?.resolvedFrom ?? null,
+      model: shown === null ? null : `${shown.providerId}/${shown.modelId}`,
+      reasoning: shown === null ? null : shown.reasoningLevel,
+    };
+  });
   return {
     v: 1,
     ok: true,
     data: {
       observedAt: snapshot.observedAt,
       default: defaultModel,
+      tiers,
       providers,
       omittedProviders: snapshot.providers.length - shownProviders.length,
     },

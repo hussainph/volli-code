@@ -101,6 +101,32 @@ describe("automations repo", () => {
     });
   });
 
+  it("reads a stored tier Runtime as a tier, and a tier this build does not know as invalid (VC-259)", () => {
+    const { project } = seeded();
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Tiered",
+        instructions: "x",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: { kind: "tier", tier: "fast" },
+      },
+      1000,
+    );
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({ kind: "tier", tier: "fast" });
+
+    // Same stance as the corrupted pin above: a tier from another build must
+    // not become inherit, because inherit still RUNS.
+    ctx.db
+      .prepare("UPDATE automations SET runtime = ? WHERE id = ?")
+      .run('{"kind":"tier","tier":"smol"}', automation.id);
+    expect(getAutomation(ctx.db, automation.id)?.runtime).toEqual({
+      kind: "invalid",
+      raw: { kind: "tier", tier: "smol" },
+    });
+  });
+
   it("lists a project's own Automations before the global shelf, name-ordered", () => {
     const { project } = seeded();
     createAutomation(

@@ -25,7 +25,9 @@ import {
   automationTriggerSchedule,
   columnRankAfterLaneDrop,
   isAutomationRuntimePin,
+  isAutomationRuntimeTier,
   isTicketStatus,
+  modelTierRow,
   scheduleSentence,
   TICKET_STATUS_LABELS,
   UNBOUND_RUN_LABEL,
@@ -126,9 +128,19 @@ function modelPairLabel(pair: { modelId: string; reasoningLevel: string }): stri
   return `${pair.modelId} · ${pair.reasoningLevel}`;
 }
 
-/** The Runtime, in one line: the inherited default, a pin, or a corrupt row saying so. */
+/**
+ * The Runtime, in one line: the inherited default, a named tier, a pin, or a
+ * corrupt row saying so.
+ *
+ * A tier prints as the Settings row it names — "Fast" — and not as the model
+ * that row currently holds. The record names a row, and a page that printed
+ * today's answer to it would be a page that changes when Settings does while
+ * the record did not. What the tier RESOLVED to is a fact about a Run, and
+ * {@link runModelLabel} is where a Run says it.
+ */
 export function runtimeLabel(runtime: AutomationRuntime): string {
   if (runtime === null) return "Default model";
+  if (isAutomationRuntimeTier(runtime)) return modelTierRow(runtime.tier).label;
   if (!isAutomationRuntimePin(runtime)) return "Unreadable runtime";
   return modelPairLabel(runtime);
 }

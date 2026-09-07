@@ -9,7 +9,7 @@ import type {
   SessionStreamFrame,
   SessionStreamOverlay,
 } from "@volli/session-engine";
-import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
+import { EMPTY_MODEL_ACCESS_DEFAULTS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -133,6 +133,7 @@ function snapshotWithRecovery(): SessionRuntimeSnapshot {
       pendingExecutorStart: executorCommand(),
       attachments: [attachment],
       liveExecutor: attachment,
+      modelTier: "fast",
       attention: { active: [recoveryAttention()], primary: recoveryAttention() },
       interactions: {
         active: [interactionWithCorrelation()],
@@ -232,6 +233,7 @@ function snapshot(): SessionRuntimeSnapshot {
       signal: null,
       stopped: null,
       modelSelection: null,
+      modelTier: null,
       turnActive: false,
       lastTurnOutcome: null,
       authorityDenials: 0,
@@ -532,12 +534,16 @@ describe("Session tRPC router", () => {
       "lastActivityAt",
       "liveExecutor",
       "modelSelection",
+      "modelTier",
       "session",
       "signal",
       "status",
       "turnActive",
     ]);
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
+    // The tier the model resolved from crosses whole (VC-259): it is the
+    // user's own vocabulary, and the header reads it beside the model.
+    expect(resolved.projection.modelTier).toBe("fast");
     expect(resolved.projection.interactions.active[0]?.native).toEqual({ id: null, detail: null });
     expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
@@ -562,6 +568,7 @@ describe("Session tRPC router", () => {
       "lastActivityAt",
       "liveExecutor",
       "modelSelection",
+      "modelTier",
       "session",
       "signal",
       "status",
@@ -996,14 +1003,13 @@ describe("Session tRPC router", () => {
     const fixture = runtimeFixture();
     const writes: unknown[] = [];
     const stored = {
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: {
         providerId: "openai-codex",
         modelId: "gpt-5.6-sol",
         reasoningLevel: "high" as const,
         credential: "must-not-cross",
       },
-      ticket: null,
-      utility: null,
     };
     const caller = createSessionRouter().createCaller({
       runtime: fixture.runtime,
@@ -1023,9 +1029,8 @@ describe("Session tRPC router", () => {
 
     // The stray credential on the stored value never crosses the edge.
     expect(current).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
-      ticket: null,
-      utility: null,
     });
     expect(writes).toEqual([
       {
@@ -1101,6 +1106,29 @@ describe("Session tRPC router", () => {
     await expect(caller.modelAccess.setCompactionPolicy({ autoCompaction: true })).rejects.toThrow(
       "unavailable",
     );
+    await expect(caller.modelAccess.pickerView()).rejects.toThrow("unavailable");
+    await expect(caller.modelAccess.setPickerView("defaults")).rejects.toThrow("unavailable");
+  });
+
+  it("round-trips the picker view as one word", async () => {
+    const fixture = runtimeFixture();
+    const writes: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      readModelPickerView: () => "all",
+      writeModelPickerView: (view) => {
+        writes.push(view);
+        return view;
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    await expect(caller.modelAccess.pickerView()).resolves.toBe("all");
+    await expect(caller.modelAccess.setPickerView("defaults")).resolves.toBe("defaults");
+    expect(writes).toEqual(["defaults"]);
+    // The vocabulary is closed at the edge: a word the renderer did not get
+    // from the shared list never reaches storage.
+    await expect(caller.modelAccess.setPickerView("tiers" as never)).rejects.toThrow();
   });
 
   it("mints Ticket and Board Sessions through one create door — ticketId is the Role", async () => {

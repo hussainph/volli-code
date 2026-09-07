@@ -29,13 +29,16 @@ import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   HiddenModelRef,
+  ModelAccessDefaults,
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
   RendererSessionInteraction,
 } from "@volli/shared";
 import {
+  EMPTY_MODEL_ACCESS_DEFAULTS,
   errorMessage,
+  modelTierRow,
   offeredComposerVerbs,
   readSkillResources,
   type ComposerVerbMoment,
@@ -125,6 +128,7 @@ import {
   type SignInProviderOption,
 } from "@renderer/components/chat/chat-plane-model";
 import {
+  composerTierRows,
   offerableModels,
   SessionComposer,
   type ComposerModelSelection,
@@ -352,8 +356,12 @@ export function ChatPlane({
     session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
+  // The tier the model resolved from (VC-259), as the Settings row names it;
+  // null for the ordinary Session whose model was chosen by exact id.
+  const modelTier = projection?.modelTier ?? null;
+  const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
-  const { models, providers, hidden, catalogState, catalogError } = useModelAccess(
+  const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null,
   );
   // A durable model is not enough to type: the row that says this Session is
@@ -367,6 +375,12 @@ export function ChatPlane({
   const composerModels = React.useMemo(
     () => offerableModels(models, providers, hidden),
     [hidden, models, providers],
+  );
+  // The pill's Defaults view (VC-259): the user's tier table against the same
+  // catalog and curation the All-models list is filtered by.
+  const composerTiers = React.useMemo(
+    () => composerTierRows(defaults, models, providers, hidden),
+    [defaults, hidden, models, providers],
   );
   const sessionModel = React.useMemo(
     () => sessionModelStanding(modelSelection, models, providers),
@@ -1253,8 +1267,10 @@ export function ChatPlane({
               // placeholder and the control's name, never the behaviour.
               answering={answering}
               models={composerModels}
+              tiers={composerTiers}
               selection={selection}
               selectionProviderLabel={sessionModel?.providerLabel}
+              selectionTier={selectionTier}
               onSelectionChange={changeModel}
               modelChoiceDisabled={working}
               working={working}
@@ -1294,6 +1310,8 @@ function useModelAccess(active: boolean): {
   models: readonly ModelAccessModel[];
   providers: readonly ModelAccessProvider[];
   hidden: readonly HiddenModelRef[];
+  /** The configured tier table, for the pill's Defaults view (VC-259). */
+  defaults: ModelAccessDefaults;
   catalogState: CatalogState;
   catalogError: string | null;
 } {
@@ -1301,31 +1319,35 @@ function useModelAccess(active: boolean): {
   const [models, setModels] = React.useState<readonly ModelAccessModel[]>(NO_MODELS);
   const [providers, setProviders] = React.useState<readonly ModelAccessProvider[]>([]);
   const [hidden, setHidden] = React.useState<readonly HiddenModelRef[]>(NO_HIDDEN);
+  const [defaults, setDefaults] = React.useState<ModelAccessDefaults>(EMPTY_MODEL_ACCESS_DEFAULTS);
   const [catalogState, setCatalogState] = React.useState<CatalogState>("loading");
   const [catalogError, setCatalogError] = React.useState<string | null>(null);
   const inspect = modelAccess?.inspect;
   const hiddenModels = modelAccess?.hiddenModels;
+  const readDefaults = modelAccess?.defaults;
   const revision = modelAccess?.revision ?? 0;
 
   React.useEffect(() => {
     if (!active) return;
     setCatalogState("loading");
     setCatalogError(null);
-    if (inspect === undefined || hiddenModels === undefined) {
+    if (inspect === undefined || hiddenModels === undefined || readDefaults === undefined) {
       setModels(NO_MODELS);
       setProviders([]);
       setHidden(NO_HIDDEN);
+      setDefaults(EMPTY_MODEL_ACCESS_DEFAULTS);
       setCatalogState("error");
       setCatalogError("Model Access is unavailable");
       return;
     }
     let current = true;
-    void Promise.all([inspect({}), hiddenModels()])
-      .then(([access, curated]) => {
+    void Promise.all([inspect({}), hiddenModels(), readDefaults()])
+      .then(([access, curated, configured]) => {
         if (!current) return;
         setModels(access.models);
         setProviders(access.providers);
         setHidden(curated);
+        setDefaults(configured);
         setCatalogError(null);
         setCatalogState(
           access.models.some((model) => model.state === "available") ? "ready" : "empty",
@@ -1339,14 +1361,15 @@ function useModelAccess(active: boolean): {
     return () => {
       current = false;
     };
-  }, [active, hiddenModels, inspect, revision]);
+  }, [active, hiddenModels, inspect, readDefaults, revision]);
 
   return active
-    ? { models, providers, hidden, catalogState, catalogError }
+    ? { models, providers, hidden, defaults, catalogState, catalogError }
     : {
         models: NO_MODELS,
         providers: [],
         hidden: NO_HIDDEN,
+        defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
         catalogState: "pinned",
         catalogError: null,
       };

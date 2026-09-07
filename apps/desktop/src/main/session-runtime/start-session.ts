@@ -44,6 +44,7 @@
 import type Database from "better-sqlite3";
 import { displayTicketId, errorMessage, shortSessionId } from "@volli/shared";
 import type {
+  AgentModelTier,
   ModelSelection,
   Project,
   ReasoningLevel,
@@ -210,14 +211,24 @@ export async function startSessionOperation(
   };
 }
 
-/** A model override built from the two halves a door may have been given. */
+/**
+ * Which model a door was asked for, if any: an exact id, or a tier (VC-259).
+ *
+ * A union rather than two optional fields because the two are alternatives —
+ * {@link SessionModelOverride} says so in its own type — and a door that has
+ * validated its input already knows which one it holds.
+ */
+export type StartSessionModelChoice =
+  | { model: { providerId: string; modelId: string } }
+  | { tier: AgentModelTier };
+
+/** A model override built from the halves a door may have been given. */
 export function startSessionModelOverride(
-  model: { providerId: string; modelId: string } | undefined,
+  choice: StartSessionModelChoice | undefined,
   reasoning: ReasoningLevel | undefined,
 ): SessionModelOverride | undefined {
-  if (model === undefined && reasoning === undefined) return undefined;
-  return {
-    ...(model === undefined ? {} : { model }),
-    ...(reasoning === undefined ? {} : { reasoningLevel: reasoning }),
-  };
+  if (choice === undefined && reasoning === undefined) return undefined;
+  const level = reasoning === undefined ? {} : { reasoningLevel: reasoning };
+  if (choice === undefined) return level;
+  return "tier" in choice ? { tier: choice.tier, ...level } : { model: choice.model, ...level };
 }

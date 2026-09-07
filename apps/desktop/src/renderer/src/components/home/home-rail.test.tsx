@@ -2,9 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { Project } from "@volli/shared";
 
+import { seedSlice } from "@volli/session-presentation";
 import { HomeRail } from "./home-rail";
 import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
@@ -36,6 +38,7 @@ function draw(activeTabId: string): string {
 afterEach(() => {
   useUiStore.setState({ homeRailMode: "now" });
   useUiStore.getInitialState().homeRailMode = "now";
+  useChatSessionsStore.getInitialState().sessions = {};
 });
 
 describe("HomeRail", () => {
@@ -104,6 +107,43 @@ describe("HomeRail", () => {
     expect(markup).toContain("Model");
     expect(markup).toContain("Effort");
     expect(markup).toContain("Activity");
+  });
+
+  it("leads the model with the tier it resolved from, where a start named one", () => {
+    // A static render reads the store's initial state, so the Session in
+    // front is seeded there: one started as `fast`, pinned to haiku.
+    const slice = seedSlice("ready");
+    slice.projection = {
+      session: {
+        id: "s1",
+        projectId: "p1",
+        ticketId: null,
+        title: null,
+        role: "project",
+        parentSessionId: null,
+        createdAt: 1,
+      },
+      status: "open",
+      liveExecutor: null,
+      attention: { active: [], primary: null },
+      interactions: { active: [], resolved: [] },
+      signal: null,
+      modelSelection: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+      modelTier: "fast",
+      turnActive: false,
+      lastActivityAt: 1,
+      bornTicketless: true,
+    };
+    useChatSessionsStore.getInitialState().sessions = { s1: slice };
+
+    // Split rather than `replace`: the tags are separators here, not
+    // something being sanitized away, and a lone `replace` of a tag pattern
+    // reads to a scanner as a half-written sanitizer.
+    expect(
+      draw("chat:s1")
+        .split(/<[^>]+>/)
+        .join(""),
+    ).toContain("Fast · haiku-4.5");
   });
 
   it("says there is no Session in front when the Board tab is", () => {

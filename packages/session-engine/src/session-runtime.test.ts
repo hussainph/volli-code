@@ -273,6 +273,36 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
+  it("hands a named tier through to the durable intent (VC-259)", async () => {
+    const { runtime } = composition();
+    const created = await runtime.command({
+      commandId: "command-create-tiered",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "ticket",
+        parentSessionId: null,
+        title: null,
+      },
+    });
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+
+    await runtime.command({
+      commandId: "command-select-tiered",
+      sessionId: created.sessionId,
+      command: { kind: "model.select", selection, tier: "fast" },
+    });
+
+    await expect(runtime.projection({ sessionId: created.sessionId })).resolves.toMatchObject({
+      projection: { modelSelection: selection, modelTier: "fast" },
+    });
+  });
+
   it("applies an idle live model selection before committing its durable policy", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

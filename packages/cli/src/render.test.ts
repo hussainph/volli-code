@@ -346,6 +346,68 @@ describe("renderCliSuccess", () => {
       "fedcba98  chat  working  last 8s  VC-52  ~$1.50  184000  Validate VC-52\n" +
         "0a1b2c3d  chat  waiting on permission  last 7m  VC-53  \u2014  0  Review VC-53\n",
     );
+    // The model cell (VC-259): the tier leads where the start named one, so a
+    // `fast` Session and one a person pinned to the same model read apart.
+    // A row that has recorded no policy has no cell, like a terminal row.
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [
+            {
+              id: "fedcba98",
+              kind: "chat",
+              status: "working",
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-52",
+              model: "anthropic/haiku-4.5",
+              reasoning: "low",
+              tier: "fast",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Scoped fix",
+            },
+            {
+              id: "0a1b2c3d",
+              kind: "chat",
+              status: "idle",
+              lastActivityAgeMs: 8_000,
+              ticket: null,
+              model: "anthropic/haiku-4.5",
+              reasoning: "low",
+              tier: null,
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Pinned by hand",
+            },
+            {
+              id: "11223344",
+              kind: "chat",
+              status: "idle",
+              lastActivityAgeMs: 8_000,
+              ticket: null,
+              model: null,
+              reasoning: null,
+              tier: null,
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "No policy yet",
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBe(
+      "fedcba98  chat  working  last 8s  VC-52  fast · anthropic/haiku-4.5 · low  \u2014  0  Scoped fix\n" +
+        "0a1b2c3d  chat  idle  last 8s  anthropic/haiku-4.5 · low  \u2014  0  Pinned by hand\n" +
+        "11223344  chat  idle  last 8s  \u2014  0  No policy yet\n",
+    );
     expect(
       renderCliSuccess(
         "ticket.events",
@@ -769,6 +831,122 @@ describe("renderCliSuccess", () => {
       renderCliSuccess(
         "model.list",
         { observedAt: 1_000, default: null, providers: [], omittedProviders: 0 },
+        options,
+      ),
+    ).toBe("default  -\n");
+  });
+
+  it("prints the model.list tier table under the default: explicit, inherited, and unset rows", () => {
+    const options = { json: false };
+    // One line per tier, aligned so the eye can run down the tier column and
+    // the model column. An inherited row says which rung supplied it — the
+    // same fact the Settings row states — and an unset row says `unset`
+    // rather than pretending, because a Session asking for it would be refused.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: { model: "anthropic/claude-opus-5", reasoning: "low" },
+          tiers: [
+            {
+              tier: "global",
+              label: "Board chats",
+              hint: "Planning and coordination across the board.",
+              resolvedFrom: "global",
+              model: "anthropic/claude-opus-5",
+              reasoning: "low",
+            },
+            {
+              tier: "ticket",
+              label: "Ticket Sessions",
+              hint: "One ticket and its optional worktree.",
+              resolvedFrom: "global",
+              model: "anthropic/claude-opus-5",
+              reasoning: "low",
+            },
+            {
+              tier: "utility",
+              label: "Utility",
+              hint: "Chat names and summaries.",
+              resolvedFrom: null,
+              model: null,
+              reasoning: null,
+            },
+            {
+              tier: "fast",
+              label: "Fast",
+              hint: "Quick, low-cost tasks.",
+              resolvedFrom: "ticket",
+              model: "openai/gpt-mini",
+              reasoning: "low",
+            },
+            {
+              tier: "deep",
+              label: "Deep",
+              hint: "Complex reasoning, planning, and review.",
+              resolvedFrom: "deep",
+              model: "anthropic/claude-opus-5",
+              reasoning: "high",
+            },
+            {
+              tier: "visual",
+              label: "Visual",
+              hint: "Images, screenshots, and pages.",
+              resolvedFrom: null,
+              model: null,
+              reasoning: null,
+            },
+          ],
+          providers: [],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe(
+      "default  anthropic/claude-opus-5  low\n" +
+        "global   anthropic/claude-opus-5  low\n" +
+        "ticket   anthropic/claude-opus-5  low   via global\n" +
+        "utility  unset\n" +
+        "fast     openai/gpt-mini          low   via ticket\n" +
+        "deep     anthropic/claude-opus-5  high\n" +
+        "visual   unset\n",
+    );
+    // A configured tier whose model the profile can no longer run: the rung
+    // survives and the model does not, so the row says which rung is signed out
+    // rather than collapsing into the same word as "never configured".
+    expect(
+      renderCliSuccess(
+        "model.list",
+        {
+          observedAt: 1_000,
+          default: null,
+          tiers: [
+            {
+              tier: "fast",
+              label: "Fast",
+              hint: "Quick, low-cost tasks.",
+              resolvedFrom: "fast",
+              model: null,
+              reasoning: null,
+            },
+            // A malformed row is still one line, never a throw.
+            { tier: "deep", resolvedFrom: 7, model: 3, reasoning: [] },
+            // A model with no reasoning cell prints the model and nothing more.
+            { tier: "visual", resolvedFrom: "visual", model: "x/y", reasoning: 4 },
+            null,
+          ],
+          providers: [],
+          omittedProviders: 0,
+        },
+        options,
+      ),
+    ).toBe("default  -\nfast     not available\ndeep     unset\nvisual   x/y\n");
+    // A response from an app that predates the table prints as before.
+    expect(
+      renderCliSuccess(
+        "model.list",
+        { observedAt: 1_000, default: null, tiers: "not-an-array", providers: [] },
         options,
       ),
     ).toBe("default  -\n");

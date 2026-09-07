@@ -530,6 +530,18 @@ describe("the model pill's controlled open", () => {
     expect(pillMarkup({ open: true })).toContain('data-state="open"');
   });
 
+  it("leads with the tier the model resolved from, and says nothing where none was named", () => {
+    // "Fast · sonnet-4.5": the qualifier in the muted ink, the model still
+    // the fact. A Session pinned by hand carries no tier and reads as before.
+    const tiered = pillMarkup({ selectionTier: "Fast" });
+    expect(tiered).toContain('data-testid="model-pill-tier"');
+    // Split rather than `replace`: the tags are separators here, not
+    // something being sanitized away.
+    expect(tiered.split(/<[^>]+>/).join("")).toContain("Fast · sonnet-4.5");
+    expect(pillMarkup()).not.toContain('data-testid="model-pill-tier"');
+    expect(pillMarkup({ selectionTier: null })).not.toContain('data-testid="model-pill-tier"');
+  });
+
   it("stays uncontrolled when no open arrives", () => {
     // No `open` prop — the internal state is the only opinion, exactly as
     // before the verb existed.

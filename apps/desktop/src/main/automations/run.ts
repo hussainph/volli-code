@@ -14,7 +14,8 @@ import {
   automationRunTargetId,
   errorMessage,
   expandCommandInvocation,
-  isAutomationRuntimePin,
+  isAutomationRuntimeTier,
+  isValidAutomationRuntime,
   roleImpliedByTicket,
   sameAutomationRunRequestIdentity,
   unboundRunProblem,
@@ -26,15 +27,19 @@ import {
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
   type CommandReceipt,
-  type ModelSelection,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
+  type ValidAutomationRuntime,
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
-import { StructuredSessionsError, type Sessions } from "../session-runtime/sessions";
+import {
+  StructuredSessionsError,
+  type SessionModelOverride,
+  type Sessions,
+} from "../session-runtime/sessions";
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
 export interface AutomationPromptSupply {
@@ -165,7 +170,7 @@ export interface AutomationRunRequest {
   commandId: string;
   target: AutomationRunTarget;
   ticketId: string;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
   /**
    * Whether a person was at the door that asked (VC-133).
    *
@@ -218,7 +223,7 @@ interface InternalRunRequest {
   commandId: string;
   target: AutomationRunTarget;
   scope: RunScope;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
   attendance: AutomationRunAttendance;
 }
 
@@ -517,38 +522,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // prints, rather than a second spelling of "nothing named this".
         title: plan.automationName ?? UNBOUND_RUN_LABEL,
         actor: { kind: "automation" },
-        ...(plan.runtime === null
-          ? {}
-          : {
-              modelOverride: {
-                model: {
-                  providerId: plan.runtime.providerId,
-                  modelId: plan.runtime.modelId,
-                },
-                reasoningLevel: plan.runtime.reasoningLevel,
-                // VC-112: "a pinned model that has since become unavailable
-                // does not silently fall back — let the Session fail through
-                // the existing error path rather than building a second
-                // failure surface." So this Run's Runtime is RECORDED as
-                // asked and the attach is what refuses it (VC-133).
-                //
-                // A door-time refusal would have been the second failure
-                // surface: no Session, no Run row, nothing on the Automations
-                // page, and — for the two doors with nobody behind them, the
-                // schedule timer and the agent verb — a returned error string
-                // that no person is on the other end of. Recorded, the same
-                // fact becomes a Session in `error` with the failing model in
-                // its history, which is what the dot reads, what the Run row
-                // links to, and what makes VC-133's "lands in `error` and is
-                // covered by the same rule" true rather than aspirational.
-                //
-                // It is also what the INHERITED path already did: a configured
-                // default that has gone stale is not inspected at mint either.
-                // Pin and inherit are meant to be interchangeable answers to
-                // one question, so they may not fail in two different places.
-                whenUnavailable: "record" as const,
-              },
-            }),
+        ...(plan.runtime === null ? {} : { modelOverride: runtimeOverride(plan.runtime) }),
       });
     } catch (error) {
       const mapped = mapSessionStartFailure(error);
@@ -744,6 +718,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     // record to read: it carries its own Instructions, saves nothing beyond
     // the Run, and therefore skips every check that is about a record.
     let automation: Automation | null = null;
+    let recordRuntime: ValidAutomationRuntime = null;
     let instructions: string;
     if (input.target.kind === "automation") {
       const found = deps.findAutomation(input.target.automationId);
@@ -755,12 +730,13 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       // Runtime cannot be read is a record to repair on the page rather than
       // one to keep running around — and a rescue that only worked from the
       // surfaces offering an override would be a second, quieter policy.
-      if (found.runtime !== null && !isAutomationRuntimePin(found.runtime)) {
+      if (!isValidAutomationRuntime(found.runtime)) {
         return refuse(
           "RUN_FAILED",
           "This Automation's saved Runtime is invalid. Edit it and choose a valid model-and-reasoning pair before running.",
         );
       }
+      recordRuntime = found.runtime;
       automation = found;
       instructions = found.instructions;
     } else {
@@ -801,13 +777,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // The per-invocation override wins for THIS Run and is stored nowhere:
         // VC-112 puts the override on the deliberate surfaces precisely so a
         // person can spend one Run differently without editing the record.
-        // Without one, the Automation's own Runtime rides (a whole pin, or
-        // `null` to inherit through project and global preferences).
-        runtime:
-          input.modelOverride ??
-          (automation !== null && isAutomationRuntimePin(automation.runtime)
-            ? automation.runtime
-            : null),
+        // Without one, the Automation's own Runtime rides: a whole pin, a
+        // tier to be resolved at mint (VC-259), or `null` to inherit through
+        // project and global preferences.
+        runtime: input.modelOverride ?? recordRuntime,
         // Recorded with the plan, because the plan is what a recovery replays
         // and the door that knew this will not exist then (VC-133).
         attendance: input.attendance,
@@ -909,6 +882,42 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     async settled() {
       await Promise.all(inFlight.values());
     },
+  };
+}
+
+/**
+ * The Session override a plan's Runtime becomes — a pin as the exact model
+ * and level, a tier by NAME for the Session to resolve at mint (VC-259).
+ *
+ * Both carry `whenUnavailable: "record"`. VC-112: "a pinned model that has
+ * since become unavailable does not silently fall back — let the Session fail
+ * through the existing error path rather than building a second failure
+ * surface." So this Run's Runtime is RECORDED as asked and the attach is what
+ * refuses it (VC-133).
+ *
+ * A door-time refusal would have been the second failure surface: no Session,
+ * no Run row, nothing on the Automations page, and — for the two doors with
+ * nobody behind them, the schedule timer and the agent verb — a returned
+ * error string that no person is on the other end of. Recorded, the same fact
+ * becomes a Session in `error` with the failing model in its history, which is
+ * what the dot reads, what the Run row links to, and what makes VC-133's
+ * "lands in `error` and is covered by the same rule" true rather than
+ * aspirational.
+ *
+ * It is also what the INHERITED path already did: a configured default that
+ * has gone stale is not inspected at mint either. Pin, tier and inherit are
+ * meant to be interchangeable answers to one question, so they may not fail
+ * in three different places. The one refusal a tier CAN meet at mint is the
+ * missing-default one — a row and its whole ladder empty — which is the same
+ * `DEFAULT_MODEL_REQUIRED` inherit meets, with the tier named, and it lands
+ * on the plan as a durable rejection through {@link mapSessionStartFailure}.
+ */
+function runtimeOverride(runtime: NonNullable<ValidAutomationRuntime>): SessionModelOverride {
+  if (isAutomationRuntimeTier(runtime)) return { tier: runtime.tier, whenUnavailable: "record" };
+  return {
+    model: { providerId: runtime.providerId, modelId: runtime.modelId },
+    reasoningLevel: runtime.reasoningLevel,
+    whenUnavailable: "record",
   };
 }
 

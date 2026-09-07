@@ -3,11 +3,21 @@
  * the visibility curation every composer honors, and the provider accounts
  * underneath all three.
  *
- * Three defaults instead of one (VC-53): orchestration (Board chats),
- * execution (Ticket Sessions), and cost-efficient utility work resolve
- * separately at Session creation. Ticket and Utility inherit the Board
- * default until an explicit choice is made — the "Board default" option is
- * that inheritance stated as a value, never a silent substitution.
+ * Six defaults instead of one (VC-53, VC-259): Board chats, Ticket Sessions,
+ * Utility, and the Fast / Deep / Visual kinds of work resolve separately at
+ * Session creation. Every row but Board inherits another until an explicit
+ * choice is made — the "Same as Ticket Sessions" option is that inheritance
+ * stated as a value, never a silent substitution.
+ *
+ * THE ROWS ARE DRAWN AS THE TREE THEY ARE. Board at the root; Utility and
+ * Ticket under it; Fast, Deep and Visual indented under Ticket behind a left
+ * rule. The ladder used to be discoverable only by opening each Select and
+ * reading "Ticket default"; two group headings ("Session" / "Task") were tried
+ * and cut because they did not follow the ladder either. Position says it now,
+ * so no heading and no disclosure is needed, and an unset row prints no
+ * caption naming what it resolves to — the row it is the same as is two rows
+ * up. The one caption that stays is the state that cannot be inferred: Visual
+ * inheriting a Ticket model that cannot read images.
  *
  * Compaction is one switch, not a per-model surface. Per-model reserve
  * budgets used to sit on every model row and were retired (VC-155): a reserve
@@ -27,9 +37,13 @@ import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import * as React from "react";
 import { toast } from "sonner";
 import {
+  acceptsImageInputIn,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   isModelHidden,
+  MODEL_TIER_ROWS,
+  modelTierFallback,
+  resolveModelTier,
   withModelVisibility,
   type CompactionPolicy,
   type HiddenModelRef,
@@ -38,9 +52,11 @@ import {
   type ModelAccessProvider,
   type ModelPurpose,
   type ModelSelection,
+  type ModelTier,
   type ReasoningLevel,
 } from "@volli/shared";
 
+import { ModelName } from "@renderer/components/models/model-identity";
 import { ModelAccessAccounts } from "@renderer/components/pages/model-access-accounts";
 import {
   refreshOutcome,
@@ -48,6 +64,7 @@ import {
 } from "@renderer/components/pages/model-access-refresh-model";
 import {
   Cell,
+  CONTROL_W,
   DataTable,
   PrefRow,
   PrefSection,
@@ -57,7 +74,9 @@ import { Button } from "@renderer/components/ui/button";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
@@ -65,40 +84,57 @@ import { Spinner } from "@renderer/components/ui/spinner";
 import { Switch } from "@renderer/components/ui/switch";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
+import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * The rows of the Default models section, in resolution order.
+ * The rows of the Default models section, in the order the tree is drawn —
+ * the shared tier list (`MODEL_TIER_ROWS`, VC-259) wearing this pane's
+ * hint rule.
  *
- * `hint` is the `(i)` a row carries when its purpose is not obvious from its
- * two-word label (VC-81 asked for one on the utility row): what the slot is
- * FOR, so a person picking a model for it knows what the bill is for.
+ * `hint` is the `(i)` beside the label (VC-81 asked for one on the utility
+ * row), and only the rows whose label does not already name the job carry
+ * one: "Fast" says nothing about what is fast, "Ticket Sessions" says
+ * everything. It is a hint and never a paragraph under the control — CLAUDE.md
+ * lets controls talk, and this ticket restated it. It never describes the
+ * inheritance chain either — each unset row names the row it follows in its
+ * own control — and it is held to the twelve-word budget.
  *
- * The Utility hint also names what happens when the slot is EMPTY, and that
- * half is not optional. Leaving it unset does not switch background work off;
- * those calls fall to the model each chat is already running under. That is a
- * fallback a person can be billed for, and CONTEXT.md's Model Access rule is
- * that Volli never falls back to another model silently.
- *
- * Held to the hint budget — twelve words — which is what turned three lines of
- * prose into one sentence without losing either fact.
+ * `depth` is the indent: the three kind-of-work tiers sit under Ticket
+ * Sessions because that is the rung they resolve through.
  */
 export const PURPOSE_ROWS: readonly {
   purpose: ModelPurpose;
   label: string;
   hint?: string;
-}[] = [
-  { purpose: "global", label: "Board chats" },
-  { purpose: "ticket", label: "Ticket Sessions" },
-  {
-    purpose: "utility",
-    label: "Utility",
-    hint: "Naming chats and summarizing. Unset, they use the chat's own model.",
-  },
-];
+  depth: 0 | 1;
+}[] = (["global", "utility", "ticket", "fast", "deep", "visual"] as const).map((purpose) => {
+  const row = MODEL_TIER_ROWS.find((candidate) => candidate.tier === purpose)!;
+  return purpose === "global" || purpose === "ticket"
+    ? { purpose, label: row.label, depth: 0 }
+    : { purpose, label: row.label, hint: row.hint, depth: row.advanced ? 1 : 0 };
+});
 
-/** The Select value that says "no explicit choice — resolve the Board default". */
-const INHERIT_VALUE = "__project-default__";
+/** The Select value that says "no explicit choice — resolve through the fallback tier". */
+const INHERIT_VALUE = "__inherit__";
+
+/**
+ * What an unset row reads as: the row it follows, named as that row is
+ * labelled — "Same as Ticket Sessions", so "default" keeps one meaning on a
+ * pane whose title is already "Default models".
+ *
+ * Utility is the exception and says what actually happens (`auto-title.ts`):
+ * background work runs on each chat's own model, not the Board default —
+ * the ladder's `global` rung for utility is the resolver's last resort, not
+ * the common case. Board itself has no fallback and no inherit option —
+ * clearing it would leave every tier resolving to nothing.
+ */
+function inheritLabel(purpose: ModelPurpose): string | null {
+  if (purpose === "utility") return "Each chat's own model";
+  const fallback = modelTierFallback(purpose);
+  if (fallback === null) return null;
+  return `Same as ${MODEL_TIER_ROWS.find((row) => row.tier === fallback)?.label ?? fallback}`;
+}
 
 export function ModelAccessSettings({
   autoSignInProviderId,
@@ -232,12 +268,33 @@ export function ModelAccessSettings({
   }
 
   const offerable = offerableModels(models);
+  const sees = acceptsImageInputIn(models);
+
+  const renderDefaultRow = ({ purpose, label, hint }: (typeof PURPOSE_ROWS)[number]) => (
+    <DefaultModelRow
+      key={purpose}
+      purpose={purpose}
+      label={label}
+      {...(hint === undefined ? {} : { hint })}
+      selection={defaults[purpose]}
+      // Only Visual can inherit a rung and still be refused — a Ticket model
+      // that cannot read images — and only that is said. An empty ladder is
+      // one problem with one fix, and Board's own "Choose a model" is it.
+      blocked={purpose === "visual" && resolveModelTier(defaults, purpose, sees) === null}
+      models={models}
+      offerable={defaultPickerModels(offerable, hidden, defaults[purpose], purpose)}
+      providers={providers}
+      disabled={loading || saving}
+      onSave={(selection) => void saveDefault(purpose, selection)}
+    />
+  );
 
   return (
     <>
       <PrefSection
         title="Default models"
         icon={CpuIcon}
+        hint={<>A project with a pinned model uses that model instead.</>}
         action={
           <Button
             size="icon-sm"
@@ -254,20 +311,17 @@ export function ModelAccessSettings({
           </Button>
         }
       >
-        {PURPOSE_ROWS.map(({ purpose, label, hint }) => (
-          <DefaultModelRow
-            key={purpose}
-            purpose={purpose}
-            label={label}
-            hint={hint}
-            selection={defaults[purpose]}
-            models={models}
-            offerable={defaultPickerModels(offerable, hidden, defaults[purpose])}
-            providers={providers}
-            disabled={loading || saving}
-            onSave={(selection) => void saveDefault(purpose, selection)}
-          />
-        ))}
+        {PURPOSE_ROWS.filter((row) => row.depth === 0).map((row) => renderDefaultRow(row))}
+        {/* The indent IS the inheritance: a left rule and a step in, nothing
+            else. One wrapper for all three so `first:` / `last:` on PrefRow
+            keep their meaning inside it; the first nested row draws its own
+            hairline against Ticket above. */}
+        <div
+          data-testid="default-models-under-ticket"
+          className="ml-2 border-l border-border/50 pl-4 [&>*:first-child]:border-t [&>*:first-child]:pt-4"
+        >
+          {PURPOSE_ROWS.filter((row) => row.depth === 1).map((row) => renderDefaultRow(row))}
+        </div>
       </PrefSection>
       <PrefSection title="Compaction" icon={ArrowsInLineVerticalIcon}>
         <PrefRow label="Automatic compaction" testId="auto-compaction">
@@ -382,21 +436,28 @@ function CatalogSection({
 /**
  * One purpose's choice: the model, and the reasoning level beside it.
  *
- * A ticket/utility row carries "Board default" as an ordinary option rather
- * than a blank: unset is a real, resolvable value, and a Select that shows
- * nothing when the purpose inherits would read as unconfigured — which is the
- * one thing it is not.
+ * A row that inherits carries "Same as Ticket Sessions" as an ordinary option
+ * rather than a blank: unset is a real, resolvable value, and a Select that
+ * shows nothing when the purpose inherits would read as unconfigured — which
+ * is the one thing it is not. It draws NO reasoning control at all — not a
+ * disabled one with "Reasoning" as its only content — and keeps the slot
+ * empty so the model column stays a column.
  *
  * A row with a `hint` carries it as the `(i)` beside its label — rendered by
- * {@link PrefRow}, so every hint on both surfaces is the same glyph in the same
- * place, and the slot explains itself without a paragraph under the control
- * (CLAUDE.md's copy rule).
+ * {@link PrefRow}, so every hint on both surfaces is the same glyph in the
+ * same place, and the slot explains itself without a paragraph under the
+ * control (CLAUDE.md's copy rule).
+ *
+ * The list is grouped by provider, as the composer's own picker is, and each
+ * row is a {@link ModelName}: the mark, the name, and the provider only where
+ * the name alone would not say which model this is.
  */
 function DefaultModelRow({
   purpose,
   label,
   hint,
   selection,
+  blocked,
   models,
   offerable,
   providers,
@@ -407,13 +468,16 @@ function DefaultModelRow({
   label: string;
   hint?: string;
   selection: ModelSelection | null;
+  /** Unset, and the rung it would inherit is one it may not use. */
+  blocked: boolean;
   models: readonly ModelAccessModel[];
   offerable: readonly ModelAccessModel[];
   providers: readonly ModelAccessProvider[];
   disabled: boolean;
   onSave(selection: ModelSelection | null): void;
 }) {
-  const inheritable = purpose !== "global";
+  const inherit = inheritLabel(purpose);
+  const inheritable = inherit !== null;
   const selectedModel = modelFor(models, selection);
   // A stored default whose provider is signed out reads as unset, because that
   // is what it is: it names no model this profile can run.
@@ -432,54 +496,79 @@ function DefaultModelRow({
       {...(hint === undefined ? {} : { hint })}
       testId={`default-model-${purpose}`}
     >
-      <Select
-        value={value}
-        disabled={disabled}
-        onValueChange={(key) => {
-          if (key === INHERIT_VALUE) {
-            onSave(null);
-            return;
-          }
-          const model = offerable.find((candidate) => modelKey(candidate) === key);
-          if (!model) return;
-          onSave({
-            providerId: model.providerId,
-            modelId: model.modelId,
-            reasoningLevel: preferredReasoning(model, selection?.reasoningLevel),
-          });
-        }}
-      >
-        <SelectTrigger className="w-72">
-          <SelectValue placeholder="Choose a model" />
-        </SelectTrigger>
-        <SelectContent>
-          {inheritable ? <SelectItem value={INHERIT_VALUE}>Board default</SelectItem> : null}
-          {offerable.map((model) => (
-            <SelectItem key={modelKey(model)} value={modelKey(model)}>
-              {modelOptionLabel(model, providers)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={selection?.reasoningLevel ?? ""}
-        disabled={disabled || selection === null || selectedModel === null}
-        onValueChange={(reasoningLevel) => {
-          if (selection === null) return;
-          onSave({ ...selection, reasoningLevel: reasoningLevel as ReasoningLevel });
-        }}
-      >
-        <SelectTrigger className="w-32">
-          <SelectValue placeholder="Reasoning" />
-        </SelectTrigger>
-        <SelectContent>
-          {(selectedModel?.reasoningLevels ?? []).map((level) => (
-            <SelectItem key={level} value={level}>
-              {level}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* A column, so a row that inherits nothing can say why under its own
+          control. Every row keeps [model lg][level sm]. */}
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-2">
+          <Select
+            value={value}
+            disabled={disabled}
+            onValueChange={(key) => {
+              if (key === INHERIT_VALUE) {
+                onSave(null);
+                return;
+              }
+              const model = offerable.find((candidate) => modelKey(candidate) === key);
+              if (!model) return;
+              onSave({
+                providerId: model.providerId,
+                modelId: model.modelId,
+                reasoningLevel: preferredReasoning(model, selection?.reasoningLevel),
+              });
+            }}
+          >
+            <SelectTrigger className={CONTROL_W.lg}>
+              <SelectValue placeholder="Choose a model" />
+            </SelectTrigger>
+            <SelectContent>
+              {inherit !== null ? <SelectItem value={INHERIT_VALUE}>{inherit}</SelectItem> : null}
+              {availableModelsByProvider(offerable, providers).map((group) => (
+                <SelectGroup key={group.providerId}>
+                  <SelectLabel>{group.providerLabel}</SelectLabel>
+                  {group.models.map((model) => (
+                    <SelectItem key={modelKey(model)} value={modelKey(model)}>
+                      <ModelName model={model} models={offerable} providers={providers} />
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+          {selection === null ? (
+            <span className={cn(CONTROL_W.sm, "shrink-0")} aria-hidden />
+          ) : (
+            <Select
+              value={selection.reasoningLevel}
+              disabled={disabled || selectedModel === null}
+              onValueChange={(reasoningLevel) =>
+                onSave({ ...selection, reasoningLevel: reasoningLevel as ReasoningLevel })
+              }
+            >
+              <SelectTrigger className={CONTROL_W.sm} aria-label="Reasoning level">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(selectedModel?.reasoningLevels ?? []).map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {level}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+        {selection === null && blocked ? (
+          // The one caption an unset row may carry: that the row it follows is
+          // one it may not use. A blocked state with one recovery — the
+          // control it sits under.
+          <span
+            className="pr-1 text-ui text-attention"
+            data-testid={`default-model-${purpose}-blocked`}
+          >
+            The Ticket model can&rsquo;t read images &mdash; choose one here.
+          </span>
+        ) : null}
+      </div>
     </PrefRow>
   );
 }
@@ -521,18 +610,24 @@ export function offerableModels(models: readonly ModelAccessModel[]): readonly M
  * What a default picker lists: the offerable catalog minus the user's hidden
  * models — plus the currently configured model even when hidden, because a
  * value the control holds and cannot name is a control that looks broken.
+ *
+ * The Visual picker lists only models that can read images. The save-time
+ * refusal (`visualModelProblem`) stays as the backstop; a picker that offers
+ * a choice it will then refuse is a trap, and the catalog already knows.
  */
 export function defaultPickerModels(
   offerable: readonly ModelAccessModel[],
   hidden: readonly HiddenModelRef[],
   current: ModelSelection | null,
+  purpose: ModelTier = "global",
 ): readonly ModelAccessModel[] {
   return offerable.filter(
     (model) =>
-      !isModelHidden(hidden, model) ||
-      (current !== null &&
-        model.providerId === current.providerId &&
-        model.modelId === current.modelId),
+      (purpose !== "visual" || model.acceptsImageInput) &&
+      (!isModelHidden(hidden, model) ||
+        (current !== null &&
+          model.providerId === current.providerId &&
+          model.modelId === current.modelId)),
   );
 }
 

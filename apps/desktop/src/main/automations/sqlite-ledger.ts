@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { isAutomationRuntimePin } from "@volli/shared";
+import { isValidAutomationRuntime } from "@volli/shared";
 import type {
   Automation,
   AutomationRun,
@@ -171,7 +171,10 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
   }
 
   insertAutomation(automation: Automation): void {
-    if (!isAutomationRuntimePin(automation.runtime) && automation.runtime !== null) {
+    // Inherit, a pin and a tier (VC-259) all project as the JSON the shared
+    // parser reads back; only the invalid row — which is READ off a record,
+    // never written to one — has no bytes it could honestly become.
+    if (!isValidAutomationRuntime(automation.runtime)) {
       throw new Error(`Automation ${automation.id} has an invalid Runtime and cannot be projected`);
     }
     prepared(
@@ -192,7 +195,7 @@ class SqliteAutomationLedgerTransaction implements AutomationLedgerTransaction {
   }
 
   updateAutomation(automation: Automation): void {
-    if (!isAutomationRuntimePin(automation.runtime) && automation.runtime !== null) {
+    if (!isValidAutomationRuntime(automation.runtime)) {
       throw new Error(`Automation ${automation.id} has an invalid Runtime and cannot be projected`);
     }
     const changed = prepared(

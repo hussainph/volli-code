@@ -121,6 +121,13 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       kind: "model.selected",
       selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
     },
+    // A start that named a tier writes it beside the selection (VC-259); the
+    // exact-id pick above stays the bytes it always was.
+    {
+      kind: "model.selected",
+      selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+      tier: "fast",
+    },
     { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
     // The attach-time skill record: names + whole delivered bodies, so a
     // recovery re-attach composes the prompt the first attach composed.
@@ -442,6 +449,11 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
         kind: "model.select",
         selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
       },
+      {
+        kind: "model.select",
+        selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "low" },
+        tier: "deep",
+      },
       { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
       { kind: "executor.stop", attachmentId: "attachment-1" },
       { kind: "executor.interrupt", attachmentId: "attachment-1" },
@@ -708,6 +720,18 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.by.sessionId must be a string");
+    // A tier this build does not know is malformed too: the list is closed,
+    // and a word outside it is not a tier the Settings pane could show.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "model.selected",
+          selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+          tier: "turbo",
+        },
+        "payload",
+      ),
+    ).toThrow("payload.tier has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "runtime-brief", text: 7 } },

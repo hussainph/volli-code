@@ -21,10 +21,15 @@
  */
 
 import type { SessionRuntime, SessionRuntimeCommandResult } from "@volli/session-engine";
-import { DEFAULT_MODEL_REQUIRED } from "@volli/shared";
+import {
+  DEFAULT_MODEL_REQUIRED,
+  defaultModelRequiredForTier,
+  modelPurposeForRole,
+} from "@volli/shared";
 import type {
   ModelAccessSnapshot,
   ModelSelection,
+  ModelTier,
   PromptResource,
   ReasoningLevel,
   SessionRole,
@@ -220,13 +225,18 @@ export interface SessionStartInput {
 
 /**
  * An invocation-time model override, within the user's configured policy — the
- * Automation Runtime contract's parameter shape, arriving today from `volli
- * session start`. Both halves are optional and merge onto the app default: a
- * bare reasoning override keeps the default model, a bare model override keeps
- * the default level when the chosen model supports it.
+ * Automation Runtime contract's parameter shape, arriving from the
+ * `session_start` tool and an Automation Run. Every half is optional and
+ * merges onto a base: a bare reasoning override keeps the base model, a bare
+ * model override keeps the base level when the chosen model supports it.
+ *
+ * The base is the Role's default unless a `tier` names another rung (VC-259).
+ * A tier and an exact model are ALTERNATIVES, and the type says so: `model`
+ * replaces the base, `tier` chooses which base, and an override carrying both
+ * would be asking two questions with one answer slot — so it does not type.
+ * The door renders that same rule as a refusal in words.
  */
-export interface SessionModelOverride {
-  model?: { providerId: string; modelId: string };
+export type SessionModelOverride = {
   reasoningLevel?: ReasoningLevel;
   /**
    * What to do when Model Access cannot run this override right now.
@@ -250,7 +260,20 @@ export interface SessionModelOverride {
    * because a refusal returned to a timer is a refusal nobody reads.
    */
   whenUnavailable?: "refuse" | "record";
-}
+} & (
+  | { model?: { providerId: string; modelId: string }; tier?: undefined }
+  | {
+      /**
+       * The kind of work, resolved through the user's tier table at start:
+       * the tier's model AND its stored reasoning level, unless
+       * `reasoningLevel` says otherwise. What the Session records is the
+       * selection it resolved to, never the tier name, so a later Settings
+       * change does not move a running Session.
+       */
+      tier?: ModelTier;
+      model?: undefined;
+    }
+);
 
 /** The durable identity a create-only call resolves — nothing about an executor. */
 export interface SessionCreateResult {
@@ -296,30 +319,41 @@ export interface SessionAttachInput {
 /**
  * Which Role's default a resolution wants.
  *
- * The Role is this module's own vocabulary, so it is what the port asks in;
- * mapping a Role onto a Model Access *purpose* (VC-53's global / ticket /
- * utility policy) is the composition root's job, and stays in one place there.
- * Since VC-9 this is the whole {@link SessionRole}: a Subagent Session reads
- * the `utility` rung, because a bounded delegation is the cost-efficient
- * background work that purpose was named for.
+ * The Role is this module's own vocabulary. Since VC-9 it is the whole
+ * {@link SessionRole}: a Subagent Session reads the `utility` rung, because a
+ * bounded delegation is the cost-efficient background work that rung was named
+ * for. The map from a Role to the tier it reads is shared
+ * (`modelPurposeForRole`), stated once for every process.
+ *
+ * The PORT, though, speaks tiers rather than Roles: since VC-259 an override
+ * can name any rung, and the Role's tier is just the rung nobody named. So the
+ * Role is mapped here, at the one moment both facts are in hand, rather than
+ * in the composition root, which no longer knows whether a tier was asked for.
  */
 export type SessionDefaultModelRole = SessionRole;
 
 export interface SessionsOptions {
   runtime: StructuredSessionCommands;
   /**
-   * The configured default for one Role, resolved through the inheritance
-   * chain the app documents (VC-112): the project's own runtime preference
-   * first (`projects.session_model`, NULL = inherit), then the app-wide
-   * per-purpose record. Separate answers, asked at the one moment the Role is
-   * known — never a substitution, since a rung with no explicit choice of its
-   * own inherits the next by stated policy rather than by silent fallback.
+   * The configured default for one tier, resolved through the inheritance
+   * chain the app documents (VC-112, VC-259): the project's own runtime
+   * preference first (`projects.session_model`, NULL = inherit), then the
+   * app-wide tier ladder from the named rung down. Separate answers, asked at
+   * the one moment the rung is known — never a substitution, since a rung
+   * with no explicit choice of its own inherits the next by stated policy
+   * rather than by silent fallback, and a ladder with nothing on it answers
+   * null so the caller can refuse.
    *
-   * `projectId` is `null` only where no project is known — the legacy
-   * model-backfill on `attach`, which holds a bare Session id — and reads as
-   * "global chain only". Every mint passes its project.
+   * Async because one rung needs the catalog: `visual`'s fallback holds only
+   * when the model it lands on can read images, and only Model Access knows.
+   *
+   * `projectId` is `null` where the project rung must not be walked: no
+   * project is known (the legacy model-backfill on `attach`, which holds a
+   * bare Session id), or the caller NAMED a tier and the project's pin is
+   * not an answer to that question — see {@link resolveModelSelection}. It
+   * reads as "the tier ladder only".
    */
-  readDefaultModel(role: SessionDefaultModelRole, projectId: string | null): ModelSelection | null;
+  readDefaultModel(tier: ModelTier, projectId: string | null): Promise<ModelSelection | null>;
   ticketBelongsToProject(projectId: string, ticketId: string): boolean;
   /** This Session's durable model policy, or `null` when it has never recorded one. */
   readModelSelection(sessionId: string): Promise<ModelSelection | null>;
@@ -364,6 +398,22 @@ export interface SessionsOptions {
  * always behaved this way — a stale configured default is never inspected
  * here either — so this is the pin catching up with the inheritance it was
  * supposed to be interchangeable with, not a new kind of leniency.
+ *
+ * A `tier` (VC-259) changes only WHICH base is read: the named rung instead of
+ * the Role's. Everything after is the same merge — a bare tier is a default
+ * path (the row was validated when it was saved, so nothing is inspected), a
+ * tier with a level is the reasoning-only path against that base. A tier that
+ * resolves to nothing is the same refusal, naming the tier, and never a walk
+ * past it to a model the user chose for something else.
+ *
+ * A named tier also OUTRANKS the project's pinned Session model, exactly as an
+ * exact `model` override already does. VC-112's pin answers "what does this
+ * project run by default"; `tier: "fast"` is a caller answering "what should
+ * THIS Session run", and a pin quietly winning would start a Session on a
+ * model nobody asked for while the door's reply and the Session header still
+ * read `fast` — the silent swap this ticket exists to forbid. The pin still
+ * governs every start that names no tier, which is every start there was
+ * before tiers existed.
  */
 async function resolveModelSelection(
   options: SessionsOptions,
@@ -371,17 +421,22 @@ async function resolveModelSelection(
   role: SessionDefaultModelRole,
   projectId: string,
 ): Promise<ModelSelection> {
-  const base = options.readDefaultModel(role, projectId);
+  const tier = override?.tier;
+  const base = await options.readDefaultModel(
+    tier ?? modelPurposeForRole(role),
+    tier === undefined ? projectId : null,
+  );
+  const required = tier === undefined ? DEFAULT_MODEL_REQUIRED : defaultModelRequiredForTier(tier);
   if (
     override === undefined ||
     (override.model === undefined && override.reasoningLevel === undefined)
   ) {
-    return requireDefaultModel(base, DEFAULT_MODEL_REQUIRED);
+    return requireDefaultModel(base, required);
   }
   const model = override.model ?? (base === null ? undefined : base);
   if (model === undefined) {
     // A reasoning level alone cannot conjure a model to run at it.
-    throw new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", DEFAULT_MODEL_REQUIRED);
+    throw new StructuredSessionsError("DEFAULT_MODEL_REQUIRED", required);
   }
   // The level is merged the same way whichever arm follows: no explicit level
   // falls back to the default's, then to Volli's central "medium" (the
@@ -511,10 +566,15 @@ export function createSessions(options: SessionsOptions): Sessions {
         actor: input.actor ?? { kind: "user" },
       });
     }
+    // The tier the override named rides beside the resolved model (VC-259):
+    // provenance for the pin, so the Session header and `session list` can
+    // say "Fast · <model>" — never the policy, which is `model` alone.
+    const tier = input.modelOverride?.tier;
     await recordModelSelection(options.runtime, {
       commandId: `${input.operationId}:model`,
       sessionId: created.sessionId,
       model,
+      ...(tier === undefined ? {} : { tier }),
     });
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
@@ -556,7 +616,7 @@ export function createSessions(options: SessionsOptions): Sessions {
         // `model.select` before the attachment, so what it resolved to is
         // visible in its history rather than assumed.
         const model = requireDefaultModel(
-          options.readDefaultModel("project", null),
+          await options.readDefaultModel(modelPurposeForRole("project"), null),
           DEFAULT_MODEL_REQUIRED,
           input.sessionId,
         );
@@ -609,12 +669,16 @@ function attachmentReady(result: SessionRuntimeCommandResult): boolean {
 /** Record the Session's model policy durably, or refuse before anything attaches. */
 async function recordModelSelection(
   runtime: StructuredSessionCommands,
-  input: { commandId: string; sessionId: string; model: ModelSelection },
+  input: { commandId: string; sessionId: string; model: ModelSelection; tier?: ModelTier },
 ): Promise<void> {
   const selected = await runtime.command({
     commandId: input.commandId,
     sessionId: input.sessionId,
-    command: { kind: "model.select", selection: input.model },
+    command: {
+      kind: "model.select",
+      selection: input.model,
+      ...(input.tier === undefined ? {} : { tier: input.tier }),
+    },
   });
   if (selected.receipt?.status !== "completed") {
     throw new StructuredSessionsError(

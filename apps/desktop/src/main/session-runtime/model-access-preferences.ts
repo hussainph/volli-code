@@ -1,13 +1,19 @@
 import type Database from "better-sqlite3";
 import {
   DEFAULT_COMPACTION_POLICY,
+  DEFAULT_MODEL_PICKER_VIEW,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  isModelPickerView,
+  MODEL_TIERS,
   REASONING_LEVELS,
   type CompactionPolicy,
   type HiddenModelRef,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
+  type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
+  visualModelProblem,
 } from "@volli/shared";
 
 import { supersededModelId } from "@volli/agent-runtime";
@@ -33,6 +39,8 @@ export const MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY = "volli:model-access-hidd
  * ignored on read — the switch it sits beside is still honoured.
  */
 export const COMPACTION_POLICY_APP_STATE_KEY = "volli:compaction-policy";
+/** Which list the model pickers open on — see {@link ModelPickerView}. */
+export const MODEL_PICKER_VIEW_APP_STATE_KEY = "volli:model-picker-view";
 
 const MAX_IDENTIFIER_LENGTH = 512;
 
@@ -78,24 +86,23 @@ export function readDefaultModelSelection(db: Database.Database): ModelSelection
 }
 
 /**
- * The per-purpose defaults this profile has configured.
+ * The per-tier defaults this profile has configured.
  *
- * The purpose-aware key wins once it exists; before it does, a legacy single
- * default reads as the global purpose so nobody's configured model vanishes on
- * update. Each stored purpose is sanitized independently — one malformed entry
- * costs that entry, never the others.
+ * The tier-aware key wins once it exists; before it does, a legacy single
+ * default reads as the global tier so nobody's configured model vanishes on
+ * update. Each stored tier is sanitized independently — one malformed entry
+ * costs that entry, never the others — and a tier the blob predates (the
+ * advanced three arrived in VC-259) simply reads as unset.
  */
 export function readModelAccessDefaults(db: Database.Database): ModelAccessDefaults {
   const stored = readAppState(db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY);
   if (typeof stored === "object" && stored !== null) {
     const candidate = stored as Record<string, unknown>;
-    return {
-      global: sanitizeSelection(candidate["global"]),
-      ticket: sanitizeSelection(candidate["ticket"]),
-      utility: sanitizeSelection(candidate["utility"]),
-    };
+    const defaults = { ...EMPTY_MODEL_ACCESS_DEFAULTS };
+    for (const tier of MODEL_TIERS) defaults[tier] = sanitizeSelection(candidate[tier]);
+    return defaults;
   }
-  return { global: readDefaultModelSelection(db), ticket: null, utility: null };
+  return { ...EMPTY_MODEL_ACCESS_DEFAULTS, global: readDefaultModelSelection(db) };
 }
 
 /** Stores one purpose's secret-free model policy; null clears an explicit choice. */
@@ -187,11 +194,11 @@ export function reconcileModelAccessPreferences(
   };
 
   const defaults = readModelAccessDefaults(db);
-  const repaired: ModelAccessDefaults = {
-    global: defaults.global === null ? null : settle(defaults.global),
-    ticket: defaults.ticket === null ? null : settle(defaults.ticket),
-    utility: defaults.utility === null ? null : settle(defaults.utility),
-  };
+  const repaired = { ...EMPTY_MODEL_ACCESS_DEFAULTS };
+  for (const tier of MODEL_TIERS) {
+    const selection = defaults[tier];
+    repaired[tier] = selection === null ? null : settle(selection);
+  }
   if (JSON.stringify(repaired) !== JSON.stringify(defaults)) {
     setAppState(db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, JSON.stringify(repaired), now);
   }
@@ -246,6 +253,28 @@ export function writeCompactionPolicy(
 }
 
 /**
+ * The list the model pickers open on.
+ *
+ * Absent or unreadable reads as {@link DEFAULT_MODEL_PICKER_VIEW} — every
+ * model — because that is what every picker showed before the Defaults view
+ * existed, and a preference nobody set is not a reason to show them less.
+ */
+export function readModelPickerView(db: Database.Database): ModelPickerView {
+  const stored = readAppState(db, MODEL_PICKER_VIEW_APP_STATE_KEY);
+  return isModelPickerView(stored) ? stored : DEFAULT_MODEL_PICKER_VIEW;
+}
+
+/** Stores the view — one word, which is the whole preference. */
+export function writeModelPickerView(
+  db: Database.Database,
+  view: ModelPickerView,
+  now: number,
+): ModelPickerView {
+  setAppState(db, MODEL_PICKER_VIEW_APP_STATE_KEY, JSON.stringify(view), now);
+  return view;
+}
+
+/**
  * Only a model this profile can actually run may become the app default.
  *
  * This value is copied into every new Session's durable model policy at birth
@@ -253,10 +282,16 @@ export function writeCompactionPolicy(
  * that merely *exists* in the catalog is a first message that dies at the
  * provider, once per Session, with a raw API error and no obvious cause.
  * Signed-out is a state to recover from before saving, not a choice to honour.
+ *
+ * `tier` adds the one per-tier rule: the Visual slot exists to read images,
+ * so a model that cannot is refused here, at the save, with the shared
+ * one-line reason — never discovered later by a Session that was handed a
+ * screenshot it cannot open. Omitted, no tier rule applies.
  */
 export function assertDefaultModelAvailable(
   access: ModelAccessSnapshot,
   selection: ModelSelection,
+  tier?: ModelPurpose,
 ): void {
   const model = access.models.find(
     (candidate) =>
@@ -271,5 +306,9 @@ export function assertDefaultModelAvailable(
   }
   if (!model.reasoningLevels.includes(selection.reasoningLevel)) {
     throw new Error("This reasoning level is not supported by the selected model.");
+  }
+  if (tier === "visual") {
+    const problem = visualModelProblem(access.models, selection);
+    if (problem !== null) throw new Error(problem);
   }
 }

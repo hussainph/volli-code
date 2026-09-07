@@ -1060,7 +1060,14 @@ describe("createVerbTool", () => {
     // from the one declaration every surface reads.
     expect(tool.name).toBe("session_start");
     const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(properties)).toEqual(["ticket", "message", "title", "model", "reasoning"]);
+    expect(Object.keys(properties)).toEqual([
+      "ticket",
+      "message",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
     // Required and optional survive the compilation, and a nested object stays
     // an object rather than being flattened into argv-ish strings.
     expect((tool.parameters as { required?: string[] }).required).toEqual(["ticket"]);

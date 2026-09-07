@@ -30,6 +30,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     signal: null,
     stopped: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: true,
     lastTurnOutcome: null,
     authorityDenials: 0,

@@ -21,6 +21,8 @@
 
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 import { parseAutomationSchedule, type AutomationSchedule } from "./automation-schedule";
+import { isModelTier, type ModelTier } from "./model-access-policy";
+import { parseSessionModel } from "./project-identity";
 import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
 
 /**
@@ -42,12 +44,75 @@ export interface InvalidAutomationRuntime {
   raw: unknown;
 }
 
-/** The saved Runtime is inheritance, a valid pin, or an explicit invalid row. */
-export type AutomationRuntime = ModelSelection | InvalidAutomationRuntime | null;
+/**
+ * A Runtime that names one of the model TIERS (VC-259) rather than a model:
+ * "run this on whatever the Fast row says". Resolved when a Run starts, never
+ * when the record is saved, so a later Settings change moves every future Run
+ * of this Automation and no Run that already happened — the Run row still
+ * records the model the tier resolved to, exactly as a pin's Run does.
+ *
+ * A discriminated shape rather than a bare tier string in the same column,
+ * so a stored value is never ambiguous about which of the three it is.
+ */
+export interface AutomationRuntimeTier {
+  kind: "tier";
+  tier: ModelTier;
+}
+
+/**
+ * The saved Runtime is inheritance, a valid pin, a tier, or an explicit
+ * invalid row.
+ */
+export type AutomationRuntime =
+  | ModelSelection
+  | AutomationRuntimeTier
+  | InvalidAutomationRuntime
+  | null;
+
+/**
+ * A Runtime a save may carry and a Run may start under: inherit, a pin, or a
+ * tier — everything but the invalid row, which exists only to be READ off a
+ * record that cannot be run until someone repairs it.
+ */
+export type ValidAutomationRuntime = ModelSelection | AutomationRuntimeTier | null;
 
 /** Whether a Runtime is the valid whole model-and-reasoning pin a Run may use. */
 export function isAutomationRuntimePin(runtime: AutomationRuntime): runtime is ModelSelection {
   return runtime !== null && !("kind" in runtime);
+}
+
+/** Whether a Runtime names a tier to be resolved when the Run starts. */
+export function isAutomationRuntimeTier(
+  runtime: AutomationRuntime,
+): runtime is AutomationRuntimeTier {
+  return runtime !== null && "kind" in runtime && runtime.kind === "tier";
+}
+
+/** Whether a Runtime is one a Run may start under — anything but the invalid row. */
+export function isValidAutomationRuntime(
+  runtime: AutomationRuntime,
+): runtime is ValidAutomationRuntime {
+  return runtime === null || isAutomationRuntimePin(runtime) || isAutomationRuntimeTier(runtime);
+}
+
+/**
+ * A stored or transported Runtime, read in today's vocabulary.
+ *
+ * `null` is inherit. A whole pin is a pin. A tier THIS build knows is a tier.
+ * Everything else — a partial pin, a tier from another build, bytes that were
+ * never JSON — is the explicit invalid row with the raw value kept, and never
+ * `null`: inherit still RUNS, so an unreadable Runtime coerced to it would
+ * start a Session under a policy nobody chose. The one reader for the SQLite
+ * column and any future transport, so the two cannot disagree about which
+ * shapes are runnable.
+ */
+export function parseAutomationRuntime(raw: unknown): AutomationRuntime {
+  if (raw === null) return null;
+  if (typeof raw === "object" && (raw as { kind?: unknown }).kind === "tier") {
+    const tier = (raw as { tier?: unknown }).tier;
+    return isModelTier(tier) ? { kind: "tier", tier } : { kind: "invalid", raw };
+  }
+  return parseSessionModel(raw) ?? { kind: "invalid", raw };
 }
 
 /**
@@ -159,11 +224,13 @@ export interface Automation {
    */
   trigger: AutomationTrigger;
   /**
-   * The Runtime: one pinned model-and-reasoning selection, or `null` to
-   * inherit through the project's runtime preferences and then the global
-   * record. The two halves travel together by construction — a reasoning
+   * The Runtime: one pinned model-and-reasoning selection, a named tier
+   * ({@link AutomationRuntimeTier}) resolved when each Run starts, or `null`
+   * to inherit through the project's runtime preferences and then the global
+   * record. A pin's two halves travel together by construction — a reasoning
    * level is a property of the model that offers it, so a type that could pin
-   * one without the other could spell a pair that does not exist.
+   * one without the other could spell a pair that does not exist; a tier
+   * carries both by reference, since a Settings row stores them together too.
    */
   runtime: AutomationRuntime;
   /** Epoch milliseconds. */
@@ -431,13 +498,14 @@ export function unboundRunProblem(instructions: string): string | null {
  */
 export interface AutomationRunRequestIdentity {
   instructions: string | null;
-  modelOverride: ModelSelection | null;
+  /** Inherit, an exact pin, or a tier to resolve when this Run starts. */
+  modelOverride: ValidAutomationRuntime;
 }
 
 /** One Run request's identity, read off the target and the invocation's override. */
 export function automationRunRequestIdentity(input: {
   target: AutomationRunTarget;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
 }): AutomationRunRequestIdentity {
   return {
     instructions: input.target.kind === "unbound" ? input.target.instructions : null,
@@ -454,6 +522,13 @@ export function sameAutomationRunRequestIdentity(
   if (left.modelOverride === null || right.modelOverride === null) {
     return left.modelOverride === right.modelOverride;
   }
+  if (isAutomationRuntimeTier(left.modelOverride)) {
+    return (
+      isAutomationRuntimeTier(right.modelOverride) &&
+      left.modelOverride.tier === right.modelOverride.tier
+    );
+  }
+  if (isAutomationRuntimeTier(right.modelOverride)) return false;
   return (
     left.modelOverride.providerId === right.modelOverride.providerId &&
     left.modelOverride.modelId === right.modelOverride.modelId &&
@@ -475,13 +550,15 @@ export function sameAutomationRunRequestIdentity(
 export function automationRunRetryKey(input: {
   target: AutomationRunTarget;
   ticketId: string;
-  modelOverride: ModelSelection | null;
+  modelOverride: ValidAutomationRuntime;
 }): string {
   const identity = automationRunRequestIdentity(input);
   const override =
     identity.modelOverride === null
       ? "inherit"
-      : `${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
+      : isAutomationRuntimeTier(identity.modelOverride)
+        ? `tier:${identity.modelOverride.tier}`
+        : `pin:${identity.modelOverride.providerId}/${identity.modelOverride.modelId}/${identity.modelOverride.reasoningLevel}`;
   return [
     automationRunTargetId(input.target) ?? "unbound",
     identity.instructions ?? "",
@@ -495,7 +572,8 @@ export interface AutomationDraft {
   name: string;
   instructions: string;
   trigger: AutomationTrigger;
-  runtime: ModelSelection | null;
+  /** Inherit, a whole pin, or a tier — never the invalid row, which is read, not written. */
+  runtime: ValidAutomationRuntime;
 }
 
 /**

@@ -46,6 +46,7 @@ function projectionWith(
     bornTicketless: true,
     ...overrides,
     modelSelection: overrides.modelSelection ?? null,
+    modelTier: overrides.modelTier ?? null,
   };
 }
 

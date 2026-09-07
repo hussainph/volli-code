@@ -192,7 +192,7 @@ describe("startSessionOperation", () => {
     await start(fixture, {
       message: "Validate VC-52 before release",
       modelOverride: startSessionModelOverride(
-        { providerId: "anthropic", modelId: "claude-opus" },
+        { model: { providerId: "anthropic", modelId: "claude-opus" } },
         "low",
       ),
     });
@@ -333,6 +333,18 @@ describe("startSessionOperation", () => {
     expect(fixture.notices).toEqual([]);
   });
 
+  it("threads a tier through as the override's tier half, with its level beside it", async () => {
+    // VC-259: the door hands the facade a KIND of work, and the facade is the
+    // one that resolves it — this module only carries the choice across.
+    const fixture = harness();
+
+    await start(fixture, { modelOverride: startSessionModelOverride({ tier: "deep" }, "high") });
+
+    expect(fixture.startInputs[0]).toMatchObject({
+      modelOverride: { tier: "deep", reasoningLevel: "high" },
+    });
+  });
+
   it("survives a kickoff the runtime refuses after the Session is open", async () => {
     const fixture = harness();
     fixture.ports.submitSessionMessage = async () => {
@@ -349,5 +361,34 @@ describe("startSessionOperation", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+/**
+ * The override a door hands the facade, built from what it validated. One
+ * builder for both doors, so the shape `SessionModelOverride` types — a model
+ * OR a tier, a level beside either — is spelled once.
+ */
+describe("startSessionModelOverride", () => {
+  it("builds nothing from nothing", () => {
+    expect(startSessionModelOverride(undefined, undefined)).toBeUndefined();
+  });
+
+  it("carries a bare level onto whichever base the facade reads", () => {
+    expect(startSessionModelOverride(undefined, "low")).toEqual({ reasoningLevel: "low" });
+  });
+
+  it("builds a model pin, with or without a level", () => {
+    const model = { providerId: "anthropic", modelId: "claude-opus" };
+    expect(startSessionModelOverride({ model }, undefined)).toEqual({ model });
+    expect(startSessionModelOverride({ model }, "high")).toEqual({ model, reasoningLevel: "high" });
+  });
+
+  it("builds a tier choice, with or without a level (VC-259)", () => {
+    expect(startSessionModelOverride({ tier: "fast" }, undefined)).toEqual({ tier: "fast" });
+    expect(startSessionModelOverride({ tier: "visual" }, "medium")).toEqual({
+      tier: "visual",
+      reasoningLevel: "medium",
+    });
   });
 });

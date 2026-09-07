@@ -234,6 +234,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     signal: null,
     stopped: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: false,
     lastTurnOutcome: null,
     authorityDenials: 0,

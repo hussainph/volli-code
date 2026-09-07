@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { EMPTY_MODEL_ACCESS_DEFAULTS } from "@volli/shared";
 
 import { setAppState } from "../db/app-state-repo";
 import { openTestDb, type TestDb } from "../db/test-helpers";
@@ -8,14 +9,17 @@ import {
   MODEL_ACCESS_DEFAULT_APP_STATE_KEY,
   MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
   MODEL_ACCESS_HIDDEN_MODELS_APP_STATE_KEY,
+  MODEL_PICKER_VIEW_APP_STATE_KEY,
   readCompactionPolicy,
   readDefaultModelSelection,
   readHiddenModels,
   readModelAccessDefaults,
+  readModelPickerView,
   reconcileModelAccessPreferences,
   writeCompactionPolicy,
   writeHiddenModels,
   writeModelAccessDefault,
+  writeModelPickerView,
 } from "./model-access-preferences";
 
 let ctx: TestDb | null = null;
@@ -37,20 +41,105 @@ describe("Model Access default selection", () => {
     writeModelAccessDefault(ctx.db, "global", selection, 123);
     const ticket = { ...selection, modelId: "gpt-5.6-luna" };
     expect(writeModelAccessDefault(ctx.db, "ticket", ticket, 124)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
       ticket,
-      utility: null,
     });
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
       ticket,
-      utility: null,
     });
 
     // Clearing an explicit choice is a write, not an absence.
     writeModelAccessDefault(ctx.db, "ticket", null, 125);
     expect(readModelAccessDefaults(ctx.db).ticket).toBeNull();
     expect(readModelAccessDefaults(ctx.db).global).toEqual(selection);
+  });
+
+  it("round-trips the advanced tiers without disturbing the three that predate them", () => {
+    ctx = openTestDb();
+    const base = {
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      reasoningLevel: "medium" as const,
+    };
+    writeModelAccessDefault(ctx.db, "global", base, 1);
+    writeModelAccessDefault(ctx.db, "ticket", { ...base, modelId: "claude-opus" }, 2);
+    writeModelAccessDefault(ctx.db, "utility", { ...base, modelId: "claude-haiku" }, 3);
+
+    const fast = { ...base, modelId: "claude-haiku", reasoningLevel: "low" as const };
+    const deep = { ...base, modelId: "claude-opus", reasoningLevel: "high" as const };
+    const visual = { ...base, modelId: "claude-sonnet", reasoningLevel: "medium" as const };
+    writeModelAccessDefault(ctx.db, "fast", fast, 4);
+    writeModelAccessDefault(ctx.db, "deep", deep, 5);
+    expect(writeModelAccessDefault(ctx.db, "visual", visual, 6)).toEqual({
+      global: base,
+      ticket: { ...base, modelId: "claude-opus" },
+      utility: { ...base, modelId: "claude-haiku" },
+      fast,
+      deep,
+      visual,
+    });
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global: base,
+      ticket: { ...base, modelId: "claude-opus" },
+      utility: { ...base, modelId: "claude-haiku" },
+      fast,
+      deep,
+      visual,
+    });
+
+    // Clearing one advanced tier is a write to that slot alone: its siblings
+    // and the three base rows keep what they hold.
+    writeModelAccessDefault(ctx.db, "deep", null, 7);
+    const after = readModelAccessDefaults(ctx.db);
+    expect(after.deep).toBeNull();
+    expect(after.fast).toEqual(fast);
+    expect(after.visual).toEqual(visual);
+    expect(after.ticket).toEqual({ ...base, modelId: "claude-opus" });
+  });
+
+  it("reads a blob written before tiers existed with the advanced three unset", () => {
+    ctx = openTestDb();
+    // The three-purpose shape VC-53 stored. On update it must read as exactly
+    // what it held — every configured model intact — with the tiers it
+    // predates (VC-259) simply absent, never invented.
+    const global = { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" };
+    const ticket = { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" };
+    const utility = { providerId: "anthropic", modelId: "claude-haiku", reasoningLevel: "low" };
+    setAppState(
+      ctx.db,
+      MODEL_ACCESS_DEFAULTS_APP_STATE_KEY,
+      JSON.stringify({ global, ticket, utility }),
+      1,
+    );
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global,
+      ticket,
+      utility,
+      fast: null,
+      deep: null,
+      visual: null,
+    });
+
+    // The first tier-aware write persists the six-slot shape, and the three
+    // carried-over rows ride along untouched.
+    const fast = {
+      providerId: "anthropic",
+      modelId: "claude-haiku",
+      reasoningLevel: "low" as const,
+    };
+    writeModelAccessDefault(ctx.db, "fast", fast, 2);
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      global,
+      ticket,
+      utility,
+      fast,
+      deep: null,
+      visual: null,
+    });
   });
 
   it("reads a pre-purpose single default as the global purpose", () => {
@@ -63,9 +152,8 @@ describe("Model Access default selection", () => {
     setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, JSON.stringify(selection), 1);
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
-      ticket: null,
-      utility: null,
     });
 
     // The first purpose-aware write persists the new shape; the legacy key
@@ -73,8 +161,8 @@ describe("Model Access default selection", () => {
     writeModelAccessDefault(ctx.db, "utility", { ...selection, modelId: "claude-haiku" }, 2);
     setAppState(ctx.db, MODEL_ACCESS_DEFAULT_APP_STATE_KEY, "not-json", 3);
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: selection,
-      ticket: null,
       utility: { ...selection, modelId: "claude-haiku" },
     });
   });
@@ -93,13 +181,12 @@ describe("Model Access default selection", () => {
     );
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       global: { providerId: "anthropic", modelId: "claude-sonnet", reasoningLevel: "medium" },
-      ticket: null,
-      utility: null,
     });
 
     setAppState(ctx.db, MODEL_ACCESS_DEFAULTS_APP_STATE_KEY, "not-json", 2);
-    expect(readModelAccessDefaults(ctx.db)).toEqual({ global: null, ticket: null, utility: null });
+    expect(readModelAccessDefaults(ctx.db)).toEqual(EMPTY_MODEL_ACCESS_DEFAULTS);
   });
 
   it("treats missing or malformed stored state as unconfigured", () => {
@@ -231,9 +318,8 @@ describe("Model Access default selection", () => {
     );
 
     expect(readModelAccessDefaults(ctx.db)).toEqual({
-      global: null,
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
       ticket: stable,
-      utility: null,
     });
     expect(readHiddenModels(ctx.db)).toEqual([{ providerId: "acme", modelId: "stable" }]);
   });
@@ -292,6 +378,57 @@ describe("Model Access default selection", () => {
     expect(readHiddenModels(ctx.db)).toEqual([
       { providerId: "opencode-go", modelId: "glm-5.3-flash" },
     ]);
+  });
+
+  it("repairs the advanced tiers exactly as it repairs global: rename followed, retirement cleared", () => {
+    ctx = openTestDb();
+    // Three fates across the advanced rows, in one refresh of one provider:
+    // Fast names a renamed model and must land on the new id; Deep names a
+    // model that is simply gone and must be cleared; Visual names a model that
+    // is still there and must not move. The base rows are the control group.
+    const kept = {
+      providerId: "opencode-go",
+      modelId: "glm-5.3-flash",
+      reasoningLevel: "high" as const,
+    };
+    writeModelAccessDefault(ctx.db, "global", kept, 1);
+    writeModelAccessDefault(ctx.db, "fast", { ...kept, modelId: "ox-alpha-free" }, 2);
+    writeModelAccessDefault(ctx.db, "deep", { ...kept, modelId: "retired" }, 3);
+    writeModelAccessDefault(ctx.db, "visual", kept, 4);
+
+    reconcileModelAccessPreferences(
+      ctx.db,
+      {
+        observedAt: 5,
+        providers: [],
+        models: [
+          {
+            providerId: "opencode-go",
+            modelId: "glm-5.3-flash",
+            label: "GLM-5.3-Flash",
+            state: "available",
+            reasoningLevels: ["high"],
+            acceptsImageInput: true,
+          },
+        ],
+        refresh: {
+          added: 1,
+          removed: 2,
+          rejected: 0,
+          refreshedProviderIds: ["opencode-go"],
+          failedProviderIds: [],
+        },
+      },
+      6,
+    );
+
+    expect(readModelAccessDefaults(ctx.db)).toEqual({
+      ...EMPTY_MODEL_ACCESS_DEFAULTS,
+      global: kept,
+      fast: kept,
+      deep: null,
+      visual: kept,
+    });
   });
 
   it("leaves every preference alone for a provider whose feed failed", () => {
@@ -389,6 +526,30 @@ describe("Model Access default selection", () => {
       ),
     ).toThrow("not currently available");
   });
+
+  it("refuses a Visual default that cannot read images, with the one-line reason", () => {
+    const blind = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-text",
+      label: "GPT-5.6 Text",
+      state: "available" as const,
+      reasoningLevels: ["off", "high"] as const,
+      acceptsImageInput: false,
+    };
+    const access = { observedAt: 1, providers: [], models: [blind] };
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-text",
+      reasoningLevel: "high" as const,
+    };
+
+    expect(() => assertDefaultModelAvailable(access, selection, "visual")).toThrow(
+      "This model can't read images, so it can't be the Visual default.",
+    );
+    // The same model is fine for every other tier: the rule is Visual's alone.
+    expect(() => assertDefaultModelAvailable(access, selection, "fast")).not.toThrow();
+    expect(() => assertDefaultModelAvailable(access, selection, "ticket")).not.toThrow();
+  });
 });
 
 describe("the stored compaction policy", () => {
@@ -430,5 +591,26 @@ describe("the stored compaction policy", () => {
     );
 
     expect(readCompactionPolicy(ctx.db)).toEqual({ autoCompaction: false });
+  });
+});
+
+describe("the stored picker view", () => {
+  it("opens on every model until a profile chooses otherwise", () => {
+    ctx = openTestDb();
+    expect(readModelPickerView(ctx.db)).toBe("all");
+
+    // A blob this build cannot read is not a reason to show fewer models.
+    setAppState(ctx.db, MODEL_PICKER_VIEW_APP_STATE_KEY, "not-json", 1);
+    expect(readModelPickerView(ctx.db)).toBe("all");
+    setAppState(ctx.db, MODEL_PICKER_VIEW_APP_STATE_KEY, JSON.stringify("tiers"), 2);
+    expect(readModelPickerView(ctx.db)).toBe("all");
+  });
+
+  it("round-trips the view", () => {
+    ctx = openTestDb();
+    expect(writeModelPickerView(ctx.db, "defaults", 1)).toBe("defaults");
+    expect(readModelPickerView(ctx.db)).toBe("defaults");
+    expect(writeModelPickerView(ctx.db, "all", 2)).toBe("all");
+    expect(readModelPickerView(ctx.db)).toBe("all");
   });
 });

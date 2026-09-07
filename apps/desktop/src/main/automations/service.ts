@@ -4,6 +4,9 @@ import {
   automationScheduleProblem,
   automationTriggerSchedule,
   automationTriggersColumn,
+  isAutomationRuntimeTier,
+  isModelTier,
+  MODEL_TIERS,
   NO_AUTOMATION_TRIGGER,
   parseAutomationTrigger,
 } from "@volli/shared";
@@ -16,8 +19,8 @@ import type {
   ColumnArming,
   ColumnAutomationOrder,
   ModelAccessSnapshot,
-  ModelSelection,
   TicketStatus,
+  ValidAutomationRuntime,
 } from "@volli/shared";
 
 import type { AutomationEngine } from "./engine";
@@ -141,7 +144,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     /** The Ownership this write lands under — a create's choice, an update's record. */
     projectId: string | null;
     trigger: AutomationTrigger;
-    runtime: ModelSelection | null;
+    runtime: ValidAutomationRuntime;
   }): Promise<string | null> {
     const draft = automationDraftProblem(input);
     if (draft !== null) return draft;
@@ -152,6 +155,16 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     const scheduled = automationScheduleProblem(input);
     if (scheduled !== null) return scheduled;
     if (input.runtime === null) return null;
+    // A tier (VC-259) names a Settings row, not a model, and is resolved when
+    // each Run starts — so there is nothing here to check against Model
+    // Access, and no reason to need it. What IS checked is the word: the IPC
+    // guard judges wire shape only, and a tier this build does not know must
+    // never reach the record, where it would read back as the invalid row.
+    if (isAutomationRuntimeTier(input.runtime)) {
+      return isModelTier(input.runtime.tier)
+        ? null
+        : `Unknown model tier ${JSON.stringify(input.runtime.tier)} (valid: ${MODEL_TIERS.join(", ")}).`;
+    }
     if (deps.inspectModelAccess === undefined) {
       return "Model Access is unavailable, so a pinned model cannot be validated. Save without a pin, or retry after relaunch.";
     }
@@ -347,7 +360,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       name: string;
       instructions: string;
       trigger: AutomationTrigger;
-      runtime: ModelSelection | null;
+      runtime: ValidAutomationRuntime;
     }): Promise<AutomationWriteOutcome> {
       // A retry must replay its receipt before consulting live facts. The
       // original accepted write remains the fact even if its project was later
@@ -386,7 +399,7 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       name: string;
       instructions: string;
       trigger: AutomationTrigger;
-      runtime: ModelSelection | null;
+      runtime: ValidAutomationRuntime;
     }): Promise<AutomationWriteOutcome> {
       const prior = deps.findAutomation(input.automationId);
       // Same replay rule as create: validation guards a new command, never

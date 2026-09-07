@@ -2108,6 +2108,15 @@ describe("agent command service", () => {
       },
     });
     expect(JSON.stringify(sessions)).not.toContain(structured.session.id);
+    // A Session that has recorded no model policy says so with nulls rather
+    // than an invented default (VC-259).
+    expect(sessions).toMatchObject({
+      data: {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({ kind: "chat", model: null, reasoning: null, tier: null }),
+        ]),
+      },
+    });
     // A ticketless structured Session identifies against its project root: it
     // has no PTY cwd and no worktree, and that is the directory it runs in.
     expect(identify).toMatchObject({
@@ -2116,6 +2125,91 @@ describe("agent command service", () => {
         session: structured.session.id.slice(0, 8),
         ticket: null,
         worktreePath: "/repo/volli",
+      },
+    });
+  });
+
+  it("names a chat row's model, its level and the tier it was asked for as (VC-259)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: { id: "local" as const, kind: "local" as const },
+    };
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 1_000 });
+    const tiered = await sessionEngine.createSession({
+      commandId: "create-tiered",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Fast",
+      role: "project",
+      parentSessionId: null,
+      provenance,
+    });
+    await sessionEngine.submit({
+      commandId: "select-tiered",
+      sessionId: tiered.session.id,
+      intent: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+        tier: "fast",
+      },
+      provenance,
+    });
+    const pinned = await sessionEngine.createSession({
+      commandId: "create-pinned",
+      projectId: "project-one",
+      ticketId: null,
+      title: "Pinned",
+      role: "project",
+      parentSessionId: null,
+      provenance,
+    });
+    await sessionEngine.submit({
+      commandId: "select-pinned",
+      sessionId: pinned.session.id,
+      intent: {
+        kind: "model.select",
+        selection: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+      },
+      provenance,
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 2_000,
+      sessionEngine,
+    });
+
+    const sessions = await service.execute({
+      v: 1,
+      cmd: "session.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    // Same model, same level: only the tier tells the delegated Session from
+    // the pinned one, which is exactly what an orchestrator is reading for.
+    expect(sessions).toMatchObject({
+      ok: true,
+      data: {
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            title: "Fast",
+            model: "anthropic/haiku-4.5",
+            reasoning: "low",
+            tier: "fast",
+          }),
+          expect.objectContaining({
+            title: "Pinned",
+            model: "anthropic/haiku-4.5",
+            reasoning: "low",
+            tier: null,
+          }),
+        ]),
       },
     });
   });
@@ -5934,6 +6028,58 @@ describe("model.list", () => {
     return { execute };
   }
 
+  /** The tier table an unconfigured profile reports: six rows, nothing resolved. */
+  const UNSET_TIERS = [
+    {
+      tier: "global",
+      label: "Board chats",
+      hint: "Planning and coordination across the board.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+    {
+      tier: "ticket",
+      label: "Ticket Sessions",
+      hint: "One ticket and its optional worktree.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+    {
+      tier: "utility",
+      label: "Utility",
+      hint: "Chat names and summaries.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+    {
+      tier: "fast",
+      label: "Fast",
+      hint: "Quick, low-cost tasks.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+    {
+      tier: "deep",
+      label: "Deep",
+      hint: "Complex reasoning, planning, and review.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+    {
+      tier: "visual",
+      label: "Visual",
+      hint: "Images, screenshots, and pages.",
+      resolvedFrom: null,
+      model: null,
+      reasoning: null,
+    },
+  ];
+
   it("lists only auth-available models, with copyable ids and an honest omission count", async () => {
     const harness = modelListHarness();
 
@@ -5945,6 +6091,7 @@ describe("model.list", () => {
       data: {
         observedAt: 900,
         default: null,
+        tiers: UNSET_TIERS,
         providers: [
           {
             id: "anthropic",
@@ -6052,6 +6199,144 @@ describe("model.list", () => {
     const response = await harness.execute();
 
     expect(response).toMatchObject({ ok: true, data: { default: null } });
+  });
+
+  it("prints the whole tier table: explicit rows, inherited rows, and the rung each came from", async () => {
+    // The agent-facing view of Settings → Default models (VC-259). One row per
+    // tier in MODEL_TIERS order; an unset row does not vanish and does not
+    // pretend — it names the rung that supplied its model, so a Session that
+    // asks for `fast` can see it will get the Ticket default.
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "global",
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "low" },
+      500,
+    );
+    writeModelAccessDefault(
+      ctx.db,
+      "deep",
+      { providerId: "anthropic", modelId: "claude-opus-5", reasoningLevel: "high" },
+      501,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        default: { model: "anthropic/claude-opus-5", reasoning: "low" },
+        tiers: [
+          {
+            tier: "global",
+            label: "Board chats",
+            resolvedFrom: "global",
+            model: "anthropic/claude-opus-5",
+            reasoning: "low",
+          },
+          // ticket is unset, so it walks to global — and says so.
+          { tier: "ticket", resolvedFrom: "global", model: "anthropic/claude-opus-5" },
+          { tier: "utility", resolvedFrom: "global", model: "anthropic/claude-opus-5" },
+          // fast walks ticket → global: the rung reported is where the model
+          // was FOUND, not the first rung it tried.
+          { tier: "fast", resolvedFrom: "global", model: "anthropic/claude-opus-5" },
+          // deep is set explicitly, with its own reasoning level.
+          {
+            tier: "deep",
+            resolvedFrom: "deep",
+            model: "anthropic/claude-opus-5",
+            reasoning: "high",
+          },
+          // visual inherits because the model it lands on accepts images.
+          { tier: "visual", resolvedFrom: "global", model: "anthropic/claude-opus-5" },
+        ],
+      },
+    });
+    expect((response as { data: { tiers: unknown[] } }).data.tiers).toHaveLength(6);
+  });
+
+  it("reports an unset visual tier when the model it would inherit cannot read images", async () => {
+    // No silent substitution: Visual's fallback holds only when the Ticket
+    // model can see. When it cannot, the row says unset rather than naming
+    // a model the person never chose for image work.
+    const harness = modelListHarness({
+      snapshot: {
+        observedAt: 900,
+        providers: [
+          {
+            id: "anthropic",
+            label: "Anthropic",
+            state: "available",
+            accountLabel: null,
+            billingSource: "subscription",
+            recovery: null,
+            signIn: [],
+            hasStoredCredential: true,
+          },
+        ],
+        models: [
+          {
+            providerId: "anthropic",
+            modelId: "claude-text",
+            label: "Claude Text",
+            state: "available",
+            reasoningLevels: ["medium"],
+            acceptsImageInput: false,
+          },
+        ],
+      },
+    });
+    writeModelAccessDefault(
+      ctx.db,
+      "ticket",
+      { providerId: "anthropic", modelId: "claude-text", reasoningLevel: "medium" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        tiers: [
+          { tier: "global", resolvedFrom: null, model: null, reasoning: null },
+          { tier: "ticket", resolvedFrom: "ticket", model: "anthropic/claude-text" },
+          { tier: "utility", resolvedFrom: null, model: null },
+          { tier: "fast", resolvedFrom: "ticket", model: "anthropic/claude-text" },
+          { tier: "deep", resolvedFrom: "ticket", model: "anthropic/claude-text" },
+          { tier: "visual", resolvedFrom: null, model: null, reasoning: null },
+        ],
+      },
+    });
+  });
+
+  it("withholds a tier's model, but not its rung, when that model is no longer authenticated", async () => {
+    // The same suppression rule `default` follows: a stored choice is not
+    // proof of access. The row still says which rung it resolved through, so
+    // the reader can tell "configured but signed out" from "never configured".
+    const harness = modelListHarness();
+    writeModelAccessDefault(
+      ctx.db,
+      "fast",
+      { providerId: "openai-codex", modelId: "gpt-5.6-terra", reasoningLevel: "high" },
+      500,
+    );
+
+    const response = await harness.execute();
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        tiers: [
+          { tier: "global", resolvedFrom: null, model: null },
+          { tier: "ticket", resolvedFrom: null, model: null },
+          { tier: "utility", resolvedFrom: null, model: null },
+          { tier: "fast", resolvedFrom: "fast", model: null, reasoning: null },
+          { tier: "deep", resolvedFrom: null, model: null },
+          { tier: "visual", resolvedFrom: null, model: null },
+        ],
+      },
+    });
   });
 
   it("answers APP_UNREACHABLE when the Pi runtime never came up this launch", async () => {
