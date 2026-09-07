@@ -382,6 +382,23 @@ describe("the cleanup history", () => {
     expect(rows[0]?.meta).toContain("no reason recorded");
   });
 
+  it("dates a settled outcome from the run when its own outcome timestamp is missing", () => {
+    const rows = historyRows([
+      run({
+        id: "finished-fallback",
+        items: [item({ id: "a", state: "skipped", settledAt: null })],
+      }),
+      run({
+        id: "started-fallback",
+        finishedAt: null,
+        items: [item({ id: "b", state: "failed", settledAt: null })],
+      }),
+    ]);
+
+    expect(rows[0]?.meta).toContain(new Date(AT + 1_000).toLocaleString());
+    expect(rows[1]?.meta).toContain(new Date(AT).toLocaleString());
+  });
+
   it("names an item whose project is gone rather than dropping the row", () => {
     const rows = historyRows([
       run({ id: "run-6", items: [item({ id: "a", state: "skipped", projectName: null })] }),
@@ -510,11 +527,15 @@ describe("a run that finished with trouble in it", () => {
     const troubled = run({ finishedAt: AT, items: [item({ state: "failed" })] });
     expect(unfinishedRuns([troubled])).toEqual([]);
     expect(runsWithFailures([troubled]).map((entry) => entry.id)).toEqual(["run-1"]);
+    expect(describeRunFailures(troubled)).toContain("1 failed");
+    expect(describeRunFailures(troubled)).not.toContain("unknown outcome");
   });
 
   it("counts an indeterminate outcome as trouble too", () => {
     const troubled = run({ finishedAt: AT, items: [item({ state: "indeterminate" })] });
     expect(runsWithFailures([troubled])).toHaveLength(1);
+    expect(describeRunFailures(troubled)).toContain("1 with an unknown outcome");
+    expect(describeRunFailures(troubled)).not.toContain("failed");
   });
 
   it("is not reported as troubled once it finished clean", () => {
