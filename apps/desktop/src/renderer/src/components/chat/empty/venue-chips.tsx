@@ -17,15 +17,15 @@
  * more than that (VC-288). The chip was a `<span>` wearing a tooltip: a pointer
  * could ask for the path it was hiding and a keyboard had no way to, so at the
  * pane widths where the cap actually bites the value was simply gone for anyone
- * not using a mouse. It is a button now — a focus stop that goes nowhere,
- * because the reveal IS the act — and it carries the untruncated value as its
- * own accessible name, so nothing has to be opened to hear it at all.
+ * not using a mouse. It is a {@link ValueReveal} now — a focus stop that goes
+ * nowhere, because the reveal IS the act — and it carries the untruncated value
+ * as its own accessible name, so nothing has to be opened to hear it at all.
  */
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import type { VenueSnapshot } from "@volli/shared";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 
 /** The word for each venue kind. A noun; the drawing above carries the rest. */
 export function venueKindLabel(venue: VenueSnapshot): string {
@@ -46,25 +46,19 @@ function ScopeChip({
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          // The alternatives were both worse. `tabIndex` on the span puts a
-          // stop in the tab order that AT announces as nothing in particular,
-          // and wrapping a 60-character branch name turns a two-chip caption
-          // into a paragraph under the drawing it is a caption for.
-          aria-label={`${term} · ${full}`}
-          className="inline-flex h-7 max-w-48 cursor-default items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45"
-        >
-          <Icon weight="bold" className="size-3 shrink-0" />
-          <span className="min-w-0 truncate">{children}</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6} className="font-mono">
-        {full}
-      </TooltipContent>
-    </Tooltip>
+    // The bubble says the VALUE alone: the term is already the word drawn on
+    // the chip, and a label repeating it back would be the reveal spending its
+    // one line on what is not hidden.
+    <ValueReveal
+      term={term}
+      full={full}
+      reveal={full}
+      side="bottom"
+      className="inline-flex h-7 max-w-48 items-center gap-1 rounded-full border border-border bg-card px-2 text-ui text-muted-foreground focus-visible:border-ring"
+    >
+      <Icon weight="bold" className="size-3 shrink-0" />
+      <span className="min-w-0 truncate">{children}</span>
+    </ValueReveal>
   );
 }
 

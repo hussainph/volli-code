@@ -79,6 +79,8 @@ import { Button } from "@renderer/components/ui/button";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { useClippedReveal } from "@renderer/components/ui/value-reveal";
 import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
@@ -409,6 +411,14 @@ export function TabStrip({
   };
 
   const strip = (
+    // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
+    // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
+    // but a strip is also rendered on its own by a good deal of the test suite
+    // and by the fixture gallery, and a Radix tooltip with no provider above it
+    // throws. Nesting is allowed and costs one context; what it changes is that
+    // a sweep along THIS strip is its own skip-delay group, which is what a row
+    // of tabs is anyway.
+    <TooltipProvider>
     <div
       data-slot="tab-strip"
       data-variant={variant}
@@ -504,6 +514,7 @@ export function TabStrip({
         </div>
       ) : null}
     </div>
+    </TooltipProvider>
   );
 
   if (reorder === undefined || inSurface) return strip;
@@ -866,8 +877,21 @@ function TabShell({
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
+  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
+  // capped at `max-w-40` and truncates, and until now the rest of it lived in
+  // `aria-label` alone — an answer for a screen reader and for nothing else,
+  // on tabs that do not all carry a `title` either. The reveal rides the tab
+  // itself rather than bringing a stop of its own, because a tab IS focusable
+  // and a control nested in one is a second press between a person and the
+  // place they were going. It opens only when the run is actually clipped:
+  // over a strip of short names it would be noise.
+  const labelRef = React.useRef<HTMLSpanElement>(null);
+  const reveal = useClippedReveal(labelRef);
+  const name = hint === undefined ? label : `${label} · ${hint}`;
 
   return (
+    <Tooltip {...reveal}>
+      <TooltipTrigger asChild>
     <div
       {...props}
       ref={setShell}
@@ -877,7 +901,7 @@ function TabShell({
       // disambiguator between two tabs called `app.ts`, and a narrow strip
       // stops drawing it — so a name that was the basename alone would leave
       // both the screen reader and the collapsed strip with two identical tabs.
-      aria-label={hint === undefined ? label : `${label} · ${hint}`}
+      aria-label={name}
       aria-selected={active}
       tabIndex={tabStop ? 0 : -1}
       onClick={onActivate}
@@ -976,8 +1000,13 @@ function TabShell({
       ) : (
         // A plain span, not a button: the tab div above is the `role="tab"`
         // that click, Enter and Space activate, so there is no nested
-        // interactive control inside it.
-        <span className={cn("max-w-40 truncate", labelClassName)}>
+        // interactive control inside it. It is also the element the reveal
+        // measures, which is why it is named.
+        <span
+          ref={labelRef}
+          data-slot="tab-label"
+          className={cn("max-w-40 truncate", labelClassName)}
+        >
           {revealLabel ? <TitleReveal text={label} /> : label}
         </span>
       )}
@@ -1000,6 +1029,13 @@ function TabShell({
       ) : null}
       {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
     </div>
+      </TooltipTrigger>
+      {/* The hint travels with it: on a strip narrow enough to be clipping the
+          label, the qualifier that tells two `app.ts` apart has already been
+          collapsed by the container query below, so a reveal without it would
+          answer half the question. */}
+      <TooltipContent side="bottom">{name}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1024,19 +1060,24 @@ export function TabDragGhost({ label }: { label: string }) {
     // folder strips, so a variant prop would be a knob nothing turns. The strip
     // that first joins a split surface wearing the pill drawing gets to add it.
     <TabVariantContext.Provider value="folder">
-      <TabShell
-        // Hidden from AT: the strip the tab came from still lists it, and
-        // dnd-kit narrates the drag itself through its own live region — a
-        // second `role="tab"` outside any tablist would be a third voice.
-        aria-hidden
-        data-testid="tab-drag-ghost"
-        label={label}
-        active
-        tabStop={false}
-        closable={false}
-        className="scale-[1.02] cursor-grabbing shadow-overlay"
-        onActivate={noop}
-      />
+      {/* The ghost draws a tab, and a tab carries a tooltip — so it needs the
+          same provider a strip mounts. It will never open one: nothing hovers
+          or focuses a thing that is following the pointer. */}
+      <TooltipProvider>
+        <TabShell
+          // Hidden from AT: the strip the tab came from still lists it, and
+          // dnd-kit narrates the drag itself through its own live region — a
+          // second `role="tab"` outside any tablist would be a third voice.
+          aria-hidden
+          data-testid="tab-drag-ghost"
+          label={label}
+          active
+          tabStop={false}
+          closable={false}
+          className="scale-[1.02] cursor-grabbing shadow-overlay"
+          onActivate={noop}
+        />
+      </TooltipProvider>
     </TabVariantContext.Provider>
   );
 }

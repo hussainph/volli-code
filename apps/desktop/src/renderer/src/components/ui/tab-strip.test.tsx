@@ -351,6 +351,19 @@ function affordance(towards: "Earlier" | "Later"): HTMLButtonElement | null {
   return container?.querySelector<HTMLButtonElement>(`[aria-label="${towards} tabs"]`) ?? null;
 }
 
+/** Make a tab's label draw less than it holds, which jsdom never does itself. */
+function clipLabel(tab: HTMLElement): void {
+  const run = tab.querySelector<HTMLElement>('[data-slot="tab-label"]');
+  if (run === null) throw new Error("no label run");
+  Object.defineProperty(run, "clientWidth", { configurable: true, get: () => 160 });
+  Object.defineProperty(run, "scrollWidth", { configurable: true, get: () => 420 });
+}
+
+/** What the reveal is currently saying, if it is open at all. It portals. */
+function revealText(): string | null {
+  return document.body.querySelector('[data-slot="tooltip-content"]')?.textContent ?? null;
+}
+
 /**
  * VC-288. A strip narrower than its tabs hid them behind one undiscoverable
  * gesture — Shift+wheel — and nothing else: no pointer affordance, and no way
@@ -529,6 +542,50 @@ describe("TabStrip overflow", () => {
 
     expect(port.scrollLeft).toBe(120);
     expect(wheel.defaultPrevented).toBe(true);
+  });
+
+  it("shows a clipped label in full on focus, and on hover, not only to AT", () => {
+    // VC-288 review. `aria-label` answers a screen reader; a sighted person
+    // arrowing along a narrow strip was left with `Rewrite the workt…` and no
+    // way to see the rest — file tabs do not even carry a `title`. The reveal
+    // rides the tab itself rather than a stop of its own: a tab is already
+    // focusable, and a second control inside it would be one more press
+    // between a person and the thing they were reaching for.
+    const label = "Rewrite the worktree archive path so a reopened ticket finds it";
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label={label} hint="src" active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    clipLabel(tab!);
+
+    act(() => tab?.focus());
+
+    // Radix opens on focus with no delay at all — the delay is the pointer's,
+    // for a sweep along a row of controls — so this is the keyboard's reveal,
+    // synchronously, in the frame the focus landed.
+    expect(revealText()).toBe(`${label} · src`);
+  });
+
+  it("stays quiet for a label the tab draws whole", () => {
+    // A tooltip over every tab in a strip is noise a person learns to ignore,
+    // which is how the one that matters gets missed. The measurement is what
+    // keeps the reveal to the tabs that are actually hiding something.
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label="app.ts" active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+
+    act(() => tab?.focus());
+
+    expect(revealText()).toBeNull();
   });
 
   it("keeps a label the tab is too narrow to draw whole in its accessible name", () => {

@@ -65,6 +65,7 @@ import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
@@ -277,16 +278,11 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
 /**
  * One truncating venue value, and the reveal that is the rest of it.
  *
- * A button that goes nowhere: the reveal is the whole act, so there is nothing
- * for a press to do that focus has not already done. It is a button anyway,
- * because that is what puts it in the tab order — and being in the tab order is
- * what makes Radix open the tooltip on focus as well as on hover. The whole
- * value rides the accessible name too, so a screen reader never has to open
- * anything.
- *
- * `text-left` because a button centres its content and these are values in a
- * column; `cursor-default` because a pointer should not be promised a
- * destination this control does not have.
+ * The shared {@link ValueReveal} does the work — a focus stop that goes
+ * nowhere, the untruncated value as its accessible name, a bubble on hover and
+ * on focus alike. What is local is the drawing: `text-left` because a button
+ * centres its content and these are values in a column, and the rail's own mono
+ * ink.
  */
 function VenueValue({
   term,
@@ -298,20 +294,14 @@ function VenueValue({
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${term} · ${full}`}
-          className="flex min-w-0 cursor-default items-center gap-1 rounded-sm text-left font-mono text-ui text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
-        >
-          {children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="left" className="font-mono">
-        {term} · {full}
-      </TooltipContent>
-    </Tooltip>
+    <ValueReveal
+      term={term}
+      full={full}
+      side="left"
+      className="flex min-w-0 items-center gap-1 rounded-sm text-left font-mono text-ui text-muted-foreground"
+    >
+      {children}
+    </ValueReveal>
   );
 }
 
