@@ -90,6 +90,9 @@ function renderStrip(onReorder: (movedId: string, ids: readonly string[]) => voi
   });
 }
 
+/** Every fake `ResizeObserver` a render made, so a test can fire one. */
+let observers: { notify(): void }[] = [];
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // jsdom implements no media queries at all, and a sortable tab asks about
@@ -100,6 +103,26 @@ beforeEach(() => {
     addEventListener: () => {},
     removeEventListener: () => {},
   }));
+  // …and no `ResizeObserver` either, which the strip installs to know whether
+  // its tabs overflow. Handing the callback back to the test is the seam: what
+  // is worth pinning is what the strip DOES with a new measurement.
+  observers = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private readonly callback: () => void) {
+        observers.push(this as unknown as { notify(): void });
+      }
+      observe(): void {}
+      // dnd-kit measures with one of these too, and it unobserves as a node
+      // detaches; a fake missing the method throws inside React's ref cleanup.
+      unobserve(): void {}
+      disconnect(): void {}
+      notify(): void {
+        this.callback();
+      }
+    },
+  );
   Element.prototype.getBoundingClientRect = function getRect(this: Element) {
     return layout(this);
   };
@@ -207,5 +230,159 @@ describe("TabStrip arrangement", () => {
 
     expect(onActivate).toHaveBeenCalledTimes(1);
     expect(onReorder).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------- reaching a tab that is clipped */
+
+/** The scroller, with the geometry jsdom has none of. */
+function scroller(): HTMLElement {
+  const found = container?.querySelector<HTMLElement>('[data-slot="tab-scroll"]');
+  if (found === null || found === undefined) throw new Error("no scroller");
+  return found;
+}
+
+/** A 300px window over `count` tabs of 100px each, parked at `scrollLeft`. */
+function measureScroller(count: number, scrollLeft = 0): HTMLElement {
+  const element = scroller();
+  let left = scrollLeft;
+  Object.defineProperty(element, "clientWidth", { configurable: true, get: () => 300 });
+  Object.defineProperty(element, "scrollWidth", { configurable: true, get: () => count * 100 });
+  Object.defineProperty(element, "scrollLeft", {
+    configurable: true,
+    get: () => left,
+    set: (next: number) => {
+      left = next;
+    },
+  });
+  // The gliding path, spelled rather than left to jsdom: whether it implements
+  // `scrollTo` is not this test's subject, and the strip prefers it whenever
+  // the reader has not asked for reduced motion.
+  Object.defineProperty(element, "scrollTo", {
+    configurable: true,
+    value: (options: ScrollToOptions) => {
+      left = options.left ?? left;
+    },
+  });
+  return element;
+}
+
+/** A plain strip of `count` tabs, the `active`th one selected. */
+function renderTabs(count: number, active: number): void {
+  act(() => {
+    root?.render(
+      <TabStrip label="Home tabs">
+        {Array.from({ length: count }, (_, index) => (
+          <Tab
+            key={index}
+            label={`Tab ${index}`}
+            active={index === active}
+            tabStop={index === active}
+            closable={false}
+            onActivate={() => {}}
+          />
+        ))}
+      </TabStrip>,
+    );
+  });
+}
+
+function affordance(towards: "Earlier" | "Later"): HTMLButtonElement | null {
+  return (
+    container?.querySelector<HTMLButtonElement>(`[aria-label="${towards} tabs"]`) ?? null
+  );
+}
+
+/**
+ * VC-288. A strip narrower than its tabs hid them behind one undiscoverable
+ * gesture — Shift+wheel — and nothing else: no pointer affordance, and no way
+ * at all from a keyboard. It could also leave the SELECTED tab out of view and
+ * simply stay there, which at a split pane's width is most of the time.
+ */
+describe("TabStrip overflow", () => {
+  it("brings the selected tab into view when the selection lands on a clipped one", () => {
+    renderTabs(9, 0);
+    const port = measureScroller(9);
+    // Tab 7 sits at 700px in a 300px window: without this it is simply not on
+    // screen, and nothing about the strip says it exists.
+    renderTabs(9, 7);
+    expect(port.scrollLeft).toBe(700 + 100 + 8 - 300);
+  });
+
+  it("follows the keyboard onto a tab the arrows walked out of view", () => {
+    renderTabs(9, 0);
+    const port = measureScroller(9);
+    const tabs = tabsInStrip();
+    tabs[0]?.focus();
+
+    // ArrowLeft from the first tab wraps to the last, which is the furthest
+    // out of view a single keystroke can put focus.
+    press(tabs[0]!, "ArrowLeft", "ArrowLeft");
+
+    expect(document.activeElement).toBe(tabs[8]);
+    expect(port.scrollLeft).toBe(600);
+  });
+
+  it("leaves the strip where it is when the tab is already whole in view", () => {
+    renderTabs(9, 0);
+    const port = measureScroller(9, 120);
+    const tabs = tabsInStrip();
+    tabs[1]?.focus();
+    // Tab 1 spans 100-200 inside a window showing 120-420. Writing anything
+    // here would fight a person mid-drag of the strip.
+    expect(port.scrollLeft).toBe(120);
+  });
+
+  it("offers a pointer a way to the tabs it cannot see, and only while there are some", () => {
+    renderTabs(9, 0);
+    const port = measureScroller(9);
+    act(() => observers[0]?.notify());
+
+    const later = affordance("Later");
+    expect(later).not.toBeNull();
+    // Nothing to the left yet, so that end says so rather than pretending.
+    expect(affordance("Earlier")?.disabled).toBe(true);
+    expect(later?.disabled).toBe(false);
+
+    act(() => later?.click());
+    // Four fifths of a window, so one tab of the last view stays in this one.
+    expect(port.scrollLeft).toBe(240);
+  });
+
+  it("draws no affordance at all for a strip that fits", () => {
+    renderTabs(2, 0);
+    measureScroller(2);
+    act(() => observers[0]?.notify());
+
+    expect(affordance("Earlier")).toBeNull();
+    expect(affordance("Later")).toBeNull();
+  });
+
+  it("keeps the affordances out of the tablist they scroll", () => {
+    // They are controls ON the tabs, not tabs: inside `role="tablist"` they
+    // would join the roving tabindex and be counted by every arrow key.
+    renderTabs(9, 0);
+    measureScroller(9);
+    act(() => observers[0]?.notify());
+
+    const tablist = container?.querySelector('[role="tablist"]');
+    expect(tablist?.contains(affordance("Later"))).toBe(false);
+    expect(affordance("Later")?.tabIndex).toBe(0);
+  });
+
+  it("keeps a hint that a narrow strip stops drawing in the tab's own name", () => {
+    // The hint is what tells `src/app.ts` from `docs/app.ts`. It gives way by
+    // the STRIP's width rather than the window's (`@container/tab-strip`), so
+    // the word it collapses has to survive somewhere: the accessible name.
+    act(() => {
+      root?.render(
+        <TabStrip label="Home tabs">
+          <Tab label="app.ts" hint="src" active tabStop closable={false} onActivate={() => {}} />
+        </TabStrip>,
+      );
+    });
+    const [tab] = tabsInStrip();
+    expect(tab?.getAttribute("aria-label")).toBe("app.ts · src");
+    expect(container?.querySelector('[data-testid="tab-hint"]')?.className).toContain("@min-[");
   });
 });

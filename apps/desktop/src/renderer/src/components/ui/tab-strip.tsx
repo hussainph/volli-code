@@ -48,6 +48,8 @@
  * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
+import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   closestCenter,
@@ -73,15 +75,22 @@ import type { TabOrder } from "@volli/shared";
 // drift the field's size apart again — which is exactly what they had done
 // (`h-5 w-40 text-ui` against `h-5 w-32 text-sm`). The field owns that size now,
 // so a strip states only its width.
+import { Button } from "@renderer/components/ui/button";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
-import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
 import { tabDropOrder } from "./tab-reorder";
-import { scrollTabsWithWheel } from "./tab-scroll";
+import {
+  scrollTabsWithWheel,
+  tabOverflow,
+  tabScrollLeftFor,
+  tabScrollStep,
+  type TabOverflow,
+} from "./tab-scroll";
 
 export type TabVariant = "folder" | "pill";
 
@@ -155,6 +164,48 @@ function moveTabFocus(from: HTMLElement, move: TabFocusMove): void {
   if (found === null) return;
   const next = movedTabIndex(found.tabs.length, found.index, move);
   if (next !== null) found.tabs[next]?.focus();
+}
+
+/**
+ * Scroll `tab` into view inside its own strip (VC-288).
+ *
+ * `scrollIntoView` is what this would normally be, and it is not usable here:
+ * it walks EVERY scrollable ancestor, so revealing a tab in a pane's strip also
+ * scrolls the transcript, the rail and the window behind it — a tab selected
+ * from a chord would take the whole plane with it. The travel is computed
+ * against this one scroller instead (`tab-scroll.ts`) and written to it alone.
+ *
+ * The tab's offset is read from the two rectangles rather than from
+ * `offsetLeft`, which answers relative to the nearest positioned ancestor and
+ * would be measured from a different origin the day a strip grows one.
+ */
+function revealTab(tab: HTMLElement, smooth: boolean): void {
+  const scroller = tab.closest<HTMLElement>('[data-slot="tab-scroll"]');
+  if (scroller === null) return;
+  const box = tab.getBoundingClientRect();
+  const port = scroller.getBoundingClientRect();
+  const at = tabScrollLeftFor(scroller, {
+    left: box.left - port.left + scroller.scrollLeft,
+    width: box.width,
+  });
+  if (at === null) return;
+  scrollTabsTo(scroller, at, smooth);
+}
+
+/**
+ * Write a scroll position, gliding where the platform can and the reader has
+ * not asked it not to.
+ *
+ * `scrollTo` is guarded because jsdom has none: a test environment that
+ * measures nothing still has to be able to observe the position this lands on,
+ * and `scrollLeft` is the assignment every browser also honours.
+ */
+function scrollTabsTo(scroller: HTMLElement, at: number, smooth: boolean): void {
+  if (smooth && typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ left: at, behavior: "smooth" });
+    return;
+  }
+  scroller.scrollLeft = at;
 }
 
 /**
@@ -247,12 +298,52 @@ export function TabStrip({
     return () => scroller.removeEventListener("wheel", onWheel);
   }, []);
 
+  // WHAT IS OUT OF VIEW, AND WHICH WAY (VC-288). Three things move this and
+  // only one of them is a scroll: the strip itself resizing (a split, a rail
+  // opening, the window), its CONTENT resizing (a tab opened or closed), and
+  // the person travelling. The observer watches both boxes for that reason —
+  // a strip that only measured itself would keep offering a chevron to a tab
+  // that had since been closed.
+  const [overflow, setOverflow] = React.useState<TabOverflow>(NO_TAB_OVERFLOW);
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    const measure = (): void => setOverflow(tabOverflow(scroller));
+    measure();
+    scroller.addEventListener("scroll", measure, { passive: true });
+    // Guarded because jsdom ships no `ResizeObserver`, and half the surfaces in
+    // this app draw a strip: a component that threw on mount without one would
+    // make all of them untestable to buy nothing. Measured once either way, so
+    // a strip in that environment still knows whether it overflows at mount.
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(scroller);
+    const tablist = scroller.firstElementChild;
+    if (tablist !== null) observer?.observe(tablist);
+    return () => {
+      observer?.disconnect();
+      scroller.removeEventListener("scroll", measure);
+    };
+  }, [children]);
+
+  // The motion preference is read at the press rather than during the render
+  // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
+  // the test suite, and `matchMedia` does not exist there — a flag a component
+  // only needs while it is moving has no business being a subscription.
+  const travel = (towards: "prev" | "next") => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    scrollTabsTo(scroller, tabScrollStep(scroller, towards), !prefersReducedMotion());
+  };
+
   const strip = (
     <div
       data-slot="tab-strip"
       data-variant={variant}
       className={cn(
-        "flex shrink-0 border-b border-border bg-rail",
+        // `@container/tab-strip`: what a tab may stop drawing is decided by the
+        // width of THIS strip, never the window's. A split puts two of these in
+        // one window, and a media query cannot tell them apart.
+        "@container/tab-strip flex shrink-0 border-b border-border bg-rail",
         // A folder strip is only as tall as its tabs plus the 4px above them,
         // because the tabs ARE its bottom edge. A pill strip centres its tabs
         // in a band of its own.
@@ -261,6 +352,23 @@ export function TabStrip({
       )}
       {...props}
     >
+      {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
+          gesture was Shift+wheel and nothing else: a convention a mouse user has
+          to already know, on a strip whose scrollbar is deliberately hidden.
+          The keyboard's way is the arrows it always had — what VC-288 added
+          there is that focus now drags the strip along with it.
+
+          Both ends stay mounted while the strip overflows, with the arrived one
+          disabled rather than removed: a chevron that vanishes at the end of a
+          travel re-lays the tabs out under the pointer that was pressing it. */}
+      {overflow.overflowing ? (
+        <TabScrollAffordance
+          towards="prev"
+          folder={folder}
+          disabled={overflow.atStart}
+          onTravel={() => travel("prev")}
+        />
+      ) : null}
       <div
         ref={scrollerRef}
         data-slot="tab-scroll"
@@ -287,6 +395,14 @@ export function TabStrip({
           </TabVariantContext.Provider>
         </div>
       </div>
+      {overflow.overflowing ? (
+        <TabScrollAffordance
+          towards="next"
+          folder={folder}
+          disabled={overflow.atEnd}
+          onTravel={() => travel("next")}
+        />
+      ) : null}
       {actions !== undefined ? (
         // The divider is half the separation; vertical alignment is the rest.
         // Tabs sit on the strip's bottom edge because they fuse with the plane
@@ -307,6 +423,54 @@ export function TabStrip({
 
   if (reorder === undefined || inSurface) return strip;
   return <TabStripDnd reorder={reorder}>{strip}</TabStripDnd>;
+}
+
+/** A strip that has not been measured yet reaches for nothing. */
+const NO_TAB_OVERFLOW: TabOverflow = { overflowing: false, atStart: true, atEnd: true };
+
+/**
+ * One end of an overflowing strip, as a control.
+ *
+ * `aria-label` says the DIRECTION IN TABS — "Earlier tabs", "Later tabs" —
+ * rather than in pixels or in glyphs. "Scroll left" names the mechanism; what a
+ * person is reaching for is the tab that is not on screen, and on a strip that
+ * can also be dragged into a new order "left" is a word about the current
+ * arrangement rather than about the list.
+ *
+ * Outside the `role="tablist"`, deliberately: inside it these would join the
+ * roving tabindex and be counted by every arrow key as two more tabs.
+ */
+function TabScrollAffordance({
+  towards,
+  folder,
+  disabled,
+  onTravel,
+}: {
+  towards: "prev" | "next";
+  folder: boolean;
+  disabled: boolean;
+  onTravel(): void;
+}) {
+  const Icon = towards === "prev" ? CaretLeftIcon : CaretRightIcon;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      data-slot="tab-scroll-affordance"
+      data-towards={towards}
+      aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
+      disabled={disabled}
+      onClick={onTravel}
+      // A folder strip's tabs stand on its bottom edge; a control that spanned
+      // the band would read as one of them, so it sits on the same baseline.
+      className={cn("shrink-0", folder ? "mb-0.5 self-end" : "self-center")}
+    >
+      {/* `bold` is the ≤12px tier (CLAUDE.md): a caret at this size draws
+          lighter than the tab labels beside it at regular. */}
+      <Icon weight="bold" className="size-3" />
+    </Button>
+  );
 }
 
 /** The sortable list itself, and the flag that tells a tab it may register. */
@@ -588,6 +752,28 @@ function TabShell({
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
+  // Composed rather than assigned: `props.ref` is already dnd-kit's node ref
+  // joined with Radix's context-menu one, and a second `ref` on the element
+  // would silently replace both.
+  const shellRef = React.useRef<HTMLDivElement>(null);
+  const setShell = useComposedTabRef(
+    React.useCallback((node: HTMLElement | null) => {
+      shellRef.current = node as HTMLDivElement | null;
+    }, []),
+    props.ref,
+  );
+  // A SELECTED TAB IS BROUGHT INTO VIEW (VC-288). A strip narrower than its
+  // tabs could hold the selection off-screen indefinitely — open a file from
+  // the palette in a split pane and the tab that opened was simply not there.
+  // A layout effect, so the travel is part of the frame the selection lands on
+  // rather than a jump after it; keyed on `active` alone, because a tab that is
+  // already selected must not re-centre itself on every streamed re-render
+  // under a person who has scrolled the strip somewhere else.
+  React.useLayoutEffect(() => {
+    if (!active) return;
+    const shell = shellRef.current;
+    if (shell !== null) revealTab(shell, !prefersReducedMotion());
+  }, [active]);
   // The close is hidden mid-rename on purpose: the only two exits from an
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
@@ -596,12 +782,26 @@ function TabShell({
   return (
     <div
       {...props}
+      ref={setShell}
       data-slot="tab"
       role="tab"
-      aria-label={label}
+      // The hint rides the NAME as well as the row (VC-288). It is the
+      // disambiguator between two tabs called `app.ts`, and a narrow strip
+      // stops drawing it — so a name that was the basename alone would leave
+      // both the screen reader and the collapsed strip with two identical tabs.
+      aria-label={hint === undefined ? label : `${label} · ${hint}`}
       aria-selected={active}
       tabIndex={tabStop ? 0 : -1}
       onClick={onActivate}
+      // Focus follows the arrows through the roving tabindex, and the strip
+      // follows focus. On the element rather than in `moveTabFocus` so it also
+      // covers the ways focus arrives that no arrow key touched: Tab into the
+      // strip, a successor inheriting focus from a close, a caller's own
+      // `.focus()`.
+      onFocus={(event) => {
+        props.onFocus?.(event);
+        revealTab(event.currentTarget, !prefersReducedMotion());
+      }}
       // dnd-kit's pointer activator, composed over whatever the caller already
       // listens for here (Radix's context menu uses this event for its
       // long-press). A drag that actually engages stops the click that would
@@ -698,9 +898,14 @@ function TabShell({
         // ACTIVE tab too, where the label is at full strength. It used to be a
         // step smaller instead; at one type size for the whole tab, weight of
         // colour is what is left to say it with.
+        // AND IT GIVES WAY BY THE STRIP'S WIDTH, not the window's (VC-288):
+        // `@container/tab-strip` is on the strip itself, so a pane narrow
+        // enough to be clipping tabs spends its room on the labels rather than
+        // on the qualifier after them. The word survives in the tab's own
+        // accessible name, which is the whole reason it may be dropped here.
         <span
           data-testid="tab-hint"
-          className="max-w-28 shrink-0 truncate text-muted-foreground/70"
+          className="hidden max-w-28 shrink-0 truncate text-muted-foreground/70 @min-[420px]/tab-strip:inline"
         >
           {hint}
         </span>

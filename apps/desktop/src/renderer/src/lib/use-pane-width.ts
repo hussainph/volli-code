@@ -42,6 +42,11 @@ export function usePaneWidth(
     if (element === null) return;
     const measure = (): void => setWidth(element.clientWidth);
     measure();
+    // Guarded: jsdom ships no `ResizeObserver`, and a hook that threw on mount
+    // without one would take every component that measures itself out of the
+    // test suite. The first measurement still lands, so a caller in that
+    // environment gets one honest width rather than none.
+    if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
