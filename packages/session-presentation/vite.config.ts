@@ -28,7 +28,15 @@ export default defineConfig({
         "src/registry.ts",
         "src/session-model.ts",
         "src/session-slice.ts",
+        "src/session-source.ts",
         "src/surface-store.ts",
+        // What a CLOSED terminal's saved record says, and which controls it
+        // makes meaningful (VC-290). In the gate because every branch here is a
+        // refusal to guess: an exit nobody observed must not read as success, a
+        // deleted ticket must not read as a project session, and a scope that
+        // no longer exists must offer no recreation. A missed branch is a
+        // confident sentence about a Session nothing actually observed.
+        "src/terminal-history.ts",
         "src/transcript.ts",
         "src/wire.ts",
       ],

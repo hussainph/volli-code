@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { SessionRecord, Ticket } from "@volli/shared";
+import { buildTerminalHistoryDetail } from "@volli/session-presentation";
+import { getHarnessAdapter, type SessionRecord, type Ticket } from "@volli/shared";
 
-import { buildTerminalSessionDetail } from "./session-detail-model";
 import {
   SessionDetailLoadFailed,
   SessionDetailPanel,
@@ -54,14 +54,18 @@ function ticket(overrides: Partial<Ticket> & { id: string }): Ticket {
   };
 }
 
+/**
+ * The panel over the real surface model, not a hand-built one: what it draws
+ * has to be what `buildTerminalHistoryDetail` decided, or these cases would
+ * only check that a component can render props somebody invented.
+ */
 function panel(
-  input: Parameters<typeof buildTerminalSessionDetail>[0],
-  options: { resumable?: boolean; busy?: boolean } = {},
+  input: Omit<Parameters<typeof buildTerminalHistoryDetail>[0], "harnesses">,
+  options: { busy?: boolean } = {},
 ): string {
   return renderToStaticMarkup(
     <SessionDetailPanel
-      detail={buildTerminalSessionDetail(input)}
-      resumable={options.resumable ?? false}
+      detail={buildTerminalHistoryDetail({ ...input, harnesses: getHarnessAdapter })}
       busy={options.busy ?? false}
       onNewTerminal={noop}
       onResume={noop}
@@ -148,34 +152,34 @@ describe("SessionDetailPanel", () => {
   // own history back. It is shown only where the harness check allows it, and
   // it never stands in for creating a new terminal.
   it("keeps Resume session beside New terminal here, never instead of it", () => {
-    const resumable = panel(
-      {
-        record: record({ id: "s1", ticketId: "t1" }),
-        ticket: ticket({ id: "t1" }),
-        ticketPrefix: "VC",
-      },
-      { resumable: true },
-    );
+    const resumable = panel({
+      record: record({ id: "s1", ticketId: "t1", launchKind: "agent" }),
+      ticket: ticket({ id: "t1" }),
+      ticketPrefix: "VC",
+    });
 
     expect(resumable).toContain("Resume session");
     expect(resumable).toContain("New terminal here");
 
+    // A bare shell has no agent history to hand back, so only the new-terminal
+    // verb survives — and it is not renamed to cover for the missing one.
     const plain = panel({
-      record: record({ id: "s1", ticketId: "t1" }),
+      record: record({ id: "s1", ticketId: "t1", launchKind: "shell" }),
       ticket: ticket({ id: "t1" }),
       ticketPrefix: "VC",
     });
     expect(plain).not.toContain("Resume session");
+    expect(plain).toContain("New terminal here");
   });
 
   it("goes quiet while a Session it started is coming up", () => {
     const html = panel(
       {
-        record: record({ id: "s1", ticketId: "t1" }),
+        record: record({ id: "s1", ticketId: "t1", launchKind: "agent" }),
         ticket: ticket({ id: "t1" }),
         ticketPrefix: "VC",
       },
-      { resumable: true, busy: true },
+      { busy: true },
     );
 
     expect(html.match(/disabled=""/g)?.length).toBe(2);

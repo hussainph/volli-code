@@ -4,7 +4,7 @@
  * happened to be in front of the Session's ticket.
  *
  * Presentational and store-free on purpose: everything on screen is either a
- * field of {@link TerminalSessionDetail} or one of two fixed sentences, so the
+ * field of {@link TerminalHistoryDetail} or one of two fixed sentences, so the
  * panel can be rendered in a test with no window, no dialog and no fetch around
  * it — which is where the promises this ticket makes are actually checked.
  *
@@ -19,23 +19,25 @@
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
-import { Button } from "@renderer/components/ui/button";
-import { formatStamp } from "@renderer/lib/relative-time";
 import {
   TERMINAL_LAST_COMMAND_NOT_RECORDED,
   TERMINAL_OUTPUT_NOT_SAVED,
-  type TerminalSessionDetail,
-} from "./session-detail-model";
+  type TerminalHistoryDetail,
+} from "@volli/session-presentation";
+
+import { Button } from "@renderer/components/ui/button";
+import { formatStamp } from "@renderer/lib/relative-time";
 
 export interface SessionDetailPanelProps {
-  detail: TerminalSessionDetail;
   /**
-   * Whether the existing harness-specific check allows a resume
-   * (`canResumeSession`). Passed in rather than derived here: the rule belongs
-   * to the harness catalogue, and a second copy of it beside a button is how a
-   * surface starts offering Resume for a harness that cannot do it.
+   * The portable surface model — what this record says and which controls it
+   * makes meaningful. Both verbs are drawn from `detail.actions`, never
+   * re-decided here: whether a scope can be recreated into and whether a
+   * harness can be resumed are Session Presentation Contract decisions, and a
+   * second copy of either beside a button is how one client starts offering
+   * Resume for a harness that cannot do it.
    */
-  resumable: boolean;
+  detail: TerminalHistoryDetail;
   /** A Session started from this panel is coming up; both verbs stand down. */
   busy: boolean;
   onNewTerminal(): void;
@@ -58,7 +60,6 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
 
 export function SessionDetailPanel({
   detail,
-  resumable,
   busy,
   onNewTerminal,
   onResume,
@@ -100,13 +101,13 @@ export function SessionDetailPanel({
             stays where it is. Resume, when the harness allows it, hands an agent
             its own history back, which is a different promise; it sits beside
             this one and never replaces it. */}
-        {detail.recreate !== null ? (
+        {detail.actions.recreate !== null ? (
           <Button variant="default" disabled={busy} onClick={onNewTerminal}>
             <TerminalWindowIcon aria-hidden />
             New terminal here
           </Button>
         ) : null}
-        {resumable ? (
+        {detail.actions.resume !== null ? (
           <Button variant="outline" disabled={busy} onClick={onResume}>
             <ArrowClockwiseIcon aria-hidden />
             Resume session

@@ -30,6 +30,7 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
+import { sessionSourceLabel } from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
@@ -45,7 +46,6 @@ import {
   type LatestSessionSignal,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "../ticket/session-history";
 import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,

@@ -23,8 +23,9 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { buildTerminalHistoryDetail } from "@volli/session-presentation";
+
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
-import { buildTerminalSessionDetail } from "./session-detail-model";
 import {
   SessionDetailLoadFailed,
   SessionDetailPanel,
@@ -32,7 +33,6 @@ import {
   SessionDetailUnknown,
 } from "./session-detail-panel";
 import { resumeTicketSession, startProjectTerminal, startTicketTerminal } from "./session-create";
-import { canResumeSession } from "@renderer/components/ticket/session-history";
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
@@ -123,10 +123,17 @@ function SessionDetailBody({
     );
   }
 
-  const detail = buildTerminalSessionDetail({
+  // What the record says and which verbs it makes meaningful — decided by the
+  // Session Presentation Contract, not here. This component owns the modal, the
+  // address it was opened with, and the actual launch; it re-decides nothing
+  // about the record (`@volli/session-presentation`).
+  const detail = buildTerminalHistoryDetail({
     record,
     ticket,
     ticketPrefix: project.ticketPrefix,
+    // The hydrated catalogue, so a registered BYO harness that can genuinely be
+    // resumed is offered the action.
+    harnesses: launchAdapter,
   });
   const busy = (record.ticketId ?? projectId) in starting;
 
@@ -138,7 +145,7 @@ function SessionDetailBody({
    * just asked for.
    */
   const newTerminal = (): void => {
-    const recreate = detail.recreate;
+    const recreate = detail.actions.recreate;
     if (recreate === null) return;
     onDone();
     if (recreate.kind === "project") {
@@ -165,8 +172,9 @@ function SessionDetailBody({
    * ended record's row stays exactly where it is.
    */
   const resume = (): void => {
-    if (record.ticketId === null) return;
-    const ticketId = record.ticketId;
+    const resumable = detail.actions.resume;
+    if (resumable === null) return;
+    const ticketId = resumable.ticketId;
     onDone();
     useWorkspaceStore.getState().openTicketWorkspace(projectId, ticketId);
     void resumeTicketSession(ticketScope(projectId, ticketId), record.id).then((booted) => {
@@ -182,14 +190,6 @@ function SessionDetailBody({
       <DialogTitle className="sr-only">{detail.title}</DialogTitle>
       <SessionDetailPanel
         detail={detail}
-        // Resume is a TICKET Session's affordance (main resolves the resume
-        // command inside that ticket's worktree), and only when the harness
-        // that was running can actually be resumed.
-        resumable={
-          record.ticketId !== null &&
-          detail.recreate !== null &&
-          canResumeSession({ kind: "terminal", record }, launchAdapter)
-        }
         busy={busy}
         onNewTerminal={newTerminal}
         onResume={resume}
