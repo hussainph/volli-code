@@ -19,6 +19,12 @@ import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { errorMessage } from "@volli/shared";
 
+import {
+  DATA_EXPORT_ACTION_LABEL,
+  DATA_EXPORT_CONFIRM_TITLE,
+  DATA_EXPORT_CONTENTS,
+  DATA_EXPORT_LIMITS,
+} from "../../../../../data-export-copy";
 import type {
   DirtyWorktreeOrphan,
   KeptWorktreeOrphan,
@@ -196,13 +202,13 @@ function DatabaseSection() {
     try {
       const result = await window.api.database("export");
       if (!result.ok) {
-        toastError(`Couldn't export database: ${result.error}`);
+        toastError(`Couldn't export data: ${result.error}`);
         return;
       }
       setSizeBytes(result.sizeBytes);
       setSizeLoaded(true);
     } catch (error) {
-      toastError(`Couldn't export database: ${errorMessage(error)}`);
+      toastError(`Couldn't export data: ${errorMessage(error)}`);
     } finally {
       setExporting(false);
       setExportOpen(false);
@@ -232,7 +238,7 @@ function DatabaseSection() {
               : "Loading…"}
           </span>
         </PrefRow>
-        <PrefRow label="Database export">
+        <PrefRow label={DATA_EXPORT_ACTION_LABEL}>
           <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
             Export…
           </Button>
@@ -247,10 +253,9 @@ function DatabaseSection() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Export database?</AlertDialogTitle>
+            <AlertDialogTitle>{DATA_EXPORT_CONFIRM_TITLE}</AlertDialogTitle>
             <AlertDialogDescription>
-              Creates a JSON file containing every project, ticket, comment, session, label, and
-              setting in Volli.
+              <DataExportConfirmBody />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -267,6 +272,26 @@ function DatabaseSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * What the export is, said before it runs.
+ *
+ * A named component rather than inline JSX because the sentence is the
+ * feature: the dialog it sits in only mounts when opened, so this is what a
+ * test can hold, and the limits cannot quietly drift back into a promise of
+ * "every project, ticket, comment, session, label, and setting" (VC-283).
+ *
+ * The exported/limited split is deliberate — the limits come FIRST, because a
+ * person skimming reads one sentence and the one that matters is the one that
+ * says a rescue is not possible from this file.
+ */
+export function DataExportConfirmBody() {
+  return (
+    <>
+      {DATA_EXPORT_LIMITS} {DATA_EXPORT_CONTENTS}
     </>
   );
 }
