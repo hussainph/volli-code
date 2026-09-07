@@ -435,7 +435,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
               : command.intent.kind === "session.retitle"
                 ? { kind: "session.retitled", title: command.intent.title }
                 : command.intent.kind === "model.select"
-                  ? { kind: "model.selected", selection: command.intent.selection }
+                  ? modelSelectedPayload(command.intent)
                   : command.intent.kind === "session.stop"
                     ? {
                         kind: "session.stopped",
@@ -548,7 +548,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           provenance: request.provenance,
           attachmentId: request.attachmentId,
           commandId: command.id,
-          payload: { kind: "model.selected", selection: command.intent.selection },
+          payload: modelSelectedPayload(command.intent),
         };
         const receiptEvent = receiptRecordedEvent(
           ports.ids.next("event"),
@@ -618,6 +618,21 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         }),
       );
     },
+  };
+}
+
+/**
+ * The `model.selected` fact for a `model.select` intent. The tier rides along
+ * only when the intent named one (VC-259), so an exact-id pick writes the
+ * same bytes it always did.
+ */
+function modelSelectedPayload(
+  intent: Extract<SessionCommandIntent, { kind: "model.select" }>,
+): Extract<SessionEventPayload, { kind: "model.selected" }> {
+  return {
+    kind: "model.selected",
+    selection: intent.selection,
+    ...(intent.tier === undefined ? {} : { tier: intent.tier }),
   };
 }
 

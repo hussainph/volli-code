@@ -538,6 +538,8 @@ describe("Sessions", () => {
           selection: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "low" },
         },
       });
+      // An exact-id override names no tier, so none is recorded.
+      expect(commands[1]?.command).not.toHaveProperty("tier");
     });
 
     it("merges a reasoning-only override onto the configured default", async () => {
@@ -819,8 +821,10 @@ describe("Sessions", () => {
       // tier's name, with the project so its own pin still comes first.
       expect(asked).toEqual([["fast", "project-1"]]);
       expect(started.model).toEqual(FAST);
+      // The pin is the model. The tier rides beside it as provenance — what
+      // the header and `session list` say the model was asked for as.
       expect(commands[1]).toMatchObject({
-        command: { kind: "model.select", selection: FAST },
+        command: { kind: "model.select", selection: FAST, tier: "fast" },
       });
     });
 

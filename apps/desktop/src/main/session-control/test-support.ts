@@ -226,6 +226,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
     signal: null,
     stopped: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: false,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,

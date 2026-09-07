@@ -36,6 +36,8 @@
  */
 
 import { COMPACTION_REASONS, REASONING_LEVELS } from "./agent-runtime";
+import { MODEL_TIERS } from "./model-access-policy";
+import type { ModelTier } from "./model-access-policy";
 import type { ModelSelection, PromptResource } from "./agent-runtime";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
@@ -162,6 +164,7 @@ const codecs = {
     decode: (record, context) => ({
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
+      ...decodeModelTier(record.tier, `${context}.tier`),
     }),
     scrub: (payload) => payload,
   },
@@ -762,6 +765,7 @@ export interface SessionPresentationProjection extends Pick<
   | "status"
   | "signal"
   | "modelSelection"
+  | "modelTier"
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
@@ -851,6 +855,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
       return {
         kind,
         selection: decodeModelSelection(row.selection, `${context}.selection`),
+        ...decodeModelTier(row.tier, `${context}.tier`),
       };
     case "executor.start":
       return {
@@ -1095,6 +1100,16 @@ function decodeModelSelection(value: unknown, context: string): ModelSelection {
     modelId: readString(row.modelId, `${context}.modelId`),
     reasoningLevel: enumValue(row.reasoningLevel, REASONING_LEVELS, `${context}.reasoningLevel`),
   };
+}
+
+/**
+ * The optional tier beside a model selection (VC-259), as a spreadable
+ * fragment: absent stays absent — a record written before tiers existed, or
+ * by an exact-id pick, must decode to the same object it always did — and a
+ * present value is held to the closed tier list like any other enum field.
+ */
+function decodeModelTier(value: unknown, context: string): { tier?: ModelTier } {
+  return value === undefined ? {} : { tier: enumValue(value, MODEL_TIERS, context) };
 }
 
 function decodeAttachment(value: unknown, context: string): SessionAttachment {

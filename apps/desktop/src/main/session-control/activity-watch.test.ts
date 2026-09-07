@@ -48,6 +48,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     lastActivityAt: 1,
     bornTicketless: false,
     modelSelection: null,
+    modelTier: null,
     ...overrides,
   };
 }

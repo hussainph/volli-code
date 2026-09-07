@@ -3,6 +3,7 @@ import type {
   CommandReceipt,
   CompactionReason,
   ModelSelection,
+  ModelTier,
   Session,
   SessionAttachment,
   SessionAttachmentContinuity,
@@ -119,7 +120,8 @@ export type SessionClientCommand =
       agent?: string | null;
       variant?: string | null;
     }
-  | { kind: "model.select"; selection: ModelSelection }
+  /** `tier`: the named tier this selection resolved from, when a start named one (VC-259). */
+  | { kind: "model.select"; selection: ModelSelection; tier?: ModelTier }
   | { kind: "executor.interrupt"; attachmentId?: string }
   | { kind: "executor.retry"; attachmentId?: string }
   | { kind: "context.compact"; attachmentId?: string; instructions?: string | null }
@@ -808,7 +810,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     const submitted = await this.ports.engine.submit({
       commandId: request.commandId,
       sessionId: request.sessionId,
-      intent: { kind: "model.select", selection: request.command.selection },
+      intent: {
+        kind: "model.select",
+        selection: request.command.selection,
+        ...(request.command.tier === undefined ? {} : { tier: request.command.tier }),
+      },
       provenance: userProvenance(location.venue),
     });
     await this.#publishSubmit(submitted, existed);

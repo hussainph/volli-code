@@ -24,6 +24,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     signal: null,
     stopped: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: true,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,

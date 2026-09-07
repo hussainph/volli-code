@@ -459,6 +459,61 @@ describe("SessionEngine creation and explicit commands", () => {
     ).rejects.toThrow("different intent");
   });
 
+  it("writes the tier a selection resolved from beside it, and only then (VC-259)", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "high" as const,
+    };
+
+    // Idle path: the fact is written in-engine, tier included.
+    await plane.submit({
+      commandId: "command-model-select-fast",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection, tier: "fast" },
+      provenance: userProvenance,
+    });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelSelection: selection,
+      modelTier: "fast",
+    });
+    const selected = (await plane.listEvents({ sessionId: session.id })).find(
+      (event) => event.payload.kind === "model.selected",
+    );
+    expect(selected?.payload).toEqual({ kind: "model.selected", selection, tier: "fast" });
+
+    // Live path: the adapter accepted, and the completion carries the same tier.
+    const running = attachment(session.id);
+    await plane.observe({
+      id: "model-select-tier-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: running,
+    });
+    const submitted = await plane.submit({
+      commandId: "command-model-select-deep",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection, tier: "deep" },
+      provenance: userProvenance,
+    });
+    expect(submitted.receipt).toBeNull();
+    const completed = await plane.completeModelSelection({
+      sessionId: session.id,
+      commandId: "command-model-select-deep",
+      attachmentId: running.id,
+      occurredAt: 2,
+      provenance: adapterProvenance,
+    });
+    expect(completed.event.payload).toEqual({ kind: "model.selected", selection, tier: "deep" });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelTier: "deep",
+    });
+  });
+
   it("rejects model changes while a turn is active", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());

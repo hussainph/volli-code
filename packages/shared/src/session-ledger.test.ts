@@ -654,6 +654,28 @@ describe("projectSession", () => {
     ]);
 
     expect(projection.modelSelection).toEqual(latest);
+    expect(projection.modelTier).toBeNull();
+  });
+
+  it("carries the tier a selection resolved from, and drops it with the next exact pick", () => {
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "medium" as const,
+    };
+    // A start that named Fast: the pin is the model, the tier is where it came from.
+    const started = projectSession(session, [
+      event(1, { kind: "model.selected", selection, tier: "fast" }),
+    ]);
+    expect(started.modelTier).toBe("fast");
+    expect(started.modelSelection).toEqual(selection);
+    // The composer then picks a model by exact id: the running model is no
+    // longer the tier's, so the tier goes with the old selection.
+    const repinned = projectSession(session, [
+      event(1, { kind: "model.selected", selection, tier: "fast" }),
+      event(2, { kind: "model.selected", selection: { ...selection, reasoningLevel: "high" } }),
+    ]);
+    expect(repinned.modelTier).toBeNull();
   });
 
   it("projects retitle and native-continuation facts without mutating immutable inputs", () => {

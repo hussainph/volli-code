@@ -944,6 +944,7 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   }
   if (source.signal !== undefined) projection.signal = source.signal;
   if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
+  if (source.modelTier !== undefined) projection.modelTier = source.modelTier;
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;

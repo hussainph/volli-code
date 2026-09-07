@@ -33,6 +33,7 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     interactions: { active: [], resolved: [] },
     signal: null,
     modelSelection: null,
+    modelTier: null,
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,

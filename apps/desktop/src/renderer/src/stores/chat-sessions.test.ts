@@ -56,6 +56,7 @@ const projection: SessionPresentationProjection = {
   interactions: { active: [], resolved: [] },
   signal: null,
   modelSelection: null,
+  modelTier: null,
   turnActive: false,
   lastActivityAt: SESSION.createdAt,
   bornTicketless: SESSION.ticketId === null,

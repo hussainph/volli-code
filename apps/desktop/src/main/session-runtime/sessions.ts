@@ -503,10 +503,15 @@ export function createSessions(options: SessionsOptions): Sessions {
         actor: input.actor ?? { kind: "user" },
       });
     }
+    // The tier the override named rides beside the resolved model (VC-259):
+    // provenance for the pin, so the Session header and `session list` can
+    // say "Fast · <model>" — never the policy, which is `model` alone.
+    const tier = input.modelOverride?.tier;
     await recordModelSelection(options.runtime, {
       commandId: `${input.operationId}:model`,
       sessionId: created.sessionId,
       model,
+      ...(tier === undefined ? {} : { tier }),
     });
     // Durable inside MINT, not beside the attach: VC-16 split the start so a
     // chat can open optimistically — `create` lands the tab and `attach`
@@ -601,12 +606,16 @@ function attachmentReady(result: SessionRuntimeCommandResult): boolean {
 /** Record the Session's model policy durably, or refuse before anything attaches. */
 async function recordModelSelection(
   runtime: StructuredSessionCommands,
-  input: { commandId: string; sessionId: string; model: ModelSelection },
+  input: { commandId: string; sessionId: string; model: ModelSelection; tier?: ModelTier },
 ): Promise<void> {
   const selected = await runtime.command({
     commandId: input.commandId,
     sessionId: input.sessionId,
-    command: { kind: "model.select", selection: input.model },
+    command: {
+      kind: "model.select",
+      selection: input.model,
+      ...(input.tier === undefined ? {} : { tier: input.tier }),
+    },
   });
   if (selected.receipt?.status !== "completed") {
     throw new StructuredSessionsError(

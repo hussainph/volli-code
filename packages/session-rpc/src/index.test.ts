@@ -131,6 +131,7 @@ function snapshotWithRecovery(): SessionRuntimeSnapshot {
       pendingExecutorStart: executorCommand(),
       attachments: [attachment],
       liveExecutor: attachment,
+      modelTier: "fast",
       attention: { active: [recoveryAttention()], primary: recoveryAttention() },
       interactions: {
         active: [interactionWithCorrelation()],
@@ -228,6 +229,7 @@ function snapshot(): SessionRuntimeSnapshot {
       signal: null,
       stopped: null,
       modelSelection: null,
+      modelTier: null,
       turnActive: false,
       authorityDenials: 0,
       usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -520,12 +522,16 @@ describe("Session tRPC router", () => {
       "lastActivityAt",
       "liveExecutor",
       "modelSelection",
+      "modelTier",
       "session",
       "signal",
       "status",
       "turnActive",
     ]);
     expect(resolved.projection.liveExecutor).toEqual({ id: "attachment-1" });
+    // The tier the model resolved from crosses whole (VC-259): it is the
+    // user's own vocabulary, and the header reads it beside the model.
+    expect(resolved.projection.modelTier).toBe("fast");
     expect(resolved.projection.interactions.active[0]?.native).toEqual({ id: null, detail: null });
     expect(serverSnapshot.projection.attachments[0]?.native).toEqual(recoveryNative());
     expect(serverSnapshot.projection.liveExecutor?.native).toEqual(recoveryNative());
@@ -550,6 +556,7 @@ describe("Session tRPC router", () => {
       "lastActivityAt",
       "liveExecutor",
       "modelSelection",
+      "modelTier",
       "session",
       "signal",
       "status",
