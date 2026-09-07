@@ -150,6 +150,27 @@ describe("the footer once a press has been refused", () => {
     expect(after.every(reachable)).toBe(true);
   });
 
+  it("keeps every action reachable after a valid delivery fails", async () => {
+    const resolve = vi.fn(() => Promise.resolve(false));
+    mount(
+      <InteractionCard interaction={ask(WALK)} onResolve={resolve} onWithdraw={() => undefined} />,
+    );
+
+    const before = footerButtons().map((button) => button.textContent);
+    const refusal = footer().querySelector<HTMLButtonElement>('button[data-variant="outline"]');
+    expect(refusal).not.toBeNull();
+    await act(async () => {
+      refusal?.click();
+      await Promise.resolve();
+    });
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(footer().querySelector('[role="alert"]')?.textContent).toBe("Not delivered");
+    const after = footerButtons();
+    expect(after.map((button) => button.textContent)).toEqual(before);
+    expect(after.every(reachable)).toBe(true);
+  });
+
   it("wraps that row rather than pushing the retry past the card's edge", () => {
     mount(<InteractionCard interaction={ask(WALK)} onResolve={() => Promise.resolve(false)} />);
     pressAdvance();

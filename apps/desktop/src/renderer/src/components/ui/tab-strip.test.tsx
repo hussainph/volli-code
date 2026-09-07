@@ -25,9 +25,14 @@ const nativeRect = Element.prototype.getBoundingClientRect;
 /** Lay the strip out: the tablist spans a row, each tab takes the next 100px. */
 function layout(element: Element): DOMRect {
   const role = element.getAttribute("role");
+  // A DOMRect is viewport-relative. Tabs move left as their scrollport moves;
+  // `revealTab` then reconstructs the content-relative offset from this rect.
+  // Leaving scrollLeft out here makes a partly clipped tab look fully visible
+  // and lets the test pass while asserting the opposite of browser geometry.
+  const scrollLeft = element.closest<HTMLElement>('[data-slot="tab-scroll"]')?.scrollLeft ?? 0;
   const box =
     role === "tab"
-      ? { left: indexOfTab(element) * TAB_WIDTH, width: TAB_WIDTH }
+      ? { left: indexOfTab(element) * TAB_WIDTH - scrollLeft, width: TAB_WIDTH }
       : { left: 0, width: 1000 };
   return {
     x: box.left,
@@ -325,9 +330,10 @@ describe("TabStrip overflow", () => {
     renderTabs(9, 0);
     const port = measureScroller(9, 120);
     const tabs = tabsInStrip();
-    tabs[1]?.focus();
-    // Tab 1 spans 100-200 inside a window showing 120-420. Writing anything
-    // here would fight a person mid-drag of the strip.
+    tabs[2]?.focus();
+    // Tab 2 spans 200-300 inside a window showing 120-420, including the 8px
+    // reveal inset on both sides. Writing anything here would fight a person
+    // mid-drag of the strip.
     expect(port.scrollLeft).toBe(120);
   });
 
