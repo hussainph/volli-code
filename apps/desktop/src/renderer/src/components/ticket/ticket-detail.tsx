@@ -62,7 +62,10 @@ import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
-import { useMaterializedAttachments } from "@renderer/hooks/use-materialized-attachments";
+import {
+  attachmentsRevision,
+  useMaterializedAttachments,
+} from "@renderer/hooks/use-materialized-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
@@ -351,7 +354,7 @@ export function TicketDetail({
    */
   const materializedAttachments = useMaterializedAttachments(
     { ticketId: ticket.id },
-    ticketAttachments.attachments.length,
+    attachmentsRevision(ticketAttachments.attachments),
   );
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,

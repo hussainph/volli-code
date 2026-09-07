@@ -22,9 +22,23 @@ export interface MaterializedAttachmentsOwner {
 
 const NONE: readonly NamedBlobLink[] = [];
 
+/**
+ * A `revision` for a strip, as its CONTENT rather than its size.
+ *
+ * A count is the obvious thing to reach for and is wrong in the one case that
+ * matters: removing one attachment and adding another leaves the length
+ * untouched, so the refetch never fires and the new picture stays unresolvable
+ * until something unrelated re-renders. Hashes are already the identity of
+ * these things, so joining them is the whole rule.
+ */
+export function attachmentsRevision(attachments: readonly { blobHash: string }[]): string {
+  return attachments.map((attachment) => attachment.blobHash).join(",");
+}
+
 export function useMaterializedAttachments(
   owner: MaterializedAttachmentsOwner,
-  revision = 0,
+  /** Anything that changes when the owner's attachments do — see {@link attachmentsRevision}. */
+  revision: string | number = 0,
 ): readonly NamedBlobLink[] {
   const [links, setLinks] = React.useState<readonly NamedBlobLink[]>(NONE);
   const { ticketId, sessionId } = owner;

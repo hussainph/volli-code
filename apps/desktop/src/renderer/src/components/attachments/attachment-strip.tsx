@@ -146,9 +146,7 @@ export function AttachmentThumbRow({
       {/* `text-label` is the rung below `text-ui` and the only one there is —
           docs/DESIGN.md bans arbitrary sizes, and a two-character count is
           exactly the badge treatment that rung is for. */}
-      {overflow > 0 ? (
-        <span className="text-label text-muted-foreground">+{overflow}</span>
-      ) : null}
+      {overflow > 0 ? <span className="text-label text-muted-foreground">+{overflow}</span> : null}
     </span>
   );
 }

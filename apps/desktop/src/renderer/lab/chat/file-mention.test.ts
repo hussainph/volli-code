@@ -33,6 +33,19 @@ describe("looksLikeFilePath", () => {
     expect(looksLikeFilePath("pnpm-lock.yaml")).toBe(true);
   });
 
+  /*
+   * The picture formats a person actually attaches, all of them. The list
+   * shipped with `png` and `svg` but not `jpg`, so `shot.png` underlined as a
+   * file mention and `shot.jpg` beside it did not — on a ticket whose whole
+   * subject is images.
+   */
+  it.each(["shot.png", "shot.jpg", "shot.jpeg", "shot.gif", "shot.webp", "shot.svg"])(
+    "accepts every image format a screenshot arrives as: %s",
+    (name: string) => {
+      expect(looksLikeFilePath(name)).toBe(true);
+    },
+  );
+
   it("treats anything with a separator as a path, absolute excepted", () => {
     expect(looksLikeFilePath("packages/shared/src")).toBe(true);
     expect(looksLikeFilePath("./local")).toBe(true);

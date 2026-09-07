@@ -52,7 +52,10 @@ import {
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
-import { useMaterializedAttachments } from "@renderer/hooks/use-materialized-attachments";
+import {
+  attachmentsRevision,
+  useMaterializedAttachments,
+} from "@renderer/hooks/use-materialized-attachments";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
@@ -501,7 +504,7 @@ export function ChatPlane({
   // is resolvable by the very next turn that mentions its path.
   const materializedAttachments = useMaterializedAttachments(
     { sessionId, ...(ticketId === null ? {} : { ticketId }) },
-    attachments.length,
+    attachmentsRevision(attachments),
   );
   // Read at submit rather than closed over, so `send` keeps its identity while
   // the strip changes underneath it.
