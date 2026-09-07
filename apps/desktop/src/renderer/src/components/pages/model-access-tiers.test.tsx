@@ -148,16 +148,20 @@ describe("the model tiers in Model Access", () => {
     ).toBeNull();
   });
 
-  it("carries a job line only where the label does not name the job", async () => {
+  it("carries the job as the row's (i) only where the label does not name it", async () => {
+    // CLAUDE.md's copy rule: the label is the tier name, the `(i)` carries the
+    // one-line job, and nothing becomes a paragraph under a control. The hint
+    // lives in the glyph's tooltip, so what the row's own text holds is the
+    // label and the control — never the job line.
     await renderSettings(EMPTY_MODEL_ACCESS_DEFAULTS);
 
-    expect(rowText("fast")).toContain("Quick, low-cost tasks.");
-    expect(rowText("deep")).toContain("Complex reasoning, planning, and review.");
-    expect(rowText("visual")).toContain("Images, screenshots, and pages.");
-    expect(rowText("utility")).toContain("Chat names and summaries.");
+    for (const tier of ["fast", "deep", "visual", "utility"]) {
+      expect(document.querySelector(`[data-testid="default-model-${tier}"] [aria-label^="About"]`))
+        .not.toBeNull();
+    }
+    expect(rowText("fast")).not.toContain("Quick, low-cost tasks.");
     expect(rowText("global")).toBe("Board chatsChoose a model");
     expect(rowText("ticket")).toBe("Ticket SessionsSame as Board chats");
-    expect(document.querySelector('[aria-label="About Fast"]')).toBeNull();
   });
 
   it("says why Visual inherits nothing when the Ticket model cannot read images", async () => {

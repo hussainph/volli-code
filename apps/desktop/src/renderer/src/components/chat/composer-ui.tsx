@@ -1257,8 +1257,6 @@ export interface ComposerTierRow {
   tier: AgentModelTier;
   /** The Settings row's label — "Fast", "Ticket Sessions". */
   label: string;
-  /** Its one-line job, as the tool description and Settings state it. */
-  hint: string;
   state: ComposerTierState;
   /**
    * The model the tier resolves to, or null when nothing on its ladder is
@@ -1294,10 +1292,10 @@ export function composerTierRows(
 ): readonly ComposerTierRow[] {
   const sees = acceptsImageInputIn(models);
   return AGENT_MODEL_TIERS.map((tier) => {
-    const { label, hint } = modelTierRow(tier);
+    const { label } = modelTierRow(tier);
     const resolved = resolveModelTier(defaults, tier, sees);
     if (resolved === null) {
-      return { tier, label, hint, state: "unset", model: null, reasoningLevel: null };
+      return { tier, label, state: "unset", model: null, reasoningLevel: null };
     }
     const { selection } = resolved;
     const listed = models.find(
@@ -1314,7 +1312,6 @@ export function composerTierRows(
     return {
       tier,
       label,
-      hint,
       state,
       model: {
         providerId: selection.providerId,
@@ -1726,7 +1723,6 @@ function TierRow({
       onSelect={onPick}
       data-testid={`model-picker-tier-${row.tier}`}
       data-tier-state={row.state}
-      title={row.hint}
     >
       <CheckIcon className={cn("size-3.5 shrink-0", !selected && "invisible")} weight="bold" />
       {/* Three columns: the tier name at a fixed width (five short words), the

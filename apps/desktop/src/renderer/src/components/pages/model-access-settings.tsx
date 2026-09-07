@@ -90,13 +90,15 @@ import { useUiStore } from "@renderer/stores/ui";
 /**
  * The rows of the Default models section, in the order the tree is drawn —
  * the shared tier list (`MODEL_TIER_ROWS`, VC-259) wearing this pane's
- * subtitle rule.
+ * hint rule.
  *
- * `description` is the one-line job under the label, and only the rows whose
- * label does not already name the job carry one: "Fast" says nothing about
- * what is fast, "Ticket Sessions" says everything. It never describes the
- * inheritance chain — each unset row names the row it follows in its own
- * control — and it is held to the twelve-word budget.
+ * `hint` is the `(i)` beside the label (VC-81 asked for one on the utility
+ * row), and only the rows whose label does not already name the job carry
+ * one: "Fast" says nothing about what is fast, "Ticket Sessions" says
+ * everything. It is a hint and never a paragraph under the control — CLAUDE.md
+ * lets controls talk, and this ticket restated it. It never describes the
+ * inheritance chain either — each unset row names the row it follows in its
+ * own control — and it is held to the twelve-word budget.
  *
  * `depth` is the indent: the three kind-of-work tiers sit under Ticket
  * Sessions because that is the rung they resolve through.
@@ -104,13 +106,13 @@ import { useUiStore } from "@renderer/stores/ui";
 export const PURPOSE_ROWS: readonly {
   purpose: ModelPurpose;
   label: string;
-  description?: string;
+  hint?: string;
   depth: 0 | 1;
 }[] = (["global", "utility", "ticket", "fast", "deep", "visual"] as const).map((purpose) => {
   const row = MODEL_TIER_ROWS.find((candidate) => candidate.tier === purpose)!;
   return purpose === "global" || purpose === "ticket"
     ? { purpose, label: row.label, depth: 0 }
-    : { purpose, label: row.label, description: row.hint, depth: row.advanced ? 1 : 0 };
+    : { purpose, label: row.label, hint: row.hint, depth: row.advanced ? 1 : 0 };
 });
 
 /** The Select value that says "no explicit choice — resolve through the fallback tier". */
@@ -268,12 +270,12 @@ export function ModelAccessSettings({
   const offerable = offerableModels(models);
   const sees = acceptsImageInputIn(models);
 
-  const renderDefaultRow = ({ purpose, label, description }: (typeof PURPOSE_ROWS)[number]) => (
+  const renderDefaultRow = ({ purpose, label, hint }: (typeof PURPOSE_ROWS)[number]) => (
     <DefaultModelRow
       key={purpose}
       purpose={purpose}
       label={label}
-      {...(description === undefined ? {} : { description })}
+      {...(hint === undefined ? {} : { hint })}
       selection={defaults[purpose]}
       // Only Visual can inherit a rung and still be refused — a Ticket model
       // that cannot read images — and only that is said. An empty ladder is
@@ -316,7 +318,7 @@ export function ModelAccessSettings({
             hairline against Ticket above. */}
         <div
           data-testid="default-models-under-ticket"
-          className="ml-3 border-l border-border/60 pl-4 [&>*:first-child]:border-t [&>*:first-child]:pt-4"
+          className="ml-2 border-l border-border/50 pl-4 [&>*:first-child]:border-t [&>*:first-child]:pt-4"
         >
           {PURPOSE_ROWS.filter((row) => row.depth === 1).map((row) => renderDefaultRow(row))}
         </div>
@@ -441,6 +443,11 @@ function CatalogSection({
  * disabled one with "Reasoning" as its only content — and keeps the slot
  * empty so the model column stays a column.
  *
+ * A row with a `hint` carries it as the `(i)` beside its label — rendered by
+ * {@link PrefRow}, so every hint on both surfaces is the same glyph in the
+ * same place, and the slot explains itself without a paragraph under the
+ * control (CLAUDE.md's copy rule).
+ *
  * The list is grouped by provider, as the composer's own picker is, and each
  * row is a {@link ModelName}: the mark, the name, and the provider only where
  * the name alone would not say which model this is.
@@ -448,7 +455,7 @@ function CatalogSection({
 function DefaultModelRow({
   purpose,
   label,
-  description,
+  hint,
   selection,
   blocked,
   models,
@@ -459,7 +466,7 @@ function DefaultModelRow({
 }: {
   purpose: ModelPurpose;
   label: string;
-  description?: string;
+  hint?: string;
   selection: ModelSelection | null;
   /** Unset, and the rung it would inherit is one it may not use. */
   blocked: boolean;
@@ -486,7 +493,7 @@ function DefaultModelRow({
   return (
     <PrefRow
       label={label}
-      {...(description === undefined ? {} : { description })}
+      {...(hint === undefined ? {} : { hint })}
       testId={`default-model-${purpose}`}
     >
       {/* A column, so a row that inherits nothing can say why under its own
