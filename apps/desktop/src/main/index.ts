@@ -129,7 +129,11 @@ import {
   createSessionWatchdog,
   watchSessionActivity,
 } from "./session-control";
-import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
+import {
+  createDesktopSessionRuntime,
+  createFileTranscriptArtifactStore,
+  sessionTranscriptsRoot,
+} from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -1379,7 +1383,7 @@ app.whenReady().then(async () => {
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).
-  const transcriptDirectory = join(app.getPath("userData"), "session-transcripts");
+  const transcriptDirectory = sessionTranscriptsRoot(app.getPath("userData"));
   const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null

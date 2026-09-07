@@ -101,9 +101,6 @@ describe("export disclosure", () => {
     await exportDatabase({ ok: false, error: "The database could not be opened." });
 
     expect(showSaveDialog).not.toHaveBeenCalled();
-    expect(showErrorBox).toHaveBeenCalledWith(
-      "Export Failed",
-      "The database could not be opened.",
-    );
+    expect(showErrorBox).toHaveBeenCalledWith("Export Failed", "The database could not be opened.");
   });
 });
