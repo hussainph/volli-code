@@ -107,6 +107,8 @@ import type {
   BlobLinkIdInput,
   BlobLinksResult,
   BlobListInput,
+  BlobMaterializedInput,
+  BlobMaterializedResult,
   CommentIdInput,
   CommentUpdateInput,
   DatabaseAction,
@@ -539,6 +541,12 @@ const api = {
       invoke("volli:blob-attach", input),
     /** A ticket's or a session's attachments, chronological. */
     list: (input: BlobListInput): Promise<BlobLinksResult> => invoke("volli:blob-list", input),
+    /**
+     * Both owners' attachments in materialize order (VC-273), for resolving a
+     * `.volli/attachments/…` image source back to the Blob it names.
+     */
+    materialized: (input: BlobMaterializedInput): Promise<BlobMaterializedResult> =>
+      invoke("volli:blob-materialized", input),
     /** Detaches one attachment; the bytes stay until collection. */
     remove: (input: BlobLinkIdInput): Promise<Result> => invoke("volli:blob-remove", input),
     /** Attaches Blobs imported before their ticket existed, once it has an id. */

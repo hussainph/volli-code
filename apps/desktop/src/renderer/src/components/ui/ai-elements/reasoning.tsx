@@ -22,7 +22,7 @@ import { mermaid } from "@streamdown/mermaid";
 import * as React from "react";
 import { Streamdown, type Components } from "streamdown";
 
-import { chatMarkdownComponents } from "./chat-markdown";
+import { chatMarkdownComponents, chatRehypePlugins } from "./chat-markdown";
 import { Shimmer } from "./shimmer";
 
 /**
@@ -175,7 +175,16 @@ export type ReasoningBodyProps = {
 
 export const ReasoningBody = React.memo(({ children, className }: ReasoningBodyProps) => (
   <div className={cn("text-ui leading-5 text-muted-foreground", className)}>
-    <Streamdown plugins={streamdownPlugins} components={reasoningMarkdownComponents}>
+    {/* `rehypePlugins` rides with the components, never without them (VC-273):
+        Streamdown sanitizes before the `img` override runs, so a reasoning body
+        given only the components would have an attachment's `volli-blob:` src
+        deleted upstream and draw `[Image blocked]` where the answer above it
+        draws the picture. */}
+    <Streamdown
+      plugins={streamdownPlugins}
+      rehypePlugins={chatRehypePlugins}
+      components={reasoningMarkdownComponents}
+    >
       {children}
     </Streamdown>
   </div>

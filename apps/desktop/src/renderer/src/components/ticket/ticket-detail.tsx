@@ -62,6 +62,10 @@ import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
+import {
+  attachmentsRevision,
+  useMaterializedAttachments,
+} from "@renderer/hooks/use-materialized-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
@@ -340,6 +344,18 @@ export function TicketDetail({
       cancelled = true;
     };
   }, [resetAttachments, ticket.id]);
+  /**
+   * What inline markdown images on this Ticket resolve against (VC-273).
+   *
+   * Fetched ONCE here and shared with both surfaces below — the body editor
+   * through a prop, the comment feed through context — so a picture cannot
+   * render in one and fail in the other. Re-fetched when the strip changes, so
+   * a file dropped on the Body is resolvable without a remount.
+   */
+  const materializedAttachments = useMaterializedAttachments(
+    { ticketId: ticket.id },
+    attachmentsRevision(ticketAttachments.attachments),
+  );
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,
     EMPTY_TICKET_RECENCY_OWNER_STATE,
@@ -1329,7 +1345,12 @@ export function TicketDetail({
               {...fileAttachHandlers((picked) => void ticketAttachments.attachFiles(picked))}
               className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
             >
-              <TicketBodyPanel ticket={ticket} fileRefs={fileRefs} editorRef={bodyEditorRef} />
+              <TicketBodyPanel
+                ticket={ticket}
+                fileRefs={fileRefs}
+                editorRef={bodyEditorRef}
+                attachments={materializedAttachments}
+              />
             </div>
           ) : null}
           {tab.kind === "file" && tab.relPath !== undefined ? (

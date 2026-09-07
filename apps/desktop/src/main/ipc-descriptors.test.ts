@@ -1109,6 +1109,34 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:blob-materialized", () => {
+    const { guard, invalidError } = DATA_IPC["volli:blob-materialized"];
+
+    it("accepts either owner, and both together", () => {
+      // Both at once is the ordinary case, not an edge one: a chat pane
+      // resolves against its Session's links AND its Ticket's, because that is
+      // what `.volli/attachments/` actually holds (VC-273).
+      expect(guard([{ ticketId: "t1" }])).toBe(true);
+      expect(guard([{ sessionId: "s1" }])).toBe(true);
+      expect(guard([{ ticketId: "t1", sessionId: "s1" }])).toBe(true);
+    });
+
+    it("rejects a non-string owner id", () => {
+      expect(guard([{ ticketId: 1 }])).toBe(false);
+      expect(guard([{ sessionId: 1 }])).toBe(false);
+    });
+
+    it("rejects a non-object payload and a wrong arity", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ ticketId: "t1" }, { sessionId: "s1" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid attachment owner");
+    });
+  });
+
   describe("volli:blob-remove", () => {
     const { guard, invalidError } = DATA_IPC["volli:blob-remove"];
 
@@ -1820,8 +1848,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 59 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(59);
+    it("covers all 60 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(60);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
@@ -1832,6 +1860,7 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
       expect(DATA_CHANNELS).toContain("volli:blob-list");
+      expect(DATA_CHANNELS).toContain("volli:blob-materialized");
       expect(DATA_CHANNELS).toContain("volli:blob-remove");
       expect(DATA_CHANNELS).toContain("volli:blob-link-drafts");
       expect(DATA_CHANNELS).toContain("volli:ticket-move");

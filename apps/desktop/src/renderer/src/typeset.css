@@ -220,6 +220,26 @@
   border-radius: var(--radius-md);
 }
 
+/*
+ * The stand-in for a picture this surface will not load (VC-273), emitted by
+ * `ticket/markdown.tsx`'s image renderer. Same object as the transcript's
+ * `MissingImage` chip and Document Mode's `.volli-document-mode-image-missing`
+ * — a refusal has to read the same wherever the same markdown is drawn, and
+ * without a rule here the ticket body and its comments were the one surface
+ * that answered in bare unstyled text.
+ */
+.typeset .typeset-image-missing {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.1em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+}
+
 .typeset table {
   display: block;
   width: max-content;

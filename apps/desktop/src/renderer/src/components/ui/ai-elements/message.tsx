@@ -9,7 +9,7 @@ import type { ComponentProps, HTMLAttributes } from "react";
 import { memo, useMemo } from "react";
 import { Streamdown } from "streamdown";
 
-import { chatMarkdownComponents } from "./chat-markdown";
+import { chatMarkdownComponents, chatRehypePlugins } from "./chat-markdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -51,9 +51,15 @@ export const MessageContent = ({ children, className, ...props }: MessageContent
   </div>
 );
 
-// `plugins` is not a prop here: the fixed set below is the decision to ship
-// code and Mermaid without math, and a caller-supplied map would override it.
-export type MessageResponseProps = Omit<ComponentProps<typeof Streamdown>, "plugins">;
+// Neither `plugins` nor `rehypePlugins` is a prop here: the fixed sets are the
+// decision to ship code and Mermaid without math, and to widen the sanitizer's
+// `src` allowlist to the app's own Blob scheme. Both are set AFTER `{...props}`
+// in the JSX below, so leaving them in this type would advertise a prop that is
+// silently discarded.
+export type MessageResponseProps = Omit<
+  ComponentProps<typeof Streamdown>,
+  "plugins" | "rehypePlugins"
+>;
 
 const streamdownPlugins = { cjk, code, mermaid };
 
@@ -110,6 +116,7 @@ export const MessageResponse = memo(
         {...props}
         className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
         plugins={streamdownPlugins}
+        rehypePlugins={chatRehypePlugins}
         components={merged}
       />
     );
