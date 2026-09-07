@@ -54,6 +54,16 @@ import type {
   ModelAccessSignInType,
   DeliberateMoveChoice,
   ModelSelection,
+  OrphanAgeBasis,
+  OrphanCleanupItem,
+  OrphanCleanupItemKind,
+  OrphanCleanupItemState,
+  OrphanCleanupReceipt,
+  OrphanCleanupRejectionCode,
+  OrphanCleanupRun,
+  OrphanCleanupSource,
+  OrphanKeptReason,
+  OrphanMetadataKeptReason,
   PendingArmedRun,
   PendingArmedRunFailure,
   Project,
@@ -3085,12 +3095,25 @@ export interface DirtyWorktreeOrphan {
 }
 
 /**
- * Which clock decided a worktree's last use: the directory's own modification
- * time, or its branch tip's commit date. The retention deadline takes the newer
- * of the two, and Storage has to be able to say WHICH — a deadline whose basis
- * is invisible cannot be argued with (VC-284 review C6).
+ * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284
+ * review S1): the run projection, its item states, the acceptance receipt and
+ * the rejection codes describe the act itself, not the wire it crosses, so the
+ * core that mints and folds them never imports this catalog. They are
+ * re-exported here because every desktop process reads the channel types from
+ * this one file.
  */
-export type OrphanAgeBasis = "directory" | "commit";
+export type {
+  OrphanAgeBasis,
+  OrphanCleanupItem,
+  OrphanCleanupItemKind,
+  OrphanCleanupItemState,
+  OrphanCleanupReceipt,
+  OrphanCleanupRejectionCode,
+  OrphanCleanupRun,
+  OrphanCleanupSource,
+  OrphanKeptReason,
+  OrphanMetadataKeptReason,
+};
 
 /**
  * One clean, stale orphan a CLEANUP would remove (VC-284). The scan only names
@@ -3118,12 +3141,6 @@ export interface RemovableWorktreeOrphan {
   /** Epoch ms it became eligible — the basis Storage shows for the verdict. */
   removableAt: number;
 }
-
-/**
- * Why the scan keeps a clean orphan out of the cleanup plan. Typed rather than
- * prose so the renderer renders one vocabulary and main enforces it.
- */
-export type OrphanKeptReason = "recently-used" | "age-unknown" | "active";
 
 /**
  * One clean orphan the scan KEEPS: still inside the retention window, its age
@@ -3165,14 +3182,6 @@ export interface PrunableWorktreeMetadata {
   reason: string;
 }
 
-/**
- * Why a stale git record is NOT the cleanup's to prune (VC-284 review C2). The
- * eligibility rule for metadata is the directory rule: only a record pointing
- * inside a container this database owns, that no ticket still claims, may be
- * pruned here.
- */
-export type OrphanMetadataKeptReason = "not-owned" | "ticket-linked";
-
 /** One stale git record the scan reports but refuses to propose, and why. */
 export interface KeptWorktreeMetadata {
   projectId: string;
@@ -3196,110 +3205,6 @@ export interface UnreadableWorktreeProject {
   projectPath: string;
   error: string;
 }
-
-/** Who asked for a cleanup. `startup` exists so a launch-time act can never be mislabelled as a user's. */
-export type OrphanCleanupSource = "settings" | "startup";
-
-/**
- * Where one item of a cleanup got to.
- *
- * `pending` and `executing` are DERIVED from the facts recorded for the item,
- * never stored as an outcome: `pending` is an item with no fact at all, and
- * `executing` is one whose mutation was announced but whose outcome never
- * landed — the power-loss window the review's C3 names. The other four are
- * immutable outcomes; once one is recorded for an item it can never be
- * relabelled, which is what makes a completed removal impossible to re-offer as
- * pending.
- */
-export type OrphanCleanupItemState =
-  | "pending"
-  | "executing"
-  | "completed"
-  | "skipped"
-  | "failed"
-  /** The app stopped mid-mutation and the world can no longer say whether it took. */
-  | "indeterminate";
-
-/** A worktree directory, or one exact stale git record. */
-export type OrphanCleanupItemKind = "worktree" | "metadata";
-
-/**
- * One thing a cleanup was asked to change, as the projection reads it back.
- * `detail` is the truth about what happened — what was removed, or the
- * preservation rule that spared it.
- */
-export interface OrphanCleanupItem {
-  /** The plan item id this outcome belongs to; stable across the whole run. */
-  id: string;
-  kind: OrphanCleanupItemKind;
-  /** The worktree directory, or the stale record's registered path. */
-  path: string;
-  projectId: string | null;
-  projectName: string | null;
-  branch: string | null;
-  state: OrphanCleanupItemState;
-  detail: string | null;
-  /** Epoch ms the mutation was announced, or `null` if it never began. */
-  startedAt: number | null;
-  /** Epoch ms the outcome was recorded, or `null` while it has none. */
-  settledAt: number | null;
-}
-
-/**
- * The durable record of one cleanup (VC-284), projected from immutable facts.
- *
- * Every item's outcome is appended, never overwritten, and the projection folds
- * the first outcome per item — so an app that stops mid-run leaves a run whose
- * completed items are still completed, whose announced-but-unsettled item is
- * `executing` until the next launch reconciles it against git and disk, and
- * whose untouched items are still `pending`.
- */
-export interface OrphanCleanupRun {
-  /** The run id, which is the caller's command id: one command, one run. */
-  id: string;
-  source: OrphanCleanupSource;
-  /** The scan revision this run was confirmed against. */
-  scanRevision: string;
-  startedAt: number;
-  /** `null` while the run is open — and forever, if it never finished. */
-  finishedAt: number | null;
-  /** Stamped by the first launch that finds an open run. */
-  interruptedAt: number | null;
-  /** The preservation rule ids in force for this run, recorded with it. */
-  preservation: string[];
-  /** The retention window those rules were measured against. */
-  retentionDays: number;
-  items: OrphanCleanupItem[];
-}
-
-/**
- * Local acceptance of a cleanup command, in the shape the rest of the app
- * already uses for commands (docs/BOUNDARIES.md rule 4): it says this host
- * accepted, rejected, or completed the command, never that the outcome is
- * eternally final.
- */
-export interface OrphanCleanupReceipt {
-  id: string;
-  commandId: string;
-  status: "accepted" | "completed" | "rejected";
-  /** A rejection's machine-readable reason; `null` on acceptance/completion. */
-  code: OrphanCleanupRejectionCode | null;
-  detail: string | null;
-  recordedAt: number;
-}
-
-/**
- * Why a cleanup command was refused. Each one has a different recovery, which
- * is why the renderer gets a code and not only a sentence: a superseded scan is
- * fixed by scanning again, a conflict by not re-sending the command.
- */
-export type OrphanCleanupRejectionCode =
-  /** The revision named is not the one main currently holds. */
-  | "scan-superseded"
-  /** The revision proposed no such item. */
-  | "unknown-items"
-  /** The same command id was already accepted with a different intent. */
-  | "conflict";
 
 /**
  * A `volli:worktree-orphans` SCAN report (VC-284): read-only by construction.
