@@ -3,9 +3,10 @@
 # (gitignored).
 #
 # Signing posture (VC-23): electron-builder signs with the Developer ID
-# Application identity it finds in the login keychain (or via CSC_NAME /
-# CSC_LINK+CSC_KEY_PASSWORD in CI) — hardened runtime with
-# build/entitlements.mac.plist. Notarization runs when credentials are in the
+# Application identity it finds in the login keychain (or, in CI, in the
+# keychain .github/workflows/release.yml imports the certificate into and
+# names via CSC_KEYCHAIN — not CSC_LINK, see that file's header for why) —
+# hardened runtime with build/entitlements.mac.plist. Notarization runs when credentials are in the
 # env: APPLE_API_KEY (path to .p8) + APPLE_API_KEY_ID + APPLE_API_ISSUER
 # (App Store Connect API key, preferred) or APPLE_ID +
 # APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID. Credentials live only in env /
