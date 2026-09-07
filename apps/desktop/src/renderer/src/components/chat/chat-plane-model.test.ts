@@ -414,7 +414,7 @@ describe("sessionBlocker", () => {
     });
   });
 
-  it("offers a project chat the same retry a Ticket chat gets", () => {
+  it("offers a Board chat the same retry a Ticket chat gets", () => {
     // The old rule withheld it from a Session with no terminal, on the honest
     // ground that retrying a run whose sign-in could not be reached was a
     // button that could not work. Both can reach the sign-in now.

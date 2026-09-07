@@ -75,7 +75,7 @@ function worktreeMisalignment(
  * The outer boundary for a project-scoped environment read.
  *
  * A caller can stand in either the main checkout or any stamped worktree. The
- * most specific worktree containing its cwd wins — a Project Session standing
+ * most specific worktree containing its cwd wins — a Board Session standing
  * in some ticket's worktree is measured against that worktree, not against the
  * checkout it was registered from. Otherwise the main checkout is the
  * boundary, and `fallback` covers a Session addressed from somewhere outside
@@ -186,7 +186,7 @@ export async function identifyVerb(
           ? {}
           : {
               agentSurface: {
-                role: envSession.ticketId === null ? "project" : "ticket",
+                role: envSession.role,
                 tools: frozenTools,
               },
             }),

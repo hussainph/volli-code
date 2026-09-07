@@ -45,6 +45,7 @@ const SOCKET_SURFACE = [
   "cost",
   "session.list",
   "session.peek",
+  "session.answer",
   "session.done",
   "session.blocked",
   "session.link",
@@ -78,6 +79,7 @@ const REFERENCE_SURFACE = [
   "worktree.sync",
   "session.list",
   "session.peek",
+  "session.answer",
   "session.done",
   "session.blocked",
   "session.link",
@@ -132,6 +134,8 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   cost: "read",
   "session.list": "read",
   "session.peek": "read",
+  // The whole of a chat's last message (VC-9): a read, like the peek beside it.
+  "session.answer": "read",
   doctor: "read",
   "prompt.baseline": "read",
   "ticket.create": "coordination",
@@ -169,6 +173,12 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // neither has ever had a socket door to shut.
   "session.stop": "control",
   "session.send": "control",
+  // Delegation to a bounded helper (VC-9): control tier for the reason
+  // `session.start` is — it opens agent work and spends a model — and in both
+  // working bundles, because "go look at this and tell me" is what an
+  // executor needs as much as an orchestrator does. The child's own bundle is
+  // what makes that safe, and the child holds none of this family.
+  "session.delegate": "control",
   // Local verbs, outside the audit.
   "app.launch": "read",
   help: "read",
@@ -342,7 +352,8 @@ describe("verbTier", () => {
     // 15 in VC-92's audit, plus `cost` — which the amendment staged read tier
     // in the same breath, on the grounds that spend has to be cheap to sample —
     // plus VC-185's `conflicts`, staged read tier by the same amendment.
-    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(17);
+    // VC-9 adds `session.answer`, a read beside the peek.
+    expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
     expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);
@@ -634,6 +645,22 @@ describe("the registry table", () => {
     expect(effects?.nonEffects.length).toBeGreaterThan(0);
   });
 
+  it("declares the ticket comment a lifecycle signal now leaves behind (VC-6)", () => {
+    // The two verbs used to promise a session-ledger write and nothing else,
+    // and `--dry-run` prints these words verbatim. A verb that quietly grew a
+    // second durable write would make the preview describe the wrong command.
+    for (const key of ["session.done", "session.blocked"] as const) {
+      const effects = verbEntry(key)?.effects;
+      expect(
+        effects?.durableWrites.map((write) => write.resource),
+        key,
+      ).toEqual(["session-ledger", "ticket-comment"]);
+      expect(JSON.stringify(effects), key).toContain("todo list");
+      // Still no board move: the comment is a record, not a state change.
+      expect(effects?.nonEffects.join(" "), key).toContain("No Ticket moves");
+    }
+  });
+
   it("looks an entry up by key, and admits when it holds none", () => {
     expect(verbEntry("ticket.move")?.group).toBe("Write");
     expect(verbEntry("ticket.teleport")).toBeUndefined();
@@ -675,6 +702,7 @@ describe("REFERENCE_VERBS", () => {
       "session.start",
       "session.stop",
       "session.send",
+      "session.delegate",
     ]);
   });
 

@@ -4,11 +4,12 @@ import type { SessionAttachmentProjection, SessionProjection } from "@volli/shar
 
 import {
   sendSessionMessageOperation,
+  stopSessionById,
   stopSessionOperation,
   SuperviseSessionError,
   supervisionMarker,
 } from "./supervise-session";
-import type { SuperviseSessionPorts } from "./supervise-session";
+import type { StopSessionByIdPorts, SuperviseSessionPorts } from "./supervise-session";
 
 const CALLER = "aaaaaaaa-0000-0000-0000-000000000000";
 const TARGET = "bbbbbbbb-0000-0000-0000-000000000000";
@@ -19,6 +20,8 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
       id: TARGET,
       projectId: "project-1",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Implementer",
       createdAt: 1,
     },
@@ -35,6 +38,7 @@ function projection(overrides: Partial<SessionProjection> = {}): SessionProjecti
     modelSelection: null,
     modelTier: null,
     turnActive: false,
+    lastTurnOutcome: null,
     authorityDenials: 0,
     usage: EMPTY_SESSION_USAGE_SUMMARY,
     lastActivityAt: 1,
@@ -89,6 +93,33 @@ function ports(
   };
 }
 
+/** The person's door: the target is read by id, never listed. */
+function byIdPorts(
+  snapshots: SessionProjection[],
+  overrides: Partial<{ submit: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> }> = {},
+): {
+  ports: StopSessionByIdPorts;
+  submit: ReturnType<typeof vi.fn>;
+  command: ReturnType<typeof vi.fn>;
+} {
+  const submit = overrides.submit ?? vi.fn(async () => ({ receipt: { status: "completed" } }));
+  const command = overrides.command ?? vi.fn(async () => ({ receipt: { status: "accepted" } }));
+  return {
+    ports: {
+      sessionEngine: {
+        getSession: vi.fn(
+          async ({ sessionId }: { sessionId: string }) =>
+            snapshots.find((one) => one.session.id === sessionId) ?? null,
+        ),
+        submit,
+      } as unknown as StopSessionByIdPorts["sessionEngine"],
+      runtime: { command } as unknown as StopSessionByIdPorts["runtime"],
+    },
+    submit,
+    command,
+  };
+}
+
 function stopInput(overrides: Partial<Parameters<typeof stopSessionOperation>[1]> = {}) {
   return {
     operationId: "op-1",
@@ -98,6 +129,151 @@ function stopInput(overrides: Partial<Parameters<typeof stopSessionOperation>[1]
     ...overrides,
   };
 }
+
+// VC-269: the island's armed stop. The same three acts as the tool's, behind a
+// door a person can reach; what differs is the actor and how the target is
+// named.
+describe("stopSessionById", () => {
+  it("records the stop with the user as actor, then interrupts and releases", async () => {
+    const {
+      ports: p,
+      submit,
+      command,
+    } = byIdPorts([projection({ attachments: [openAttachment()], turnActive: true })]);
+
+    const outcome = await stopSessionById(p, {
+      operationId: "op-user",
+      sessionId: TARGET,
+      reason: "Runaway",
+    });
+
+    expect(submit).toHaveBeenCalledWith({
+      commandId: "op-user",
+      sessionId: TARGET,
+      intent: { kind: "session.stop", reason: "Runaway", by: { kind: "user" } },
+      provenance: {
+        source: { kind: "user", id: "renderer", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    expect(command.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({
+        commandId: "op-user:interrupt",
+        sessionId: TARGET,
+        command: { kind: "executor.interrupt", attachmentId: "attachment-1" },
+      }),
+      expect.objectContaining({
+        commandId: "op-user:release",
+        sessionId: TARGET,
+        command: { kind: "adapter.release", attachmentId: "attachment-1" },
+      }),
+    ]);
+    expect(outcome).toMatchObject({
+      sessionId: TARGET,
+      title: "Implementer",
+      previouslyStopped: false,
+      interrupted: true,
+      released: true,
+      failures: [],
+    });
+  });
+
+  it("re-reads the target by id after the durable write, and reports a failed act", async () => {
+    const snapshots = [projection({ attachments: [openAttachment()] })];
+    const command = vi.fn(async (request: { command: { kind: string } }) => {
+      if (request.command.kind === "adapter.release") throw new Error("executor is gone");
+      return { receipt: { status: "accepted" } };
+    });
+    const submit = vi.fn(async () => {
+      snapshots.splice(
+        0,
+        1,
+        projection({
+          stopped: { at: 5, reason: null, by: { kind: "user" } },
+          attachments: [openAttachment()],
+          turnActive: true,
+        }),
+      );
+      return { receipt: { status: "completed" } };
+    });
+    const { ports: p } = byIdPorts(snapshots, { submit, command });
+
+    const outcome = await stopSessionById(p, { operationId: "op-user", sessionId: TARGET });
+
+    expect(outcome).toMatchObject({
+      interrupted: true,
+      released: false,
+      failures: ["The executor did not release: executor is gone."],
+    });
+  });
+
+  it("refuses an unknown id, a terminal session, and an unrecorded stop, by name", async () => {
+    await expect(
+      stopSessionById(byIdPorts([]).ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(new SuperviseSessionError("Unknown session."));
+
+    const terminal = projection({
+      attachments: [openAttachment({ adapterId: "terminal" })],
+    });
+    await expect(
+      stopSessionById(byIdPorts([terminal]).ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(/terminal session/);
+
+    const refused = byIdPorts([projection({ attachments: [openAttachment()] })], {
+      submit: vi.fn(async () => ({ receipt: { status: "rejected" } })),
+    });
+    await expect(
+      stopSessionById(refused.ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(
+      new SuperviseSessionError(
+        `Session ${TARGET.slice(0, 8)} could not be durably recorded as stopped.`,
+      ),
+    );
+    expect(refused.command).not.toHaveBeenCalled();
+  });
+
+  // Fix-first (review c5714a22): a not-live target — no open structured
+  // attachment, so nothing for the runtime acts to touch — must be refused by
+  // name rather than durably recorded as a quiet no-op success. This is the
+  // "already-idle/done child" case the island's stop button races against.
+  it("refuses a target with no open attachment as not live, and writes nothing", async () => {
+    const notLive = byIdPorts([projection()]);
+    await expect(
+      stopSessionById(notLive.ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(
+      new SuperviseSessionError(
+        `Session ${TARGET.slice(0, 8)} is not live; there is nothing running to stop.`,
+      ),
+    );
+    expect(notLive.submit).not.toHaveBeenCalled();
+    expect(notLive.command).not.toHaveBeenCalled();
+
+    const closed = byIdPorts([
+      projection({ attachments: [openAttachment({ status: "closed", closedAt: 9 })] }),
+    ]);
+    await expect(
+      stopSessionById(closed.ports, { operationId: "op", sessionId: TARGET }),
+    ).rejects.toThrow(/is not live/);
+    expect(closed.submit).not.toHaveBeenCalled();
+  });
+
+  // A previously-recorded stop with its attachment still open is a legitimate
+  // retry of the runtime release (VC-86) — "live" is about the attachment, not
+  // about `stopped`, so this must not be refused.
+  it("does not refuse a retry of a previously-stopped, still-live target", async () => {
+    const retry = byIdPorts([
+      projection({
+        stopped: { at: 5, reason: null, by: { kind: "user" } },
+        attachments: [openAttachment()],
+        turnActive: true,
+      }),
+    ]);
+    await expect(
+      stopSessionById(retry.ports, { operationId: "op", sessionId: TARGET }),
+    ).resolves.toMatchObject({ previouslyStopped: true, interrupted: true, released: true });
+    expect(retry.submit).not.toHaveBeenCalled();
+  });
+});
 
 describe("stopSessionOperation", () => {
   it("records the stop with the calling Session as actor, then interrupts and releases", async () => {

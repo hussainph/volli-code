@@ -12,7 +12,23 @@
  * keeps provider tool projection, Registry validation, and durable grant data
  * in their separate jobs.
  */
-import type { RuntimeSessionRole, VerbToolKey } from "@volli/shared";
+import type { SessionRole, VerbToolKey } from "@volli/shared";
+
+/**
+ * One delegation as the durable record names it (VC-9): the child, its parent,
+ * the operation id every durable write of the delegation is keyed on, and the
+ * title the parent gave it. What the store hands boot recovery, and what the
+ * live registry keeps per child. Data, so the store never imports the
+ * application module it serves.
+ */
+export interface DelegationRef {
+  operationId: string;
+  parentSessionId: string;
+  childSessionId: string;
+  /** The parent's project, which is the child's by construction of the mint. */
+  projectId: string;
+  title: string;
+}
 
 /**
  * The largest delegation chain this build will record.
@@ -65,8 +81,18 @@ export interface TicketSessionDelegation {
 export interface SessionGrantBirth {
   /** Canonical Verb Registry keys that feed resolveAgentToolSurface. */
   grants: readonly VerbToolKey[];
-  /** Null for a Project Session; retained even when a child reaches the depth cap. */
+  /** Null for a Board Session; retained even when a child reaches the depth cap. */
   delegation: TicketSessionDelegation | null;
+  /**
+   * The Session that delegated this one, for a Subagent Session (VC-9).
+   *
+   * Beside `delegation` rather than inside it, because the two are different
+   * kinds of child. A `session.start` child is a peer executor born under a
+   * scoped grant with a fan-out allowance; a subagent is a bounded helper with
+   * no grant at all, whose only ancestry fact is who asked. Recording it in
+   * `session_delegations` reuses the parent link and nothing else.
+   */
+  parentSessionId: string | null;
 }
 
 /**
@@ -76,9 +102,11 @@ export interface SessionGrantBirth {
  */
 export interface SessionGrantPorts {
   resolveBirth(input: {
-    role: RuntimeSessionRole;
+    role: SessionRole;
     ticketId: string | null;
     delegation?: TicketSessionDelegation;
+    /** The delegating Session; present exactly for a `subagent`. */
+    parentSessionId?: string;
   }): SessionGrantBirth;
   recordBirth(sessionId: string, birth: SessionGrantBirth): void;
 }

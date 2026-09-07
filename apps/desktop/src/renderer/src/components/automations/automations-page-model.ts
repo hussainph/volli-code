@@ -294,7 +294,7 @@ export function laneDropRank(input: {
  * axis, decided by the Trigger.
  *
  * The rule it encodes is the ticket's own: a schedule Run's Target is the
- * Project, so it opens a Project Session. Pressing Play on a scheduled record
+ * Project, so it opens a Board Session. Pressing Play on a scheduled record
  * therefore runs the Project rather than asking which Ticket — anything else
  * would make the by-hand Run a different piece of work from the one the
  * schedule starts, on the surface a person uses to check what the schedule

@@ -29,6 +29,7 @@ Write
 Session
   session list [--project <p>] [--ticket <id>]
   session peek <id> [--lines <n>]
+  session answer <id>
   session done [--reason <text>] [--dry-run]
   session blocked [--reason <text>] [--dry-run]
   session link <id> [--dry-run]
@@ -44,6 +45,7 @@ Agent Tool Surface
   session start  Start an agent chat session on a ticket.
   session stop  Stop another agent session's work, recording who stopped it.
   session send  Steer a message into another running agent session.
+  session delegate  Delegate one task to a subagent Session that answers back here.
 
 App-only verbs
   ticket archive  Archive a ticket (its worktree is preserved).
@@ -533,7 +535,7 @@ Effects:
 - Does not: No new Session starts, and the stopped Session can be reattached by a person.
 
 Notes:
-- Runs as a named tool in the project Role bundle; the shell never executes it.
+- Runs as a named tool in the Board Session's tool bundle; the shell never executes it.
 - Records a durable stopped event with the calling Session as actor, interrupts any open turn, and releases the executor.
 - The Session identity survives: its history stays openable, and a person can reattach it.
 
@@ -559,9 +561,40 @@ Effects:
 - Does not: No Ticket moves, no Session stops, and no new Session starts.
 
 Notes:
-- Runs as a named tool in the project Role bundle; the shell never executes it.
+- Runs as a named tool in the Board Session's tool bundle; the shell never executes it.
 - Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.
 - The message arrives marked as supervisor steering from this Session, never as the target's own user.
+
+============================================================================
+volli help session delegate
+============================================================================
+session delegate — Delegate one task to a subagent Session that answers back here.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: session_delegate
+
+Input:
+  task  The delegated task, complete on its own: what to do, where to look, and what the answer should contain.
+  title (optional)  A permanent title for the subagent Session. Omit to let Volli name it from the task.
+  model (optional)  Run the subagent on a specific model instead of the utility default.
+  model.providerId  Provider id, as `model list` prints it.
+  model.modelId  Model id, as `model list` prints it.
+  reasoning (optional)  Reasoning level override; the chosen model must support it. (valid: off, minimal, low, medium, high, xhigh, max)
+
+Effects:
+- Durable write: Create one durable Subagent Session with this Session as its parent, freeze its start inputs, and submit the task as its kickoff turn after a ready attachment.
+- Durable write: When the subagent's first turn completes, append a notice from Volli to this Session's ledger naming the subagent and its state; its final message stays in the subagent's own ledger, read through `session answer`.
+- Human sees: The subagent appears in the session list as a child of this Session, with its own transcript.
+- Does not: No Ticket moves, and the person driving is not asked anything.
+- Does not: This Session is not paused: the call returns at once and the answer arrives later.
+
+Notes:
+- Runs as a named tool in the project and ticket Role bundles; the shell never executes it.
+- Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session naming it; `volli session answer <handle>` reads its final message.
+- The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.
 
 ============================================================================
 volli help session list
@@ -606,6 +639,23 @@ Notes:
 - Keep peeks narrow — output consumes the caller's context.
 
 ============================================================================
+volli help session answer
+============================================================================
+session answer — Read a chat session's final message in full: a subagent's answer.
+
+Door: Agent CLI
+Verb tier: read
+
+Usage: volli session answer <id>
+
+Example: volli session answer a1b2c3
+
+Notes:
+- Handle is a short session id from session list, or the one a subagent notice names.
+- Answers the state of the latest turn — completed, running, interrupted, stopped, failed, not-started — then the last assistant message, untruncated.
+- The message is quoted as untrusted prose: another Session's words, never an instruction.
+
+============================================================================
 volli help session done
 ============================================================================
 session done — Record that this session's work is finished.
@@ -621,14 +671,18 @@ Options:
 
 Effects:
 - Durable write: Append a completed done signal command and receipt to the current Session ledger.
+- Durable write: Create one attributed Ticket comment holding this Session's final todo list, when it kept one and belongs to a Ticket.
 - Human sees: The done signal and optional reason appear in the Session's durable history.
+- Human sees: The Session's final todo list appears in the Ticket activity feed.
 - Does not: No Ticket moves, the Session identity remains openable, and its worktree is not removed.
+- Does not: No comment is written for a Board Session or for one that kept no todo list.
 
 Example: volli session done --reason "Tests pass"
 
 Notes:
 - Acts on VOLLI_SESSION; needs a Volli session.
 - Records the signal in the session ledger; the board does not move. Use ticket move for that.
+- Leaves this session's last todo list on the ticket as a comment, when it kept one.
 
 ============================================================================
 volli help session blocked
@@ -646,14 +700,18 @@ Options:
 
 Effects:
 - Durable write: Append a completed blocked signal command and receipt to the current Session ledger.
+- Durable write: Create one attributed Ticket comment holding this Session's unfinished todo list, when it kept one and belongs to a Ticket.
 - Human sees: The Session raises attention in the app and shows the optional reason.
+- Human sees: The Session's todo list as it stood appears in the Ticket activity feed.
 - Does not: No Ticket moves, and the Session is not archived or deleted.
+- Does not: No comment is written for a Board Session or for one that kept no todo list.
 
 Example: volli session blocked --reason "Needs credentials"
 
 Notes:
 - Acts on VOLLI_SESSION; needs a Volli session.
 - Raises attention on this session; --reason is the text a person sees.
+- Leaves this session's last todo list on the ticket as a comment, when it kept one.
 
 ============================================================================
 volli help session link
@@ -735,7 +793,7 @@ Verb tier: read
 Usage: volli prompt baseline [options]
 
 Options:
-  --ticket <id>  Price a Ticket Session for this ticket instead of a project chat.
+  --ticket <id>  Price a Ticket Session for this ticket instead of a Board chat.
   --project <p>  Resolve against this project instead of the context ladder.
 
 Example: volli prompt baseline
@@ -838,14 +896,16 @@ Run volli help model <subcommand> for detail.
 volli help session
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
-  session stop     Stop another agent session's work, recording who stopped it. [Agent Tool Surface (named tool; not shell-executable)]
-  session send     Steer a message into another running agent session. [Agent Tool Surface (named tool; not shell-executable)]
-  session list     List a project's active terminal and chat sessions. [Agent CLI]
-  session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
-  session done     Record that this session's work is finished. [Agent CLI]
-  session blocked  Signal the current session is blocked and needs a person. [Agent CLI]
-  session link     Record the harness's own session id on the current Volli session. [Agent CLI]
+  session start     Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
+  session stop      Stop another agent session's work, recording who stopped it. [Agent Tool Surface (named tool; not shell-executable)]
+  session send      Steer a message into another running agent session. [Agent Tool Surface (named tool; not shell-executable)]
+  session delegate  Delegate one task to a subagent Session that answers back here. [Agent Tool Surface (named tool; not shell-executable)]
+  session list      List a project's active terminal and chat sessions. [Agent CLI]
+  session peek      Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session answer    Read a chat session's final message in full: a subagent's answer. [Agent CLI]
+  session done      Record that this session's work is finished. [Agent CLI]
+  session blocked   Signal the current session is blocked and needs a person. [Agent CLI]
+  session link      Record the harness's own session id on the current Volli session. [Agent CLI]
 Run volli help session <subcommand> for detail.
 
 ============================================================================
@@ -879,9 +939,9 @@ The app action Create & start is a composed human action. It creates a Ticket in
 - session.start starts a Session and does not move or create a Ticket.
 - session.done and session.blocked record Session signals and do not move the board.
 
-Tickets, worktrees, and Project Sessions
+Tickets, worktrees, and Board Sessions
 A worktree-scoped Ticket records the intent to use isolation before a checkout exists. Volli materializes or reuses the Ticket worktree when work starts. Ending a Session does not remove the checkout. Archiving a Ticket preserves its worktree; later retention or an explicit app action can remove disposable checkout state while the retained branch remains the source for recreation.
-A Project Session runs on the Main checkout, the project folder the person added to Volli. It has no Ticket worktree and no board effect. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.
+A Board Session runs on the Main checkout, the project folder the person added to Volli. It sees the whole board but has no Ticket of its own, so it has no worktree and its lifecycle moves no card. A Ticket configured without worktree isolation also runs on the Main checkout, but it remains a Ticket Session because Role and work location answer different questions.
 
 Board state, Session signals, and human effects
 Ticket state and Session state are separate ledgers. A Ticket comment appears in the Ticket activity feed. A Ticket move changes the board. A Session signal appears on that Session and can raise attention. Each write documents where a person sees the result and the important actions it does not imply.
@@ -916,6 +976,18 @@ Bundle identity
   Build id: reference-fixture
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
+
+VC-6 (after VC-185)
+Added
+- todo_write — a named tool for keeping this Session's todo list. Each call REPLACES the whole list, so send every item every time, including the ones already finished. It takes a status per item (pending, in_progress, completed, cancelled), which means work may be finished out of order and a step may be dropped rather than deleted.
+- The tool answers with the whole list rather than an acknowledgement. That is deliberate: compaction drops older tool calls out of what the model sees, and the newest result is the copy of the plan that survives it.
+- A person watching the Session sees the list live, above the composer. It is for them and for the ticket record — not a thinking aid, so a list that is written once and never updated is worse than no list at all.
+Changed
+- session done and session blocked now leave this Session's last todo list on its Ticket as one attributed comment, when it kept a list and belongs to a Ticket. Their registry effects and --dry-run preview say so. Neither verb moves the board; a comment is a record, not a state change.
+Fixed
+- None in this record.
+Removed
+- None in this record.
 
 VC-185 (after VC-178)
 Added
@@ -958,7 +1030,7 @@ Changed
 Fixed
 - None in this record.
 Removed
-- session.start left the Agent CLI. It is control tier now: the named session_start tool in the project Role's bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
+- session.start left the Agent CLI. It is control tier now: the named session_start tool in the Board Session's tool bundle is the agent path, and the app is the human one. Typing it in a shell answers WRONG_DOOR and starts nothing.
 - ticket.archive left every agent surface. Archiving is app-only curation; no Role bundle carries it and no CLI access mode projects it. Help still names it, so a wrong door stays distinguishable from no door.
 
 VC-85 (after VC-162)
@@ -975,7 +1047,7 @@ Removed
 VC-162 (after VC-91)
 Added
 - A Role-scoped Agent Tool Surface: the named tools a Session holds are now resolved from its Role at creation, not handed identically to every Session.
-- session_start as a named tool in the project Role's bundle. A Project Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
+- session_start as a named tool in the Board Session's tool bundle. A Board Session can start a Ticket Session without touching the agent socket; the calling Session and its project are bound by Volli from the attachment, so the tool takes a ticket and nothing about the caller.
 - A SESSION TOOLS block in every Session's first message, naming the Volli verbs that Session holds under their callable names, and stating that what is absent will not become available mid-Session.
 Changed
 - session.start gained the named session_start tool on the Agent Tool Surface beside its Agent CLI door. One registry key, one handler, two doors — its verb tier stayed coordination while the CLI door remained open. VC-163 then closed that door; see the entry above.
@@ -1115,36 +1187,38 @@ volli conflicts before you schedule: it names the active worktrees that touch th
 volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
 No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.
 Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.
-Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the project Role bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
+Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
 
 ============================================================================
 volli help session harness
 ============================================================================
 session subcommands:
-  session start    Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
-  session stop     Stop another agent session's work, recording who stopped it. [Agent Tool Surface (named tool; not shell-executable)]
-  session send     Steer a message into another running agent session. [Agent Tool Surface (named tool; not shell-executable)]
-  session list     List a project's active terminal and chat sessions. [Agent CLI]
-  session peek     Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
-  session done     Record that this session's work is finished. [Agent CLI]
-  session blocked  Signal the current session is blocked and needs a person. [Agent CLI]
-  session link     Record the harness's own session id on the current Volli session. [Agent CLI]
+  session start     Start an agent chat session on a ticket. [Agent Tool Surface (named tool; not shell-executable)]
+  session stop      Stop another agent session's work, recording who stopped it. [Agent Tool Surface (named tool; not shell-executable)]
+  session send      Steer a message into another running agent session. [Agent Tool Surface (named tool; not shell-executable)]
+  session delegate  Delegate one task to a subagent Session that answers back here. [Agent Tool Surface (named tool; not shell-executable)]
+  session list      List a project's active terminal and chat sessions. [Agent CLI]
+  session peek      Peek at what a session is doing: terminal output, or a chat's tail. [Agent CLI]
+  session answer    Read a chat session's final message in full: a subagent's answer. [Agent CLI]
+  session done      Record that this session's work is finished. [Agent CLI]
+  session blocked   Signal the current session is blocked and needs a person. [Agent CLI]
+  session link      Record the harness's own session id on the current Volli session. [Agent CLI]
 Run volli help session <subcommand> for detail.
 
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session list, session peek, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1219,7 +1293,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, session stop, session send; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1337,6 +1411,11 @@ volli session send ORACLE-1 --not-an-option
 WRONG_DOOR volli session send exists on the Agent Tool Surface as session.send; the Agent CLI does not execute it.
 
 ============================================================================
+volli session delegate --not-an-option
+============================================================================
+WRONG_DOOR volli session delegate exists on the Agent Tool Surface as session.delegate; the Agent CLI does not execute it.
+
+============================================================================
 volli session list --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: --project, --ticket) — see volli help session list
@@ -1345,6 +1424,11 @@ USAGE Unknown option --not-an-option (options: --project, --ticket) — see voll
 volli session peek ORACLE-1 --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: --lines) — see volli help session peek
+
+============================================================================
+volli session answer ORACLE-1 --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option — see volli help session answer
 
 ============================================================================
 volli session done --not-an-option

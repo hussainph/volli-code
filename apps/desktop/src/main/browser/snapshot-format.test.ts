@@ -83,6 +83,11 @@ describe("formatAXSnapshot", () => {
     expect(snapshot.refs.get("e3")).toBe(105);
     expect(snapshot.refs.size).toBe(3);
     expect(snapshot.truncated).toBe(false);
+    // The name the page computed rides beside each ref (VC-238), so an action
+    // on `e2` can be reported as `Clicked "Toggle Todo"` rather than by its ref.
+    expect(snapshot.names.get("e1")).toBe("What needs to be done?");
+    expect(snapshot.names.get("e2")).toBe("Toggle Todo");
+    expect(snapshot.names.get("e3")).toBe("All");
   });
 
   it("splices ignored and generic structure up, and drops a text leaf that echoes its parent's name", () => {
@@ -164,6 +169,29 @@ describe("formatAXSnapshot", () => {
     // e2's line fell past the bound, so e2 is gone — whatever tokens survive
     // inside quoted names are the page talking, not the map's keys.
     expect(snapshot.refs.has("e2")).toBe(false);
+    // And its name goes with it: a row must never report an action against a
+    // line the model was never shown.
+    expect(snapshot.names.has("e2")).toBe(false);
+  });
+
+  it("holds no name for an interactive element the page left unnamed, so the row falls back to the ref", () => {
+    const nodes: AXNodeLike[] = [
+      node({ nodeId: "1", role: { value: "RootWebArea" }, childIds: ["2", "3"] }),
+      node({ nodeId: "2", role: { value: "button" }, name: { value: "" }, backendDOMNodeId: 700 }),
+      node({
+        nodeId: "3",
+        role: { value: "button" },
+        name: { value: "Save" },
+        backendDOMNodeId: 701,
+      }),
+    ];
+
+    const snapshot = formatAXSnapshot(nodes);
+
+    // Absent rather than `""`: `Clicked “”` says less than `Clicked e1`.
+    expect(snapshot.refs.has("e1")).toBe(true);
+    expect(snapshot.names.has("e1")).toBe(false);
+    expect(snapshot.names.get("e2")).toBe("Save");
   });
 
   it("bounds cyclic or excessively deep protocol trees instead of recursing forever", () => {

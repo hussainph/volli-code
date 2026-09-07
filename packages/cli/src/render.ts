@@ -463,6 +463,38 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
   return [header, ...transcript.filter(isRecord).map(transcriptLine)].join("\n");
 }
 
+/**
+ * A chat Session's answer (VC-9): one line of Volli's facts — handle, Role,
+ * state, turns — then the last assistant message inside the untrusted-prose
+ * envelope, because it is another Session's words and the caller is most often
+ * the parent that delegated to it.
+ */
+function renderSessionAnswer(data: Record<string, unknown>): string {
+  const unreadable = data["unreadable"] === true;
+  const header = [
+    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["state"])}`,
+    ...(typeof data["role"] === "string" ? [terminalSafeInline(data["role"])] : []),
+    `turns ${countCell(data["turns"])}`,
+    ...(typeof data["title"] === "string" ? [terminalSafeInline(data["title"])] : []),
+  ].join("  ");
+  const answer = data["answer"];
+  if (typeof answer !== "string") {
+    return [
+      header,
+      unreadable
+        ? "Its last message could not be read from the transcript store."
+        : "It has said nothing yet.",
+    ].join("\n");
+  }
+  return [
+    header,
+    ...untrustedProseResponseLines({
+      response: "session answer response",
+      blocks: [{ label: "final message", text: answer }],
+    }),
+  ].join("\n");
+}
+
 /** One transcript message: how long ago, who, which tools, what it said. */
 function transcriptLine(entry: Record<string, unknown>): string {
   const tools = Array.isArray(entry["tools"])
@@ -1013,6 +1045,10 @@ function renderStableLines(command: string, data: unknown): string | null {
         )
         .join("\n") ?? null
     );
+  }
+  if (command === "session.answer") {
+    if (typeof data["session"] !== "string" || typeof data["state"] !== "string") return null;
+    return renderSessionAnswer(data);
   }
   if (command === "session.peek") {
     if (typeof data["session"] !== "string" || typeof data["status"] !== "string") return null;

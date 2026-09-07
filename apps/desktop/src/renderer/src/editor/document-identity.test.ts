@@ -186,8 +186,120 @@ describe("detectDocumentLanguage", () => {
     ["Gemfile", "ruby"],
     ["Rakefile", "ruby"],
     ["Gemfile.lock", "plaintext"],
+    // The VC-125 gap fill: component frameworks, the macOS-native pair, diffs,
+    // infra and config languages, and the long tail of general-purpose ones.
+    ["src/App.vue", "vue"],
+    ["src/App.svelte", "svelte"],
+    ["src/pages/index.astro", "astro"],
+    ["Sources/AppDelegate.m", "objective-c"],
+    ["Sources/Bridge.mm", "objective-cpp"],
+    ["fix.diff", "diff"],
+    ["0001-fix.patch", "diff"],
+    ["config.hcl", "hcl"],
+    ["main.tf", "terraform"],
+    ["prod.tfvars", "terraform"],
+    ["api/v1/service.proto", "proto"],
+    ["init.lua", "lua"],
+    ["Main.scala", "scala"],
+    ["script.sc", "scala"],
+    ["build.sbt", "scala"],
+    ["lib/main.dart", "dart"],
+    ["lib/app.ex", "elixir"],
+    ["test/app_test.exs", "elixir"],
+    ["src/Main.hs", "haskell"],
+    ["lib/parser.ml", "ocaml"],
+    ["lib/parser.mli", "ocaml"],
+    ["src/main.zig", "zig"],
+    ["scripts/build.ps1", "powershell"],
+    ["modules/Util.psm1", "powershell"],
+    ["modules/Util.psd1", "powershell"],
+    ["analysis/model.r", "r"],
+    // Paths are lower-cased before the lookup, so R's conventional capital works.
+    ["analysis/model.R", "r"],
+    ["src/core.clj", "clojure"],
+    ["src/ui.cljs", "clojure"],
+    ["src/shared.cljc", "clojure"],
+    ["deps.edn", "clojure"],
+    ["build.groovy", "groovy"],
+    ["build.gradle", "groovy"],
+    ["scripts/deploy.pl", "perl"],
+    ["lib/Util.pm", "perl"],
+    ["scripts/build.bat", "bat"],
+    ["scripts/build.cmd", "bat"],
+    ["flake.nix", "nix"],
   ])("selects %s as %s", (relPath, expected) => {
     expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
+  });
+
+  // A dotfile's only dot is its first character, so the extension lookup sees
+  // nothing. These are exact-name rules for the ones with a real grammar. The
+  // ignore files are deliberately absent: they have no grammar, and INI paints
+  // a `[Bb]uild/` pattern as a section header.
+  it.each([
+    [".env", "dotenv"],
+    [".env.local", "dotenv"],
+    [".env.production", "dotenv"],
+    ["apps/desktop/.env.example", "dotenv"],
+    [".editorconfig", "ini"],
+    [".gitconfig", "ini"],
+    [".gitmodules", "ini"],
+    [".npmrc", "ini"],
+    [".bashrc", "shell"],
+    [".bash_profile", "shell"],
+    [".bash_aliases", "shell"],
+    [".profile", "shell"],
+    [".zshrc", "shell"],
+    [".zprofile", "shell"],
+    [".zshenv", "shell"],
+    [".gitignore", "plaintext"],
+    [".dockerignore", "plaintext"],
+    [".npmignore", "plaintext"],
+    [".prettierignore", "plaintext"],
+  ])("selects dotfile %s as %s", (relPath, expected) => {
+    expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
+  });
+
+  // Scripts with no extension say what they are on line 1. Same first-line
+  // rules VS Code applies; the interpreter word may sit anywhere on the line so
+  // `env -S node --flags` still reads as node.
+  it.each([
+    ["#!/bin/bash\necho hi\n", "shell"],
+    // A valid one-line script need not end with a newline.
+    ["#!/bin/sh", "shell"],
+    ["#!/bin/sh\n", "shell"],
+    ["#!/usr/bin/env zsh\n", "shell"],
+    ["#!/bin/ksh\n", "shell"],
+    ["#!/bin/dash\n", "shell"],
+    ["#!/usr/bin/env fish\n", "shell"],
+    ["#!/usr/bin/env python3\nprint(1)\n", "python"],
+    ["#!/usr/bin/python2.7\n", "python"],
+    ["#!/usr/bin/env node\n", "javascript"],
+    ["#!/usr/bin/env -S node --enable-source-maps\n", "javascript"],
+    ["#!/usr/bin/env ruby\n", "ruby"],
+    ["#!/usr/bin/env pwsh\n", "powershell"],
+    ["#!/usr/bin/perl -w\n", "perl"],
+    // Not a shebang, or one nobody has a grammar for: plain text, as before.
+    ["echo hi\n#!/bin/bash\n", "plaintext"],
+    ["# a comment, not a shebang\n", "plaintext"],
+    ["#!/usr/bin/env lolcode\n", "plaintext"],
+    ["", "plaintext"],
+  ])("sniffs an extensionless script starting %j as %s", (content, expected) => {
+    expect(detectDocumentLanguage({ ...mainFile, relPath: "bin/run" }, content)).toBe(expected);
+  });
+
+  it("lets the path win over the first line whenever the path knows the language", () => {
+    // A `.py` file that happens to start `#!/usr/bin/env node` is still Python
+    // to the tools that will run it, and to the person editing it.
+    expect(
+      detectDocumentLanguage({ ...mainFile, relPath: "tool.py" }, "#!/usr/bin/env node\n"),
+    ).toBe("python");
+    // And the Ticket Body never sniffs — it is Markdown by role.
+    expect(
+      detectDocumentLanguage(
+        { kind: "ticket-body", projectId: "project-1", ticketId: "ticket-1" },
+        "#!/bin/bash\n",
+      ),
+    ).toBe("markdown");
   });
 
   it("uses the diff path and falls back to plaintext for unknown files", () => {

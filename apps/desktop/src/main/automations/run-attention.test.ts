@@ -104,6 +104,8 @@ async function attachedRuntime() {
       kind: "session.create",
       projectId: "project-1",
       ticketId: null,
+      role: "project",
+      parentSessionId: null,
       title: "Nightly sweep",
     },
   });

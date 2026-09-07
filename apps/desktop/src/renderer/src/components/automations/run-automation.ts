@@ -116,7 +116,7 @@ async function startProjectRun(input: {
  *
  *  - A **scheduled record's Play**, on the Automations page. VC-112 rules that
  *    the Trigger decides the Target, so running a scheduled Automation by hand
- *    must start the Project Session its schedule would have started. Asking
+ *    must start the Board Session its schedule would have started. Asking
  *    which Ticket instead would make the by-hand Run a different piece of work from
  *    the automatic one, which is the one thing this control must not be.
  *  - A **Skipped occurrence's "Run now"**, from the Run history (VC-112: "a

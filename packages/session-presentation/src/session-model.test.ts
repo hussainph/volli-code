@@ -56,6 +56,22 @@ describe("composer delivery", () => {
     ]);
   });
 
+  it("keeps a composed start's auto-title baseline on its opening message", () => {
+    expect(
+      enqueueMessage([], {
+        id: "a",
+        text: " begin ",
+        autoTitleBaseline: "Work on VC-42",
+      }),
+    ).toEqual([
+      {
+        id: "a",
+        text: "begin",
+        autoTitleBaseline: "Work on VC-42",
+      },
+    ]);
+  });
+
   it("gives an unqueued message back rather than dropping it", () => {
     const queue = [
       { id: "a", text: "first" },

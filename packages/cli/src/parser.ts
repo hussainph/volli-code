@@ -415,6 +415,8 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   "session.peek": {
     options: { "--lines": { kind: "value", key: "lines", parse: positiveIntValue } },
   },
+  // A handle and nothing else (VC-9): the answer is read whole or not at all.
+  "session.answer": { options: {} },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,
   "session.link": { options: { "--dry-run": DRY_RUN } },

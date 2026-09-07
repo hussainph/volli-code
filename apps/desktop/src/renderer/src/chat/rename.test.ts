@@ -16,7 +16,15 @@ import { applyRemoteChatTitle, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
-const SESSION = { id: "chat-1", projectId: "p1", ticketId: "t1", title: "Plan", createdAt: 0 };
+const SESSION = {
+  id: "chat-1",
+  projectId: "p1",
+  ticketId: "t1",
+  role: "ticket" as const,
+  parentSessionId: null,
+  title: "Plan",
+  createdAt: 0,
+};
 
 const projection: SessionPresentationProjection = {
   session: SESSION,
@@ -53,8 +61,11 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       live: true,
       activity: "idle",
       waitingOn: null,
+      outcome: null,
       lastActivityAt: 1,
       bornTicketless: false,
+      role: "ticket",
+      parentSessionId: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -148,8 +159,8 @@ describe("renameChatSession", () => {
     useChatSessionsStore.setState({ sessions: {} });
     useTicketSessionRecordsStore.setState({ byTicket: {} });
 
-    expect(await renameChatSession("project-chat", "Project chat")).toBe(true);
-    expect(renameMock).toHaveBeenCalledWith({ sessionId: "project-chat", title: "Project chat" });
+    expect(await renameChatSession("project-chat", "Board chat")).toBe(true);
+    expect(renameMock).toHaveBeenCalledWith({ sessionId: "project-chat", title: "Board chat" });
   });
 
   it("is a no-op on a blank title, and never calls main", async () => {

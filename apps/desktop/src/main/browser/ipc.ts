@@ -1,10 +1,12 @@
 import type {
   BrowserIpcChannel,
+  BrowserPictureInput,
   BrowserTabIdInput,
   BrowserTabListInput,
   BrowserTabNavigateInput,
   BrowserTabOpenInput,
   BrowserTabSetBoundsInput,
+  BrowserTabSetPresentationInput,
   Result,
 } from "../../ipc/contract";
 import { BROWSER_IPC } from "../ipc-descriptors";
@@ -85,6 +87,35 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
     },
     "volli:browser-toggle-devtools": (input: BrowserTabIdInput): Result => {
       host.toggleDevTools(input.tabId);
+      return { ok: true };
+    },
+    // Where a Session's tab is drawn is the person's decision and main's fact
+    // (VC-238): the renderer asks, main answers with the tab as it now stands.
+    "volli:browser-set-presentation": (input: BrowserTabSetPresentationInput) => ({
+      ok: true,
+      tab: host.setPresentation(input.tabId, input.presentation),
+    }),
+    // The one read of a picture the transcript names. Pixels only, like
+    // `capture`; a picture the host no longer holds answers null, not an error.
+    "volli:browser-picture": (input: BrowserPictureInput) => ({
+      ok: true,
+      dataUrl: host.pictureOf(input.pictureId),
+    }),
+    // The person's hold controls (VC-239). Each is an explicit press on the
+    // chrome pill or the cursor's label; nothing here is inferred from input
+    // into the page. What the displaced or asked Session is TOLD is not this
+    // handler's business — the host emits a hold event and index.ts relays it
+    // in-band, so the notice reaches the Session whichever door moved the hold.
+    "volli:browser-take-over": (input: BrowserTabIdInput) => ({
+      ok: true,
+      tab: host.takeOver(input.tabId).tab,
+    }),
+    "volli:browser-hand-back": (input: BrowserTabIdInput) => ({
+      ok: true,
+      tab: host.handBack(input.tabId),
+    }),
+    "volli:browser-ask-to-leave": (input: BrowserTabIdInput): Result => {
+      host.askToLeave(input.tabId);
       return { ok: true };
     },
   };

@@ -198,7 +198,7 @@ export interface AutomationRunPlan {
    * The Target, in the only spelling the Session layer has: `ticketId !== null`
    * IS the Role a Session is born under. A column Trigger and every by-hand Run
    * name a Ticket; a schedule names the Project (VC-112), so its plan carries
-   * `null` and mints a Project Session. Widened rather than replaced by a
+   * `null` and mints a Board Session. Widened rather than replaced by a
    * `target` union on purpose — this shape is stored in an append-only ledger,
    * and every plan written before VC-130 already spells its Ticket here.
    */

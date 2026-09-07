@@ -40,10 +40,16 @@ const APP_LAUNCH_INJECTION_ENV = new Set([
 
 /** Builds a child environment without carrying CLI authority or loader injection into the GUI. */
 function appLaunchEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // One inherited VOLLI_ value is process presentation rather than authority,
+  // addressing, or a writable location: a smoke app relaunched by its own CLI
+  // must keep the same quiet-window posture as generation one. Preserve only
+  // its two declared values and continue stripping every other VOLLI_ key.
+  const quietWindows = source.VOLLI_QUIET_WINDOWS;
   const env = { ...source };
   for (const key of Object.keys(env)) {
     if (key.startsWith("VOLLI_") || APP_LAUNCH_INJECTION_ENV.has(key)) delete env[key];
   }
+  if (quietWindows === "0" || quietWindows === "1") env.VOLLI_QUIET_WINDOWS = quietWindows;
   env.VOLLI_LAUNCHED_BY_CLI = "1";
   return env;
 }

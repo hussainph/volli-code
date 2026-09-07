@@ -248,6 +248,15 @@ export function BrowserPane({
         onToggleDevTools={() =>
           void runCommand(api.toggleDevTools({ tabId: tab.tabId }), "toggle DevTools")
         }
+        // The person's hold controls (VC-239). Explicit presses, never
+        // inferred from input into the page; the holding Session is told by
+        // main, so nothing here has to reach it.
+        holder={tab.heldBy}
+        onTakeOver={() => void runTabCommand(api.takeOver({ tabId: tab.tabId }), "take over")}
+        onAskToLeave={() =>
+          void runCommand(api.askToLeave({ tabId: tab.tabId }), "ask the Session to leave")
+        }
+        onHandBack={() => void runTabCommand(api.handBack({ tabId: tab.tabId }), "hand back")}
       />
       <div
         ref={anchorRef}

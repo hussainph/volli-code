@@ -53,6 +53,8 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  BrowserPictureInput,
+  BrowserPictureResult,
   BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
@@ -61,7 +63,12 @@ import type {
   BrowserTabOpenInput,
   BrowserTabResult,
   BrowserTabSetBoundsInput,
+  BrowserTabSetPresentationInput,
   BrowserTabStateEvent,
+  BackgroundShellIdInput,
+  BackgroundShellListResult,
+  BackgroundShellStateEvent,
+  BackgroundShellTailResult,
   AutomationArmInput,
   AutomationArmingsResult,
   AutomationArmResult,
@@ -162,6 +169,8 @@ import type {
   SessionHarnessNotice,
   SessionRenameInput,
   SessionRenameResult,
+  SessionStopInput,
+  SessionStopResult,
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
@@ -408,6 +417,16 @@ const api = {
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
       invoke("volli:browser-toggle-devtools", input),
+    setPresentation: (input: BrowserTabSetPresentationInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-set-presentation", input),
+    picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
+      invoke("volli:browser-picture", input),
+    takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-take-over", input),
+    handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
+      invoke("volli:browser-hand-back", input),
+    askToLeave: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-ask-to-leave", input),
     /** Subscribes to full chrome snapshots; returns the unsubscribe. */
     onTabState: (callback: (event: BrowserTabStateEvent) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: BrowserTabStateEvent) =>
@@ -415,6 +434,21 @@ const api = {
       ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+    },
+  },
+  /** Background shells a Session started (VC-270): the island's shell feed and its two verbs. */
+  shells: {
+    list: (): Promise<BackgroundShellListResult> => invoke("volli:shell-list"),
+    tail: (input: BackgroundShellIdInput): Promise<BackgroundShellTailResult> =>
+      invoke("volli:shell-tail", input),
+    kill: (input: BackgroundShellIdInput): Promise<Result> => invoke("volli:shell-kill", input),
+    /** Subscribes to shell starts, exits and removals; returns the unsubscribe. */
+    onShellState: (callback: (event: BackgroundShellStateEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BackgroundShellStateEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:shell-state" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
   },
   projects: {
@@ -539,6 +573,13 @@ const api = {
      */
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
+    /**
+     * Stops a Session's work as the person (VC-269): the Activity Island's
+     * armed "Stop subagent". Records the stop with the `user` actor, then
+     * interrupts and releases; the row it moves arrives on `onActivity`.
+     */
+    stop: (input: SessionStopInput): Promise<SessionStopResult> =>
+      invoke("volli:session-stop", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
@@ -826,7 +867,7 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
-    /** Runs an Automation against the PROJECT: one fresh Project Session (VC-130). */
+    /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
     /** Which Automations are switched on on this machine (VC-127). */
@@ -1005,7 +1046,7 @@ const api = {
    * Session's venue is the project's main checkout, and a ticket's may be too.
    */
   venue: {
-    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Project Session. */
+    /** One reading of the checkout `{ projectId, ticketId }` names. `ticketId: null` is a Board Session. */
     snapshot: (projectId: string, ticketId: string | null): Promise<VenueSnapshotResult> =>
       invoke("volli:venue-snapshot", { projectId, ticketId }),
   },

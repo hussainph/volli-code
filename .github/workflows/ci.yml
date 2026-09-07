@@ -198,8 +198,8 @@ jobs:
           vp run --filter @volli/desktop build
           vp run --filter @volli/desktop ensure:electron
 
-      - name: Run boot tier
-        run: node apps/desktop/scripts/run-smokes.mjs --tier boot --jobs 4
+      - name: Run boot tier and verify quiet native windows
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4
 
   # Everything else, sharded three ways and run four-at-a-time inside each
   # shard. The runner script globs apps/desktop/e2e/*-smoke.mjs and subtracts a
@@ -238,5 +238,5 @@ jobs:
           vp run --filter @volli/desktop build
           vp run --filter @volli/desktop ensure:electron
 
-      - name: Run shard ${{ matrix.shard }} of 3
-        run: node apps/desktop/scripts/run-smokes.mjs --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
+      - name: Run shard ${{ matrix.shard }} of 3 and verify quiet native windows
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4

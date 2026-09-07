@@ -839,7 +839,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
           return;
         }
-        // Its project-hosted chats remain resident, but their temporary
+        // Its Board chats remain resident, but their temporary
         // restoration path cannot outlive a permanent ticket deletion.
         useChatSessionsStore.getState().clearRehomedTicketProvenance(ticketId);
         // Any live terminal sessions the ticket still owns must die with it —

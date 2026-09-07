@@ -18,6 +18,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionRole,
   UnstampedCommandReceipt,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
@@ -109,6 +110,10 @@ export type SessionClientCommand =
       kind: "session.create";
       projectId: string;
       ticketId: string | null;
+      /** The Role the Session is created under (VC-9); the caller states it. */
+      role: SessionRole;
+      /** The delegating Session, for a `subagent`; null for a root Role. */
+      parentSessionId: string | null;
       title: string | null;
     }
   | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
@@ -755,6 +760,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         commandId: request.commandId,
         projectId: request.command.projectId,
         ticketId: request.command.ticketId,
+        role: request.command.role,
+        parentSessionId: request.command.parentSessionId,
         title: request.command.title,
         provenance: userProvenance(null),
       });
@@ -2099,6 +2106,16 @@ class DefaultSessionRuntime implements SessionRuntime {
           kind: observation.kind,
           reason: observation.reason,
           detail: observation.detail,
+        });
+        break;
+      case "context.reasoning_dropped":
+        event = await this.ports.engine.observe({
+          ...base,
+          kind: observation.kind,
+          turnId: observation.turnId,
+          count: observation.count,
+          causes: observation.causes,
+          paths: observation.paths,
         });
         break;
       case "authority.denied":

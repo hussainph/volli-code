@@ -127,7 +127,11 @@ describe("launchApp", () => {
         appEntry: undefined,
         platform: "linux",
         timeoutMs: 1000,
-        env: { ELECTRON_RUN_AS_NODE: "1", PATH: "/bin" },
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          PATH: "/bin",
+          VOLLI_QUIET_WINDOWS: "0",
+        },
       },
       {
         probe: async () => {
@@ -148,12 +152,16 @@ describe("launchApp", () => {
     expect(spawns[0]).toMatchObject({
       executable: "/Applications/Volli Code.app/Contents/MacOS/Volli Code",
       args: [],
-      env: { PATH: "/bin", VOLLI_LAUNCHED_BY_CLI: "1" },
+      env: {
+        PATH: "/bin",
+        VOLLI_QUIET_WINDOWS: "0",
+        VOLLI_LAUNCHED_BY_CLI: "1",
+      },
     });
     expect(spawns[0]?.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
   });
 
-  it("does not forward CLI context, Node injection, or test-only overrides into the GUI app", async () => {
+  it("strips CLI authority, injection, and writable overrides while preserving quiet presentation", async () => {
     const spawns: NodeJS.ProcessEnv[] = [];
     let probes = 0;
     await launchApp(
@@ -182,6 +190,7 @@ describe("launchApp", () => {
           VOLLI_AGENT_HOME: "/tmp/evil-home",
           VOLLI_SKIP_AGENT_TOOLS: "1",
           VOLLI_SKIP_CLOSE_CONFIRM: "1",
+          VOLLI_QUIET_WINDOWS: "1",
         },
       } as Parameters<typeof launchApp>[0],
       {
@@ -201,6 +210,7 @@ describe("launchApp", () => {
     expect(spawns).toEqual([
       {
         PATH: "/bin",
+        VOLLI_QUIET_WINDOWS: "1",
         VOLLI_LAUNCHED_BY_CLI: "1",
         ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
       },

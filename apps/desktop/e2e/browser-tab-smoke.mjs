@@ -6,9 +6,12 @@
  * because remote bytes do not belong in the app renderer: the pushed chrome
  * state must prove there is no `window.api`, no Node global, and no usable
  * denied `window.open`. The smoke then exercises managed HTTP popup handling,
- * address/history/reload chrome, in-pane DevTools, tab destruction, and clean
+ * address/history/reload chrome, in-pane DevTools, a Session's hold on the tab
+ * with its cursor drawn over the plane (VC-239), tab destruction, and clean
  * app/server teardown. It starts no Session and takes no model turn, so it costs
- * $0 and needs no provider credentials.
+ * $0 and needs no provider credentials: the hold step builds the same Browser
+ * port the adapter builds, through main's `VOLLI_BROWSER_PROBE` seam, in two
+ * invented Sessions' names.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -302,6 +305,95 @@ async function dockedDevToolsState(app, targetUrl) {
   }, targetUrl);
 }
 
+/** The chrome's holder pill (VC-239), or nothing for a free tab. */
+const holderPill = (page) => page.locator('[data-slot="browser-holder-pill"]');
+const holderDots = (page) => page.locator('[data-slot="browser-holder-dot"]');
+
+/**
+ * The Session cursor overlay's view in the app window: a child whose page is
+ * the app's own cursor entry, sitting inside the fixture tab's plane. Null when
+ * no cursor is drawn — which is what a free tab and a hidden plane must show.
+ */
+async function cursorViewOver(app, targetUrl) {
+  return app.evaluate(({ BrowserWindow }, url) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    const children =
+      window?.contentView.children.flatMap((view) => {
+        const child = view;
+        return "webContents" in child && !child.webContents.isDestroyed()
+          ? [{ url: child.webContents.getURL(), bounds: child.getBounds() }]
+          : [];
+      }) ?? [];
+    const page = children.find((child) => child.url === url);
+    const cursor = children.find((child) => child.url.endsWith("/cursor.html"));
+    if (page === undefined || cursor === undefined) return null;
+    const inside =
+      cursor.bounds.x >= page.bounds.x - 16 &&
+      cursor.bounds.y >= page.bounds.y - 16 &&
+      cursor.bounds.x <= page.bounds.x + page.bounds.width &&
+      cursor.bounds.y <= page.bounds.y + page.bounds.height &&
+      cursor.bounds.width < page.bounds.width / 2 &&
+      cursor.bounds.height < page.bounds.height / 2;
+    return { inside, cursor: cursor.bounds, page: page.bounds, order: children.map((c) => c.url) };
+  }, targetUrl);
+}
+
+/**
+ * One Session's write on the fixture tab through a real Browser port built in
+ * main — the port the adapter builds, in an invented Session's name. Answers
+ * the refusal's rule rather than throwing it, because a BrowserRefusal does
+ * not survive Playwright's error serialisation with its `rule` intact.
+ */
+async function sessionWrite(app, which, targetUrl) {
+  return app.evaluate(
+    async (_electron, { port: portName, url, projectId }) => {
+      const probe = globalThis.volliBrowserProbe;
+      globalThis.volliBrowserProbePorts ??= {
+        a: probe.port({ projectId, ticketId: null }, "smoke-session-alpha"),
+        b: probe.port({ projectId, ticketId: null }, "smoke-session-beta"),
+      };
+      const port = globalThis.volliBrowserProbePorts[portName];
+      const signal = new AbortController().signal;
+      try {
+        const listing = await port.tabs({ signal });
+        const tab = listing.tabs.find((candidate) => candidate.url === url);
+        if (tab === undefined) return { rule: "no-such-tab", heldBy: null };
+        const snap = await port.snapshot({ tabId: tab.tabId, signal });
+        const ref = /\[ref=(e\d+)\]/.exec(snap.snapshotText)?.[1];
+        if (ref === undefined) return { rule: "no-ref", heldBy: tab.heldBy };
+        // A hover, not a click: the fixture's one link opens a managed popup,
+        // and this step is about the hold and the cursor, not another tab.
+        await port.act({
+          tabId: tab.tabId,
+          generation: snap.generation,
+          kind: "hover",
+          ref,
+          signal,
+        });
+        const after = await port.tabs({ signal });
+        return {
+          rule: null,
+          heldBy: after.tabs.find((candidate) => candidate.tabId === tab.tabId)?.heldBy ?? null,
+        };
+      } catch (error) {
+        return { rule: error?.rule ?? "error", message: String(error?.message ?? error) };
+      }
+    },
+    { port: which, url: targetUrl, projectId: PROJECT.id },
+  );
+}
+
+const endSessionTurn = (app, which) =>
+  app.evaluate((_electron, portName) => {
+    globalThis.volliBrowserProbePorts?.[portName]?.turnEnded();
+  }, which);
+
+const disposeSessionPorts = (app) =>
+  app.evaluate(() => {
+    for (const port of Object.values(globalThis.volliBrowserProbePorts ?? {})) port.dispose();
+    delete globalThis.volliBrowserProbePorts;
+  });
+
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-browser-tab-smoke-");
 const scratchHome = join(scratch, "home");
 const { must, summarize } = createRunner();
@@ -316,7 +408,11 @@ let code = 1;
 async function main() {
   await fs.mkdir(scratchHome, { recursive: true });
   const projectPath = await makeGitRepo(scratch, "browser-project-");
-  app = await launch({ dbPath, userDataDir, extraEnv: { HOME: scratchHome } });
+  app = await launch({
+    dbPath,
+    userDataDir,
+    extraEnv: { HOME: scratchHome, VOLLI_BROWSER_PROBE: "1" },
+  });
   await assertProfileIsolated(app, userDataDir);
 
   const page = await app.firstWindow();
@@ -644,6 +740,118 @@ async function main() {
 
   await must(
     8,
+    "a Session's write takes the tab's hold and draws its cursor over the plane; a second Session is refused",
+    async () => {
+      const pillBefore = await holderPill(page).count();
+      const cursorBefore = await cursorViewOver(app, secondUrl);
+
+      const alpha = await sessionWrite(app, "a", secondUrl);
+      const pill = await waitUntil("the holder pill for the Session", async () =>
+        (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
+      ).catch(() => false);
+      const takeOverOffered = await page
+        .getByRole("button", { name: "Take over", exact: true })
+        .count();
+      const dots = await holderDots(page).count();
+      const cursor = await waitUntil("the cursor view over the plane", async () => {
+        const view = await cursorViewOver(app, secondUrl);
+        return view?.inside === true ? view : null;
+      }).catch(() => null);
+      // The label is pinned for a moment when a hold begins, and the view is
+      // sized to the drawing: wider than the arrow alone while the label shows,
+      // which is the page's size report reaching main.
+      const labelSized = await waitUntil(
+        "the cursor view to grow around its pinned label",
+        async () => {
+          const view = await cursorViewOver(app, secondUrl);
+          return view !== null && view.cursor.width > 60 ? view.cursor : null;
+        },
+        // What this waits on is a renderer BOOT: the overlay's page is built
+        // lazily by the first draw, and only once it is listening can it be
+        // told to show the label and report the size that proves it. A dev Mac
+        // does that inside the label's own pin and a loaded CI runner takes
+        // seconds, so the old 1.5s bound failed on CI for every branch. The
+        // pin now runs from when the page can first draw (cursor-overlay.ts),
+        // which makes the label certain; this bound only has to outlast a slow
+        // boot.
+        { timeout: 15000 },
+      ).catch(() => null);
+
+      const beta = await sessionWrite(app, "b", secondUrl);
+
+      return {
+        ok:
+          pillBefore === 0 &&
+          cursorBefore === null &&
+          alpha.rule === null &&
+          alpha.heldBy?.kind === "session" &&
+          alpha.heldBy?.self === true &&
+          pill === true &&
+          takeOverOffered === 1 &&
+          dots === 1 &&
+          cursor !== null &&
+          labelSized !== null &&
+          // The cursor sits ABOVE the page: added to the window after it.
+          cursor.order.indexOf(secondUrl) <
+            cursor.order.findIndex((u) => u.endsWith("/cursor.html")) &&
+          beta.rule === "browser.tab-held" &&
+          pageErrors.length === 0,
+        detail: `alpha=${JSON.stringify(alpha)} beta=${JSON.stringify(beta)} pill=${pill} takeOver=${takeOverOffered} dots=${dots} cursor=${JSON.stringify(cursor)} labelSized=${JSON.stringify(labelSized)} pageErrors=${JSON.stringify(pageErrors)}`,
+      };
+    },
+  );
+
+  await must(
+    9,
+    "the person takes over, the Session is refused until hand-back, and the turn's end frees the tab",
+    async () => {
+      await page.getByRole("button", { name: "Take over", exact: true }).click();
+      const yours = await waitUntil("the pill to say Yours", async () =>
+        (await holderPill(page).getAttribute("data-holder")) === "person" ? true : null,
+      ).catch(() => false);
+      const cursorGone = await waitUntil("the cursor to leave the plane", async () =>
+        (await cursorViewOver(app, secondUrl)) === null ? true : null,
+      ).catch(() => false);
+      const refusedByPerson = await sessionWrite(app, "a", secondUrl);
+
+      await page.getByRole("button", { name: "Hand back", exact: true }).click();
+      const freed = await waitUntil("the pill to leave the chrome", async () =>
+        (await holderPill(page).count()) === 0 ? true : null,
+      ).catch(() => false);
+      const again = await sessionWrite(app, "a", secondUrl);
+      const heldAgain = await waitUntil("the Session's hold to return", async () =>
+        (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
+      ).catch(() => false);
+
+      await endSessionTurn(app, "a");
+      const endedWithTurn = await waitUntil("the hold to end with the turn", async () =>
+        (await holderPill(page).count()) === 0 && (await holderDots(page).count()) === 0
+          ? true
+          : null,
+      ).catch(() => false);
+      const cursorAfterTurn = await waitUntil("the cursor to fade with the turn", async () =>
+        (await cursorViewOver(app, secondUrl)) === null ? true : null,
+      ).catch(() => false);
+      await disposeSessionPorts(app);
+
+      return {
+        ok:
+          yours === true &&
+          cursorGone === true &&
+          refusedByPerson.rule === "browser.person-has-tab" &&
+          freed === true &&
+          again.rule === null &&
+          heldAgain === true &&
+          endedWithTurn === true &&
+          cursorAfterTurn === true &&
+          pageErrors.length === 0,
+        detail: `yours=${yours} cursorGone=${cursorGone} refused=${JSON.stringify(refusedByPerson)} freed=${freed} again=${JSON.stringify(again)} heldAgain=${heldAgain} endedWithTurn=${endedWithTurn} cursorAfterTurn=${cursorAfterTurn} pageErrors=${JSON.stringify(pageErrors)}`,
+      };
+    },
+  );
+
+  await must(
+    10,
     "closing both Browser Tabs quits cleanly and leaves no fixture-server socket",
     async () => {
       await strip(page)

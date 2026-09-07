@@ -1,10 +1,12 @@
 import {
   DEFAULT_COMPACTION_SETTINGS,
-  InMemorySessionRepo,
+  MemorySessionRepo,
   type AgentMessage,
+  type Branch,
   type CompactionEntry,
   type CustomEntry,
   type Entry,
+  type JsonValue,
   type MessageEntry,
   type Session,
 } from "@earendil-works/pi-agent-core";
@@ -30,6 +32,8 @@ import {
   occupiedContextTokens,
   type ConversationReader,
 } from "./compaction";
+import { piContext } from "./pi-context";
+import { MAIN_BRANCH } from "./sidecar-storage";
 
 const PROVIDER_ID = "anthropic";
 const MODEL_ID = "claude-haiku-4-5";
@@ -78,7 +82,7 @@ function messageEntry(message: AgentMessage): MessageEntry {
   };
 }
 
-function customEntry(customType: string, data?: unknown): CustomEntry {
+function customEntry(customType: string, data?: JsonValue): CustomEntry {
   nextSeq += 1;
   return {
     type: "custom",
@@ -94,7 +98,7 @@ function customEntry(customType: string, data?: unknown): CustomEntry {
 /** Reads acceptance markers the way the runtime's own sidecar writes them. */
 const reader: ConversationReader = {
   acceptedMessage: (entry) =>
-    entry.customType === "accepted" ? (entry.data as AgentMessage) : undefined,
+    entry.customType === "accepted" ? (entry.data as unknown as AgentMessage) : undefined,
   replayable: (entry) =>
     entry.message.role !== "assistant" || (entry.message as AssistantMessage).stopReason === "stop",
 };
@@ -136,7 +140,17 @@ function scriptedModels(replies: readonly string[], sent: Context[] = []): Model
 }
 
 async function memorySession(): Promise<Session> {
-  return new InMemorySessionRepo().create();
+  return new MemorySessionRepo().create({}, piContext());
+}
+
+/**
+ * The session's main branch, which Pi 0.85.0 made an explicit handle rather
+ * than the implicit target of `Session.appendEntry` and `findEntriesOnBranch`.
+ */
+async function mainBranchOf(sidecar: Session): Promise<Branch> {
+  const branch = await sidecar.branch(MAIN_BRANCH, piContext());
+  if (branch === undefined) throw new Error("the memory session has no main branch");
+  return branch;
 }
 
 describe("contextWindowOf", () => {
@@ -218,7 +232,10 @@ describe("conversationPath", () => {
     const path = conversationPath(
       [
         customEntry("turn-marker"),
-        customEntry("accepted", accepted),
+        // Pi 0.85.0 types `CustomEntry.data` as `JsonValue`; an `AgentMessage`
+        // is JSON but is not declared as such, exactly as the runtime's own
+        // marker write is.
+        customEntry("accepted", accepted as unknown as JsonValue),
         messageEntry(assistant("answered")),
       ],
       reader,
@@ -250,6 +267,7 @@ describe("conversationPath", () => {
       summary: "what came before",
       retainedTail: [user("kept")],
       tokensBefore: 4_000,
+      fromHook: false,
     };
 
     expect(conversationPath([compaction], reader)).toEqual([compaction]);
@@ -267,6 +285,7 @@ describe("contextMessages", () => {
       summary,
       retainedTail: [user(`tail of ${summary}`)],
       tokensBefore: 1,
+      fromHook: false,
     });
     const path: Entry[] = [
       messageEntry(user("first")),
@@ -282,6 +301,60 @@ describe("contextMessages", () => {
       { role: "compactionSummary", summary: "newer", tokensBefore: 1, timestamp: 0 },
       user("tail of newer"),
       user("third"),
+    ]);
+  });
+
+  it("does not replay a failed assistant message as conversation context", () => {
+    expect(
+      contextMessages([
+        messageEntry(user("start")),
+        messageEntry(assistant("failed", { stopReason: "aborted" })),
+      ]),
+    ).toEqual([user("start")]);
+  });
+
+  it("projects branch summaries and ignores custom entries like Pi 0.85.0", () => {
+    const path: Entry[] = [
+      {
+        type: "branch_summary",
+        id: "summary-1",
+        parentId: null,
+        seq: 1,
+        timestamp: 10,
+        fromId: "entry-1",
+        summary: "work on the sibling branch",
+        fromHook: false,
+      },
+      {
+        type: "branch_summary",
+        id: "summary-empty",
+        parentId: "summary-1",
+        seq: 2,
+        timestamp: 11,
+        fromId: null,
+        summary: "",
+        fromHook: false,
+      },
+      {
+        type: "custom",
+        id: "custom-1",
+        parentId: "summary-empty",
+        seq: 3,
+        timestamp: 12,
+        customType: "application.marker",
+        data: { ignored: true },
+      },
+      messageEntry(user("carry on")),
+    ];
+
+    expect(contextMessages(path)).toEqual([
+      {
+        role: "branchSummary",
+        summary: "work on the sibling branch",
+        fromId: "entry-1",
+        timestamp: 10,
+      },
+      user("carry on"),
     ]);
   });
 
@@ -316,6 +389,7 @@ describe("contextMessages", () => {
       summary: "older history",
       retainedTail: [user("recent request"), kept],
       tokensBefore: 1,
+      fromHook: false,
     };
 
     const messages = contextMessages([
@@ -379,6 +453,7 @@ describe("contextMessages", () => {
         summary: "read the marker, then report the token",
         retainedTail: [assistant("working on it")],
         tokensBefore: 200_000,
+        fromHook: false,
       },
       messageEntry(user("carry on")),
     ];
@@ -434,7 +509,11 @@ describe("compactSession", () => {
     });
     expect(outcome.entry.retainedTail).toEqual([path[2]?.message, path[3]?.message]);
     // The entry is a real one in the tree, not a marker: Pi can find it by type.
-    expect(await sidecar.findEntriesOnBranch({ type: "compaction" })).toEqual([outcome.entry]);
+    expect(
+      await mainBranchOf(sidecar).then((branch) =>
+        branch.findEntries({ type: "compaction" }, piContext()),
+      ),
+    ).toEqual([outcome.entry]);
     // The early exchange is summarized away; the recent tail survives verbatim.
     expect(JSON.stringify(outcome.messages)).not.toContain("a long early answer");
     expect(JSON.stringify(outcome.messages)).toContain("the recent answer");
@@ -479,7 +558,11 @@ describe("compactSession", () => {
       "assistant",
     ]);
     expect(outcome.messages[1]).toEqual(user("restored ahead of the tail"));
-    expect(await sidecar.findEntriesOnBranch({ type: "compaction" })).toEqual([outcome.entry]);
+    expect(
+      await mainBranchOf(sidecar).then((branch) =>
+        branch.findEntries({ type: "compaction" }, piContext()),
+      ),
+    ).toEqual([outcome.entry]);
   });
 
   it("summarizes through a request that shares no prefix with the Session", async () => {
@@ -519,7 +602,7 @@ describe("compactSession", () => {
     expect(await compactSession({ sidecar, path: [], models, model, settings })).toEqual({
       kind: "skipped",
     });
-    expect(await sidecar.findEntries()).toEqual([]);
+    expect(await sidecar.findEntries(undefined, piContext())).toEqual([]);
   });
 
   it("writes nothing when summarization fails, and sanitizes what it reports", async () => {
@@ -539,6 +622,6 @@ describe("compactSession", () => {
     expect(outcome.kind).toBe("failed");
     if (outcome.kind !== "failed") return;
     expect(outcome.message).toContain("Summarization failed");
-    expect(await sidecar.findEntries()).toEqual([]);
+    expect(await sidecar.findEntries(undefined, piContext())).toEqual([]);
   });
 });

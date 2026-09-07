@@ -15,6 +15,13 @@ import { parseCliArgs } from "./parser";
  * version 0.1.0 and already predates this tree (VC-157 changed `identify` and
  * `doctor`).
  *
+ * **VC-6 moved them a second time**, and for the same kind of reason: the two
+ * lifecycle signals now leave a Session's final todo list on its Ticket, so
+ * their registry `effects` gained a durable write and both detail pages gained
+ * the lines that describe it. The bytes moved because the PROMISE moved — a
+ * `--dry-run` still naming only the ledger would have described a command that
+ * no longer exists.
+ *
  * **VC-163 is the first ticket that legitimately moved these bytes**, and the
  * diff is the ticket's own acceptance rendered as text. Nothing in `help.ts`
  * changed to produce it: two registry fields moved, and every line below
@@ -33,7 +40,7 @@ import { parseCliArgs } from "./parser";
  */
 
 /**
- * The 31 listed commands, in the order the compact reference prints them.
+ * The 32 listed commands, in the order the compact reference prints them.
  *
  * `ticket archive` and `session start` are still HERE after VC-163, and that is
  * the point rather than an oversight: help must go on naming a verb the shell
@@ -44,6 +51,8 @@ import { parseCliArgs } from "./parser";
  * VC-185 added two: `conflicts` beside the other worktree reads, and `worktree
  * sync` at the end of the writes. Both are new bytes in the oracle, which is
  * the surface growing in the open rather than a projection quietly drifting.
+ * VC-9 added `session delegate` beside `session send` — a named tool, listed
+ * so the shell teaches its real door.
  */
 const REFERENCE_COMMANDS = [
   "identify",
@@ -69,8 +78,10 @@ const REFERENCE_COMMANDS = [
   "session start",
   "session stop",
   "session send",
+  "session delegate",
   "session list",
   "session peek",
+  "session answer",
   "session done",
   "session blocked",
   "session link",
@@ -95,6 +106,7 @@ const TAKES_ID: ReadonlySet<string> = new Set([
   "session stop",
   "session send",
   "session peek",
+  "session answer",
   "session link",
   "session harness",
   "worktree status",

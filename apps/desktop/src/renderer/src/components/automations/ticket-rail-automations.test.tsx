@@ -20,9 +20,11 @@ import type { Automation, AutomationRun, ColumnArming, Ticket } from "@volli/sha
 
 import { openRunSession, runAutomationOnTicket } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("./run-automation", () => ({
   openRunSession: vi.fn(),
@@ -144,9 +146,13 @@ async function render() {
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <ModelAccessProvider client={MODEL_ACCESS}>
-        <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
-      </ModelAccessProvider>,
+      // The header's door wears a tooltip, which needs the provider the app
+      // root mounts once.
+      <TooltipProvider>
+        <ModelAccessProvider client={MODEL_ACCESS}>
+          <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
+        </ModelAccessProvider>
+      </TooltipProvider>,
     );
   });
 }
@@ -239,6 +245,7 @@ beforeEach(() => {
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
+  useWorkspaceStore.setState({ byProject: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -333,11 +340,50 @@ describe("the split button", () => {
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
-  it("stays visible with no automations at all, says so, and links to the page", async () => {
+  it("moves the empty state's one page door into the heading row", async () => {
     await mount({});
 
     expect(control("Run Run once on this ticket")).not.toBeNull();
     expect(text()).toContain("No automations in this project yet.");
+
+    const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
+    const heading = panel?.querySelector("h2");
+    const door = control("Open Automations");
+    expect(heading?.textContent).toBe("Automations");
+    // VC-257 is a layout change: the heading and door must be siblings in the
+    // shared heading row, not merely somewhere inside the same rail panel.
+    expect(door.parentElement).toBe(heading?.parentElement);
+    // The empty sentence is a report, never a second door under that row.
+    expect(panel?.querySelector("a")).toBeNull();
+    expect(
+      [...(panel?.querySelectorAll("button") ?? [])].filter(
+        (candidate) => candidate.textContent === "Automations",
+      ),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      door.click();
+    });
+    expect(useWorkspaceStore.getState().byProject.p1?.nav).toBe("automations");
+  });
+
+  it("does not expand the empty-state page door into a populated rail", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+
+    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
+  });
+
+  it("does not claim an empty state or offer its page door before reads land", async () => {
+    const list = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockReturnValue(list.promise);
+    doors.armings.mockResolvedValue({ ok: true, armings: [] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
+    expect(text()).not.toContain("No automations in this project yet.");
   });
 
   it("presses nothing, and claims nothing, until its own reads have landed", async () => {

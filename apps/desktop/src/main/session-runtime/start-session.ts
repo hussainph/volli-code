@@ -152,6 +152,8 @@ export async function startSessionOperation(
     operationId: input.operationId,
     projectId: input.project.id,
     ticketId: input.ticket.id,
+    // This door starts Ticket Sessions and nothing else (VC-162).
+    role: "ticket",
     title,
     actor: input.actor,
     ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),

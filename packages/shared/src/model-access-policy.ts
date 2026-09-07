@@ -9,18 +9,21 @@
  * two policies wearing one name.
  */
 
-import type { ModelSelection } from "./agent-runtime";
+import type { ModelSelection, SessionRole } from "./agent-runtime";
 
 /**
  * The named tiers a default model is configured for (VC-259), in the order
  * Settings lists them. A tier is a KIND OF WORK, not a caller: the same Ticket
  * Session may delegate a quick fix to `fast` and a design question to `deep`.
  *
+
  * The three that predate tiers keep their names and their rows:
  *
- * - `global` — planning and coordination across the board.
- * - `ticket` — one ticket and its optional worktree.
- * - `utility` — chat names and summaries.
+ * - `global` — planning and coordination across the board: Board chats opened
+ *   from Home, and the base every other tier falls back to.
+ * - `ticket` — one ticket and its optional worktree; the structured coding runs.
+ * - `utility` — chat names, summaries, and the rest of the cost-efficient
+ *   background work.
  *
  * The three kind-of-work tiers fall back to `ticket`:
  *
@@ -125,9 +128,12 @@ export const EMPTY_MODEL_ACCESS_DEFAULTS: ModelAccessDefaults = {
 /**
  * The tier an unset tier resolves through, or null at the root.
  *
- * Stated as data so Settings can print "Ticket default" on an unset Fast row
- * from the same fact the resolver walks, rather than from a second copy of
- * the ladder.
+
+ * Stated as data so Settings can print "Same as Ticket Sessions" on an unset
+ * Fast row from the same fact the resolver walks, rather than from a second
+ * copy of the ladder. Each rung falls back BY DEFINITION, not silently: an
+ * unset Ticket default *means* "use the Board default", which is what its
+ * settings row says when it is unset.
  */
 export function modelTierFallback(tier: ModelTier): ModelTier | null {
   switch (tier) {
@@ -234,6 +240,27 @@ export function visualModelProblem(
     ? null
     : "This model can't read images, so it can't be the Visual default.";
 }
+
+/**
+ * Which tier's default a Role reads when nothing NAMES one (VC-53, VC-9):
+ * orchestration for a Board Session, execution for a Ticket Session, and the
+ * cost-efficient `utility` rung for a Subagent Session — a bounded delegation
+ * is exactly the background work that tier was named for. Total over
+ * {@link SessionRole}, so the next Role is a decision here rather than a
+ * silent `global`.
+ *
+ * The Role's rung is the FLOOR, not the ceiling: since VC-259 a start may name
+ * any tier itself, and this is only what it resolves through when it does not.
+ */
+export function modelPurposeForRole(role: SessionRole): ModelPurpose {
+  return MODEL_PURPOSE_FOR_ROLE[role];
+}
+
+const MODEL_PURPOSE_FOR_ROLE: Readonly<Record<SessionRole, ModelPurpose>> = Object.freeze({
+  project: "global",
+  ticket: "ticket",
+  subagent: "utility",
+});
 
 /**
  * The refusal every structured Session start states when no default resolves.

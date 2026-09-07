@@ -15,6 +15,7 @@ import {
   acceptsImageInputIn,
   defaultModelRequiredForTier,
   isAgentModelTier,
+  modelPurposeForRole,
   resolveDefaultModel,
   resolveModelTier,
   visibleModels,
@@ -186,6 +187,20 @@ describe("the visual tier", () => {
       "This model can't read images, so it can't be the Visual default.",
     );
     expect(visualModelProblem(catalog, VISUAL)).toBeNull();
+  });
+});
+
+describe("modelPurposeForRole", () => {
+  it("reads a Subagent Session off the utility rung — cost-efficient background work (VC-9)", () => {
+    expect(modelPurposeForRole("project")).toBe("global");
+    expect(modelPurposeForRole("ticket")).toBe("ticket");
+    expect(modelPurposeForRole("subagent")).toBe("utility");
+  });
+
+  it("is the rung a start resolves through only when it names no tier of its own", () => {
+    // VC-259: the Role's tier is the floor. A named tier replaces it, which is
+    // `resolveModelTier`'s job above, not this map's.
+    expect(MODEL_TIERS).toContain(modelPurposeForRole("subagent"));
   });
 });
 

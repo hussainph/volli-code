@@ -18,6 +18,8 @@ const tab: BrowserTabState = {
   projectId: "project-1",
   ticketId: null,
   createdBy: "user",
+  ownerSessionId: null,
+  presentation: "tab",
   url: "https://example.com",
   title: "Example",
   loading: false,
@@ -25,6 +27,7 @@ const tab: BrowserTabState = {
   canGoBack: false,
   canGoForward: false,
   generation: 0,
+  heldBy: null,
 };
 
 let container: HTMLDivElement | null = null;

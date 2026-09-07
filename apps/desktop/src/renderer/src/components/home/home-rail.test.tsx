@@ -114,7 +114,15 @@ describe("HomeRail", () => {
     // front is seeded there: one started as `fast`, pinned to haiku.
     const slice = seedSlice("ready");
     slice.projection = {
-      session: { id: "s1", projectId: "p1", ticketId: null, title: null, createdAt: 1 },
+      session: {
+        id: "s1",
+        projectId: "p1",
+        ticketId: null,
+        title: null,
+        role: "project",
+        parentSessionId: null,
+        createdAt: 1,
+      },
       status: "open",
       liveExecutor: null,
       attention: { active: [], primary: null },

@@ -21,7 +21,29 @@ import {
   WEB_ACCESS_IPC,
   BROWSER_CHANNELS,
   BROWSER_IPC,
+  SHELL_CHANNELS,
+  SHELL_IPC,
 } from "./ipc-descriptors";
+
+describe("SHELL_IPC descriptor table (VC-270)", () => {
+  it("derives the complete background shell command surface from its descriptors", () => {
+    expect(SHELL_CHANNELS).toEqual(Object.keys(SHELL_IPC));
+    expect(SHELL_CHANNELS).toEqual(["volli:shell-list", "volli:shell-tail", "volli:shell-kill"]);
+  });
+
+  it("accepts a shell id and nothing looser", () => {
+    for (const channel of ["volli:shell-tail", "volli:shell-kill"] as const) {
+      const { guard, invalidError } = SHELL_IPC[channel];
+      expect(guard([{ shellId: "sh-1" }])).toBe(true);
+      expect(guard([{ shellId: 1 }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ shellId: "sh-1" }, "extra"])).toBe(false);
+      expect(invalidError).toBe("Invalid background shell request");
+    }
+    expect(SHELL_IPC["volli:shell-list"].guard([])).toBe(true);
+    expect(SHELL_IPC["volli:shell-list"].guard([{}])).toBe(false);
+  });
+});
 
 describe("BROWSER_IPC descriptor table", () => {
   it("derives the complete Browser Tab command surface from its descriptors", () => {
@@ -39,7 +61,31 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
+      "volli:browser-set-presentation",
+      "volli:browser-picture",
+      "volli:browser-take-over",
+      "volli:browser-hand-back",
+      "volli:browser-ask-to-leave",
     ]);
+  });
+
+  it("accepts one of the three presentations for an opaque tab, and nothing the renderer invents (VC-238)", () => {
+    const { guard } = BROWSER_IPC["volli:browser-set-presentation"];
+    for (const presentation of ["headless", "preview", "tab"]) {
+      expect(guard([{ tabId: "opaque-1", presentation }])).toBe(true);
+    }
+    expect(guard([{ tabId: "opaque-1", presentation: "visible" }])).toBe(false);
+    expect(guard([{ tabId: "opaque-1" }])).toBe(false);
+    expect(guard([{ tabId: 1, presentation: "tab" }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one opaque picture id for a picture read", () => {
+    const { guard } = BROWSER_IPC["volli:browser-picture"];
+    expect(guard([{ pictureId: "picture-1" }])).toBe(true);
+    expect(guard([{ pictureId: 1 }])).toBe(false);
+    expect(guard([{}])).toBe(false);
+    expect(guard([])).toBe(false);
   });
 
   it("accepts a scoped HTTP(S)-shaped open request and rejects malformed fields", () => {
@@ -1300,6 +1346,29 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  // VC-269: the person's stop.
+  describe("volli:session-stop", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-stop"];
+
+    it("accepts an id alone, and an id with a non-blank reason", () => {
+      expect(guard([{ sessionId: "s1" }])).toBe(true);
+      expect(guard([{ sessionId: "s1", reason: "Runaway" }])).toBe(true);
+    });
+
+    it("rejects a missing or empty id, a blank or non-string reason, and a wrong arity", () => {
+      expect(guard([{ sessionId: "" }])).toBe(false);
+      expect(guard([{ sessionId: 1 }])).toBe(false);
+      expect(guard([{ sessionId: "s1", reason: "   " }])).toBe(false);
+      expect(guard([{ sessionId: "s1", reason: 1 }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session stop");
+    });
+  });
+
   describe("volli:label-set-color", () => {
     const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
 
@@ -1751,8 +1820,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 58 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(58);
+    it("covers all 59 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(59);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no

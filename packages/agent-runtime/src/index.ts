@@ -30,8 +30,10 @@ export {
 } from "./prompt-baseline";
 export {
   piExecutionEnv,
+  sessionCommandEnvironment,
   type PiExecutionEnvOptions,
   type PiSessionEnvIdentity,
+  type SessionCommandEnvironmentOptions,
 } from "./pi/execution-env";
 export {
   extractReadableMarkdown,
@@ -39,8 +41,16 @@ export {
   type ExtractedDocument,
   type WebExtractLimits,
 } from "./web/extract";
-export { BrowserRefusal } from "./browser/refusal";
+export { BrowserRefusal, type BrowserRefusalPage } from "./browser/refusal";
 export { BROWSER_TOOL_NAMES, type BrowserToolId } from "./pi/browser-tools";
+export { ShellRefusal } from "./shell/refusal";
+export {
+  createShellTool,
+  SHELL_MAX_PER_SESSION,
+  SHELL_TOOL_NAMES,
+  type ShellToolDetails,
+  type ShellToolId,
+} from "./pi/shell-tools";
 export {
   createSafeWebFetch,
   WEB_FETCH_LIMITS,
