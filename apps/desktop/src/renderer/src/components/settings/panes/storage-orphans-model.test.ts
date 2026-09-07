@@ -310,7 +310,7 @@ describe("the cleanup history", () => {
     ).toContain("pruned during startup");
   });
 
-  it("lists every completed item, newest run first, and never folds two away as one", () => {
+  it("lists every SETTLED item, newest run first, and never folds two away as one", () => {
     const rows = historyRows([
       run({
         id: "run-2",
@@ -327,9 +327,67 @@ describe("the cleanup history", () => {
 
     expect(rows).toEqual([
       { key: "run-2:a", path: "/wt/one", meta: expect.stringContaining("Removed by cleanup") },
+      // A skip is history too: it is the preservation policy working, and the
+      // rule that spared the path is the whole point of recording it.
+      { key: "run-2:b", path: "/wt/two", meta: expect.stringContaining("kept at") },
       { key: "run-2:c", path: "/repo", meta: expect.stringContaining("stale git record") },
       { key: "run-1:a", path: "/wt/one", meta: expect.stringContaining("Removed by cleanup") },
     ]);
+  });
+
+  it("never lists work nobody attempted, or an item still in flight, as history", () => {
+    const rows = historyRows([
+      run({
+        id: "run-3",
+        finishedAt: null,
+        items: [
+          item({ id: "a", state: "pending", detail: null, startedAt: null, settledAt: null }),
+          item({ id: "b", state: "executing", detail: null, settledAt: null }),
+          item({ id: "c", state: "completed" }),
+        ],
+      }),
+    ]);
+
+    expect(rows.map((row) => row.key)).toEqual(["run-3:c"]);
+  });
+
+  it("says what happened to a failed and to an unresolvable item, with its reason", () => {
+    const rows = historyRows([
+      run({
+        id: "run-4",
+        items: [
+          item({ id: "a", path: "/wt/one", state: "failed", detail: "git refused" }),
+          item({
+            id: "b",
+            path: "/wt/two",
+            kind: "metadata",
+            state: "indeterminate",
+            detail: "Volli stopped mid-prune.",
+          }),
+        ],
+      }),
+    ]);
+
+    expect(rows[0]?.meta).toContain("cleanup of this folder failed at");
+    expect(rows[0]?.meta).toContain("git refused");
+    expect(rows[1]?.meta).toContain("can't say what happened to this stale git record");
+    expect(rows[1]?.meta).toContain("Volli stopped mid-prune.");
+  });
+
+  it("falls back to an honest phrase when an outcome recorded no reason", () => {
+    const rows = historyRows([
+      run({ id: "run-5", items: [item({ id: "a", state: "skipped", detail: null })] }),
+    ]);
+
+    expect(rows[0]?.meta).toContain("no reason recorded");
+  });
+
+  it("names an item whose project is gone rather than dropping the row", () => {
+    const rows = historyRows([
+      run({ id: "run-6", items: [item({ id: "a", state: "skipped", projectName: null })] }),
+    ]);
+
+    expect(rows[0]?.meta).toContain("Unknown project");
   });
 
   it("renders a run's recorded preservation ids through the shared vocabulary, unknown ids included", () => {
@@ -471,7 +529,7 @@ describe("a run that finished with trouble in it", () => {
     ).toEqual([]);
   });
 
-  it("names every failed path with its reason, and the one recovery: scan again", () => {
+  it("counts what went wrong and points at the rows that explain it, with the one recovery", () => {
     const troubled = run({
       finishedAt: AT,
       items: [
@@ -492,9 +550,15 @@ describe("a run that finished with trouble in it", () => {
       ],
     });
 
+    // The per-path reasons are rows of their own (historyRows); this line is
+    // the one a person notices, and the place the recovery hangs off.
     expect(describeRunFailures(troubled)).toBe(
-      `Cleanup at ${new Date(AT).toLocaleString()} — 2 item(s) failed: Proj One: disk busy; /wt/two: no reason recorded. Scan again to review what is left.`,
+      `Cleanup at ${new Date(AT).toLocaleString()} — 1 failed, 1 with an unknown outcome. Each one is listed below with its reason. Scan again to review what is left.`,
     );
+    expect(historyRows([troubled]).map((row) => row.meta)).toEqual([
+      expect.stringContaining("disk busy"),
+      expect.stringContaining("no reason recorded"),
+    ]);
   });
 });
 

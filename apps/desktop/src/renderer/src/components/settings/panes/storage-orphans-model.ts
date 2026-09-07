@@ -210,21 +210,46 @@ export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem
 }
 
 /**
- * Every completed item across the recorded runs, in the order the runs
- * arrived — one row per item, never folded away. Metadata items (a pruned
- * record) are included, not skipped: a pruned record is a completed act just
- * as much as a removed folder is, and the audit's other finding was history
- * that quietly dropped rows it should have kept (VC-284 review C6).
+ * The truthful label for one SETTLED item, whatever it settled as (VC-284
+ * review C6/S2). A skip is the preservation policy working and says which rule
+ * spared the path; a failure and an unresolvable outcome say what went wrong,
+ * in the same place and with the same timestamp discipline as a removal — a
+ * destructive act whose refusals are invisible is one nobody can audit.
+ */
+export function describeSettled(run: OrphanCleanupRun, item: OrphanCleanupItem): string {
+  if (item.state === "completed") return describeCompleted(run, item);
+  const when = moment(item.settledAt ?? run.finishedAt ?? run.startedAt);
+  const project = item.projectName ?? "Unknown project";
+  const subject = item.kind === "metadata" ? "stale git record" : "folder";
+  const reason = item.detail ?? "no reason recorded";
+  if (item.state === "skipped") return `${project} — ${subject} kept at ${when}: ${reason}`;
+  if (item.state === "failed") {
+    return `${project} — cleanup of this ${subject} failed at ${when}: ${reason}`;
+  }
+  return `${project} — Volli can't say what happened to this ${subject} at ${when}: ${reason}`;
+}
+
+/**
+ * Every SETTLED item across the recorded runs, in the order the runs arrived —
+ * one row per item, never folded away.
+ *
+ * Two of the audit's findings meet here. Metadata items (a pruned record) are
+ * included, not skipped: a pruned record is a completed act just as much as a
+ * removed folder is. And every outcome is shown, not only the successful ones
+ * — the previous version listed completed removals alone, so a path a cleanup
+ * refused, failed on, or could not resolve left no trace at all (review C6/S2).
+ * `pending` and `executing` are the two states that are NOT history: one is
+ * work nobody attempted, the other is described by its run's own row.
  */
 export function historyRows(runs: readonly OrphanCleanupRun[]): HistoryRow[] {
   const rows: HistoryRow[] = [];
   for (const run of runs) {
     for (const item of run.items) {
-      if (item.state !== "completed") continue;
+      if (item.state === "pending" || item.state === "executing") continue;
       rows.push({
         key: `${run.id}:${item.id}`,
         path: item.path,
-        meta: describeCompleted(run, item),
+        meta: describeSettled(run, item),
       });
     }
   }
@@ -316,19 +341,18 @@ export function runsWithFailures(runs: readonly OrphanCleanupRun[]): OrphanClean
 }
 
 /**
- * Every failed or indeterminate path in a run, WITH its reason, and the one
- * recovery action that answers both: scan again. (VC-284 review S2 — a
- * failure with no visible reason and no way back is worse than no message at
- * all.)
+ * The one actionable line for a run that finished owing someone an explanation
+ * (VC-284 review S2). It counts rather than repeats: every failed path and its
+ * reason is already a row of its own in {@link historyRows}, and this row's job
+ * is to be the thing a person notices and the place the recovery hangs off.
  */
 export function describeRunFailures(run: OrphanCleanupRun): string {
-  const failed = run.items.filter(
-    (item) => item.state === "failed" || item.state === "indeterminate",
-  );
-  const detail = failed
-    .map((item) => `${item.projectName ?? item.path}: ${item.detail ?? "no reason recorded"}`)
-    .join("; ");
-  return `${runHeading(run)} — ${failed.length} item(s) failed: ${detail}. Scan again to review what is left.`;
+  const failed = run.items.filter((item) => item.state === "failed").length;
+  const uncertain = run.items.filter((item) => item.state === "indeterminate").length;
+  const parts: string[] = [];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (uncertain > 0) parts.push(`${uncertain} with an unknown outcome`);
+  return `${runHeading(run)} — ${parts.join(", ")}. Each one is listed below with its reason. Scan again to review what is left.`;
 }
 
 /** What a finished cleanup did, for the toast that follows it. */
