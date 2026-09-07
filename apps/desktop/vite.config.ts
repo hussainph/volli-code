@@ -303,6 +303,13 @@ export default defineConfig(({ mode }) => ({
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
         "src/components/ticket/clamp-policy.ts",
+        // Whether a pane can hold two columns of diff (VC-288). Gated for
+        // `clamp-policy.ts`'s reason one line up: it is a threshold read by two
+        // surfaces that must agree — the control band that says the pane is
+        // narrow, and the editor that draws one column because it is — and a
+        // wrong answer here is a diff nobody can read at a width a screenshot
+        // of a wide window would never show.
+        "src/components/ticket/diff-fit.ts",
         "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",

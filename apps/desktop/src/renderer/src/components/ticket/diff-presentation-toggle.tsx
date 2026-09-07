@@ -89,19 +89,49 @@ export function DiffControlBand({
   onPresentationChange,
   wordWrap,
   onToggleWordWrap,
+  inlineFallback = false,
 }: {
   presentation: DiffPresentation;
   onPresentationChange(next: DiffPresentation): void;
   wordWrap: boolean;
   onToggleWordWrap(): void;
+  /**
+   * The pane is too narrow for two columns, so the diff below is drawing
+   * inline whatever the segmented control says (`diff-fit.ts`).
+   */
+  inlineFallback?: boolean;
 }) {
   return (
     <div
       data-testid="ticket-diff-control-band"
       className="flex shrink-0 items-center gap-1 border-b border-border px-gutter py-1"
     >
+      {/* The segmented control keeps showing the CHOICE, never the fit. The
+          preference is app-wide and durable; a pane being narrow for a minute
+          is not a person changing their mind, and a control that rewrote itself
+          on a resize would lose the setting the moment the reader split a
+          view. */}
       <DiffPresentationToggle presentation={presentation} onChange={onPresentationChange} />
       <WordWrapToggle wordWrap={wordWrap} onToggle={onToggleWordWrap} />
+      {/* Which leaves one thing to say, and this says it: the diff is not
+          drawing what the control shows, and the pane is why. Two words in the
+          muted ink — a noun for a state, not a sentence explaining a feature
+          (CLAUDE.md's "let controls talk") — and the recovery is the gesture a
+          reader already has: widen the pane, and the choice standing in the
+          control takes effect with nothing to press.
+
+          `role="status"` rather than a tooltip on the segment, because a
+          tooltip is the pointer's alone and this is a fact about the screen. It
+          is announced when it appears and it stays readable while it stands. */}
+      {inlineFallback ? (
+        <span
+          role="status"
+          data-testid="ticket-diff-inline-fallback"
+          className="min-w-0 truncate text-ui text-muted-foreground"
+        >
+          Narrow pane
+        </span>
+      ) : null}
     </div>
   );
 }
