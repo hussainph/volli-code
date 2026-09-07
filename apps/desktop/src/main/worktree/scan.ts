@@ -95,8 +95,9 @@ export const KEPT_UNKNOWN_AGE = "last use unknown";
  * How recently a clean orphan was touched, in epoch ms — the newest of its
  * directory mtime and its branch tip's commit date, so a checkout that is only
  * built in (mtime moves, no commits) and one that is only committed to (commits
- * move, mtime may not) both read as recent. `null` when neither can be read,
- * which every caller treats as "cannot vouch for it" and keeps.
+ * move, mtime may not) both read as recent. `null` when EITHER source cannot be
+ * read: without both values the newer one is unknowable, and the preservation
+ * rule says any unreadable state stays in place.
  *
  * Exported because the cleanup's immediate re-check has to ask the identical
  * question: a second definition of "recent" is a second retention policy.
@@ -105,22 +106,21 @@ export function lastTouchedAt(
   git: RunGit,
   entry: Pick<WorktreeListEntry, "path" | "branch">,
 ): number | null {
-  let newest: number | null = null;
+  let directoryMtime: number;
   try {
-    newest = statSync(entry.path).mtimeMs;
+    directoryMtime = statSync(entry.path).mtimeMs;
   } catch {
-    // Unreadable dir: fall through to the commit date, then to `null`.
+    return null;
   }
   try {
     const seconds = Number.parseInt(
       git(["log", "-1", "--format=%ct", entry.branch ?? "HEAD"], entry.path).trim(),
       10,
     );
-    if (Number.isFinite(seconds)) newest = Math.max(newest ?? 0, seconds * 1000);
+    return Number.isFinite(seconds) ? Math.max(directoryMtime, seconds * 1000) : null;
   } catch {
-    // A branchless/unreadable worktree keeps whatever the mtime gave us.
+    return null;
   }
-  return newest;
 }
 
 export async function scanOrphans(deps: WorktreeDeps): Promise<OrphanScanReport> {

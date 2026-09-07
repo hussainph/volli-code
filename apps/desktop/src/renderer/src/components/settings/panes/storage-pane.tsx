@@ -777,11 +777,11 @@ function OrphansSection() {
           <AlertDialogHeader>
             <AlertDialogTitle>Clean up these worktrees?</AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {plan !== null && plan.worktrees.length > 0 ? (
                   <div className="space-y-1">
                     <p>Removes {plan.worktrees.length} folder(s):</p>
-                    <ul className="space-y-0.5">
+                    <ul className="space-y-1">
                       {plan.worktrees.map((entry) => (
                         <li key={entry.path} className="font-mono text-foreground">
                           {entry.path}
@@ -794,7 +794,7 @@ function OrphansSection() {
                 {plan !== null && plan.metadata.length > 0 ? (
                   <div className="space-y-1">
                     <p>Prunes {plan.metadata.length} stale git record(s):</p>
-                    <ul className="space-y-0.5">
+                    <ul className="space-y-1">
                       {plan.metadata.map((entry) => (
                         <li key={entry.path} className="font-mono text-foreground">
                           {entry.path}
@@ -803,7 +803,7 @@ function OrphansSection() {
                     </ul>
                   </div>
                 ) : null}
-                <ul className="space-y-0.5">
+                <ul className="space-y-1">
                   {(plan?.preservation ?? []).map((rule) => (
                     <li key={rule}>{rule}</li>
                   ))}

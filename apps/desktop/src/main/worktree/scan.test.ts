@@ -273,6 +273,7 @@ describe("scanOrphans report", () => {
       // dirty probes, keyed by cwd: only the dirty orphan reports changes.
       if (args[0] === "status") return cwd === dirtyOrphan ? "?? junk\n" : "";
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
+      if (args[0] === "log" && args[1] === "-1") return String((NOW - 40 * DAY_MS) / 1000);
       return "";
     });
 
@@ -485,6 +486,51 @@ describe("scanOrphans report", () => {
     ]);
   });
 
+  it("keeps an old directory when its branch-tip date cannot be read", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const orphan = join(container, "VC-12-unreadable-tip");
+    mkdirSync(orphan, { recursive: true });
+    ageDir(orphan, 400);
+    const gitDir = tempDir("gitdir");
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+    const { git } = scriptedGit((rawArgs) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") {
+        return (
+          `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n` +
+          `worktree ${orphan}\nHEAD b\nbranch refs/heads/volli/VC-12\n`
+        );
+      }
+      if (args[0] === "rev-parse") return gitDir;
+      // The unreachable-commit probe succeeds, but the distinct date read
+      // fails. Falling back to the old directory mtime would wrongly offer the
+      // path for cleanup even though the newer half of the clock is unknown.
+      if (args[0] === "log" && args[1] === "-1") throw new Error("cannot read branch tip");
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, git, home, now, blobsRoot: "unused" });
+
+    expect(report.removable).toEqual([]);
+    expect(report.keptRecent).toEqual([
+      expect.objectContaining({
+        path: orphan,
+        lastTouchedAt: null,
+        removableAt: null,
+        reason: "last use unknown",
+      }),
+    ]);
+  });
+
   it("spares a clean orphan touched inside the retention window, with the date it becomes eligible", async () => {
     const projectPath = tempDir("proj");
     const home = tempDir("home");
@@ -508,6 +554,7 @@ describe("scanOrphans report", () => {
           `worktree ${justPushed}\nHEAD b\nbranch refs/heads/volli/VC-7-just-pushed\n`
         );
       }
+      if (args[0] === "log" && args[1] === "-1") return String((NOW - 40 * DAY_MS) / 1000);
       return "";
     });
 

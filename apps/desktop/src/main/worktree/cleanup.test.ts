@@ -116,6 +116,7 @@ function fixture(
       return "";
     }
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
+    if (args[0] === "log" && args[1] === "-1") return String((NOW - 400 * DAY_MS) / 1000);
     return "";
   });
 
@@ -297,6 +298,25 @@ describe("cleanupOrphans", () => {
         status: "skipped",
         detail: expect.stringMatching(/could not read git status/),
       }),
+    );
+  });
+
+  it("skips an old path whose branch-tip date cannot be read", async () => {
+    const f = fixture({
+      script: (args) => {
+        if (args[0] === "log" && args[1] === "-1") throw new Error("cannot read branch tip");
+        return undefined;
+      },
+    });
+
+    const run = await cleanupOrphans(
+      { worktree: f.deps },
+      { paths: f.paths, projectIds: [], source: "settings" },
+    );
+
+    expect(f.removed).toEqual([]);
+    expect(run.items[0]).toEqual(
+      expect.objectContaining({ status: "skipped", detail: expect.stringMatching(/last used/i) }),
     );
   });
 
