@@ -820,8 +820,24 @@ export function registerDataIpcHandlers(
       // the same split `volli:ticket-move` makes for its interrupt side effect.
       const switchedOn =
         before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
-      if (!switchedOn) return { ok: true, ticket };
-      return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
+      if (switchedOn) return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
+      // Switching OFF moves the ticket's Session destination too — from "an
+      // isolated worktree, not yet made" to the main checkout — with nothing
+      // async behind it. The same `worktree` broadcast the switch-on makes is
+      // what lets a ticket venue reader (the empty chat) stop waiting on a
+      // checkout that will never arrive and measure the one it now binds
+      // (VC-286). Only the transition broadcasts: re-asserting `false` moved
+      // nothing.
+      const switchedOff =
+        before !== undefined && before.uses_worktree !== 0 && ticket.usesWorktree === false;
+      if (switchedOff) {
+        broadcastDataChanged({
+          ticketId: input.ticketId,
+          projectId: ticket.projectId,
+          kind: "worktree",
+        });
+      }
+      return { ok: true, ticket };
     },
 
     "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {

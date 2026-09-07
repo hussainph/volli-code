@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { VenueSnapshot } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
@@ -7,7 +10,7 @@ import { VenueChips } from "./venue-chips";
 import { VenueVisual } from "./venue-visual";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore } from "@renderer/stores/venue";
+import { useVenueStore, venueKey } from "@renderer/stores/venue";
 
 function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
   return {
@@ -24,7 +27,30 @@ function draw(node: React.ReactElement): string {
   return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
 }
 
+/**
+ * A live mount, for the cases that read a store state set by the test: a
+ * static render reads zustand's initial snapshot and would draw the empty
+ * store whatever was seeded. The venue door is stubbed to a read that never
+ * answers, so the mount-time refresh cannot overwrite the seeded entry.
+ */
+let mounted: { root: Root; host: HTMLElement } | null = null;
+function mount(node: React.ReactElement): string {
+  Object.assign(window, { api: { venue: { snapshot: vi.fn(() => new Promise(() => {})) } } });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  act(() => root.render(<TooltipProvider>{node}</TooltipProvider>));
+  mounted = { root, host };
+  return host.innerHTML;
+}
+
 afterEach(() => {
+  if (mounted !== null) {
+    act(() => mounted?.root.unmount());
+    mounted.host.remove();
+    mounted = null;
+  }
+  Reflect.deleteProperty(window, "api");
   useVenueStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
 });
@@ -121,5 +147,38 @@ describe("ChatEmptyState", () => {
 
     expect(markup).not.toContain("Worktree");
     expect(markup).not.toContain('data-empty-visual="venue"');
+  });
+
+  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", () => {
+    useVenueStore.setState({
+      byScope: {
+        // The project's own reading exists and is the main checkout — the
+        // one thing this ticket's chat must not borrow while it waits.
+        [venueKey("p1", null)]: {
+          status: "ready",
+          venue: venue({ kind: "main-checkout", diff: null }),
+        },
+        [venueKey("p1", "t1")]: { status: "resolving" },
+      },
+    });
+
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />);
+
+    expect(markup).toContain('data-venue-state="resolving"');
+    expect(markup).not.toContain("Main checkout");
+    expect(markup).not.toContain("Worktree");
+    expect(markup).not.toContain('data-empty-visual="venue"');
+  });
+
+  it("draws the venue once the ticket's checkout is measured", () => {
+    useVenueStore.setState({
+      byScope: { [venueKey("p1", "t1")]: { status: "ready", venue: venue() } },
+    });
+
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />);
+
+    expect(markup).toContain('data-empty-visual="venue"');
+    expect(markup).toContain("Worktree");
+    expect(markup).not.toContain("data-venue-state");
   });
 });

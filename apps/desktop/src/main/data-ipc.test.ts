@@ -867,6 +867,32 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
     expect(ensure).not.toHaveBeenCalled();
   });
 
+  it("broadcasts a worktree change when scope is switched OFF, so a venue reader stops waiting (VC-286)", () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId); // worktree-scoped, no worktree yet
+    dataChangedSends.length = 0;
+
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: false });
+
+    // The ticket's Session now binds the main checkout; a venue cached as
+    // `resolving` for the worktree it will never get must be read again.
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    });
+  });
+
+  it("does not broadcast when scope is re-asserted as already off", () => {
+    const projectId = createProject();
+    const ticket = mainCheckoutTicket(projectId);
+    dataChangedSends.length = 0;
+
+    invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: false });
+
+    // No transition, no checkout moved, nothing for a venue reader to re-read.
+    expect(dataChangedSends).toEqual([]);
+  });
+
   it("does not re-materialize when scope is re-asserted as already on", () => {
     const projectId = createProject();
     const ticket = createTicket(projectId); // already worktree-scoped
