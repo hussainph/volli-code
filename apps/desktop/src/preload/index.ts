@@ -1096,10 +1096,11 @@ const api = {
     orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
       invoke("volli:worktree-orphans", opts ?? {}),
     /**
-     * The confirmed cleanup: the exact directories to remove and the exact
-     * projects whose stale git metadata to prune, both taken from a scan the
-     * user just confirmed. Main re-checks every target immediately before it
-     * acts and answers with the durable run record.
+     * The confirmed cleanup, as a command: the caller's UUID, the revision of
+     * the scan whose proposal was confirmed, and the ids of the items selected
+     * out of it. Main owns the paths — a client cannot name a directory no scan
+     * offered — re-checks every target immediately before it acts, and answers
+     * with the acceptance receipt plus the durable run.
      */
     cleanupOrphans: (input: WorktreeOrphanCleanupInput): Promise<WorktreeOrphanCleanupResult> =>
       invoke("volli:worktree-orphan-cleanup", input),

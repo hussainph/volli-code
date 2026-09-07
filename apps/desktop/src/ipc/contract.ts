@@ -449,14 +449,24 @@ export interface WorktreeOrphansInput {
 }
 
 /**
- * `{ paths, projectIds }` — the Storage pane's confirmed cleanup: the exact
- * worktree directories to remove and the exact projects whose stale git
- * metadata to prune, both taken from a completed scan and both re-checked in
- * main immediately before anything is touched.
+ * The Storage pane's confirmed cleanup, as a COMMAND rather than a list of
+ * paths (VC-284 review, S1/C1).
+ *
+ * It carries no paths at all. `scanRevision` names the read-only scan a person
+ * reviewed, `itemIds` selects items out of the proposal main itself minted for
+ * that revision, and `commandId` is the caller's UUID — the same command id
+ * replayed answers with the first run's receipt instead of removing anything a
+ * second time. A revision main no longer holds, or an item id that revision
+ * never proposed, is REFUSED: a client cannot name a directory that no
+ * completed scan offered.
  */
 export interface WorktreeOrphanCleanupInput {
-  paths: string[];
-  projectIds: string[];
+  /** Caller-minted UUID. Idempotent: one command id can only ever run once. */
+  commandId: string;
+  /** The opaque revision of the scan whose proposal was confirmed. */
+  scanRevision: string;
+  /** Ids of the proposed items to act on, from that scan's plan. */
+  itemIds: string[];
 }
 
 /** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
@@ -3069,8 +3079,18 @@ export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 export interface DirtyWorktreeOrphan {
   path: string;
   projectId?: string;
+  /** The project's display name, so a row can name a project and not an id (VC-284 review C6). */
+  projectName?: string;
   reason: string;
 }
+
+/**
+ * Which clock decided a worktree's last use: the directory's own modification
+ * time, or its branch tip's commit date. The retention deadline takes the newer
+ * of the two, and Storage has to be able to say WHICH — a deadline whose basis
+ * is invisible cannot be argued with (VC-284 review C6).
+ */
+export type OrphanAgeBasis = "directory" | "commit";
 
 /**
  * One clean, stale orphan a CLEANUP would remove (VC-284). The scan only names
@@ -3078,86 +3098,208 @@ export interface DirtyWorktreeOrphan {
  * touched — which directory, whose project, and the branch that survives it.
  */
 export interface RemovableWorktreeOrphan {
+  /**
+   * This item's id inside its scan revision — what a cleanup command selects
+   * (VC-284 review C1). Scoped by the revision UUID, so an id from a superseded
+   * scan can never name work in the current one.
+   */
+  id: string;
   path: string;
   /** The project whose container held it — every scan tier knows this, so the type says so. */
   projectId: string;
+  /** That project's display name, for a row that names a project rather than an id. */
+  projectName: string;
   /** The branch the directory is on; retained by the removal, so nothing committed is lost. */
   branch: string | null;
   /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
-  lastTouchedAt: number | null;
+  lastTouchedAt: number;
+  /** Which of the two clocks that timestamp came from. */
+  ageBasis: OrphanAgeBasis;
   /** Epoch ms it became eligible — the basis Storage shows for the verdict. */
-  removableAt: number | null;
+  removableAt: number;
 }
 
 /**
- * One clean orphan the scan KEEPS because it is still inside the retention
- * window, or because its age can't be read at all (VC-113). `removableAt` is
- * when it becomes eligible, so the list can say "in 9 days" instead of leaving
- * the user to guess whether it is safe.
+ * Why the scan keeps a clean orphan out of the cleanup plan. Typed rather than
+ * prose so the renderer renders one vocabulary and main enforces it.
+ */
+export type OrphanKeptReason = "recently-used" | "age-unknown" | "active";
+
+/**
+ * One clean orphan the scan KEEPS: still inside the retention window, its age
+ * unreadable (VC-113), or something is live inside it right now. `removableAt`
+ * is when it becomes eligible, so the list can say "in 9 days" instead of
+ * leaving the user to guess whether it is safe.
  */
 export interface KeptWorktreeOrphan {
   path: string;
   projectId: string;
+  projectName: string;
   branch: string | null;
   lastTouchedAt: number | null;
+  ageBasis: OrphanAgeBasis | null;
   removableAt: number | null;
-  /** Why it stays: `"recently used"` or `"last use unknown"`. */
+  reason: OrphanKeptReason;
+  /** What is live in it, when `reason` is `active`; `null` otherwise. */
+  detail: string | null;
+}
+
+/**
+ * One stale git ADMIN record a cleanup would prune — read out of the `prunable`
+ * marker in `git worktree list --porcelain`, so naming it costs nothing and
+ * changes nothing.
+ *
+ * One record per entry, not one bundle per project (VC-284 review C2): the
+ * confirmation shows records, so the plan has to carry records, and every one
+ * of them earns its own outcome in the durable history.
+ */
+export interface PrunableWorktreeMetadata {
+  /** This record's id inside its scan revision — what a cleanup command selects. */
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  /** The path git can no longer find. */
+  path: string;
+  /** Git's own reason, verbatim (`prunable <reason>`). */
   reason: string;
 }
 
 /**
- * Stale git ADMIN data a cleanup's `git worktree prune` would drop for one
- * project — read out of the `prunable` marker in `git worktree list
- * --porcelain`, so naming it costs nothing and changes nothing.
+ * Why a stale git record is NOT the cleanup's to prune (VC-284 review C2). The
+ * eligibility rule for metadata is the directory rule: only a record pointing
+ * inside a container this database owns, that no ticket still claims, may be
+ * pruned here.
  */
-export interface PrunableWorktreeMetadata {
+export type OrphanMetadataKeptReason = "not-owned" | "ticket-linked";
+
+/** One stale git record the scan reports but refuses to propose, and why. */
+export interface KeptWorktreeMetadata {
   projectId: string;
+  projectName: string;
   projectPath: string;
-  /** One entry per stale record: the path git can no longer find, and git's own reason. */
-  entries: { path: string; reason: string }[];
+  path: string;
+  /** Git's own `prunable` reason. */
+  gitReason: string;
+  reason: OrphanMetadataKeptReason;
+}
+
+/**
+ * A project whose worktree listing could not be read (VC-284 review C5). It is
+ * reported rather than skipped in silence: without the listing, every checkout
+ * in that project's container is unaccounted for, and "we could not look" is a
+ * different statement from "there was nothing there".
+ */
+export interface UnreadableWorktreeProject {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  error: string;
 }
 
 /** Who asked for a cleanup. `startup` exists so a launch-time act can never be mislabelled as a user's. */
 export type OrphanCleanupSource = "settings" | "startup";
 
-/** Where one item of a cleanup got to. `pending` is an item the run never reached. */
-export type OrphanCleanupItemStatus = "pending" | "completed" | "skipped" | "failed";
+/**
+ * Where one item of a cleanup got to.
+ *
+ * `pending` and `executing` are DERIVED from the facts recorded for the item,
+ * never stored as an outcome: `pending` is an item with no fact at all, and
+ * `executing` is one whose mutation was announced but whose outcome never
+ * landed — the power-loss window the review's C3 names. The other four are
+ * immutable outcomes; once one is recorded for an item it can never be
+ * relabelled, which is what makes a completed removal impossible to re-offer as
+ * pending.
+ */
+export type OrphanCleanupItemState =
+  | "pending"
+  | "executing"
+  | "completed"
+  | "skipped"
+  | "failed"
+  /** The app stopped mid-mutation and the world can no longer say whether it took. */
+  | "indeterminate";
+
+/** A worktree directory, or one exact stale git record. */
+export type OrphanCleanupItemKind = "worktree" | "metadata";
 
 /**
- * One thing a cleanup was asked to change: a worktree directory, or one
- * project's stale git metadata. `detail` is the truth about what happened —
- * what was removed, or the preservation rule that spared it.
+ * One thing a cleanup was asked to change, as the projection reads it back.
+ * `detail` is the truth about what happened — what was removed, or the
+ * preservation rule that spared it.
  */
 export interface OrphanCleanupItem {
-  kind: "worktree" | "metadata";
-  /** The worktree directory, or the project path whose metadata was pruned. */
+  /** The plan item id this outcome belongs to; stable across the whole run. */
+  id: string;
+  kind: OrphanCleanupItemKind;
+  /** The worktree directory, or the stale record's registered path. */
   path: string;
   projectId: string | null;
+  projectName: string | null;
   branch: string | null;
-  status: OrphanCleanupItemStatus;
+  state: OrphanCleanupItemState;
   detail: string | null;
-  finishedAt: number | null;
+  /** Epoch ms the mutation was announced, or `null` if it never began. */
+  startedAt: number | null;
+  /** Epoch ms the outcome was recorded, or `null` while it has none. */
+  settledAt: number | null;
 }
 
 /**
- * The durable record of one cleanup (VC-284). Written BEFORE the first change
- * and updated after every item, so an app that stops mid-run leaves behind a
- * run whose completed items are still completed and whose untouched items are
- * still pending — the next launch stamps `interruptedAt` and shows it rather
- * than silently re-offering work that already happened.
+ * The durable record of one cleanup (VC-284), projected from immutable facts.
+ *
+ * Every item's outcome is appended, never overwritten, and the projection folds
+ * the first outcome per item — so an app that stops mid-run leaves a run whose
+ * completed items are still completed, whose announced-but-unsettled item is
+ * `executing` until the next launch reconciles it against git and disk, and
+ * whose untouched items are still `pending`.
  */
 export interface OrphanCleanupRun {
+  /** The run id, which is the caller's command id: one command, one run. */
   id: string;
   source: OrphanCleanupSource;
+  /** The scan revision this run was confirmed against. */
+  scanRevision: string;
   startedAt: number;
   /** `null` while the run is open — and forever, if it never finished. */
   finishedAt: number | null;
   /** Stamped by the first launch that finds an open run. */
   interruptedAt: number | null;
-  /** The preservation rules in force for this run, recorded with it. */
+  /** The preservation rule ids in force for this run, recorded with it. */
   preservation: string[];
+  /** The retention window those rules were measured against. */
+  retentionDays: number;
   items: OrphanCleanupItem[];
 }
+
+/**
+ * Local acceptance of a cleanup command, in the shape the rest of the app
+ * already uses for commands (docs/BOUNDARIES.md rule 4): it says this host
+ * accepted, rejected, or completed the command, never that the outcome is
+ * eternally final.
+ */
+export interface OrphanCleanupReceipt {
+  id: string;
+  commandId: string;
+  status: "accepted" | "completed" | "rejected";
+  /** A rejection's machine-readable reason; `null` on acceptance/completion. */
+  code: OrphanCleanupRejectionCode | null;
+  detail: string | null;
+  recordedAt: number;
+}
+
+/**
+ * Why a cleanup command was refused. Each one has a different recovery, which
+ * is why the renderer gets a code and not only a sentence: a superseded scan is
+ * fixed by scanning again, a conflict by not re-sending the command.
+ */
+export type OrphanCleanupRejectionCode =
+  /** The revision named is not the one main currently holds. */
+  | "scan-superseded"
+  /** The revision proposed no such item. */
+  | "unknown-items"
+  /** The same command id was already accepted with a different intent. */
+  | "conflict";
 
 /**
  * A `volli:worktree-orphans` SCAN report (VC-284): read-only by construction.
@@ -3166,21 +3308,29 @@ export interface OrphanCleanupRun {
  * cleanup history that lets Storage label past removals truthfully.
  */
 export type WorktreeOrphansResult = Result<{
+  /** The opaque revision a cleanup command must name to act on this proposal. */
+  revision: string;
   scannedAt: number;
   retentionDays: number;
   prunable: PrunableWorktreeMetadata[];
   removable: RemovableWorktreeOrphan[];
   keptRecent: KeptWorktreeOrphan[];
+  keptMetadata: KeptWorktreeMetadata[];
+  unreadableProjects: UnreadableWorktreeProject[];
   dirty: DirtyWorktreeOrphan[];
   runs: OrphanCleanupRun[];
 }>;
 
 /**
  * Ack for a `volli:worktree-orphan-cleanup` — the confirmed, destructive half
- * of the Storage pane. It answers with the durable run record, so the caller
- * shows exactly what was removed, what was skipped, and why.
+ * of the Storage pane. It answers with the local acceptance receipt and the
+ * durable run, so the caller shows exactly what was removed, what was skipped,
+ * what failed, and why. A refusal carries a code, because "scan again" and
+ * "this already ran" are different recoveries.
  */
-export type WorktreeOrphanCleanupResult = Result<{ run: OrphanCleanupRun }>;
+export type WorktreeOrphanCleanupResult =
+  | { ok: true; receipt: OrphanCleanupReceipt; run: OrphanCleanupRun }
+  | { ok: false; error: string; code: OrphanCleanupRejectionCode };
 
 /**
  * Ack for a `volli:worktree-orphan-delete` — the Settings list's explicit,
