@@ -489,6 +489,14 @@ export interface PiAdapterOptions {
    * these tests run in.
    */
   observability?: PiRuntimeHostOptions["observability"];
+  /**
+   * The subscription usage read (VC-263): on, with its own holder and the
+   * platform fetch, unless a test injects a fetch that never reaches the
+   * network. Threaded as its own seam rather than defaulted inside the
+   * runtime so this file stays the one place main states what the runtime
+   * is allowed to touch.
+   */
+  usageLimits?: PiRuntimeHostOptions["usageLimits"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -582,6 +590,13 @@ function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   return entryId;
 }
 
+/**
+ * The platform fetch the usage probe reads provider endpoints with — stated
+ * once here so the runtime itself never chooses a transport (VC-263).
+ */
+const platformUsageFetch: NonNullable<PiRuntimeHostOptions["usageLimits"]>["fetch"] = (url, init) =>
+  globalThis.fetch(url, init);
+
 export interface PiRuntimeHost {
   readonly adapter: NativeHarnessAdapter;
   inspectModelAccess: AgentRuntime["inspectModelAccess"];
@@ -606,6 +621,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
   });
 
   return {
