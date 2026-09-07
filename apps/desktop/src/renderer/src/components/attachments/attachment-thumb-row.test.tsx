@@ -29,12 +29,14 @@ describe("AttachmentThumbRow (VC-273)", () => {
     expect(html).toContain("1 attachment");
   });
 
-  it("stands a non-image up as its type rather than a broken picture", () => {
+  it("stands a non-image up as a glyph rather than a broken picture", () => {
     const html = renderToStaticMarkup(
       <AttachmentThumbRow attachments={[view("spec.pdf", "application/pdf", "c".repeat(64))]} />,
     );
     expect(html).not.toContain("<img");
-    expect(html).toContain("PDF");
+    expect(html).toContain("<svg");
+    // The type still reaches the person, on the tooltip where it is readable.
+    expect(html).toContain("spec.pdf · PDF");
   });
 
   it("caps the row and counts the remainder", () => {

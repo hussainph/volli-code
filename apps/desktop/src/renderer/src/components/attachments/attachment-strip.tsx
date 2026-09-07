@@ -13,6 +13,7 @@
  * materialized into has been pruned.
  */
 import * as React from "react";
+import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { blobUrl, type BlobLinkView } from "@volli/shared";
 
@@ -122,16 +123,20 @@ export function AttachmentThumbRow({
             src={blobUrl(attachment.blobHash)}
             alt={attachment.label}
             title={attachment.label}
-            className="size-4 rounded-[3px] border border-border/70 object-cover"
+            className="size-4 rounded-sm border border-border/70 object-cover"
             draggable={false}
           />
         ) : (
+          // A glyph, not the type label the 64px tile shows: three letters in a
+          // 16px box needs a font size below the smallest rung, and `PDF` set
+          // at 7px is not legible enough to be worth having. The name is on the
+          // tooltip, where it is readable.
           <span
             key={attachment.linkId ?? attachment.blobHash}
-            title={attachment.label}
-            className="flex size-4 items-center justify-center rounded-[3px] border border-border/70 bg-muted/40 text-[7px] font-medium text-muted-foreground"
+            title={`${attachment.label} · ${fileTypeLabel(attachment.originalName, attachment.mime)}`}
+            className="flex size-4 items-center justify-center rounded-sm border border-border/70 bg-muted/40 text-muted-foreground"
           >
-            {fileTypeLabel(attachment.originalName, attachment.mime).slice(0, 3)}
+            <FileIcon className="size-2.5" />
           </span>
         ),
       )}
