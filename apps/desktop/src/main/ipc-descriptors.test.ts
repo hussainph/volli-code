@@ -23,6 +23,8 @@ import {
   BROWSER_IPC,
   SHELL_CHANNELS,
   SHELL_IPC,
+  NOTIFICATION_CHANNELS,
+  NOTIFICATION_IPC,
 } from "./ipc-descriptors";
 
 describe("SHELL_IPC descriptor table (VC-270)", () => {
@@ -220,6 +222,55 @@ describe("UPDATE_IPC descriptor table", () => {
 
     it("names the release channel in its refusal", () => {
       expect(invalidError).toBe("Invalid release channel");
+    });
+  });
+});
+
+describe("NOTIFICATION_IPC descriptor table (VC-295)", () => {
+  it("derives the whole notification surface from its descriptors", () => {
+    expect(NOTIFICATION_CHANNELS).toEqual(Object.keys(NOTIFICATION_IPC));
+    expect(NOTIFICATION_CHANNELS).toEqual([
+      "volli:notifications-get",
+      "volli:notifications-set",
+      "volli:notifications-pending-activation",
+    ]);
+  });
+
+  it("refuses stray arguments on the two read requests", () => {
+    for (const channel of [
+      "volli:notifications-get",
+      "volli:notifications-pending-activation",
+    ] as const) {
+      const { guard, invalidError } = NOTIFICATION_IPC[channel];
+      expect(guard([])).toBe(true);
+      expect(guard(["junk"])).toBe(false);
+      expect(invalidError).toBe("Invalid request");
+    }
+  });
+
+  describe("volli:notifications-set", () => {
+    const { guard, invalidError } = NOTIFICATION_IPC["volli:notifications-set"];
+
+    it("accepts a switch move on a category and on the master switch", () => {
+      expect(guard([{ event: "needs-you", enabled: false }])).toBe(true);
+      expect(guard([{ event: null, enabled: true }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      // Shape only — whether "sessions" names a category is the service's
+      // question, and its refusal is a sentence rather than this message.
+      expect(guard([{ event: "sessions", enabled: false }])).toBe(true);
+      expect(guard([{ event: "needs-you", enabled: "off" }])).toBe(false);
+      expect(guard([{ event: 7, enabled: true }])).toBe(false);
+      expect(guard([{ enabled: true }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard(["needs-you"])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ event: null, enabled: true }, "extra"])).toBe(false);
+    });
+
+    it("names what was wrong with the request", () => {
+      expect(invalidError).toBe("Invalid notification preference");
     });
   });
 });

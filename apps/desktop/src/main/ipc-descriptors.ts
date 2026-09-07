@@ -36,6 +36,7 @@ import type {
   HarnessIpcChannel,
   IpcArgs,
   ModelAccessIpcChannel,
+  NotificationIpcChannel,
   ShellIpcChannel,
   ThemeIpcChannel,
   WebAccessIpcChannel,
@@ -1719,6 +1720,41 @@ export const AGENT_OBSERVABILITY_IPC: {
 export const AGENT_OBSERVABILITY_CHANNELS = Object.keys(
   AGENT_OBSERVABILITY_IPC,
 ) as readonly AgentObservabilityIpcChannel[];
+
+// ---- notification descriptor table (VC-295) -------------------------------
+// The guard is the shape check; WHICH categories exist is the service's
+// vocabulary question, and it answers a bad one with a sentence naming the
+// category rather than "Invalid request". Same split as the observability
+// endpoint above: a guard checks shape, a policy explains a refusal.
+
+function isNotificationPreferenceUpdate(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const event = value["event"];
+  return typeof value["enabled"] === "boolean" && (event === null || typeof event === "string");
+}
+
+export const NOTIFICATION_IPC: {
+  readonly [C in NotificationIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:notifications-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:notifications-set": {
+    guard: (args): args is IpcArgs<"volli:notifications-set"> =>
+      args.length === 1 && isNotificationPreferenceUpdate(args[0]),
+    invalidError: "Invalid notification preference",
+  },
+  "volli:notifications-pending-activation": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the notification surface owns, derived — never hand-synced. */
+export const NOTIFICATION_CHANNELS = Object.keys(
+  NOTIFICATION_IPC,
+) as readonly NotificationIpcChannel[];
 
 // ---- self-update descriptor table (VC-59) ---------------------------------
 // Every update request is argument-less — the state is main's to own and the
