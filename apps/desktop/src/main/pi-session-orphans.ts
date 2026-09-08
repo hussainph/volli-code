@@ -8,7 +8,7 @@ import {
   readSync,
   unlinkSync,
 } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
+import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type Database from "better-sqlite3";
@@ -20,9 +20,9 @@ import type {
   PiSessionOrphanReclaimReport,
   PiSessionOrphanSkipped,
 } from "../ipc/contract";
+import { PI_ADAPTER_ID } from "./session-runtime/pi-adapter";
 
 const HEADER_LIMIT_BYTES = 64 * 1024;
-const PI_ADAPTER_ID = "pi";
 const NATIVE_BINDING_KIND = "volli.native-binding.v1";
 
 interface FileIdentity {
@@ -45,6 +45,9 @@ interface ScanState {
 export interface PiSessionOrphanServiceOptions {
   now?: () => number;
   nextId?: () => string;
+  /** Test seam that also makes the no-follow syscall flag mutation-sensitive. */
+  openSidecar?: (path: string, flags: number) => Promise<FileHandle>;
+  openSidecarSync?: (path: string, flags: number) => number;
 }
 
 /**
@@ -58,6 +61,8 @@ export class PiSessionOrphanService {
   readonly #root: string;
   readonly #now: () => number;
   readonly #nextId: () => string;
+  readonly #openSidecar: (path: string, flags: number) => Promise<FileHandle>;
+  readonly #openSidecarSync: (path: string, flags: number) => number;
   #current: ScanState | null = null;
 
   constructor(
@@ -68,6 +73,8 @@ export class PiSessionOrphanService {
     this.#root = resolve(root);
     this.#now = options.now ?? Date.now;
     this.#nextId = options.nextId ?? randomUUID;
+    this.#openSidecar = options.openSidecar ?? open;
+    this.#openSidecarSync = options.openSidecarSync ?? openSync;
   }
 
   /** Read-only inventory. Nothing in this call removes or rewrites a sidecar. */
@@ -77,7 +84,7 @@ export class PiSessionOrphanService {
     this.#current = null;
     const protectedIds = protectedPiSessionIds(this.db);
     const skipped: PiSessionOrphanSkipped[] = [];
-    const confirmed = await scanPiSidecars(this.#root, skipped);
+    const confirmed = await scanPiSidecars(this.#root, skipped, this.#openSidecar);
     const candidates = confirmed.filter((entry) => !protectedIds.has(entry.sessionId));
     const revision = this.#nextId();
     const report: PiSessionOrphanInventory = {
@@ -122,7 +129,7 @@ export class PiSessionOrphanService {
         // This block is deliberately synchronous from the final db read through
         // unlink: no IPC or other main-process callback can attach this id in
         // the gap between the protection check and deletion.
-        const current = inspectPiSidecarSync(this.#root, candidate.path);
+        const current = inspectPiSidecarSync(this.#root, candidate.path, this.#openSidecarSync);
         if (!sameIdentity(candidate, current)) {
           throw new Error("The file changed after it was inventoried");
         }
@@ -188,6 +195,7 @@ function protectedPiSessionIds(db: Database.Database): Set<string> {
       continue;
     }
     const locator = detail.locator;
+    if (locator === null) continue;
     if (isRecord(locator) && locator.runtime === "pi") {
       if (
         typeof locator.sessionId !== "string" ||
@@ -212,6 +220,7 @@ function malformedAttachment(id: string): never {
 async function scanPiSidecars(
   root: string,
   skipped: PiSessionOrphanSkipped[],
+  openSidecar: (path: string, flags: number) => Promise<FileHandle>,
 ): Promise<ConfirmedPiSidecar[]> {
   let rootInfo: Awaited<ReturnType<typeof lstat>>;
   try {
@@ -245,7 +254,7 @@ async function scanPiSidecars(
       if (!fileEntry.name.endsWith(".jsonl")) continue;
       const path = join(directoryPath, fileEntry.name);
       try {
-        const sidecar = await inspectPiSidecar(root, path);
+        const sidecar = await inspectPiSidecar(root, path, openSidecar);
         confirmed.push(sidecar);
       } catch (error) {
         skipped.push({ path, reason: errorMessage(error) });
@@ -255,13 +264,17 @@ async function scanPiSidecars(
   return confirmed.toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
-async function inspectPiSidecar(root: string, path: string): Promise<ConfirmedPiSidecar> {
+async function inspectPiSidecar(
+  root: string,
+  path: string,
+  openSidecar: (path: string, flags: number) => Promise<FileHandle>,
+): Promise<ConfirmedPiSidecar> {
   assertOwnedSidecarPath(root, path);
   const before = await lstat(path);
   if (!before.isFile() || before.isSymbolicLink()) {
     throw new Error("Not a regular Pi sidecar file");
   }
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await openSidecar(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   let line: string;
   let opened: Awaited<ReturnType<typeof handle.stat>>;
   try {
@@ -278,11 +291,15 @@ async function inspectPiSidecar(root: string, path: string): Promise<ConfirmedPi
   return confirmedSidecar(root, path, line, identity(after));
 }
 
-function inspectPiSidecarSync(root: string, path: string): ConfirmedPiSidecar {
+function inspectPiSidecarSync(
+  root: string,
+  path: string,
+  openSidecarSync: (path: string, flags: number) => number,
+): ConfirmedPiSidecar {
   assertOwnedSidecarPath(root, path);
   const before = lstatSync(path);
   if (!before.isFile() || before.isSymbolicLink()) throw new Error("Not a regular Pi sidecar file");
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openSidecarSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   let line: string;
   let opened: ReturnType<typeof fstatSync>;
   try {

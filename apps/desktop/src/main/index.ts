@@ -2722,6 +2722,8 @@ app.whenReady().then(async () => {
     return window;
   };
   const mainWindow = createOwnedWindow();
+  const transcriptRepackAbort = new AbortController();
+  app.on("before-quit", () => transcriptRepackAbort.abort());
   mainWindow.webContents.once("did-finish-load", () => {
     // Transcript repack is migration-by-sibling rather than an in-place
     // rewrite. Give first paint five seconds of quiet, then process only small
@@ -2730,6 +2732,17 @@ app.whenReady().then(async () => {
     const repackDelay = setTimeout(() => {
       void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
         batchSize: 25,
+        signal: transcriptRepackAbort.signal,
+        shouldBackOff: async () => {
+          if (sessionRuntime === null) return false;
+          const sessionIds = new Set(
+            sessionRuntime.openNativeBindings().map((binding) => binding.sessionId),
+          );
+          for (const sessionId of sessionIds) {
+            if ((await sessionRuntime.projection({ sessionId })).projection.turnActive) return true;
+          }
+          return false;
+        },
         onError: (name, error) => {
           console.error(`[transcript-repack] kept ${name}:`, errorMessage(error));
         },

@@ -1,5 +1,14 @@
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import {
+  constants,
+  existsSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdtemp, open as openFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -101,7 +110,10 @@ describe("PiSessionOrphanService inventory", () => {
       unrelated,
       `${JSON.stringify({ kind: "header", v: 3, id: "old", createdAt, cwd })}\n`,
     );
-    writeFileSync(external, "external");
+    writeFileSync(
+      external,
+      `${JSON.stringify({ kind: "header", v: 4, id: "linked", createdAt, cwd })}\n`,
+    );
     writeFileSync(rootLevel, "not in an encoded cwd directory");
     symlinkSync(external, linked);
 
@@ -112,6 +124,61 @@ describe("PiSessionOrphanService inventory", () => {
       expect.arrayContaining([malformed, unrelated, linked, external, rootLevel]),
     );
     expect(existsSync(linked)).toBe(true);
+  });
+
+  it("accepts a legal null locator while still protecting its native id", async () => {
+    const protectedPath = writePiSession("native-without-locator");
+    const orphanPath = writePiSession("still-orphaned");
+    bindPi("native-without-locator", null);
+
+    const report = await new PiSessionOrphanService(ctx.db, root).scan();
+
+    expect(report.candidates.map((candidate) => candidate.path)).toEqual([orphanPath]);
+    expect(report.candidates.map((candidate) => candidate.path)).not.toContain(protectedPath);
+  });
+
+  it("rejects a valid header stored under another session's filename", async () => {
+    const directory = join(root, piSessionDirectoryName(cwd));
+    mkdirSync(directory, { recursive: true });
+    const mismatched = join(directory, piSessionFilename(createdAt, "filename-id"));
+    writeFileSync(
+      mismatched,
+      `${JSON.stringify({ kind: "header", v: 4, id: "header-id", createdAt, cwd })}\n`,
+    );
+
+    const report = await new PiSessionOrphanService(ctx.db, root).scan();
+
+    expect(report.candidates).toEqual([]);
+    expect(report.skipped).toEqual([
+      expect.objectContaining({ path: mismatched, reason: expect.stringMatching(/path.*header/i) }),
+    ]);
+  });
+
+  it("opens inventory and pre-unlink checks with O_NOFOLLOW", async () => {
+    writePiSession("no-follow");
+    const asyncFlags: number[] = [];
+    const syncFlags: number[] = [];
+    const service = new PiSessionOrphanService(ctx.db, root, {
+      openSidecar: (path, flags) => {
+        asyncFlags.push(flags);
+        return openFile(path, flags);
+      },
+      openSidecarSync: (path, flags) => {
+        syncFlags.push(flags);
+        return openSync(path, flags);
+      },
+    });
+    const scan = await service.scan();
+
+    await service.reclaim({
+      scanRevision: scan.revision,
+      itemIds: [scan.candidates[0]!.itemId],
+    });
+
+    expect(asyncFlags).toHaveLength(1);
+    expect(syncFlags).toHaveLength(1);
+    expect(asyncFlags[0]! & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
+    expect(syncFlags[0]! & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
   });
 
   it("fails closed when a Pi attachment locator is malformed", async () => {
@@ -179,6 +246,25 @@ describe("PiSessionOrphanService explicit reclaim", () => {
 
     expect(result.removedCount).toBe(0);
     expect(result.kept[0]?.reason).toMatch(/changed/i);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it("keeps a candidate when its owned parent directory becomes a symlink", async () => {
+    const path = writePiSession("parent-became-symlink");
+    const service = new PiSessionOrphanService(ctx.db, root, { nextId: () => "scan-1" });
+    const scan = await service.scan();
+    const directory = join(root, piSessionDirectoryName(cwd));
+    const relocated = join(root, "relocated-sidecars");
+    renameSync(directory, relocated);
+    symlinkSync(relocated, directory, "dir");
+
+    const result = await service.reclaim({
+      scanRevision: scan.revision,
+      itemIds: [scan.candidates[0]!.itemId],
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.kept[0]?.reason).toMatch(/symlink/i);
     expect(existsSync(path)).toBe(true);
   });
 

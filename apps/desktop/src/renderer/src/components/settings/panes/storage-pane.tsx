@@ -154,29 +154,47 @@ function RetentionSection() {
 }
 
 function PiSessionLogsSection() {
-  const [inventory, setInventory] = React.useState<PiSessionOrphanInventory | null>(null);
+  const [state, setState] = React.useState<AsyncState<PiSessionOrphanInventory | null>>({
+    status: "ready",
+    data: null,
+  });
   const [scanning, setScanning] = React.useState(false);
   const [cleaning, setCleaning] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const fetcher = useLatestAsync();
+  const inventory = state.status === "ready" ? state.data : null;
 
   async function scan(): Promise<void> {
     if (scanning) return;
+    const token = fetcher.claim();
     setScanning(true);
+    setState({ status: "loading" });
     try {
       const result = await window.api.piSessions.scanOrphans();
+      if (!fetcher.isCurrent(token)) return;
       if (!result.ok) {
-        setInventory(null);
-        toastError(`Couldn't scan Pi session logs: ${result.error}`);
+        setState({
+          status: "error",
+          message: `Couldn't scan Pi session logs: ${result.error}`,
+          onRetry: () => void scan(),
+        });
         return;
       }
-      setInventory(result.inventory);
+      setState({ status: "ready", data: result.inventory });
     } catch (error) {
-      setInventory(null);
-      toastError(`Couldn't scan Pi session logs: ${errorMessage(error)}`);
+      if (fetcher.isCurrent(token)) {
+        setState({
+          status: "error",
+          message: `Couldn't scan Pi session logs: ${errorMessage(error)}`,
+          onRetry: () => void scan(),
+        });
+      }
     } finally {
-      setScanning(false);
+      if (fetcher.isCurrent(token)) setScanning(false);
     }
   }
+
+  React.useEffect(() => () => fetcher.invalidate(), [fetcher]);
 
   async function reclaim(): Promise<void> {
     if (inventory === null || inventory.candidateCount === 0 || cleaning) return;
@@ -205,13 +223,15 @@ function PiSessionLogsSection() {
   }
 
   const summary =
-    inventory === null
-      ? "Not scanned"
-      : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
+    state.status === "loading"
+      ? "Scanning…"
+      : inventory === null
+        ? "Not scanned"
+        : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
 
   return (
     <>
-      <PrefSection
+      <AsyncSection
         title="Pi session logs"
         icon={DatabaseIcon}
         action={
@@ -222,37 +242,53 @@ function PiSessionLogsSection() {
             onAct={() => void scan()}
           />
         }
-      >
-        <PrefRow
-          label="Orphaned logs"
-          description="Only logs not referenced by any Volli session are candidates. Scanning never deletes files."
-        >
-          <span className="text-ui text-muted-foreground">{summary}</span>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={inventory === null || inventory.candidateCount === 0 || scanning || cleaning}
-            onClick={() => setConfirmOpen(true)}
+        before={
+          <PrefRow
+            label="Orphaned logs"
+            hint={
+              <>
+                Only logs not referenced by any Volli session are candidates. Scanning never deletes
+                files.
+              </>
+            }
           >
-            <TrashIcon />
-            Clean up…
-          </Button>
-        </PrefRow>
-        {inventory?.candidates.map((candidate) => (
-          <ItemRow
-            key={candidate.itemId}
-            name={truncateMiddle(candidate.path)}
-            meta={`${candidate.sessionId} · ${formatFileSize(candidate.sizeBytes)}`}
-          />
-        ))}
-        {inventory?.skipped.map((entry) => (
-          <ItemRow
-            key={`skipped:${entry.path}`}
-            name={truncateMiddle(entry.path)}
-            meta={`Kept — ${entry.reason}`}
-          />
-        ))}
-      </PrefSection>
+            <span className="text-ui text-muted-foreground">{summary}</span>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={
+                inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+              }
+              onClick={() => setConfirmOpen(true)}
+            >
+              <TrashIcon />
+              Clean up…
+            </Button>
+          </PrefRow>
+        }
+        state={state}
+      >
+        {(report) =>
+          report === null ? null : (
+            <>
+              {report.candidates.map((candidate) => (
+                <ItemRow
+                  key={candidate.itemId}
+                  name={truncateMiddle(candidate.path)}
+                  meta={`${candidate.sessionId} · ${formatFileSize(candidate.sizeBytes)}`}
+                />
+              ))}
+              {report.skipped.map((entry) => (
+                <ItemRow
+                  key={`skipped:${entry.path}`}
+                  name={truncateMiddle(entry.path)}
+                  meta={`Kept — ${entry.reason}`}
+                />
+              ))}
+            </>
+          )
+        }
+      </AsyncSection>
 
       <AlertDialog
         open={confirmOpen}

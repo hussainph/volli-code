@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzip } from "node:zlib";
+import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -10,10 +10,12 @@ import { canonicalJson, type SessionTranscriptArtifact } from "@volli/session-en
 
 import {
   createFileTranscriptArtifactStore,
+  FileTranscriptArtifactStore,
   repackLegacyTranscriptArtifacts,
 } from "./transcript-artifacts";
 
 const gunzipAsync = promisify(gunzip);
+const gzipAsync = promisify(gzip);
 
 let directory: string | undefined;
 
@@ -227,6 +229,148 @@ describe("FileTranscriptArtifactStore", () => {
     await expect(lstat(join(directory!, `${digest}.json.gz`))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("keeps a good plain artifact readable when compressed publication fails", async () => {
+    await store();
+    const value = artifact("publish failure");
+    const { bytes, reference } = referenceFor(value);
+    const digest = reference.id.slice("sha256:".length);
+    const plainPath = join(directory!, `${digest}.json`);
+    await writeFile(plainPath, bytes);
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async () => {
+        throw new Error("fixture gzip failed");
+      },
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+    });
+
+    expect(report).toMatchObject({ scanned: 1, repacked: 0, skipped: 1 });
+    expect((await lstat(plainPath)).isFile()).toBe(true);
+    await expect(artifacts.read(reference)).resolves.toEqual(value);
+  });
+
+  it("removes its bad publication and keeps the plain artifact when gzip inflates to wrong bytes", async () => {
+    await store();
+    const value = artifact("good plain bytes");
+    const { bytes, reference } = referenceFor(value);
+    const digest = reference.id.slice("sha256:".length);
+    const plainPath = join(directory!, `${digest}.json`);
+    const compressedPath = join(directory!, `${digest}.json.gz`);
+    await writeFile(plainPath, bytes);
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async () => gzipAsync(canonicalBytes(artifact("wrong compressed bytes"))),
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+    });
+
+    expect(report).toMatchObject({ scanned: 1, repacked: 0, skipped: 1 });
+    expect((await lstat(plainPath)).isFile()).toBe(true);
+    await expect(lstat(compressedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(artifacts.read(reference)).resolves.toEqual(value);
+  });
+
+  it("keeps a same-bytes legacy replacement when its file identity changes during publish", async () => {
+    await store();
+    const value = artifact("identity changed");
+    const { bytes, reference } = referenceFor(value);
+    const digest = reference.id.slice("sha256:".length);
+    const plainPath = join(directory!, `${digest}.json`);
+    await writeFile(plainPath, bytes);
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async (canonical) => {
+        await rm(plainPath);
+        await writeFile(plainPath, canonical);
+        return gzipAsync(canonical);
+      },
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+    });
+
+    expect(report).toMatchObject({ scanned: 1, repacked: 0, skipped: 1 });
+    expect((await lstat(plainPath)).isFile()).toBe(true);
+    await expect(artifacts.read(reference)).resolves.toEqual(value);
+  });
+
+  it("atomically repairs a known-bad compressed sibling from a verified plain artifact", async () => {
+    const artifacts = await store();
+    const value = artifact("repair me");
+    const { bytes, reference } = referenceFor(value);
+    const digest = reference.id.slice("sha256:".length);
+    const plainPath = join(directory!, `${digest}.json`);
+    const compressedPath = join(directory!, `${digest}.json.gz`);
+    await writeFile(plainPath, bytes);
+    await writeFile(compressedPath, Buffer.from([0x1f, 0x8b, 0x08]));
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+    });
+
+    expect(report).toMatchObject({ scanned: 1, repacked: 1, skipped: 0 });
+    await expect(lstat(plainPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(gunzipAsync(await readFile(compressedPath))).resolves.toEqual(bytes);
+    await expect(artifacts.read(reference)).resolves.toEqual(value);
+  });
+
+  it("backs off while a turn is live before attempting a legacy batch", async () => {
+    await store();
+    const entry = referenceFor(artifact("wait for idle"));
+    await writeFile(
+      join(directory!, `${entry.reference.id.slice("sha256:".length)}.json`),
+      entry.bytes,
+    );
+    const events: string[] = [];
+    let live = true;
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async (bytes) => {
+        events.push("gzip");
+        return gzipAsync(bytes);
+      },
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+      shouldBackOff: () => {
+        events.push(live ? "live" : "idle");
+        return live;
+      },
+      backoff: async () => {
+        events.push("backoff");
+        live = false;
+      },
+    } as Parameters<typeof repackLegacyTranscriptArtifacts>[1]);
+
+    expect(report).toMatchObject({ repacked: 1, skipped: 0, aborted: false });
+    expect(events).toEqual(["live", "backoff", "idle", "gzip"]);
+  });
+
+  it("cancels without touching a legacy artifact while waiting for idle", async () => {
+    await store();
+    const entry = referenceFor(artifact("quit while busy"));
+    const plainPath = join(directory!, `${entry.reference.id.slice("sha256:".length)}.json`);
+    await writeFile(plainPath, entry.bytes);
+    const controller = new AbortController();
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async () => {
+        throw new Error("repack ran after cancellation");
+      },
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      signal: controller.signal,
+      shouldBackOff: () => true,
+      backoff: async () => controller.abort(),
+    } as Parameters<typeof repackLegacyTranscriptArtifacts>[1]);
+
+    expect(report).toMatchObject({ repacked: 0, skipped: 0, aborted: true });
+    expect((await lstat(plainPath)).isFile()).toBe(true);
   });
 
   it("an interrupted repack leaves every artifact readable and resumes from siblings", async () => {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { link, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gunzipSync, gzip } from "node:zlib";
@@ -34,10 +34,21 @@ const gunzipAsync = promisify(gunzip);
  * the uncompressed canonical JSON bytes, so neither ledger references nor
  * bundle version 1 change.
  */
+export interface FileTranscriptArtifactStoreOptions {
+  /** Test seam for failures between verified legacy input and compressed publication. */
+  gzipBytes?: (canonicalBytes: Buffer) => Promise<Buffer>;
+}
+
 export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   #ready: Promise<void> | undefined;
+  readonly #gzipBytes: (canonicalBytes: Buffer) => Promise<Buffer>;
 
-  constructor(private readonly baseDirectory: string) {}
+  constructor(
+    private readonly baseDirectory: string,
+    options: FileTranscriptArtifactStoreOptions = {},
+  ) {
+    this.#gzipBytes = options.gzipBytes ?? gzipAsync;
+  }
 
   async write(artifact: SessionTranscriptArtifact): Promise<TranscriptReference> {
     assertArtifact(artifact);
@@ -121,7 +132,9 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
 
   /**
    * Repack one legacy file. The plain path is removed only after the compressed
-   * sibling has been published, inflated, and verified to the same digest.
+   * sibling has been published, inflated, and verified to the same digest. A
+   * new sibling costs one temp-file fsync plus two directory fsyncs: one for
+   * publication and one for legacy deletion; there is no duplicate read-back.
    */
   async repackLegacyArtifact(name: string): Promise<void> {
     const match = LEGACY_ARTIFACT_NAME.exec(name);
@@ -133,14 +146,15 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     const before = await lstat(legacy);
     if (!before.isFile()) throw new Error("Legacy transcript artifact is not a regular file");
     const bytes = await this.readAndVerify(legacy, digest, "plain");
-    await this.publishCompressed(bytes, digest, compressed);
-    // This separate read-back is intentionally not satisfied by the publisher's
-    // winner check: deletion is gated on what is reachable at the final path.
-    await this.verifyStored(compressed, digest, "gzip");
+    // Repair is restricted to repack, where the canonical plain sibling has
+    // already verified against the digest-shaped name. Ordinary writes keep
+    // strict no-replace behavior for every present compressed path.
+    await this.publishCompressed(bytes, digest, compressed, true);
 
-    // A live store never overwrites a legacy path, but re-check its identity and
-    // bytes before unlinking so an external replacement is kept, not deleted
-    // merely because it inherited a digest-shaped name.
+    // publishCompressed performs the one verified compressed read-back that
+    // gates deletion. A live store never overwrites a legacy path, but re-check
+    // its identity and bytes before unlinking so an external replacement is
+    // kept, not deleted merely because it inherited a digest-shaped name.
     const after = await lstat(legacy);
     if (!sameFile(before, after)) {
       throw new Error("Legacy transcript artifact changed during repack");
@@ -177,36 +191,98 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     canonicalBytes: Buffer,
     expectedDigest: string,
     destination: string,
+    repairCorruptExisting = false,
   ): Promise<void> {
-    const packed = await gzipAsync(canonicalBytes);
+    const packed = await this.#gzipBytes(canonicalBytes);
     const temporary = join(
       this.baseDirectory,
       `.${expectedDigest.slice("sha256:".length)}.${randomBytes(16).toString("hex")}.tmp`,
     );
     let handle: Awaited<ReturnType<typeof open>> | undefined;
+    let temporaryMoved = false;
     try {
       handle = await open(temporary, "wx", 0o600);
       await handle.writeFile(packed);
       await handle.sync();
       await handle.close();
       handle = undefined;
+      const temporaryInfo = await lstat(temporary);
 
       // link is an atomic no-replace publish. If another writer won the race,
       // its compressed bytes must independently inflate and verify.
+      let linked = false;
+      let existingBefore: Awaited<ReturnType<typeof lstat>> | undefined;
       try {
         await link(temporary, destination);
+        linked = true;
       } catch (error) {
         if (!isAlreadyExists(error)) throw error;
+        existingBefore = await lstat(destination);
       }
-      await this.syncDirectory();
-      await unlink(temporary);
-    } catch (error) {
-      if (handle) await handle.close().catch(() => undefined);
-      await unlink(temporary).catch(() => undefined);
-      throw error;
-    }
 
-    await this.verifyStored(destination, expectedDigest, "gzip");
+      if (linked) {
+        await this.syncDirectory();
+        try {
+          // The one successful read-back that gates a normal repack deletion:
+          // read from the final path, inflate, then hash canonical bytes.
+          await this.verifyStored(destination, expectedDigest, "gzip");
+        } catch (error) {
+          // A codec or disk fault must not leave our newly-linked bad path in
+          // front of the still-good legacy sibling. Remove only our own inode.
+          try {
+            const destinationInfo = await lstat(destination);
+            if (sameFile(temporaryInfo, destinationInfo)) {
+              await unlink(destination);
+              await this.syncDirectory();
+            }
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Compressed transcript publication failed and could not be removed",
+              { cause: cleanupError },
+            );
+          }
+          throw error;
+        }
+        return;
+      }
+
+      try {
+        await this.verifyStored(destination, expectedDigest, "gzip");
+        return;
+      } catch (error) {
+        if (
+          !repairCorruptExisting ||
+          existingBefore === undefined ||
+          !existingBefore.isFile() ||
+          existingBefore.isSymbolicLink()
+        ) {
+          throw error;
+        }
+
+        // Repack alone may replace a compressed path proven bad while a plain
+        // sibling proved the canonical bytes. Verify the temporary gzip before
+        // the atomic rename, then ensure the exact verified inode landed there.
+        await this.verifyStored(temporary, expectedDigest, "gzip");
+        const current = await lstat(destination);
+        if (!sameFile(existingBefore, current)) {
+          // Another process changed the winner. Accept it only if it is now a
+          // valid artifact; never overwrite a path we did not diagnose.
+          await this.verifyStored(destination, expectedDigest, "gzip");
+          return;
+        }
+        await rename(temporary, destination);
+        temporaryMoved = true;
+        await this.syncDirectory();
+        const installed = await lstat(destination);
+        if (!sameFile(temporaryInfo, installed)) {
+          throw new Error("Compressed transcript artifact changed during repair", { cause: error });
+        }
+      }
+    } finally {
+      if (handle) await handle.close().catch(() => undefined);
+      if (!temporaryMoved) await unlink(temporary).catch(() => undefined);
+    }
   }
 
   private async readAndVerify(
@@ -246,7 +322,11 @@ export interface TranscriptRepackOptions {
   /** Files attempted between yields. */
   batchSize?: number;
   signal?: AbortSignal;
-  /** Production throttles here; tests inject a deterministic pause. */
+  /** Live work can ask the migration to wait before starting another batch. */
+  shouldBackOff?: () => boolean | Promise<boolean>;
+  /** Production waits longer for live work; tests inject a deterministic release. */
+  backoff?: () => Promise<void>;
+  /** Production throttles completed batches; tests inject a deterministic pause. */
   pause?: () => Promise<void>;
   onError?: (path: string, error: unknown) => void;
 }
@@ -267,14 +347,22 @@ export async function repackLegacyTranscriptArtifacts(
   store: FileTranscriptArtifactStore,
   options: TranscriptRepackOptions = {},
 ): Promise<TranscriptRepackReport> {
+  if (options.signal?.aborted) {
+    return { scanned: 0, repacked: 0, skipped: 0, aborted: true };
+  }
   const names = await store.listLegacyArtifactNames();
   const batchSize = Math.max(1, Math.floor(options.batchSize ?? 25));
   const pause = options.pause ?? (() => delay(250));
+  const backoff = options.backoff ?? (() => delay(1_000));
   let repacked = 0;
   let skipped = 0;
   let index = 0;
 
   while (index < names.length && !options.signal?.aborted) {
+    if (await options.shouldBackOff?.()) {
+      await backoff();
+      continue;
+    }
     const batch = names.slice(index, index + batchSize);
     for (const name of batch) {
       if (options.signal?.aborted) break;
@@ -394,7 +482,12 @@ function sameFile(
   left: Awaited<ReturnType<typeof lstat>>,
   right: Awaited<ReturnType<typeof lstat>>,
 ) {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
 }
 
 function delay(ms: number): Promise<void> {

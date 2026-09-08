@@ -265,7 +265,13 @@ async function verifyStagedProfile(
         bytes = await transcripts.readCanonicalBytes(
           transcriptReferenceForId(`sha256:${entry.sha256}`),
         );
-      } catch {
+      } catch (error) {
+        if (isMissing(error)) {
+          problems.push(
+            problem("artifact-missing", `${entry.path} was not written into the profile.`),
+          );
+          continue;
+        }
         bytes = null;
       }
     } else {
@@ -293,6 +299,14 @@ async function verifyStagedProfile(
     }
   }
   return problems;
+}
+
+function isMissing(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 function readFileSyncSafe(path: string): Buffer | null {
