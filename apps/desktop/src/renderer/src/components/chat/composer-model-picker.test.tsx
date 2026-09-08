@@ -224,6 +224,7 @@ async function renderPill(input: {
   view: ModelPickerView;
   defaults: ModelAccessDefaults;
   withTiers?: boolean;
+  selectionTier?: string | null;
   onChange?: (next: ComposerModelSelection) => void;
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
@@ -239,6 +240,7 @@ async function renderPill(input: {
           models={models}
           tiers={input.withTiers === false ? undefined : tiers}
           selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
+          selectionTier={input.selectionTier ?? null}
           disabled={false}
           onChange={input.onChange ?? (() => undefined)}
           open
@@ -317,5 +319,104 @@ describe("the model pill's Defaults view", () => {
     });
     expect(document.querySelector('[data-testid="model-picker-view"]')).toBeNull();
     expect(document.querySelector('[data-slot="command-input"]')).not.toBeNull();
+  });
+});
+
+/**
+ * The pill draws eight characters of a model name at a narrow pane and is right
+ * to (VC-288): it is the elastic member of a row that has to survive a 313px
+ * composer. What it cannot be is the ONLY place the fact exists — the tier, the
+ * provider and the rest of the name were unreachable without changing the
+ * selection to find out what it had been.
+ */
+describe("reading the whole selected model without changing it", () => {
+  it("leads the open list with the tier, the model and the provider, in full", async () => {
+    await renderPill({
+      view: "all",
+      defaults: { ...EMPTY_MODEL_ACCESS_DEFAULTS, fast: HAIKU },
+      selectionTier: "Fast",
+    });
+    const identity = document.querySelector('[data-testid="model-pill-identity"]');
+    expect(identity?.textContent).toContain("Fast · Claude Sonnet · Anthropic");
+    // Wrapping, not an ellipsis: a reveal that truncates is the thing it was
+    // opened to escape, and a popover has a width of its own to spend.
+    expect(identity?.innerHTML).not.toContain("truncate");
+  });
+
+  it("says the same words the pill itself carries as its name", async () => {
+    // One string, one function (`modelIdentityLabel`): a reveal that composed
+    // its own could drift into describing a different selection than the
+    // control it was opened from.
+    await renderPill({ view: "all", defaults: EMPTY_MODEL_ACCESS_DEFAULTS, selectionTier: "Fast" });
+    const pill = document.querySelector('[data-slot="popover-trigger"]');
+    const identity = document.querySelector('[data-testid="model-pill-identity"]');
+    expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
+    expect(identity?.textContent).toContain(pill?.getAttribute("title") ?? "");
+  });
+});
+
+/**
+ * AND WITHOUT BEING ABLE TO CHANGE IT AT ALL (VC-288 review). The list is the
+ * enabled pill's reveal, and a disabled trigger opens nothing and takes no
+ * focus — so in the two states where the selection is frozen, which is most of
+ * a working turn, the whole identity was reachable by a `title` and by nothing
+ * else. Reading what is selected cannot depend on being allowed to change it.
+ */
+describe("reading it while the selection is frozen", () => {
+  async function renderLocked(input: { disabled?: boolean; models?: typeof MODELS } = {}) {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root?.render(
+        <ModelPill
+          models={offerableModels(input.models ?? MODELS, PROVIDERS, [])}
+          selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
+          selectionTier="Fast"
+          disabled={input.disabled ?? true}
+          onChange={() => undefined}
+        />,
+      );
+    });
+    return container.querySelector<HTMLElement>('[data-testid="model-pill"]');
+  }
+
+  it("stays a focus stop while a turn is working, and reveals the whole identity there", async () => {
+    const pill = await renderLocked({ disabled: true });
+
+    // Focusable: `disabled` takes a control out of the tab order entirely, so
+    // the fact behind it was unreachable without a mouse.
+    expect(pill?.tagName).toBe("BUTTON");
+    expect(pill?.hasAttribute("disabled")).toBe(false);
+    expect(pill?.getAttribute("aria-label")).toBe("Model: Fast · Claude Sonnet · Anthropic");
+
+    await act(async () => pill?.focus());
+    expect(document.activeElement).toBe(pill);
+    // Radix opens a tooltip on focus with no delay: this is the keyboard's
+    // reveal, in ink, in the frame the focus landed.
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Fast · Claude Sonnet · Anthropic",
+    );
+  });
+
+  it("opens no list from a press it cannot honour", async () => {
+    const pill = await renderLocked({ disabled: true });
+    await act(async () => pill?.click());
+
+    expect(document.querySelector('[data-slot="command-input"]')).toBeNull();
+    // And it says so, rather than looking like a control that simply did
+    // nothing when it was pressed.
+    expect(pill?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("reveals the selection even when the catalog offers nothing to switch to", async () => {
+    // No models: the pill has nothing to open, and the Session is still
+    // running on something whose name a person may need to read.
+    const pill = await renderLocked({ disabled: false, models: [] });
+    await act(async () => pill?.focus());
+
+    expect(document.body.querySelector('[data-slot="tooltip-content"]')?.textContent).toBe(
+      "Fast · sonnet · anthropic",
+    );
   });
 });

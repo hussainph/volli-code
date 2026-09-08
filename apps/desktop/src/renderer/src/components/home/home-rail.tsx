@@ -65,6 +65,7 @@ import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
@@ -217,6 +218,15 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
  * `resolving` is not a state it reaches in practice — a main checkout is always
  * there to measure. It draws the waiting card anyway rather than claiming a
  * venue it has not read (VC-286).
+ *
+ * BOTH VALUES TRUNCATE, AND BOTH HAVE A WAY OUT OF IT (VC-288). A rail is
+ * narrow by construction and a worktree path is not, so `venuePathTail` shows
+ * the tail and the row clips what is left — that part is right. What was wrong
+ * is where the whole value lived: the path's was on a tooltip hung off a `<p>`,
+ * which a pointer can ask for and a keyboard cannot, and the BRANCH had no
+ * reveal at all. This is the rail a reader checks to see which tree they are
+ * about to change something in; "hover to find out" is the wrong last word on
+ * that question. Both are {@link VenueValue} now.
  */
 function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
   if (venue === undefined || venue.status === "loading" || venue.status === "resolving") {
@@ -232,21 +242,24 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
   const loose = venueLooseCount(venue.venue.files);
   return (
     <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <p className="truncate text-left font-mono text-ui text-foreground">
-            {venuePathTail(venue.venue.path)}
-          </p>
-        </TooltipTrigger>
-        <TooltipContent side="left" className="font-mono">
-          {venueKindLabel(venue.venue)} · {venue.venue.path}
-        </TooltipContent>
-      </Tooltip>
+      <VenueValue term={venueKindLabel(venue.venue)} full={venue.venue.path}>
+        <span className="min-w-0 truncate text-foreground">{venuePathTail(venue.venue.path)}</span>
+      </VenueValue>
       <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
-          <GitBranchIcon weight="bold" className="size-3 shrink-0" />
-          <span className="truncate">{venue.venue.branch ?? "detached"}</span>
-        </span>
+        {/* A detached HEAD has no branch to reveal — `detached` IS the whole
+            value — so it stays the plain row it was rather than becoming a
+            focus stop that opens a tooltip repeating the word under it. */}
+        {venue.venue.branch === null ? (
+          <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
+            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+            <span className="truncate">detached</span>
+          </span>
+        ) : (
+          <VenueValue term="Branch" full={venue.venue.branch}>
+            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
+            <span className="min-w-0 truncate">{venue.venue.branch}</span>
+          </VenueValue>
+        )}
         {/* Silent at zero: a clean tree has nothing to report, and "0 loose"
             is a number where there is no news. */}
         {loose === 0 ? null : (
@@ -264,6 +277,36 @@ function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One truncating venue value, and the reveal that is the rest of it.
+ *
+ * The shared {@link ValueReveal} does the work — a focus stop that goes
+ * nowhere, the untruncated value as its accessible name, a bubble on hover and
+ * on focus alike. What is local is the drawing: `text-left` because a button
+ * centres its content and these are values in a column, and the rail's own mono
+ * ink.
+ */
+function VenueValue({
+  term,
+  full,
+  children,
+}: {
+  term: string;
+  full: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <ValueReveal
+      term={term}
+      full={full}
+      side="left"
+      className="flex min-w-0 items-center gap-1 rounded-sm text-left font-mono text-ui text-muted-foreground"
+    >
+      {children}
+    </ValueReveal>
   );
 }
 

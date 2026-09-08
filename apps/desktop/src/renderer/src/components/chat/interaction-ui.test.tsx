@@ -854,6 +854,129 @@ describe("the receipt an answered question leaves", () => {
   });
 });
 
+/**
+ * The opening tag of the one element wearing `data-slot`, attributes and all.
+ *
+ * The footer's argument is entirely in its own box — whether the row may take a
+ * second line, and whether the cluster on it may be squeezed — so the tag is
+ * the whole of what there is to read. `buttonVariant` above cannot be used for
+ * it: these two elements carry no text of their own.
+ */
+function slotTag(html: string, slot: string): string | null {
+  const at = html.indexOf(`data-slot="${slot}"`);
+  if (at < 0) return null;
+  return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
+}
+
+/** The footer's own markup, from its opening tag to the end of the card. */
+function footerMarkup(html: string): string {
+  return html.slice(html.indexOf('data-slot="interaction-footer"'));
+}
+
+describe("the footer at a pane's narrowest", () => {
+  // VC-288/A10. At 150% zoom in a split, the pane the card stands in is around
+  // 320 CSS px wide, and this footer was a single `nowrap` line: the withdraw
+  // control, the notice, and a `shrink-0` cluster of two or three actions on
+  // the right. `ui/button.tsx` gives every button `shrink-0 whitespace-nowrap`,
+  // so nothing in that row could give — the cluster ran past the card's right
+  // edge and `overflow-hidden` on the shell cut it off. The primary action was
+  // what the clipping reached first, because it is last in the row.
+  const walk = () => ask([askPrompt(), askPrompt({ id: "prompt:1", label: "And the tag?" })]);
+
+  it("lets both footers take a second line rather than clip an action", () => {
+    const cases: readonly (readonly [string, string])[] = [
+      [
+        "the verdict card",
+        renderToStaticMarkup(
+          <InteractionCard
+            interaction={permission()}
+            onResolve={() => undefined}
+            onWithdraw={() => undefined}
+          />,
+        ),
+      ],
+      [
+        "the ask-user card",
+        renderToStaticMarkup(
+          <InteractionCard
+            interaction={walk()}
+            onResolve={() => undefined}
+            onWithdraw={() => undefined}
+          />,
+        ),
+      ],
+    ];
+    for (const [what, html] of cases) {
+      expect([what, slotTag(html, "interaction-footer")?.includes("flex-wrap")]).toEqual([
+        what,
+        true,
+      ]);
+      // The cluster wraps INSIDE itself too: a pane narrower than three
+      // actions side by side has to break between them, and a row that only
+      // wraps at the top level would push one unbroken cluster off the edge.
+      expect([what, slotTag(html, "interaction-actions")?.includes("flex-wrap")]).toEqual([
+        what,
+        true,
+      ]);
+      // The regression itself: `shrink-0` on the cluster is what stopped the
+      // line breaking at all, and it is the one class that must not come back.
+      expect([what, slotTag(html, "interaction-actions")?.includes("shrink-0")]).toEqual([
+        what,
+        false,
+      ]);
+    }
+  });
+
+  it("breaks between actions and never inside one", () => {
+    // Locally, not by weakening the global rule: `ui/button.tsx`'s
+    // `whitespace-nowrap` is what keeps `Send`/`Skip` whole for every unrelated
+    // screen, and this footer wraps by letting its own rows break instead.
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={walk()} onResolve={() => undefined} />,
+    );
+    const skip = html.split("<button").find((fragment) => fragment.includes(">Skip"));
+    expect(skip).toContain("whitespace-nowrap");
+  });
+
+  it("keeps every action in the footer, in the order the keyboard walks them", () => {
+    // Wrapping moves where a control is drawn, never where Tab finds it: the
+    // reading order and the focus order are the same DOM order they were on
+    // one line, so a footer on two lines is not a different card.
+    //
+    // Read structurally rather than by label — what each act is CALLED is
+    // VC-289's, and this is a claim about arrangement: the acts that touch the
+    // request itself lead, and the cluster that answers it is last and whole.
+    const footer = footerMarkup(
+      renderToStaticMarkup(
+        <InteractionCard
+          interaction={walk()}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        />,
+      ),
+    );
+    const cluster = footer.indexOf('data-slot="interaction-actions"');
+    const buttons = [...footer.matchAll(/<button/g)].map((match) => match.index);
+    expect(buttons.length).toBeGreaterThanOrEqual(3);
+    // At least one control stands before the cluster (withdrawal), and every
+    // remaining one stands inside it rather than trailing after its close.
+    expect(buttons.filter((at) => at < cluster).length).toBeGreaterThanOrEqual(1);
+    expect(buttons.filter((at) => at > cluster).length).toBeGreaterThanOrEqual(2);
+    expect(footer.indexOf("Skip")).toBeGreaterThan(cluster);
+  });
+
+  it("gives a wrapped footer the same rhythm down as across", () => {
+    // A row that may become two rows needs a gap on both axes; `gap-1` alone
+    // read as one control sitting on top of another the first time the cluster
+    // broke. The notice slot is the one that meets it — `Not delivered` and a
+    // blocked press share it, and both now take a row rather than an ellipsis.
+    const html = renderToStaticMarkup(
+      <InteractionCard interaction={walk()} onResolve={() => undefined} />,
+    );
+    expect(slotTag(html, "interaction-footer")).toContain("gap-y-1");
+  });
+});
+
 describe("the co-mounted request announcement", () => {
   it("politely announces a pending title without a focusable control", () => {
     const html = renderToStaticMarkup(<PendingInteractionAnnouncement interaction={asked()} />);

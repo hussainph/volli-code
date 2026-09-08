@@ -493,7 +493,26 @@ function DecisionCard({
         </AnimatePresence>
       </div>
 
-      <div className="mt-1 flex items-center gap-1 border-t border-border/70 px-4 py-2">
+      {/* THE ROW MAY BECOME TWO ROWS (VC-288). At 150% zoom in a split, the
+          pane this card stands in is around 320 CSS px wide, and every button
+          in the app carries `shrink-0 whitespace-nowrap` from `ui/button.tsx` —
+          so a `nowrap` footer had nothing to give and the cluster on the right
+          ran under the shell's own `overflow-hidden`. The primary action was
+          what went first, because it is last in the row.
+
+          Wrapping is the local answer, and it is local on purpose: the global
+          rule is what keeps `Reject` and `Send` from breaking mid-word on every
+          unrelated screen, and weakening it there to fix a footer here would
+          trade a clipped control for a hyphenated one. The break belongs
+          BETWEEN the controls, which is the one thing only this row can say.
+
+          `gap-y-1` because a row that can become two needs a gap on both axes;
+          `gap-1` alone stacked one control directly on another the first time
+          the cluster broke. */}
+      <div
+        data-slot="interaction-footer"
+        className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-border/70 px-4 py-2"
+      >
         {/* Worded, not a bare glyph, and worded for its effect: it withdraws
             the durable interaction as well as interrupting the turn that asked
             it, which the composer's Stop turn does not. "Cancel request" named
@@ -529,7 +548,17 @@ function DecisionCard({
             <span className="min-w-0 truncate">Not delivered</span>
           </span>
         ) : null}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        {/* No `shrink-0`: that class is what stopped the line breaking at all,
+            and a cluster that cannot be squeezed is a cluster the row has to
+            draw whole or not at all. It gives instead — down to its widest
+            member, and then its own contents wrap, because a pane narrower
+            than Reject-and-Submit side by side has to break between them too.
+            `justify-end` keeps the last row against the same edge the one-line
+            footer put it on, so nothing moves at a width that still fits. */}
+        <div
+          data-slot="interaction-actions"
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1"
+        >
           {/* A refusal the harness did not declare an option for. It is a
               control rather than a row in the list because none of a question's
               option ids can mean "no" — they are the harness's own encoded
@@ -842,8 +871,13 @@ function QuestionCard({
       ) : null}
 
       <div
+        data-slot="interaction-footer"
         className={cn(
-          "flex items-center gap-1 px-4 py-2",
+          // Wrapping, for the verdict card's reason and one more of its own:
+          // this footer can hold five controls at once (minimise, withdraw,
+          // Skip, Reject, and the control that advances), which is a row no
+          // narrow pane has ever been able to draw on one line.
+          "flex flex-wrap items-center gap-x-1 gap-y-1 px-4 py-2",
           // No rule under nothing: a request that declares no questions is all
           // footer, and the line would be drawing the top edge of the card.
           step && "mt-1 border-t border-border/70",
@@ -914,7 +948,14 @@ function QuestionCard({
             <span className="min-w-0 truncate">{failed ? "Not delivered" : blocked}</span>
           </span>
         ) : null}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        {/* The same give as the verdict card's cluster, and the same reason:
+            see the note there. Three actions at once is the state that needs
+            it — Skip, Reject and the advance control together are wider than a
+            320px pane's content box before any of them has a long word in it. */}
+        <div
+          data-slot="interaction-actions"
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1"
+        >
           {/* Movement, not an answer: a resolution carries one `answers` array,
               so there is no partial one to send and nothing durable a skip
               could write. It steps past the question and leaves it unanswered,
