@@ -588,7 +588,7 @@ describe("migrate — post-success compaction", () => {
     const vacuumCalls = execSpy.mock.calls.filter(([source]) => source === "VACUUM");
     const afterBytes = statSync(dbPath).size;
     expect(vacuumCalls).toHaveLength(1);
-    expect(db.pragma("user_version", { simple: true })).toBe(41);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(db.pragma("freelist_count", { simple: true })).toBe(0);
     expect(afterBytes).toBeLessThan(beforeBytes);
     expect(sessionRowDump(db)).toBe(digestBeforeVacuum);
@@ -676,7 +676,7 @@ describe("migrate — post-success compaction", () => {
     expect(() => migrate(db, dbPath)).not.toThrow();
 
     expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toHaveLength(1);
-    expect(db.pragma("user_version", { simple: true })).toBe(41);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
     expect(existsSync(`${dbPath}.backup-v1`)).toBe(false);
     expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
