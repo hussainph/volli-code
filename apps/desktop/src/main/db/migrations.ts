@@ -2157,18 +2157,22 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   }
 
   db.exec(MIGRATION_042_CREATE_PROVENANCES);
-  // Rebuild both sides of the receipt FK. Renaming the child first makes
-  // SQLite retarget it to the renamed old event table; after both copies are
-  // complete, dropping child-before-parent cannot cascade any preserved row.
+  // Copy both sides of the receipt FK to SQLite's TEMP database, then drop the
+  // child before its parent. Creating the compact main tables only after the
+  // old ones are gone lets SQLite reuse their pages instead of permanently
+  // growing the profile by the size of a second event ledger. TEMP_STORE=FILE
+  // keeps the copy outside the main database and bounds heap use on large
+  // profiles; every object is still covered by migrate's one transaction.
   db.exec(`
-    PRAGMA defer_foreign_keys = ON;
-    ALTER TABLE session_command_receipts RENAME TO session_command_receipts_v41;
-    DROP INDEX session_receipts_command_sequence;
-    DROP INDEX session_receipts_session_sequence;
-    ALTER TABLE session_events RENAME TO session_events_v41;
-    DROP INDEX session_events_session_sequence;
-    DROP INDEX session_events_command;
-    DROP INDEX session_events_attachment;
+    CREATE TEMP TABLE session_events_v41_copy AS
+    SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+           attachment_id, command_id, payload
+      FROM session_events;
+    CREATE TEMP TABLE session_command_receipts_v41_copy AS
+    SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+      FROM session_command_receipts;
+    DROP TABLE session_command_receipts;
+    DROP TABLE session_events;
   `);
   db.exec(MIGRATION_042_CREATE_SESSION_EVENTS);
   db.exec(`
@@ -2177,7 +2181,7 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
        attachment_id, command_id, payload)
     SELECT COALESCE(m.new_id, e.id), e.session_id, e.sequence, e.occurred_at, e.recorded_at,
            p.id, e.attachment_id, e.command_id, e.payload
-      FROM session_events_v41 e
+      FROM session_events_v41_copy e
       JOIN session_provenances p ON p.provenance = e.provenance
       LEFT JOIN session_event_id_map_v42 m ON m.old_id = e.id
      ORDER BY e.session_id COLLATE BINARY, e.sequence;
@@ -2188,7 +2192,7 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
       (id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id)
     SELECT r.id, r.session_id, r.command_id, r.sequence, r.recorded_at, r.receipt,
            COALESCE(m.new_id, r.receipt_event_id)
-      FROM session_command_receipts_v41 r
+      FROM session_command_receipts_v41_copy r
       LEFT JOIN session_event_id_map_v42 m ON m.old_id = r.receipt_event_id
      ORDER BY r.command_id COLLATE BINARY, r.sequence;
 
@@ -2198,8 +2202,8 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
        )
      WHERE event_id IN (SELECT old_id FROM session_event_id_map_v42);
 
-    DROP TABLE session_command_receipts_v41;
-    DROP TABLE session_events_v41;
+    DROP TABLE session_command_receipts_v41_copy;
+    DROP TABLE session_events_v41_copy;
   `);
 
   const failedRewrites = countRows(
