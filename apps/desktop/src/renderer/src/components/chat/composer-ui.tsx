@@ -123,6 +123,12 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
@@ -189,19 +195,6 @@ export interface SessionComposerProps {
    * parks here at a time.
    */
   interactionOpen?: boolean;
-  /**
-   * The question above this composer takes what is typed here as its answer
-   * (`chat/interaction.ts`'s `composerAnswerPrompt`).
-   *
-   * A state of the Session, not a mode of the box: the composer is the same
-   * control doing the same thing — one press sends what was written — and what
-   * changes is only where the words land. So what changes here is what the box
-   * asks for and what the control is called, and nothing about how either one
-   * behaves. In particular the box is never disabled and never disables its
-   * neighbours: the whole point of answering from here is that a question
-   * cannot take the composer away from the person it is asking.
-   */
-  answering?: boolean;
   /**
    * The Session's context occupancy, or null while nothing has been metered.
    * Settles once per turn, never per frame — the parent memoizes it on the
@@ -358,7 +351,6 @@ export const SessionComposer = React.memo(function SessionComposer({
   files = NO_FILES,
   onFilePickerOpen,
   interactionOpen = false,
-  answering = false,
   contextUsage = null,
   attachments = NO_ATTACHMENTS,
   onAttachFiles,
@@ -571,7 +563,6 @@ export const SessionComposer = React.memo(function SessionComposer({
           <ComposerTextarea
             value={value}
             ready={ready}
-            answering={answering}
             onValueChange={onValueChange}
             onSteer={() => send("steer")}
             queued={queued}
@@ -717,18 +708,16 @@ export const SessionComposer = React.memo(function SessionComposer({
                 <SquareIcon className="size-3" weight="fill" />
               </Button>
             ) : null}
-            {/* Three words for one control, and the third one outranks the
-                other two: a turn is live for the whole of a blocked question,
-                so "Queue" is what this said while the words being typed were
-                the very thing the turn was waiting for — and a queue that
-                drains into an idle Session could not have released them until
-                after the question they answer had been answered some other
-                way. */}
+            {/* Two words for one control, and the turn decides which. This box
+                sends messages and nothing else: a question standing above it is
+                answered on its own card, through its own control (VC-289), so
+                there is no third state in which this press means something else
+                to something else. */}
             <PromptInputSubmit
               status="ready"
               size="icon-xs"
               disabled={!canSubmit}
-              aria-label={answering ? "Answer" : working ? "Queue" : "Send"}
+              aria-label={working ? "Queue" : "Send"}
             >
               {/* 12px, and therefore both `bold`. The house rule is that
                   `bold`'s flat 1.50x is the small-size tier — at ≤12px regular
@@ -736,7 +725,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                   scale-invariant, so nothing about a smaller button can be
                   answered by a bigger glyph. Queue was outline at 14px and had
                   no reason to change until the button did. */}
-              {working && !answering ? (
+              {working ? (
                 <QueueIcon className="size-3" weight="bold" />
               ) : (
                 <ArrowUpIcon className="size-3" weight="bold" />
@@ -870,7 +859,6 @@ export function ComposerPickerStack({
 function ComposerTextarea({
   value,
   ready,
-  answering,
   onValueChange,
   onSteer,
   queued,
@@ -879,8 +867,6 @@ function ComposerTextarea({
 }: {
   value: string;
   ready: boolean;
-  /** The open question takes these words — see {@link SessionComposerProps.answering}. */
-  answering: boolean;
   onValueChange(value: string): void;
   onSteer(): void;
   queued: readonly QueuedMessage[];
@@ -894,15 +880,15 @@ function ComposerTextarea({
       ref={caret.ref}
       value={value}
       disabled={!ready}
-      // A placeholder is not a name — it is gone the moment anyone types —
-      // and this is the surface's primary input. Under an open question the
-      // name changes with the destination: the words go into that question's
-      // answer, and "Message" would be the one word for it that is wrong.
-      // `Your answer` is the card's own field asking (`interaction-ui.tsx`),
-      // said here because this box IS that field for as long as the question
-      // stands — the card does not draw a second one.
-      aria-label={answering ? "Answer" : "Message"}
-      placeholder={answering ? "Your answer" : "Ask, plan, or implement…"}
+      // A placeholder is not a name — it is gone the moment anyone types — and
+      // this is the surface's primary input. It is a MESSAGE box, and it stays
+      // one while a question waits above it (VC-289): renaming it Answer gave
+      // one question two live fields and two submit paths, and the composer's
+      // path could not see the card's in-flight state, so the same question
+      // could be answered twice. The card owns its answer; this owns messages,
+      // and a draft typed here is never taken for one.
+      aria-label="Message"
+      placeholder="Ask, plan, or implement…"
       // FOUR LINES AT REST: 8 + (4 × 20) + 8 = 96px, which is `min-h-24`
       // against `text-sm`'s 20px leading and the `py-2` below.
       //
@@ -1387,6 +1373,50 @@ export function modelPillLabel(
 }
 
 /**
+ * The whole of what this Session will send to: `Fast · sonnet-4.5 · Anthropic`.
+ *
+ * {@link modelPillLabel} is the pill's *drawing* and answers a different
+ * question — what is the shortest thing that still tells this model from its
+ * neighbours — which is why it says the provider only where the name alone
+ * would be ambiguous, and why the label it returns is then capped at 56px and
+ * truncated. Both of those are right for a chip on a row that has to survive a
+ * 313px composer.
+ *
+ * What they left unanswered is this one (VC-288): at 150% zoom in a split the
+ * pill draws eight characters, and the tier, the provider and the rest of the
+ * name were unreachable without opening the list and changing the selection to
+ * find out what it had been. So the identity is composed once, in full, and
+ * spent in the three places a truncated pill cannot reach — the accessible
+ * name, the pointer's `title`, and the line the open list stands on.
+ *
+ * The provider is ALWAYS said here, ambiguity or not. "Which model" is what the
+ * pill answers; "which account is about to be billed for it" is what this one
+ * does, and a name that happens to be unique among today's signed-in providers
+ * is not an answer to that.
+ */
+export function modelIdentityLabel(
+  models: readonly ComposerModel[],
+  selection: ComposerModelSelection,
+  /**
+   * What the CALLER knows that the catalog does not: the tier a Session was
+   * started from, and the provider's label for a model the catalog no longer
+   * lists. Both are facts about this selection that cannot be looked up.
+   */
+  known: {
+    /** The tier the selection resolved from, as its label (VC-259). */
+    tier?: string | null;
+    /** The Session's provider as the catalog names it, for a model no longer listed. */
+    providerLabel?: string;
+  } = {},
+): string {
+  const model = selectedModel(models, selection);
+  const name = model?.label ?? selection.modelId;
+  if (!name) return "Model";
+  const provider = model?.providerLabel ?? known.providerLabel ?? selection.providerId;
+  return [known.tier ?? null, name, provider || null].filter((term) => term !== null).join(" · ");
+}
+
+/**
  * Which list the pill opens on, remembered per profile (VC-259).
  *
  * Read once from Model Access on mount and written through on every change;
@@ -1458,6 +1488,96 @@ const TIER_STATE_LABEL: Record<Exclude<ComposerTierState, "ready">, string> = {
  * pinned to a model, never to a tier name, so a later Settings change does
  * not move a running Session.
  */
+/**
+ * `shrink` against `Button`'s own `shrink-0`: this is the row's give.
+ *
+ * AND THE BASIS IS WHAT ORDERS THE GIVE AGAINST THE WRAP. In a wrapping row the
+ * line breaks on an item's flex BASIS, not on the width it would shrink to — so
+ * with `basis-auto` this pill kept its full natural width and the effort chip
+ * dropped to a second line the moment the two no longer fitted side by side at
+ * full size, which measured as a 24px-taller composer at 420px while there was
+ * still room to simply truncate. `basis-27` is the 108px floor (a 56px label,
+ * the 14px mark and its 4px gap, plus this button's own 32px of caret and
+ * padding), so the line only breaks once the NAME has already given everything
+ * it has; `grow` then spends whatever is left on the label, and `max-w-max`
+ * stops it spending more than the name is wide — a ghost button stretched to
+ * the full row is a hover target the size of the footer.
+ *
+ * Named because the pill has two drawings now — the chooser and the frozen
+ * reveal — and a row whose give depended on which one is up would re-lay the
+ * composer every time a turn started.
+ */
+const MODEL_PILL_GIVE = "min-w-0 max-w-max shrink grow basis-27";
+
+/**
+ * What the pill DRAWS, in either state: the mark, the name that gives, and the
+ * caret. Extracted so the frozen reveal and the chooser cannot drift apart —
+ * they are one control in two conditions, not two controls.
+ */
+function ModelPillFace({
+  models,
+  selection,
+  selectionTier,
+  selectionProviderLabel,
+}: {
+  models: readonly ComposerModel[];
+  selection: ComposerModelSelection;
+  selectionTier: string | null;
+  selectionProviderLabel?: string;
+}) {
+  return (
+    <>
+      {/* The mark leads the name: a family the eye catches before the word is
+          read, and the one thing that survives the label truncating to eight
+          characters. A selection the list no longer holds still gets one, read
+          off its id — the mark is about WHAT the model is, and that is known
+          even when the account that served it is gone. */}
+      <ModelMark
+        model={
+          selectedModel(models, selection) ?? {
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+            label: selection.modelId,
+          }
+        }
+        providerLabel={
+          selectedModel(models, selection)?.providerLabel ??
+          selectionProviderLabel ??
+          selection.providerId
+        }
+      />
+      {/* THE GIVE HAS A FLOOR, and 3.5rem is where it is. This is the row's
+          elastic member and it should be — a model name is the long value and
+          the only one with anything to lose. What it was doing instead was
+          losing everything: measured in a 313px chat pane (the app's own
+          default at its 940px window minimum) this label came out 36px wide,
+          and 3px in the pane one notch narrower. At 3px the pill is a caret and
+          a gap, and the one fact it exists to carry is gone.
+
+          56px holds roughly eight characters and an ellipsis at the ui size —
+          enough to tell `sonnet-4.5` from `gpt-5.6-luna`, which is the question
+          this control answers most of the time. Below it the footer wraps
+          instead (see `PromptInputTools` above), so the floor is what CHOOSES
+          that break rather than a width that overflows. */}
+      <span className="min-w-14 truncate">
+        {/* The tier leads the model where a start named one (VC-259): "Fast ·
+            Claude Haiku 4.5". It is a qualifier in the muted ink, in the same
+            "term · name" grammar the provider already uses for an ambiguous
+            name, and it lives inside the one truncating run so the pill stays
+            one fact wide. A model picked by hand after that start carries no
+            tier, because the projection clears it with the pick. */}
+        {selectionTier !== null ? (
+          <span className="text-muted-foreground" data-testid="model-pill-tier">
+            {selectionTier} ·{" "}
+          </span>
+        ) : null}
+        {modelPillLabel(models, selection, selectionProviderLabel)}
+      </span>
+      <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
+    </>
+  );
+}
+
 export function ModelPill({
   models,
   tiers,
@@ -1508,6 +1628,61 @@ export function ModelPill({
     }
     return result;
   }, []);
+  // Composed once and spent four times — the pill's name, its `title`, the line
+  // the open list leads with, and the bubble a frozen pill reveals — so no two
+  // of them can disagree about one selection.
+  const identity = modelIdentityLabel(models, selection, {
+    tier: selectionTier,
+    providerLabel: selectionProviderLabel,
+  });
+  // Nothing can be CHOSEN here right now: a turn is working, or the catalog
+  // offers nothing to switch to.
+  const frozen = disabled || models.length === 0;
+
+  // READING IS NOT CHOOSING (VC-288 review). `disabled` took the pill out of
+  // the tab order, and the enabled pill's reveal is the list it opens — so in
+  // the one state a person is most likely to ask what they are talking to,
+  // mid-turn, the answer was a `title` and nothing else. A frozen pill draws
+  // the same face and becomes what it actually is: a value, focusable, saying
+  // the whole identity on hover and on focus alike. `aria-disabled` rather than
+  // `disabled` is what keeps it reachable while still telling AT that a press
+  // will not choose anything.
+  if (frozen) {
+    return (
+      // Its own provider, for the reason `ui/tab-strip.tsx` mounts one: the pill
+      // is drawn by four surfaces and by a good deal of the test suite, some of
+      // them outside the app shell that owns the app-wide provider, and a Radix
+      // tooltip with none above it throws rather than degrading.
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              data-testid="model-pill"
+              aria-disabled
+              aria-label={`Model: ${identity}`}
+              className={cn(MODEL_PILL_GIVE, "text-muted-foreground opacity-50")}
+            >
+              <ModelPillFace
+                models={models}
+                selection={selection}
+                selectionTier={selectionTier}
+                selectionProviderLabel={selectionProviderLabel}
+              />
+            </Button>
+          </TooltipTrigger>
+          {/* Wrapping, and wide enough for a real name: the bubble is the
+              reveal, and a reveal that truncates is the thing it was opened to
+              escape. */}
+          <TooltipContent side="top" className="max-w-72 text-wrap">
+            {identity}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -1516,72 +1691,25 @@ export function ModelPill({
           type="button"
           size="xs"
           variant="ghost"
-          disabled={disabled || models.length === 0}
-          // `shrink` against `Button`'s own `shrink-0`: this is the row's give.
-          //
-          // AND THE BASIS IS WHAT ORDERS THE GIVE AGAINST THE WRAP. In a
-          // wrapping row the line breaks on an item's flex BASIS, not on the
-          // width it would shrink to — so with `basis-auto` this pill kept its
-          // full natural width and the effort chip dropped to a second line the
-          // moment the two no longer fitted side by side at full size, which
-          // measured as a 24px-taller composer at 420px while there was still
-          // room to simply truncate. `basis-27` is the 108px floor (a 56px
-          // label, the 14px mark and its 4px gap, plus this button's own 32px
-          // of caret and padding), so the line only breaks once the NAME has
-          // already given everything it has; `grow` then spends whatever is
-          // left on the label, and `max-w-max` stops it spending more than the
-          // name is wide — a ghost button stretched to the full row is a hover
-          // target the size of the footer.
-          className="min-w-0 max-w-max shrink grow basis-27 text-muted-foreground"
+          data-testid="model-pill"
+          // THE NAME IS THE WHOLE FACT, EVEN WHERE THE DRAWING IS EIGHT
+          // CHARACTERS (VC-288). The label below truncates by design; what
+          // must not truncate with it is the answer to "what am I sending
+          // to". `aria-label` is that answer for anything reading the control
+          // rather than looking at it, and `title` is the pointer's half.
+          // Neither is the reveal on its own — a `title` is unreachable from a
+          // keyboard, and a name is not readable — which is why the list this
+          // pill opens leads with the same string, in ink, one press away.
+          aria-label={`Model: ${identity}`}
+          title={identity}
+          className={cn(MODEL_PILL_GIVE, "text-muted-foreground")}
         >
-          {/* The mark leads the name: a family the eye catches before the word
-              is read, and the one thing that survives the label truncating to
-              eight characters. A selection the list no longer holds still gets
-              one, read off its id — the mark is about WHAT the model is, and
-              that is known even when the account that served it is gone. */}
-          <ModelMark
-            model={
-              selectedModel(models, selection) ?? {
-                providerId: selection.providerId,
-                modelId: selection.modelId,
-                label: selection.modelId,
-              }
-            }
-            providerLabel={
-              selectedModel(models, selection)?.providerLabel ??
-              selectionProviderLabel ??
-              selection.providerId
-            }
+          <ModelPillFace
+            models={models}
+            selection={selection}
+            selectionTier={selectionTier}
+            selectionProviderLabel={selectionProviderLabel}
           />
-          {/* THE GIVE HAS A FLOOR, and 3.5rem is where it is. This is the row's
-              elastic member and it should be — a model name is the long value
-              and the only one with anything to lose. What it was doing instead
-              was losing everything: measured in a 313px chat pane (the app's
-              own default at its 940px window minimum) this label came out 36px
-              wide, and 3px in the pane one notch narrower. At 3px the pill is a
-              caret and a gap, and the one fact it exists to carry is gone.
-
-              56px holds roughly eight characters and an ellipsis at the ui
-              size — enough to tell `sonnet-4.5` from `gpt-5.6-luna`, which is
-              the question this control answers most of the time. Below it the
-              footer wraps instead (see `PromptInputTools` above), so the floor
-              is what CHOOSES that break rather than a width that overflows. */}
-          <span className="min-w-14 truncate">
-            {/* The tier leads the model where a start named one (VC-259):
-                "Fast · Claude Haiku 4.5". It is a qualifier in the muted ink,
-                in the same "term · name" grammar the provider already uses
-                for an ambiguous name, and it lives inside the one truncating
-                run so the pill stays one fact wide. A model picked by hand
-                after that start carries no tier, because the projection
-                clears it with the pick. */}
-            {selectionTier !== null ? (
-              <span className="text-muted-foreground" data-testid="model-pill-tier">
-                {selectionTier} ·{" "}
-              </span>
-            ) : null}
-            {modelPillLabel(models, selection, selectionProviderLabel)}
-          </span>
-          <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
         </Button>
       </PopoverTrigger>
       {/* `w-72`, down from `w-80`: the extra 32px existed to hold the effort
@@ -1596,6 +1724,44 @@ export function ModelPill({
         side="top"
         className={cn("p-0", tiers === undefined ? "w-72" : "w-88")}
       >
+        {/* WHAT IS SELECTED, SAID IN FULL (VC-288) — and the keyboard's reveal
+            for a pill that draws eight characters of it. The pill is a focus
+            stop, Enter opens this, Escape closes it, and nothing about the
+            selection has moved: reading is not choosing.
+
+            It wraps rather than truncates. A reveal that truncates is the thing
+            it was opened to escape, and a popover has a width of its own to
+            spend — two lines of a long name here cost nothing, where the same
+            two lines in the composer row would move the box someone is typing
+            in. Outside the command root, so cmdk's arrow keys still land on the
+            first ROW rather than on a line that is not a choice.
+
+            The same string the pill's accessible name carries, from the same
+            function, so the two cannot drift into saying different things about
+            one selection. */}
+        <div
+          data-testid="model-pill-identity"
+          // `py-1` — the ladder's 4px rung. `py-1.5` was 6px from nowhere on
+          // `docs/DESIGN.md`'s five steps, bought nothing this line needed, and
+          // is exactly the kind of value the collapse exists to keep out.
+          className="flex items-start gap-2 border-b px-2 py-1 text-ui text-muted-foreground"
+        >
+          <ModelMark
+            model={
+              selectedModel(models, selection) ?? {
+                providerId: selection.providerId,
+                modelId: selection.modelId,
+                label: selection.modelId,
+              }
+            }
+            providerLabel={
+              selectedModel(models, selection)?.providerLabel ??
+              selectionProviderLabel ??
+              selection.providerId
+            }
+          />
+          <span className="min-w-0 break-words">{identity}</span>
+        </div>
         <PromptInputCommand>
           {/* Inside the command root, so arrow keys reach the list from the
               toggle too; the search field keeps focus in the All view through

@@ -5,7 +5,7 @@ import type {
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
-import { sessionPersonNeed } from "@volli/shared";
+import { nativeObservationEventId, sessionPersonNeed } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -2586,13 +2586,13 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   /**
-   * The durable id, composed end to end and spelled out.
+   * The durable id, composed end to end from all four stable inputs.
    *
    * Every relaunch re-derives these from live data and the ledger dedupes them
    * by exact string match on a primary key, so a changed derivation does not
    * fail — it writes a second copy of every fact in the Session's history. The
-   * dedupe case below proves the derivation is *stable*; this one is what makes
-   * a change to it loud.
+   * dedicated id suite pins the compact hash bytes; this assertion proves the
+   * runtime actually uses that shared derivation.
    */
   it("composes a durable observation id from the adapter, the Session, and the attachment", async () => {
     const { runtime, adapter } = composition();
@@ -2605,7 +2605,7 @@ describe("SessionRuntime native adapter contract", () => {
       ({ event }) => event.payload.kind === "turn.started",
     );
     expect(started?.event.id).toBe(
-      `native-event:fake:${sessionId}:${attachmentId}:fake:turn:turn-1:started`,
+      nativeObservationEventId("fake", sessionId, attachmentId, "fake:turn:turn-1:started"),
     );
   });
 

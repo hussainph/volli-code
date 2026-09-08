@@ -78,6 +78,7 @@ const OPEN_ATTACHMENT = (id: string): SessionProjection["attachments"][number] =
   closedAt: null,
   outcome: null,
   failure: null,
+  exitCode: null,
 });
 
 function projection(id: string, overrides: Partial<SessionProjection> = {}): SessionProjection {

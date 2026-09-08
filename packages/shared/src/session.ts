@@ -111,9 +111,14 @@ export interface SessionRecord {
   /** Epoch milliseconds; `null` while the session is live. */
   endedAt: number | null;
   /**
-   * The shell's exit code, stamped by the PTY exit path alongside `endedAt`.
-   * `null` while live, for boot-sweep ends (the process outcome was never
-   * observed), and for rows predating the column — outcome labels never guess.
+   * The shell's exit status, carried from the Session's own `attachment.exited`
+   * fact (VC-290) — the durable record of a process status something actually
+   * observed.
+   *
+   * `null` while live, for relaunch-sweep ends (the process outcome was never
+   * seen), and for records written before that fact existed. Never derived from
+   * the attachment's completed/failed outcome, which is what Volli made of the
+   * ending rather than what the process said: outcome labels never guess.
    */
   exitCode: number | null;
   /**
@@ -254,6 +259,91 @@ export type SessionListingRow = SessionListingIdentity & {
 export type SessionListingIdentity =
   | { kind: "terminal"; record: SessionRecord }
   | { kind: "chat"; record: ChatSessionRecord };
+
+/**
+ * Whether this Session is a Subagent one — the durable child a parent's
+ * `session_delegate` call created (CONTEXT.md "Session Role").
+ *
+ * **A Subagent Session is never a row in a Session listing** (VC-279): not in
+ * the project sidebar's two bands, the ticket rail's roster, Home's Sessions
+ * page, or ⌘K. A subagent is a detail of the turn that delegated it — a
+ * parent may open several at once and several parents may run at once — so
+ * listing them top-level makes the number of rows a function of how the agents
+ * chose to work rather than of what the person started. Its door is the chat
+ * that delegated it, whose Activity Island peeks, promotes and stops each one
+ * (`use-island-agents.ts`), so the rule hides no Session from the person who
+ * owns it; it stops one surface answering a question another answers better.
+ *
+ * **A listing that drops these rows must still hold them.** The renderer's
+ * Session caches (`stores/project-sessions.ts`,
+ * `stores/ticket-session-records.ts`) stay complete — the island reads exactly
+ * those rows, and the usage blocks count every Session that spent money. This
+ * is a predicate a listing applies to what it DRAWS, never a filter on what
+ * main returns.
+ *
+ * Takes the Role alone rather than a whole record, because the callers hold
+ * different shapes of the same fact and none of them should have to build
+ * another's to ask one question. It reads only a {@link ChatSessionRecord}
+ * because that is the only listing shape carrying a Role at all:
+ * {@link SessionRecord} is the terminal projection and has none, which costs
+ * nothing here — a subagent has no door in any surface that opens a terminal,
+ * so it never becomes one.
+ */
+export function isSubagentSession(record: Pick<ChatSessionRecord, "role">): boolean {
+  return record.role === "subagent";
+}
+
+/**
+ * Whether a Session listing may DRAW this Session as a row.
+ *
+ * The listing question, which is not the Role question above even though one
+ * answers the other today. Four listings ask it — the sidebar's two bands, the
+ * ticket rail's roster, Home's Sessions page and ⌘K — and asking it by name is
+ * what makes a fifth listing's author read this comment rather than reinvent
+ * `role !== "subagent"`. It is also the one edit a future non-listable Role
+ * would need: `isSubagentSession` has callers that genuinely mean the Role (the
+ * island's own feed, the usage fold, {@link sessionWaitAudience}) and would be
+ * wrong to widen.
+ *
+ * Unlistable is not unreachable, and never means hidden: see
+ * {@link isSubagentSession} for where a child is reached instead, and why the
+ * caches behind these listings stay complete.
+ */
+export function isListableSession(record: Pick<ChatSessionRecord, "role">): boolean {
+  return !isSubagentSession(record);
+}
+
+/**
+ * WHO answers this Session's `waiting`.
+ *
+ * A chat Session says `waiting` for exactly three reasons — a question, a tool
+ * call to approve, an expired credential ({@link ChatWaitingReason}) — and
+ * every one of them is cleared by a person, not by time. So the word is an
+ * errand, and an errand needs an addressee:
+ *
+ *  - `listing` — the Session has a row of its own, so a navigator may point at
+ *    it: the sidebar's Active band, the ticket rail, the board's `waiting`
+ *    ring. The reader clicks the row and answers there.
+ *  - `parent` — a Subagent Session ({@link isSubagentSession}). It has no row
+ *    (VC-279), so a navigator pointing at it would send a reader to a Ticket
+ *    holding nothing they could answer. Its errand is delivered where its
+ *    other facts already are: the parent chat's Activity Island, which draws
+ *    the child's chip, announces the wait, and peeks the transcript that holds
+ *    the actual prompt.
+ *
+ * ONE FUNCTION BECAUSE THE TWO ANSWERS PARTITION ONE FACT. A surface that
+ * decided this for itself would be the copy nobody sees drift — the same
+ * argument `session-need.ts` makes for `sessionPersonNeed`, and a wait that
+ * two surfaces both disown is a person never told at all. The board reads it
+ * to know its ring must stay quiet; the island is the `parent` half in code
+ * (`use-island-agents.ts`), which is why the chip draws the wait rather than
+ * folding it away.
+ */
+export type SessionWaitAudience = "listing" | "parent";
+
+export function sessionWaitAudience(record: Pick<ChatSessionRecord, "role">): SessionWaitAudience {
+  return isSubagentSession(record) ? "parent" : "listing";
+}
 
 /**
  * Which harness a session is to be JUDGED by: what announced itself, falling

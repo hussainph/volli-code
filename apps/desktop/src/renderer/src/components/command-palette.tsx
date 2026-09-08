@@ -14,6 +14,7 @@ import {
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionProvenance,
+  type SessionRecord,
 } from "@volli/shared";
 
 import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
@@ -123,8 +124,8 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
 }
 
 /**
- * Universal ⌘K destination picker for tickets, open terminals, and durable
- * chats. Tickets lead (VC-205); each section truncates behind a "Show all"
+ * Universal ⌘K destination picker for tickets, open terminals, closed terminal
+ * records, and durable chats. Tickets lead (VC-205); each section truncates behind a "Show all"
  * row; and a completed `@` token — typed, or picked from the rows `@` itself
  * surfaces — narrows the palette to one section.
  */
@@ -145,6 +146,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }),
   );
   const [chatSessions, setChatSessions] = React.useState<readonly ChatSessionRecord[]>([]);
+  /**
+   * Durable TERMINAL rows from the same listing fetch (VC-290).
+   *
+   * They were being fetched and thrown away: the effect below read every
+   * project's Session listing, kept the chat records and the provenance map,
+   * and dropped the terminal half — so a terminal you closed an hour ago could
+   * not be found in the app's one global search, while the row that would have
+   * found it was already in the response.
+   */
+  const [terminalSessions, setTerminalSessions] = React.useState<readonly SessionRecord[]>([]);
   /**
    * Who started each listed Session, across every tracked project (VC-131).
    *
@@ -217,6 +228,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             chatSessions,
             residentChatTitles,
             sessionProvenance,
+            terminalSessions,
           )
         : EMPTY_COMMAND_PALETTE_ITEMS,
     [
@@ -228,6 +240,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       chatSessions,
       residentChatTitles,
       sessionProvenance,
+      terminalSessions,
     ],
   );
 
@@ -292,6 +305,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   React.useEffect(() => {
     if (!open) {
       setChatSessions([]);
+      setTerminalSessions([]);
       setSessionProvenance({});
       return;
     }
@@ -308,6 +322,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           result.ok ? result.sessions : [],
         );
         setChatSessions(rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])));
+        setTerminalSessions(rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])));
         // Both kinds of row contribute: a terminal Session reaches the list
         // through the open-tab store, which carries no provenance of its own,
         // so dropping the terminal rows here would leave exactly those rows
@@ -459,7 +474,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                   keywords={match.keywords}
                   onSelect={() => {
                     useProjectsStore.getState().select(item.projectId);
-                    if (item.sessionKind === "chat") {
+                    if (item.destination === "detail") {
+                      // A closed terminal opens its own saved record and
+                      // navigates NOWHERE else (VC-290): its tab is gone, and
+                      // the ticket workspace or Home it used to fall through to
+                      // is a different Session's surface.
+                      useUiStore.getState().openSessionDetail(item.projectId, item.sessionId);
+                    } else if (item.sessionKind === "chat") {
                       const chat = useChatSessionsStore.getState();
                       chat.adoptChatSession(item.sessionId);
                       if (item.scope.kind === "ticket") {
@@ -515,7 +536,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                     </span>
                     <span className="truncate text-label text-muted-foreground">{context}</span>
                   </span>
-                  <span className="shrink-0 text-label text-muted-foreground">Open session</span>
+                  <span className="shrink-0 text-label text-muted-foreground">
+                    {item.destination === "detail" ? "Open details" : "Open session"}
+                  </span>
                 </Command.Item>
               );
             })}

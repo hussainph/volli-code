@@ -129,7 +129,12 @@ import {
   createSessionWatchdog,
   watchSessionActivity,
 } from "./session-control";
-import { createDesktopSessionRuntime, createFileTranscriptArtifactStore } from "./session-runtime";
+import {
+  createDesktopSessionRuntime,
+  createFileTranscriptArtifactStore,
+  repackLegacyTranscriptArtifacts,
+  sessionTranscriptsRoot,
+} from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { closeStaleAttachments } from "./session-runtime/boot-recovery";
 import { sessionRootThreadId } from "@volli/session-engine";
@@ -137,6 +142,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
+import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -1120,13 +1126,14 @@ app.whenReady().then(async () => {
   });
 
   let agentToolDoor: AgentToolDoor | null = null;
+  const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
       ? createPiRuntimeHost({
-          sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+          sessionDataDir: piSessionsDirectory,
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -1388,7 +1395,7 @@ app.whenReady().then(async () => {
   // One store for the launch: the runtime writes and replays through it, and
   // `session peek` reads a chat Session's transcript tail through it straight
   // off the ledger, without a runtime in the middle (VC-79).
-  const transcriptDirectory = join(app.getPath("userData"), "session-transcripts");
+  const transcriptDirectory = sessionTranscriptsRoot(app.getPath("userData"));
   const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
@@ -2203,6 +2210,10 @@ app.whenReady().then(async () => {
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
   });
+  // Pi sidecar cleanup is a separate, explicit surface: registration performs
+  // no scan and no deletion. The read-only inventory must run before its
+  // confirmed reclaim can name any main-owned item ids.
+  registerPiSessionOrphanIpcHandlers(dbHandle, piSessionsDirectory);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
@@ -2753,7 +2764,42 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
   });
   const mainWindow = createOwnedWindow();
+  const transcriptRepackAbort = new AbortController();
+  app.on("before-quit", () => transcriptRepackAbort.abort());
   mainWindow.webContents.once("did-finish-load", () => {
+    // Transcript repack is migration-by-sibling rather than an in-place
+    // rewrite. Give first paint five seconds of quiet, then process only small
+    // batches with a pause between them. Every individual failure is kept for
+    // the next launch, with its legacy bytes untouched.
+    const repackDelay = setTimeout(() => {
+      void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
+        batchSize: 25,
+        signal: transcriptRepackAbort.signal,
+        shouldBackOff: async () => {
+          if (sessionRuntime === null) return false;
+          const sessionIds = new Set(
+            sessionRuntime.openNativeBindings().map((binding) => binding.sessionId),
+          );
+          for (const sessionId of sessionIds) {
+            if ((await sessionRuntime.projection({ sessionId })).projection.turnActive) return true;
+          }
+          return false;
+        },
+        onError: (name, error) => {
+          console.error(`[transcript-repack] kept ${name}:`, errorMessage(error));
+        },
+      })
+        .then((report) => {
+          console.info(
+            `[transcript-repack] scanned=${report.scanned} repacked=${report.repacked} skipped=${report.skipped}`,
+          );
+        })
+        .catch((error) => {
+          console.error("[transcript-repack] scan failed:", errorMessage(error));
+        });
+    }, 5_000);
+    repackDelay.unref();
+
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
     // can never become an unhandled rejection from this fire-and-forget path.

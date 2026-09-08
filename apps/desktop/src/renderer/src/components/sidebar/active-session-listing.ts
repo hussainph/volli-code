@@ -18,6 +18,21 @@
  * Session listing returned: ended terminals, chats past the window, live panes
  * nobody has touched in half an hour.
  *
+ * **A Subagent Session is never a row here** (VC-279). It is a child of one
+ * turn in one chat, reached from that chat's Activity Island; a band that
+ * listed it would grow by however many helpers the agents happened to open,
+ * which is the one number a navigator must not be a function of. The INPUT is
+ * filtered rather than the store, because the island reads the same rows — see
+ * `isListableSession`.
+ *
+ * **A parent is busy while its children are.** Dropping the rows must not drop
+ * the work: a Session that delegated and ended its own turn is `idle` with
+ * helpers running inside it, and a band that showed the project as quiet would
+ * disagree with the board over the same Ticket and then clean the parent away
+ * on a clock its own work should have been resetting. So the children are read
+ * for their parent's liveness and recency before they are dropped, which is
+ * why this module wants the rows whole.
+ *
  * **Terminal quiet stamps are volatile.** `lastOutputAt` lives in the renderer
  * store and dies with the window, so after a relaunch a genuinely busy terminal
  * has no stamp at all. The stamp chain therefore ends in a deliberate bias
@@ -30,8 +45,11 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
+import { sessionSourceLabel } from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
+  isListableSession,
+  isSubagentSession,
   sessionActivitySource,
   sessionProvenanceOf,
   type ChatSessionRecord,
@@ -45,7 +63,6 @@ import {
   type LatestSessionSignal,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "../ticket/session-history";
 import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
@@ -78,17 +95,29 @@ export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
  * target is the tab in front of you, the only thing that makes a row look
  * current.
  *
- * The two kinds are different doors, not one door with an optional field. A
+ * The kinds are different doors, not one door with an optional field. A
  * terminal tab can be split, so the row names the pane it speaks for and the
  * sessions store has to be told which pane is in front; a chat tab is one
  * surface, and reaching it means adopting the Session through the chat store
- * before the tab has anything behind it. A row with no target at all is a
- * Session whose tab is gone — an ended terminal — and it can only offer its
- * ticket.
+ * before the tab has anything behind it.
+ *
+ * `session-detail` is the door for a terminal whose tab is GONE (VC-290). Such a
+ * row used to carry no target at all, and the view answered a targetless row
+ * with the row's ticket workspace — or with Home when it had no ticket — so
+ * clicking a saved-looking "Session 2" opened whatever chat happened to be in
+ * front of that ticket, with nothing on screen admitting the substitution. The
+ * Session is still durable and still addressable: project plus Session id names
+ * the saved record itself, which is a destination the row can honestly claim.
+ * It is deliberately not a tab id — there is no tab, and inventing one is how a
+ * history entry ends up reopening a live surface.
+ *
+ * A row with no target at all is now only a row whose Session has no reachable
+ * surface of any kind; the two fallbacks below it are kept for that case alone.
  */
 export type ActiveSessionTarget =
   | { kind: "terminal"; tabId: string; paneId: string }
-  | { kind: "chat"; tabId: string; sessionId: string };
+  | { kind: "chat"; tabId: string; sessionId: string }
+  | { kind: "session-detail"; projectId: string; sessionId: string };
 
 /** Which execution surface a row speaks for — one of the two axes the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
@@ -214,7 +243,10 @@ export function isProjectSessionRowSelected(
 ): boolean {
   if (!homeVisible || row.ticket !== null) return false;
   const target = row.target;
-  if (target === null || homeActiveTab !== target.tabId) return false;
+  // A saved record is not a tab, so it is never the tab in front of you — and
+  // it has no tab id that could accidentally collide with one (VC-290).
+  if (target === null || target.kind === "session-detail") return false;
+  if (homeActiveTab !== target.tabId) return false;
   if (target.kind === "chat") return true;
   const activeTab = projectContainer?.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
@@ -384,6 +416,63 @@ export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): Prev
   return entries;
 }
 
+/**
+ * Where a row's click actually GOES — {@link ActiveSessionTarget} resolved
+ * against the row's ticket, which is the other half of the address.
+ *
+ * A separate, pure step because the sidebar's answer to "what does this row
+ * open" is a product rule with a history of being wrong: a row that named no
+ * surface used to fall through to its ticket's workspace or to Home, which is
+ * how a closed terminal's history entry came to open an unrelated chat
+ * (VC-290). Stated as data, the rule is checkable without a store, a window or
+ * a click — the view's job is reduced to performing the writes each case names.
+ */
+export type SessionRowRoute =
+  | { kind: "session-detail"; projectId: string; sessionId: string }
+  | { kind: "ticket-terminal"; ticketId: string; tabId: string; paneId: string }
+  | { kind: "ticket-chat"; ticketId: string; tabId: string; sessionId: string }
+  | { kind: "ticket-workspace"; ticketId: string }
+  | { kind: "home-terminal"; tabId: string; paneId: string }
+  | { kind: "home-chat"; tabId: string; sessionId: string }
+  | { kind: "home" };
+
+/**
+ * What selecting `row` opens.
+ *
+ * The saved-record door is answered FIRST and for every row, ticketed or not:
+ * its whole point is that it does not degrade into a neighbouring surface. The
+ * two remaining fallbacks — a ticket's workspace, and Home — belong only to a
+ * row that names no surface at all, which after VC-290 is a Session with
+ * nothing reachable behind it rather than an ordinary ended terminal.
+ */
+export function sessionRowRoute(row: ActiveSessionRow | PreviousSessionRow): SessionRowRoute {
+  const target = row.target;
+  if (target !== null && target.kind === "session-detail") {
+    return { kind: "session-detail", projectId: target.projectId, sessionId: target.sessionId };
+  }
+  const ticket = row.ticket;
+  if (ticket !== null) {
+    if (target === null) return { kind: "ticket-workspace", ticketId: ticket.id };
+    return target.kind === "chat"
+      ? {
+          kind: "ticket-chat",
+          ticketId: ticket.id,
+          tabId: target.tabId,
+          sessionId: target.sessionId,
+        }
+      : {
+          kind: "ticket-terminal",
+          ticketId: ticket.id,
+          tabId: target.tabId,
+          paneId: target.paneId,
+        };
+  }
+  if (target === null) return { kind: "home" };
+  return target.kind === "chat"
+    ? { kind: "home-chat", tabId: target.tabId, sessionId: target.sessionId }
+    : { kind: "home-terminal", tabId: target.tabId, paneId: target.paneId };
+}
+
 export interface ActiveSessionListing {
   active: ActiveSessionRow[];
   previous: PreviousSessionRow[];
@@ -440,6 +529,12 @@ export interface BuildActiveSessionListingInput {
    * attachment. They carry their own activity and recency, so they join both
    * bands on the same terms a terminal does; optional, and absent reads as
    * none. Defaults to `[]`.
+   *
+   * Handed over WHOLE, subagents included, and not merely as a convenience:
+   * this module reads a parent's children to date and band the parent (see the
+   * module comment), so pre-filtered rows would leave it describing a Session
+   * whose work it could no longer see. Dropping them is its rule to apply, and
+   * a caller that had to pre-filter would be a caller that could forget to.
    */
   chatSessions?: readonly ChatSessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
@@ -577,24 +672,44 @@ function sessionRow(
   };
 }
 
-/** A chat Session's row. Its activity is the adapter's own word, never a PTY heuristic. */
+/**
+ * A chat Session's row. Its activity is the adapter's own word, never a PTY
+ * heuristic — with one addition it cannot say for itself.
+ *
+ * A PARENT IS BUSY WHILE ITS CHILDREN ARE. A Session that delegated and ended
+ * its own turn sits `idle` with helpers running inside it, and since VC-279
+ * those helpers have no row of their own: the band would show the project as
+ * quiet, drop the parent to Previous half an hour later, and disagree with the
+ * board — which lights the same Ticket `working` for exactly this work. Only
+ * `idle` is overridden. `waiting` is the parent's own question and outranks
+ * anything happening under it; `stopped` ends the children with it.
+ *
+ * `activitySource` stays `reported` because nothing here is inferred from
+ * output recency: a child's `working` is main's word about the child, exactly
+ * as the parent's own word is main's about the parent.
+ */
 function chatRow(
   record: ChatSessionRecord,
   ticket: Ticket | null,
   provenance: SessionProvenance,
+  delegationBusy: boolean,
+  /** The delegation's freshest stamp — the parent's own, or a child's if newer. */
+  activityAt: number,
 ): ActiveSessionRow {
   return {
     id: `chat:${record.sessionId}`,
     ticket,
     title: record.title,
     source: sessionSourceLabel({ kind: "chat", record }),
-    activity: record.activity,
+    activity: delegationBusy && record.activity === "idle" ? "working" : record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
-    lastActivityAt: record.lastActivityAt,
+    // The row's own age line, so "last 1m" is true of the Session rather than
+    // of the parent's last sentence while its helpers ran for an hour.
+    lastActivityAt: activityAt,
     provenance,
     // A chat Session's tab id is derivable from the Session, whether or not a
     // tab is open. For a ticket-owned Session this names its ticket-tab
@@ -686,6 +801,48 @@ interface PreviousCandidate {
   bornTicketless: boolean;
 }
 
+/** What one Session's delegated children add to its row. */
+interface DelegationActivity {
+  /** At least one child is still running or is stopped on a person. */
+  busy: boolean;
+  /** The newest stamp any child carries. Every entry has at least one child. */
+  lastActivityAt: number;
+}
+
+/**
+ * Each parent's delegation, read off the children this listing is about to
+ * drop (VC-279).
+ *
+ * WHY A WAITING CHILD COUNTS AS BUSY. Its wait is addressed to the parent
+ * (`sessionWaitAudience`), not to this band — the parent's Activity Island
+ * draws and announces it, and a row here saying `waiting` would offer a
+ * question this navigator cannot answer. What the band must not do is go
+ * quiet: the delegation is unfinished either way, and the board reads the same
+ * pair the same way, so the two navigators agree about one Ticket.
+ *
+ * Keyed by `parentSessionId` and never walked transitively: a Subagent Session
+ * cannot delegate, so the tree is one level deep by construction.
+ */
+function delegationActivity(
+  records: readonly ChatSessionRecord[],
+): ReadonlyMap<string, DelegationActivity> {
+  const byParent = new Map<string, DelegationActivity>();
+  for (const record of records) {
+    if (!isSubagentSession(record) || record.parentSessionId === null) continue;
+    const held = byParent.get(record.parentSessionId);
+    byParent.set(record.parentSessionId, {
+      busy: (held?.busy ?? false) || record.activity === "working" || record.activity === "waiting",
+      // No zero identity for the max: a stamp is an instant, not a magnitude,
+      // and seeding with one would date every delegation from the epoch.
+      lastActivityAt:
+        held === undefined
+          ? record.lastActivityAt
+          : Math.max(held.lastActivityAt, record.lastActivityAt),
+    });
+  }
+  return byParent;
+}
+
 /**
  * Which Active group a row belongs to, or `null` when it has aged out of Active
  * altogether. Order matters: an attention outranks everything (that is the
@@ -724,7 +881,15 @@ export function buildActiveSessionListing(
   const now = input.now;
   const filter = input.filter ?? DEFAULT_FILTER;
   const statusEnteredAt = input.statusEnteredAt ?? EMPTY_STATUS_ENTERED_AT;
-  const chatSessions = input.chatSessions ?? [];
+  // The children are READ before they are dropped: a parent that delegated and
+  // ended its own turn is doing nothing itself, and only its children can say
+  // that the Session is still busy. This is why the input arrives whole.
+  const allChats = input.chatSessions ?? [];
+  const delegated = delegationActivity(allChats);
+  // The one place the navigator's "no Subagent rows" rule is applied — before
+  // anything is grouped, dated or sorted, so a child cannot reach a band, a
+  // count, or a boundary the caller then waits on (VC-279).
+  const chatSessions = allChats.filter((record) => isListableSession(record));
   const recordsById = new Map(input.records.map((record) => [record.id, record]));
   const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
   /**
@@ -956,7 +1121,13 @@ export function buildActiveSessionListing(
         kind: "terminal",
         endedOrQuietAt: record.endedAt,
         provenance: provenanceOf(record.id),
-        target: null,
+        // The Session's own saved record, addressed by the two things that
+        // outlive its PTY (VC-290). This used to be `null`, and a null target
+        // is what let the view answer a terminal's row with its ticket's
+        // current tab. The project comes off the RECORD rather than off the
+        // listing being built, so the address always names the Session it is
+        // about.
+        target: { kind: "session-detail", projectId: record.projectId, sessionId: record.id },
         cleaned: false,
       },
       ticketId: record.ticketId,
@@ -966,17 +1137,34 @@ export function buildActiveSessionListing(
     });
   }
 
-  // 2b. Chat Sessions, which carry their own activity and recency.
+  // 2b. Chat Sessions, which carry their own activity and recency — plus, for
+  // one that delegated, its children's.
   for (const record of chatSessions) {
     const ticket = record.ticketId === null ? null : (ticketsById.get(record.ticketId) ?? null);
-    const row = chatRow(record, ticket, provenanceOf(record.sessionId));
-    const group = activeGroup(row, record.lastActivityAt, record.live, now);
+    const delegation = delegated.get(record.sessionId);
+    // The freshest fact in the whole delegation, so a parent sorts and ages by
+    // what its Session is actually doing rather than by when it last spoke.
+    const activityAt =
+      delegation === undefined
+        ? record.lastActivityAt
+        : Math.max(record.lastActivityAt, delegation.lastActivityAt);
+    const row = chatRow(
+      record,
+      ticket,
+      provenanceOf(record.sessionId),
+      delegation?.busy ?? false,
+      activityAt,
+    );
+    // `live` is the parent's own attachment. A busy child keeps the row in the
+    // working group without one, because the work is running in main whether
+    // or not this parent is bound to an executor right now.
+    const group = activeGroup(row, activityAt, record.live || (delegation?.busy ?? false), now);
     if (group !== null) {
       activeEntries.push({
         row,
         group,
-        recency: record.lastActivityAt,
-        quietAt: record.lastActivityAt,
+        recency: activityAt,
+        quietAt: activityAt,
       });
       continue;
     }
@@ -986,7 +1174,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "chat",
-        endedOrQuietAt: record.lastActivityAt,
+        endedOrQuietAt: activityAt,
         provenance: row.provenance,
         target: row.target,
         cleaned: false,

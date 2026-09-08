@@ -146,6 +146,9 @@ import type {
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
   PickFolderResult,
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanReclaimResult,
+  PiSessionOrphanScanResult,
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
@@ -392,6 +395,12 @@ const api = {
   /** Reads the database size or runs one main-owned action without exposing its path. */
   database: (action?: DatabaseAction): Promise<DatabaseResult> =>
     action === undefined ? invoke("volli:database") : invoke("volli:database", action),
+  /** Read-only Pi sidecar inventory and its separately confirmed cleanup. */
+  piSessions: {
+    scanOrphans: (): Promise<PiSessionOrphanScanResult> => invoke("volli:pi-session-orphans-scan"),
+    reclaimOrphans: (input: PiSessionOrphanReclaimInput): Promise<PiSessionOrphanReclaimResult> =>
+      invoke("volli:pi-session-orphans-reclaim", input),
+  },
   /**
    * The Browser Tab door: chrome commands in, chrome snapshots out. Every
    * operation names Volli's opaque tab id — no Chromium index, partition,

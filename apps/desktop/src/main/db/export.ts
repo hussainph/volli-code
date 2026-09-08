@@ -1,9 +1,18 @@
 /**
- * Full-database JSON export: one versioned document covering the tables in
+ * Limited JSON data export: one versioned document covering the tables in
  * the current schema (`migrations.ts` is the authoritative table list) —
- * user-facing data-export trust, a debug/inspection tool, and a manual
- * backup story alongside the migration backups. Export only: there is
- * deliberately no import/restore path here.
+ * user-facing data-export trust, a debug/inspection tool, and a portable
+ * readable copy. Export only: there is deliberately no import/restore path
+ * here.
+ *
+ * **This is not a backup and must never be described as one** (VC-283). It
+ * carries no attachment bytes (`blobs`/`blob_links` and the files under
+ * `<userData>/blobs`), no transcript files (`<userData>/session-transcripts`),
+ * and several ledgers a restore would need. `backup/` is the restorable
+ * format: a versioned bundle with a manifest, content hashes, and a staged
+ * restore. A reader there must refuse a `volli-export` document, which is why
+ * the two formats carry different markers ({@link EXPORT_FORMAT} vs
+ * `BACKUP_BUNDLE_FORMAT`).
  *
  * {@link REBUILDABLE_PROJECTIONS} names what is left out and why: a read model
  * whose every fact is derived from a table this document does carry is stated
@@ -725,7 +734,8 @@ interface SessionEventRow {
   sequence: number;
   occurred_at: number;
   recorded_at: number;
-  provenance: string;
+  provenance_id: number;
+  provenance: string | null;
   attachment_id: string | null;
   command_id: string | null;
   payload: string;
@@ -734,22 +744,28 @@ interface SessionEventRow {
 function exportSessionEvents(db: Database.Database): ExportSessionEvent[] {
   const rows = prepared<[], SessionEventRow>(
     db,
-    `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-            attachment_id, command_id, payload
-       FROM session_events
-      ORDER BY session_id COLLATE BINARY, sequence, id COLLATE BINARY`,
+    `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+            e.provenance_id, p.provenance, e.attachment_id, e.command_id, e.payload
+       FROM session_events e
+       LEFT JOIN session_provenances p ON p.id = e.provenance_id
+      ORDER BY e.session_id COLLATE BINARY, e.sequence, e.id COLLATE BINARY`,
   ).all();
-  return rows.map((event) => ({
-    id: event.id,
-    sessionId: event.session_id,
-    sequence: event.sequence,
-    occurredAt: event.occurred_at,
-    recordedAt: event.recorded_at,
-    provenance: JSON.parse(event.provenance) as unknown,
-    attachmentId: event.attachment_id,
-    commandId: event.command_id,
-    payload: JSON.parse(event.payload) as unknown,
-  }));
+  return rows.map((event) => {
+    if (event.provenance === null) {
+      throw new Error(`Session event ${event.id} is missing provenance row ${event.provenance_id}`);
+    }
+    return {
+      id: event.id,
+      sessionId: event.session_id,
+      sequence: event.sequence,
+      occurredAt: event.occurred_at,
+      recordedAt: event.recorded_at,
+      provenance: JSON.parse(event.provenance) as unknown,
+      attachmentId: event.attachment_id,
+      commandId: event.command_id,
+      payload: JSON.parse(event.payload) as unknown,
+    };
+  });
 }
 
 interface SessionCommandRow {

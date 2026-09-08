@@ -10,6 +10,7 @@
 import type Database from "better-sqlite3";
 import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -34,7 +35,6 @@ function detailFor(record: SessionRecord): TerminalAttachmentDetail {
     harnessSessionId: record.harnessSessionId,
     launchKind: record.launchKind,
     placement: record.placement,
-    exitCode: record.exitCode,
   };
 }
 
@@ -59,14 +59,14 @@ function appendEvent(
 ): void {
   db.prepare(
     `INSERT INTO session_events
-       (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
      VALUES
-       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenance, @attachmentId, NULL, @payload)`,
+       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, NULL, @payload)`,
   ).run({
     ...input,
     sequence: nextSequence(db, input.sessionId),
     recordedAt: input.occurredAt,
-    provenance: TEST_PROVENANCE,
+    provenanceId: internSessionEventProvenance(db, TEST_PROVENANCE),
     payload: JSON.stringify(input.payload),
   });
 }
@@ -165,6 +165,32 @@ function latestNativeReference(
       };
 }
 
+/**
+ * The status the PTY reported for this attachment, from the durable
+ * `attachment.exited` fact (VC-290) — `null` when nothing observed one.
+ *
+ * Read as its own event rather than off the attachment's native detail: the
+ * exit code is product vocabulary the ledger projects, not adapter correlation
+ * this helper may reinterpret.
+ */
+function observedExitCode(
+  db: Database.Database,
+  sessionId: string,
+  attachment: AttachmentRow,
+): number | null {
+  const event = db
+    .prepare(
+      `SELECT payload FROM session_events
+        WHERE session_id = ? AND attachment_id = ?
+          AND json_extract(payload, '$.kind') = 'attachment.exited'
+        ORDER BY sequence DESC LIMIT 1`,
+    )
+    .get(sessionId, attachment.id) as { payload: string } | undefined;
+  if (!event) return null;
+  const payload = JSON.parse(event.payload) as { exitCode?: number };
+  return payload.exitCode ?? null;
+}
+
 /** Reads a terminal compatibility DTO by projecting the persisted ledger facts. */
 export function getSession(db: Database.Database, sessionId: string): SessionRecord | undefined {
   const session = db
@@ -226,6 +252,7 @@ export function getSession(db: Database.Database, sessionId: string): SessionRec
         outcome:
           closedPayload?.outcome ?? (attachment.observed_kind === "failed" ? "failed" : null),
         failure: attachment.failure === null ? null : (JSON.parse(attachment.failure) as never),
+        exitCode: observedExitCode(db, sessionId, attachment),
       },
     ],
     liveExecutor: null,
@@ -309,7 +336,18 @@ export function endSession(
   const current = getSession(db, sessionId);
   if (!current) return;
   const attachmentId = attachmentIdFor(sessionId);
-  updateNative(db, sessionId, (detail) => ({ ...detail, exitCode }), endedAt);
+  // Only a code something actually observed is written, exactly as the PTY
+  // adapter does it: a `null` here is the relaunch sweep's silence, and an
+  // event that carried it would be inventing an observation (VC-290).
+  if (exitCode !== null) {
+    appendEvent(db, {
+      id: `test-exited:${sessionId}`,
+      sessionId,
+      occurredAt: endedAt,
+      attachmentId,
+      payload: { kind: "attachment.exited", attachmentId, exitCode },
+    });
+  }
   const closed = db
     .prepare(
       `SELECT 1 FROM session_events

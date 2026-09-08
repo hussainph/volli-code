@@ -5,7 +5,10 @@
     "types": ["node"],
     // vite.config.ts imports the plain-JS dev-constants module (it must stay
     // .mjs — scripts/dev.mjs runs under plain node, so a .ts file won't do).
-    "allowJs": true
+    "allowJs": true,
+    // The read-only storage tools load their source modules directly under
+    // Node's type stripper, where explicit `.ts` is required by ESM.
+    "allowImportingTsExtensions": true
   },
   // src/ipc is the shared type-only IPC contract — all three processes read it.
   "include": [

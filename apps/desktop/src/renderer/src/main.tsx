@@ -220,7 +220,14 @@ async function main() {
   window.api.data.onChanged((event) => {
     // Forward the payload's scope (affected ticket/project, or untargeted) so
     // per-ticket surfaces can skip a refetch that's provably for another ticket.
-    void refreshPlanningData({ ticketId: event.ticketId, projectId: event.projectId })
+    // `kind` rides along for the one reader that acts on it: a `worktree` change
+    // moved a ticket's CHECKOUT, and its cached venue reading belongs to the
+    // checkout it was taken in (VC-286).
+    void refreshPlanningData({
+      ticketId: event.ticketId,
+      projectId: event.projectId,
+      kind: event.kind,
+    })
       .then((refreshResult) => {
         if (!refreshResult.ok) {
           toastError(`Couldn't refresh agent changes: ${refreshResult.error}`);

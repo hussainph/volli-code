@@ -21,6 +21,7 @@ import {
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
+  scrubSessionAuthority,
   scrubSessionEvent,
   scrubSessionInteraction,
   type CompactionPolicy,
@@ -988,6 +989,11 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
   if (source.liveExecutor !== undefined) {
     projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
+    // Derived from the same attachment in the same branch, so the identity a
+    // surface shows and the policy it shows beside it can never be about two
+    // different attachments (VC-285). The codec owns what may cross; this edge
+    // only composes it, as it does for every other scrubbed field here.
+    projection.authority = scrubSessionAuthority(source.liveExecutor);
   }
   return {
     projection: projection as SessionPresentationProjection,

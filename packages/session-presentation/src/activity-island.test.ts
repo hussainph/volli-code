@@ -210,7 +210,26 @@ describe("subagents", () => {
   it("says progress while working and the state otherwise, with `· tab` once promoted", () => {
     expect(agentStateWord(agent({ progress: 0.724 }))).toBe("72%");
     expect(agentStateWord(agent({ state: "done" }))).toBe("done");
+    expect(agentStateWord(agent({ state: "failed" }))).toBe("failed");
     expect(agentStateWord(agent({ state: "stopped", promoted: true }))).toBe("stopped · tab");
+  });
+
+  // The one state that is an errand rather than a report: a Subagent Session
+  // has no listing row (VC-279), so this word is how a person learns their
+  // helper is stopped on something only they can clear.
+  it("calls a waiting subagent an errand, and neither dims it nor spins it", () => {
+    expect(agentStateWord(agent({ state: "waiting" }))).toBe("needs you");
+    expect(agentStateWord(agent({ state: "waiting", promoted: true }))).toBe("needs you · tab");
+    // A stale `progress` cannot turn the errand back into a percentage — only
+    // a working row is ever measured.
+    expect(agentStateWord(agent({ state: "waiting", progress: 0.5 }))).toBe("needs you");
+    expect(agentProgressMeasured(agent({ state: "waiting", progress: 0.5 }))).toBe(false);
+    expect(agentDimmed(agent({ state: "waiting" }))).toBe(false);
+  });
+
+  it("does not count a waiting subagent as done", () => {
+    expect(agentsDone([agent({ state: "waiting" }), agent({ id: "a2", state: "done" })])).toBe(1);
+    expect(agentsLine([agent({ state: "waiting" })])).toBe("0/1 subagents done");
   });
 
   it("rounds progress rather than truncating it, at both ends", () => {

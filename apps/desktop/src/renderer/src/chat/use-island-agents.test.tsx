@@ -206,8 +206,16 @@ describe("what a row says", () => {
   it("reads working from activity", () => {
     expect(islandAgentState({ activity: "working", outcome: null })).toBe("working");
   });
-  it("folds waiting into working (v1 ruling — no interactive trip a person answers)", () => {
-    expect(islandAgentState({ activity: "waiting", outcome: null })).toBe("working");
+  // VC-269 folded this into `working`; VC-279 took the child's listing row
+  // away, and with it every other surface that could have asked on its behalf
+  // — no band row, no board ring, no notification. `permission` and `auth` are
+  // waits only a person clears, so the chip is now where the errand lands.
+  it("draws waiting as waiting — this cluster is the only surface that can ask", () => {
+    expect(islandAgentState({ activity: "waiting", outcome: null })).toBe("waiting");
+    // Not confused with an ended state: a child stopped on a question has not
+    // finished, and a turn outcome left over from an earlier turn cannot make
+    // it look as if it had.
+    expect(islandAgentState({ activity: "waiting", outcome: "completed" })).toBe("waiting");
   });
   it("reads stopped from activity, whatever the turn's outcome", () => {
     expect(islandAgentState({ activity: "stopped", outcome: null })).toBe("stopped");
@@ -415,6 +423,51 @@ describe("the now channel", () => {
       ]),
     );
     expect(probe.flashes).toHaveLength(3);
+  });
+
+  it("announces a child that stops on something only a person can clear", async () => {
+    // The whole of VC-279's answer to "who tells anyone?": a child blocked on
+    // a permission has no row, draws no board ring and raises no notification,
+    // so if this announcement does not fire the delegation stalls in silence.
+    listing([record({ sessionId: "a", title: "Find the auth refresh" })]);
+    const probe = await mount();
+
+    await act(async () =>
+      listing([
+        record({
+          sessionId: "a",
+          title: "Find the auth refresh",
+          activity: "waiting",
+          waitingOn: "permission",
+        }),
+      ]),
+    );
+    expect(probe.flashes.at(-1)).toMatchObject({
+      event: "Needs you",
+      payload: "Find the auth refresh",
+    });
+
+    // Once, not once per reading: the wait is a state the row now HOLDS, and
+    // an announcement per push would be the pill shouting for as long as the
+    // person takes to answer.
+    await act(async () =>
+      listing([
+        record({
+          sessionId: "a",
+          title: "Find the auth refresh",
+          activity: "waiting",
+          waitingOn: "permission",
+        }),
+      ]),
+    );
+    expect(probe.flashes).toHaveLength(1);
+
+    // And answering it announces the child's return to work as nothing at all
+    // — `working` is not an event, exactly as it is not one after a resume.
+    await act(async () =>
+      listing([record({ sessionId: "a", title: "Find the auth refresh", activity: "working" })]),
+    );
+    expect(probe.flashes).toHaveLength(1);
   });
 
   it("announces the last change when two children end in one reading — latest wins", async () => {

@@ -165,7 +165,7 @@ async function main() {
         // Both are correct; pinning either would make this check pass or fail on
         // a property of the machine rather than of the composer.
         const modelPill = await composer(page)
-          .getByRole("button", { name: "Model", exact: true })
+          .getByRole("button", { name: /^Model: / })
           .count();
         const effortChip = await composer(page)
           .getByRole("button", { name: /^Reasoning effort:/ })

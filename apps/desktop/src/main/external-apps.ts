@@ -53,12 +53,24 @@ export type NativeAppCommand = (
  * user installed them, unlike a hand-maintained scan of /Applications. The id
  * is JSON-encoded before it enters JXA; production calls only pass catalogue
  * values, but this keeps the native-script boundary closed as well.
+ *
+ * The path leaves as the program's COMPLETION VALUE, never through
+ * `console.log`: under `osascript -l JavaScript`, `console.log` writes to
+ * stderr, so the version that used it put every app path on the stream this
+ * runtime does not read and reported every Mac as having no supported apps
+ * (VC-287). stderr stays free for real diagnostics.
+ *
+ * `typeof path === "string"` is the absent case, and it is not defensive
+ * padding: a nil `NSURL` comes back as a TRUTHY JXA object whose `.path`
+ * unwraps to `undefined`, so an `if (url)` test alone answers "installed" for
+ * every bundle id on earth.
  */
 function launchServicesLookupScript(bundleId: string): string {
   return [
     "ObjC['import']('AppKit');",
     `const url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier(${JSON.stringify(bundleId)});`,
-    "if (url) console.log(ObjC.unwrap(url.path));",
+    "const path = url ? ObjC.unwrap(url.path) : null;",
+    "typeof path === 'string' ? path : '';",
   ].join("\n");
 }
 
@@ -83,6 +95,15 @@ export function createMacOSExternalAppRuntime(run: NativeAppCommand): ExternalAp
 
 export type ExternalAppOpenResult = Result;
 
+/**
+ * What a scan that could not run says. It is deliberately a claim about the
+ * INSPECTION, not about the Mac: "no supported apps" is a finding, and a
+ * lookup that failed has no findings. The renderer shows this beside its one
+ * Try again; the underlying osascript failure (a full command line with the
+ * script inlined) rides along as `cause` for the log, not onto the surface.
+ */
+export const EXTERNAL_APP_DISCOVERY_FAILED = "Couldn't check which apps are installed on this Mac.";
+
 export interface ExternalAppGateway {
   list(): Promise<ExternalApp[]>;
   open(appId: ExternalAppId, path: string): Promise<ExternalAppOpenResult>;
@@ -94,20 +115,36 @@ export interface ExternalAppGateway {
  */
 export function createExternalAppGateway(finder: ExternalAppRuntime): ExternalAppGateway {
   return {
+    /**
+     * Every allowlisted bundle, or nothing. A per-app lookup that could not run
+     * used to become `null` — indistinguishable from "not installed" — so one
+     * broken Launch Services call quietly shortened the menu and a wholly
+     * broken one produced a confident empty list. The whole scan now fails
+     * instead, and `volli:external-app-list` turns that into `{ ok: false }`
+     * through the shared IPC envelope.
+     */
     async list(): Promise<ExternalApp[]> {
       if (finder.platform !== "darwin") return [];
-      const candidates = await Promise.all(
+      const inspected = await Promise.all(
         EXTERNAL_APPS.map(async ({ bundleId, ...app }) => {
           try {
-            return (await finder.findBundle(bundleId)) ? app : null;
-          } catch {
-            // A missing or temporarily unavailable Launch Services entry is an
-            // unavailable app, not an error state for the menu.
-            return null;
+            return { app, installed: await finder.findBundle(bundleId), failure: null };
+          } catch (error: unknown) {
+            return { app, installed: false, failure: error };
           }
         }),
       );
-      return candidates.filter((app): app is ExternalApp => app !== null);
+      // Every bundle is inspected before the verdict, so the log names every
+      // failed lookup rather than only whichever one lost the race.
+      const failures = inspected.filter((entry) => entry.failure !== null);
+      if (failures.length > 0) {
+        console.error(
+          `[volli] external-app lookup failed for ${failures.map((entry) => entry.app.id).join(", ")}:`,
+          errorMessage(failures[0]?.failure),
+        );
+        throw new Error(EXTERNAL_APP_DISCOVERY_FAILED, { cause: failures[0]?.failure });
+      }
+      return inspected.filter((entry) => entry.installed).map((entry) => entry.app);
     },
 
     async open(appId: ExternalAppId, path: string): Promise<ExternalAppOpenResult> {

@@ -142,8 +142,9 @@ function sessionItem(
     ticketDisplayId: null,
     ticketTitle: null,
     provenance: PERSON_STARTED,
+    destination: "tab",
     ...overrides,
-  };
+  } as CommandPaletteSessionItem;
 }
 
 describe("row match text", () => {
@@ -154,11 +155,14 @@ describe("row match text", () => {
     });
   });
 
-  it("gives a ticket session its ticket context and a Board Session its project", () => {
+  it("gives ticket, Board, and unavailable-ticket Sessions truthful context", () => {
     expect(sessionRowContext(sessionItem())).toBe("Alpha · Board Session");
     expect(
       sessionRowContext(sessionItem({ ticketDisplayId: "ALP-1", ticketTitle: "Fix auth" })),
     ).toBe("ALP-1 · Fix auth");
+    expect(
+      sessionRowContext(sessionItem({ destination: "detail", scope: { kind: "unavailable" } })),
+    ).toBe("Alpha · Ticket unavailable");
   });
 
   it("builds a session row's value and keywords from the same context line", () => {
