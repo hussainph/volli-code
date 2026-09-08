@@ -27,7 +27,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const createdAt = "2025-01-02T03:04:05.678Z";
+const createdAt = Date.parse("2025-01-02T03:04:05.678Z");
 const cwd = "/Users/test/code/project";
 
 function writePiSession(id: string, options: { body?: string; cwd?: string } = {}): string {

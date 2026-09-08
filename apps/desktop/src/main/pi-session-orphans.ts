@@ -34,7 +34,7 @@ interface FileIdentity {
 
 interface ConfirmedPiSidecar extends PiSessionOrphanCandidate, FileIdentity {
   cwd: string;
-  createdAt: string;
+  createdAt: number;
 }
 
 interface ScanState {
@@ -155,7 +155,7 @@ export function piSessionDirectoryName(cwd: string): string {
 }
 
 /** Pi's timestamp plus encoded native-id sidecar naming rule. */
-export function piSessionFilename(createdAt: string, id: string): string {
+export function piSessionFilename(createdAt: number, id: string): string {
   return `${new Date(createdAt).toISOString().replace(/[:.]/g, "-")}_${encodeURIComponent(id)}.jsonl`;
 }
 
@@ -317,7 +317,9 @@ function confirmedSidecar(
     header.v !== 4 ||
     typeof header.id !== "string" ||
     header.id.length === 0 ||
-    typeof header.createdAt !== "string" ||
+    typeof header.createdAt !== "number" ||
+    !Number.isSafeInteger(header.createdAt) ||
+    header.createdAt < 0 ||
     typeof header.cwd !== "string" ||
     header.cwd.length === 0
   ) {
