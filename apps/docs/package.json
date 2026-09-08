@@ -11,16 +11,16 @@
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.41.9",
+    "@astrojs/starlight": "0.42.0",
     "@volli/shared": "workspace:*",
     "@fontsource-variable/mona-sans": "5.3.0",
-    "astro": "7.2.8",
+    "astro": "7.3.1",
     "sharp": "0.35.4"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
-    "@astrojs/sitemap": "3.7.3",
+    "@astrojs/sitemap": "3.7.4",
     "typescript": "6.0.3",
-    "wrangler": "4.126.0"
+    "wrangler": "4.129.0"
   }
 }
