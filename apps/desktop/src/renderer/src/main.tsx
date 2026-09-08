@@ -18,6 +18,7 @@ import {
 import { applyRemoteChatTitle } from "./chat/rename";
 import { interruptToastModel } from "./components/sessions/interrupt-toast";
 import { activateNotificationTarget } from "./lib/notification-activation";
+import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData } from "./lib/boot";
@@ -167,11 +168,14 @@ async function main() {
   // every window closed opened this one, and its target has been waiting in
   // main ever since. Ordering the other way would drop a push that landed
   // between the read and the listener.
-  window.api.notifications.onActivated((target) => void activateNotificationTarget(target));
+  window.api.notifications.onActivated(
+    (target) => void activateNotificationTarget(target, desktopNotificationSurface),
+  );
   window.api.notifications
     .pendingActivation()
     .then((pending) => {
-      if (pending.ok && pending.target !== null) void activateNotificationTarget(pending.target);
+      if (pending.ok && pending.target !== null)
+        void activateNotificationTarget(pending.target, desktopNotificationSurface);
     })
     .catch(() => {
       // A click whose target could not be collected leaves the window open on

@@ -59,6 +59,24 @@ describe("the reveal slot", () => {
   });
 });
 
+describe("two planes on one Session", () => {
+  it("tells both, and unsubscribing one leaves the other listening", () => {
+    // A Session can be on screen twice — a split view, or a ticket tab beside
+    // Home's. Both are told; only one claim succeeds, which is the slot's job.
+    const seen: string[] = [];
+    const offA = onSessionItemReveal("s1", () => seen.push("a"));
+    const offB = onSessionItemReveal("s1", () => seen.push("b"));
+
+    requestSessionItemReveal("s1", { interactionId: "i1", attentionId: null });
+    expect(seen).toEqual(["a", "b"]);
+
+    offA();
+    requestSessionItemReveal("s1", { interactionId: "i1", attentionId: null });
+    expect(seen).toEqual(["a", "b", "b"]);
+    offB();
+  });
+});
+
 describe("preferRevealedInteraction", () => {
   const cards = [{ id: "i1" }, { id: "i2" }, { id: "i3" }];
 

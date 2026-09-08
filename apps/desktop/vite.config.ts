@@ -371,8 +371,19 @@ export default defineConfig(({ mode }) => ({
         // alert nobody saw, and a route that disagrees with it opens somewhere
         // the suppression rule was never talking about. The store work that
         // carries the decision out (`notification-activation.ts`) stays outside,
-        // like every other glue module.
+        // like every other glue module — and so does `notification-surface.ts`,
+        // which is the store calls that carry that decision out.
         "src/lib/notification-target.ts",
+        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // project, open the Session, then reveal the item. Ported precisely so
+        // the sequence is assertable, because the failure it prevents — a card
+        // revealed in a Session nobody opened, or a harness alert opening a chat
+        // tab that does not exist — is invisible in a screenshot.
+        "src/lib/notification-activation.ts",
+        // And the slot that carries a reveal across the mount race, on the same
+        // argument `editor/reveal-line.ts` is enrolled under: single module
+        // state, claimed once, whose bug is a card that jumps for no reason.
+        "src/chat/session-item-reveal.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         // The split chords (VC-202 §5), in the gate for the same reason the
