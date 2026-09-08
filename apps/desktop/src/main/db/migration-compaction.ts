@@ -48,10 +48,7 @@ export function decideMigrationCompaction(
   freelistCount: number,
 ): MigrationCompactionDecision {
   const freeBytes = freelistCount * pageSize;
-  const thresholdBytes = Math.max(
-    MINIMUM_FREE_BYTES,
-    MINIMUM_FREE_RATIO * pageCount * pageSize,
-  );
+  const thresholdBytes = Math.max(MINIMUM_FREE_BYTES, MINIMUM_FREE_RATIO * pageCount * pageSize);
   return {
     shouldCompact: freeBytes >= thresholdBytes,
     freeBytes,
@@ -68,10 +65,7 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
-function readFileSize(
-  dbPath: string,
-  fileStat: MigrationCompactionFileStat,
-): MeasurementResult {
+function readFileSize(dbPath: string, fileStat: MigrationCompactionFileStat): MeasurementResult {
   try {
     const value = fileStat.fileSize(dbPath);
     if (!Number.isFinite(value) || value < 0) {
@@ -106,11 +100,7 @@ function checkpointFailure(result: unknown): string | undefined {
   const row = result[0] as unknown;
   if (typeof row !== "object" || row === null) return `unexpected result ${safeJson(result)}`;
   const { busy, log, checkpointed } = row as Record<string, unknown>;
-  if (
-    typeof busy !== "number" ||
-    typeof log !== "number" ||
-    typeof checkpointed !== "number"
-  ) {
+  if (typeof busy !== "number" || typeof log !== "number" || typeof checkpointed !== "number") {
     return `unexpected result ${safeJson(result)}`;
   }
   if (busy !== 0) return `busy=${busy} log=${log} checkpointed=${checkpointed}`;
@@ -126,7 +116,9 @@ function safeJson(value: unknown): string {
 }
 
 function withBeforeStatFailure(reason: string, before: MeasurementResult): string {
-  return before.error === undefined ? reason : `${reason}; before-size stat failed: ${before.error}`;
+  return before.error === undefined
+    ? reason
+    : `${reason}; before-size stat failed: ${before.error}`;
 }
 
 /**

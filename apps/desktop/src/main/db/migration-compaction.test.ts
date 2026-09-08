@@ -57,11 +57,7 @@ function stagedFileSizes(...sizes: number[]): MigrationCompactionFileStat & { ca
 describe("decideMigrationCompaction", () => {
   it("uses the 32 MiB floor and treats exact equality as qualifying", () => {
     const atThreshold = decideMigrationCompaction(PAGE_SIZE, 10_000, (32 * MIB) / PAGE_SIZE);
-    const onePageBelow = decideMigrationCompaction(
-      PAGE_SIZE,
-      10_000,
-      32 * (MIB / PAGE_SIZE) - 1,
-    );
+    const onePageBelow = decideMigrationCompaction(PAGE_SIZE, 10_000, 32 * (MIB / PAGE_SIZE) - 1);
 
     expect(atThreshold).toEqual({
       shouldCompact: true,
@@ -211,6 +207,32 @@ describe("compactMigrationDatabase", () => {
     expect(fileStat.calls).toEqual(["/profile/volli.db"]);
   });
 
+  it("keeps ran true and reports a thrown checkpoint error without measuring afterBytes", () => {
+    const sqliteBusy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const db = fakeDb({
+      pragma: vi.fn((source: string) => {
+        if (source === "page_size") return PAGE_SIZE;
+        if (source === "page_count") return 10_000;
+        if (source === "freelist_count") return (32 * MIB) / PAGE_SIZE;
+        if (source === "wal_checkpoint(TRUNCATE)") throw sqliteBusy;
+        throw new Error(`unexpected PRAGMA: ${source}`);
+      }),
+    });
+    const fileStat = stagedFileSizes(45 * MIB);
+
+    const report = compactMigrationDatabase(db, "/profile/volli.db", fileStat);
+
+    expect(db.exec).toHaveBeenCalledExactlyOnceWith("VACUUM");
+    expect(report).toEqual({
+      ran: true,
+      beforeBytes: 45 * MIB,
+      afterBytes: "unknown",
+      freelistBefore: (32 * MIB) / PAGE_SIZE,
+      reason: "checkpoint failed: SQLITE_BUSY: database is locked",
+    });
+    expect(fileStat.calls).toEqual(["/profile/volli.db"]);
+  });
+
   it("reports unreadable PRAGMAs without issuing VACUUM or throwing", () => {
     const sqliteBusy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     const db = fakeDb({
@@ -317,7 +339,9 @@ describe("migration compaction on a real WAL fixture", () => {
     const report = compactMigrationDatabase(db, dbPath);
 
     const afterBytes = statSync(dbPath).size;
-    const digestAfter = JSON.stringify(db.prepare("SELECT * FROM preserved_rows ORDER BY id").all());
+    const digestAfter = JSON.stringify(
+      db.prepare("SELECT * FROM preserved_rows ORDER BY id").all(),
+    );
     expect(report).toEqual({
       ran: true,
       beforeBytes,
