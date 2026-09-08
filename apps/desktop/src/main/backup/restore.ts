@@ -161,9 +161,11 @@ function writeRows(
   for (const table of BACKUP_INCLUDED_TABLES) {
     const data = document.tables[table];
     if (data === undefined) continue;
-    // The `ticket_events` insert trigger writes this table itself; the bundle
-    // carries the real sequence numbers, so the trigger's guesses go first.
+    // The `ticket_events` and `session_events` insert triggers write these two
+    // tables themselves; the bundle carries the real sequence numbers, so the
+    // triggers' guesses go first.
     if (table === "ticket_event_sequence") db.exec("DELETE FROM ticket_event_sequence");
+    if (table === "session_event_sequence") db.exec("DELETE FROM session_event_sequence");
     counts[table] = data.rows.length;
     if (data.rows.length === 0) continue;
     const pathIndex = table === "projects" ? data.columns.indexOf("path") : -1;

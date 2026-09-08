@@ -222,6 +222,7 @@ import { createAgentToolDoor } from "./agent-tool-door";
 import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanSweep } from "./orphan-sweep";
 import { registerUpdateIpcHandlers } from "./update-ipc";
@@ -835,9 +836,19 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
-  const sessionActivityWatch =
+  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
+  // watch: a write returns from the engine, the bus fans the committed event
+  // out to whichever `session_await` is parked on it, and only then does the
+  // watch mark the row dirty. Same construction-site rule as the watch — this
+  // is the only place the engine is made, so no caller can hold an unwatched
+  // one. See `session-wake.ts`.
+  const sessionWakeBus =
     watchedDb !== null
-      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
+      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+      : null;
+  const sessionActivityWatch =
+    watchedDb !== null && sessionWakeBus !== null
+      ? watchSessionActivity(sessionWakeBus.engine, {
           publish: broadcastSessionActivity,
           // Read on the push path as well as the fetch path, so a Run's bolt
           // survives its Session's first turn (VC-131): the renderer upserts
@@ -1839,6 +1850,11 @@ app.whenReady().then(async () => {
           // post-commit wake bus until a planner fact matches.
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
           subscribeTicketWake,
+          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
+          // read through a closure because the bus and the door are composed
+          // under different null-guards in this same function.
+          subscribeSessionWake: (listener) =>
+            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>

@@ -1781,6 +1781,72 @@ UPDATE sessions
 
 const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
 
+/**
+ * Migration 042: durable opaque cursors for lossless waits on a SESSION.
+ *
+ * Migration 029's argument, one ledger over. `session_events` is unique on
+ * `(session_id, sequence)` only: the Session Engine assigns that sequence per
+ * Session, so it orders one Session's history and says nothing about the order
+ * two Sessions' facts were committed in. A wait over a fleet needs exactly
+ * that missing total order — "the first matching event after X, across these
+ * handles" is one question, not one question per handle.
+ *
+ * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
+ * commits can share a millisecond and a timestamp is metadata rather than
+ * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * cannot either — it may be reused after a cascading delete, and a Session
+ * delete cascades this whole table.
+ *
+ * So the same sidecar: an AUTOINCREMENT sequence per appended Session Event,
+ * host-private behind {@link encodeSessionEventCursor}'s opaque prefix, with
+ * session and kind repeated so a multi-handle/multi-kind replay is one
+ * indexed, bounded query rather than a fold over each Session's log. The
+ * trigger is what keeps `session-control/sqlite-ledger.ts` — the one durable
+ * Session Event writer — from having to remember a second insert.
+ *
+ * The backfill orders by `(session_id, sequence)` rather than by `rowid`.
+ * Ledger order between two Sessions that were interleaved before this table
+ * existed is not recoverable from anything in the schema, so the honest
+ * choice is a deterministic one: every Session's own history stays in its own
+ * order, which is the order any reader of one Session already believes. New
+ * appends are in true commit order from here on, and a cursor only ever
+ * promises "nothing after this point is missed".
+ *
+ * `session_events` has no `kind` column — the kind lives inside the JSON
+ * payload — so both the backfill and the trigger read it with `json_extract`.
+ * The immutability trigger guards `id` and `session_id`, the two values the
+ * sidecar copies verbatim, and deliberately NOT `payload`: nothing in the
+ * product ever updates a `session_events` row, and `sqlite-ledger.test.ts`
+ * rewrites a payload on purpose to prove the read path tolerates corruption.
+ * The `kind` copy is therefore what the event was COMMITTED as, which is the
+ * fact a wake reports.
+ */
+const MIGRATION_042_SESSION_EVENT_SEQUENCE = `
+CREATE TABLE session_event_sequence (
+  sequence   INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   TEXT NOT NULL UNIQUE REFERENCES session_events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL
+);
+INSERT INTO session_event_sequence (event_id, session_id, kind)
+SELECT id, session_id, json_extract(payload, '$.kind')
+  FROM session_events
+ ORDER BY session_id ASC, sequence ASC;
+CREATE INDEX session_event_sequence_match
+  ON session_event_sequence(session_id, kind, sequence);
+CREATE TRIGGER session_event_sequence_insert
+AFTER INSERT ON session_events
+BEGIN
+  INSERT INTO session_event_sequence (event_id, session_id, kind)
+  VALUES (NEW.id, NEW.session_id, json_extract(NEW.payload, '$.kind'));
+END;
+CREATE TRIGGER session_event_sequence_identity_immutable
+BEFORE UPDATE OF id, session_id ON session_events
+BEGIN
+  SELECT RAISE(ABORT, 'session event identity is immutable');
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1992,7 +2058,34 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_041_SESSION_PARENT,
     apply: applyMigration041SessionParent,
   },
+  {
+    version: 42,
+    name: "session_event_sequence — durable opaque cursors for lossless waits on a Session",
+    sql: MIGRATION_042_SESSION_EVENT_SEQUENCE,
+    apply: applyMigration042SessionEventSequence,
+  },
 ];
+
+/**
+ * Migration 042's reconciler, probe-gated like 040's and 041's.
+ *
+ * `CREATE TABLE` is as un-idempotent as `ADD COLUMN` here: a database that is
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — must converge rather than fail
+ * on a duplicate object, and this file's own tests re-offer every version.
+ * One probe covers the whole block, because the table, its index and both
+ * triggers are created together or not at all.
+ */
+function applyMigration042SessionEventSequence(db: Database.Database): void {
+  const exists =
+    (db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_event_sequence'",
+      )
+      .get() as unknown) !== undefined;
+  if (exists) return;
+  db.exec(MIGRATION_042_SESSION_EVENT_SEQUENCE);
+}
 
 /** Migration 041's reconciler, probe-gated like 040's. */
 function applyMigration041SessionParent(db: Database.Database): void {

@@ -15,7 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   DEFAULT_AUTHORITY_POLICY,
@@ -205,6 +205,7 @@ function harness(
     automations: () => null,
     authorityPolicy: overrides.authorityPolicy ?? (() => DEFAULT_AUTHORITY_POLICY),
     subscribeTicketWake: () => () => undefined,
+    subscribeSessionWake: () => () => undefined,
     // Supervision's ports likewise: `supervise-session.test.ts` drives the
     // operations; this suite proves only the door — identity binding, wording,
     // and the no-runtime refusal (which is what `null` exercises).
@@ -758,6 +759,7 @@ function automationHarness(options: { host?: "absent" } = {}) {
     now: () => 1_000,
     authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
     subscribeTicketWake: () => () => undefined,
+    subscribeSessionWake: () => () => undefined,
     // Supervision's ports are inert here for the same reason `sessions` is:
     // this suite drives `automation.run` alone.
     supervise: () => null,
@@ -1074,7 +1076,12 @@ describe("automation_run through the Agent Tool Surface (VC-134)", () => {
 describe("session_stop and session_send through the Agent Tool Surface", () => {
   const TARGET_SESSION = "bbbbbbbb-0000-0000-0000-000000000000";
 
-  function superviseHarness() {
+  /**
+   * `delivery` holds the steer open, for the one test that needs the send to
+   * still be in flight when the caller's turn stops waiting; `turnOpened` is
+   * the runtime's answer about which turn the steer landed in (VC-324).
+   */
+  function superviseHarness(options: { delivery?: Promise<unknown>; turnOpened?: boolean } = {}) {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1095,6 +1102,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       subscribeTicketWake: () => () => undefined,
+      subscribeSessionWake: () => () => undefined,
       delegate: () => null,
       supervise: () =>
         ({
@@ -1160,13 +1168,20 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
           runtime: {
             command: async (request: unknown) => {
               sends.push(request);
-              return { receipt: { status: "accepted" } };
+              if (options.delivery !== undefined) await options.delivery;
+              return {
+                receipt: { status: "accepted" },
+                ...(options.turnOpened === undefined ? {} : { turnOpened: options.turnOpened }),
+              };
             },
           },
         }) as unknown as ReturnType<AgentToolDoorOptions["supervise"]>,
     });
-    const call = (verb: "session.stop" | "session.send", input: Record<string, unknown>) =>
-      door(CALLER, { verb, input, toolCallId: "tc-9" }, new AbortController().signal);
+    const call = (
+      verb: "session.stop" | "session.send",
+      input: Record<string, unknown>,
+      signal: AbortSignal = new AbortController().signal,
+    ) => door(CALLER, { verb, input, toolCallId: "tc-9" }, signal);
     return { call, stops, sends };
   }
 
@@ -1202,7 +1217,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       message: "Use the thinking-orbs library",
     });
 
-    expect(result.text).toContain("Steering delivered into Session bbbbbbbb");
+    expect(result.text).toContain("Delivered into Session bbbbbbbb");
     expect(result.text).toContain("mid-stream");
     const submitted = h.sends.find(
       (request) => (request as { command?: { kind?: string } }).command?.kind === "message.submit",
@@ -1212,6 +1227,38 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
     expect(submitted.command.message.parts[0]).toMatchObject({
       text: expect.stringContaining("Steering from supervising Session caller-s"),
     });
+  });
+
+  it("tells a new turn from one already running, and asks the runtime to settle on the open", async () => {
+    const h = superviseHarness({ turnOpened: true });
+
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Use the thinking-orbs library",
+    });
+
+    expect(result.text).toContain("It opened a new turn");
+    expect(result.text).not.toContain("mid-stream");
+    expect(h.sends[0]).toMatchObject({ command: { settle: "opened" } });
+  });
+
+  it("refuses a send whose caller stopped waiting instead of orphaning it", async () => {
+    const held = Promise.withResolvers<void>();
+    const h = superviseHarness({ delivery: held.promise });
+    const controller = new AbortController();
+
+    const call = h.call(
+      "session.send",
+      { session: TARGET_SESSION.slice(0, 8), message: "Use the thinking-orbs library" },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    controller.abort();
+
+    const result = await call;
+    expect(result.text).toContain("stopped waiting");
+    expect(result.text).toContain("session peek");
+    held.resolve();
   });
 
   it("refuses field mistakes and a host without a runtime in words, never throws", async () => {
@@ -1260,6 +1307,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       subscribeTicketWake: () => () => undefined,
+      subscribeSessionWake: () => () => undefined,
       supervise: () => null,
       // The operation is proved in `delegate-session.test.ts`; this suite
       // proves the door — identity binding, wording, and the refusals.

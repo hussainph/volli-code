@@ -2732,3 +2732,136 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
     db.close();
   });
 });
+
+describe("migration 042 — durable Session Event sequence", () => {
+  /** The provenance every seeded Session Event carries; shape, not meaning. */
+  const PROVENANCE =
+    '{"source":{"kind":"user","id":"u","detail":null},"venue":{"id":"local","kind":"local"}}';
+
+  /** A v41 database with two Sessions whose events were committed interleaved. */
+  function buildV41WithInterleavedEvents(dbPath: string): Database.Database {
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 41)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 41");
+    seedTicket(db);
+    const insertSession = db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, 'p1', NULL, ?, 1)",
+    );
+    insertSession.run("s-one", "One");
+    insertSession.run("s-two", "Two");
+    const insertEvent = db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       VALUES (?, ?, ?, 1, 1, '${PROVENANCE}', NULL, NULL, ?)`,
+    );
+    // Written in commit order, which is NOT (session, sequence) order.
+    insertEvent.run("e-one-1", "s-one", 1, '{"kind":"session.archived"}');
+    insertEvent.run("e-two-1", "s-two", 1, '{"kind":"session.archived"}');
+    insertEvent.run("e-one-2", "s-one", 2, '{"kind":"turn.completed"}');
+    return db;
+  }
+
+  it("upgrades a populated v41 database, backfilling each Session's own order", () => {
+    const dbPath = tempDbPath();
+    const db = buildV41WithInterleavedEvents(dbPath);
+    expect(tableExists(db, "session_event_sequence")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(indexExists(db, "session_event_sequence_match")).toBe(true);
+    // Grouped by Session, each Session in its own ledger order: interleaving
+    // that predates this table is not recoverable, so the backfill is
+    // deterministic rather than invented.
+    expect(
+      db
+        .prepare(
+          "SELECT sequence, event_id, session_id, kind FROM session_event_sequence ORDER BY sequence",
+        )
+        .all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-one-1", session_id: "s-one", kind: "session.archived" },
+      { sequence: 2, event_id: "e-one-2", session_id: "s-one", kind: "turn.completed" },
+      { sequence: 3, event_id: "e-two-1", session_id: "s-two", kind: "session.archived" },
+    ]);
+
+    // And converges byte for byte on what a fresh database builds.
+    const freshPath = tempDbPath();
+    const fresh = openRawDb(freshPath);
+    migrate(fresh, freshPath);
+    expect(schema(db)).toEqual(schema(fresh));
+    fresh.close();
+    db.close();
+  });
+
+  it("fills itself from a trigger on a fresh database, and never reuses a cursor", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    expect(tableExists(db, "session_event_sequence")).toBe(true);
+    seedTicket(db);
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s-one', 'p1', NULL, 'One', 1)",
+    ).run();
+    const insertEvent = db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       VALUES (?, 's-one', ?, 1, 1, '${PROVENANCE}', NULL, NULL, ?)`,
+    );
+    // The writer (`session-control/sqlite-ledger.ts`) knows nothing about this
+    // table: the trigger is what keeps it true.
+    insertEvent.run("e-1", 1, '{"kind":"turn.completed"}');
+    insertEvent.run("e-2", 2, '{"kind":"session.signaled","signal":"done","reason":null}');
+    expect(
+      db
+        .prepare("SELECT sequence, event_id, kind FROM session_event_sequence ORDER BY sequence")
+        .all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-1", kind: "turn.completed" },
+      { sequence: 2, event_id: "e-2", kind: "session.signaled" },
+    ]);
+
+    // A deleted event cascades out, and its cursor is never handed to another
+    // event — a cursor that moved backwards would replay history as new.
+    db.prepare("DELETE FROM session_events WHERE id = 'e-2'").run();
+    insertEvent.run("e-3", 3, '{"kind":"turn.interrupted"}');
+    expect(
+      db.prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-1" },
+      { sequence: 3, event_id: "e-3" },
+    ]);
+  });
+
+  it("holds event identity immutable so the sidecar can never point at another Session", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s-one', 'p1', NULL, 'One', 1)",
+    ).run();
+    db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       VALUES ('e-1', 's-one', 1, 1, 1, '${PROVENANCE}', NULL, NULL, '{"kind":"turn.completed"}')`,
+    ).run();
+
+    expect(() =>
+      db.prepare("UPDATE session_events SET session_id = 's-two' WHERE id = 'e-1'").run(),
+    ).toThrow("session event identity is immutable");
+    expect(() => db.prepare("UPDATE session_events SET id = 'e-9' WHERE id = 'e-1'").run()).toThrow(
+      "session event identity is immutable",
+    );
+    // Metadata stays writable: the ledger appends and never updates, but a
+    // guard wider than identity would break the corruption-tolerance tests
+    // `sqlite-ledger.test.ts` writes on purpose.
+    expect(() =>
+      db.prepare("UPDATE session_events SET recorded_at = 2 WHERE id = 'e-1'").run(),
+    ).not.toThrow();
+    db.close();
+  });
+});

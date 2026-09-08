@@ -35,6 +35,7 @@
  */
 
 import type { AuthorityFallback } from "./authority";
+import { SESSION_AWAIT_KINDS, type SessionAwaitKind } from "./session-await";
 import { TICKET_AWAIT_KINDS, type TicketAwaitKind } from "./ticket-await";
 
 /**
@@ -187,6 +188,19 @@ export interface AuthorityActorPolicy {
    * what may be *awaited* is policy data, and the tool's presence is not.
    */
   awaitable: readonly TicketAwaitKind[];
+  /**
+   * What this caller may block on through `session_await` (VC-324 item 3).
+   *
+   * A second list rather than a widened first one. {@link TicketAwaitKind}
+   * names planner facts and {@link SessionAwaitKind} names Session Events:
+   * two ledgers, two vocabularies, two cursors. Merged, a project could not
+   * say "wait on your children, not on my board" — and a stored word would
+   * have two meanings, which is the one thing a policy list may not have.
+   *
+   * Tolerant on read: a document written before this field existed resolves to
+   * the defaults, exactly as an absent `awaitable` does.
+   */
+  awaitableSessions: readonly SessionAwaitKind[];
 }
 
 /**
@@ -288,6 +302,8 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
  * withholds nothing and a project that wants a narrower list writes one. The
  * unauthenticated caller keeps the empty list for the reason its whole row is
  * empty: it holds no tool surface, so there is nothing the list could admit.
+ * `awaitableSessions` takes the same posture over the Session vocabulary, for
+ * the same reason and with the same empty unauthenticated row.
  */
 export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
   enforcement: "observe",
@@ -306,16 +322,19 @@ export const DEFAULT_AUTHORITY_POLICY: AuthorityPolicy = Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "project",
       awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
+      awaitableSessions: Object.freeze([...SESSION_AWAIT_KINDS]),
     }),
     session: Object.freeze({
       coordinationVerbs: Object.freeze([...DEFAULT_SESSION_COORDINATION_VERBS]),
       peek: "own",
       awaitable: Object.freeze([...TICKET_AWAIT_KINDS]),
+      awaitableSessions: Object.freeze([...SESSION_AWAIT_KINDS]),
     }),
     unauthenticated: Object.freeze({
       coordinationVerbs: Object.freeze([]),
       peek: "none",
       awaitable: Object.freeze([]),
+      awaitableSessions: Object.freeze([]),
     }),
   }),
 }) as AuthorityPolicy;
@@ -371,11 +390,18 @@ export type AuthorityAwaitableOverride = readonly (
   | typeof AUTHORITY_DEFAULTS_TOKEN
 )[];
 
+/** A Session-await list can name only the Session vocabulary or splice defaults. */
+export type AuthorityAwaitableSessionsOverride = readonly (
+  | SessionAwaitKind
+  | typeof AUTHORITY_DEFAULTS_TOKEN
+)[];
+
 /** The per-actor half of an override; every field optional. */
 export interface AuthorityActorPolicyOverride {
   coordinationVerbs?: AuthorityListOverride;
   peek?: PeekDisclosure;
   awaitable?: AuthorityAwaitableOverride;
+  awaitableSessions?: AuthorityAwaitableSessionsOverride;
 }
 
 /** The budget half of an override; every field optional, absent inherits. */
@@ -426,6 +452,7 @@ function resolveActor(
     coordinationVerbs: spliceList(override?.coordinationVerbs, defaults.coordinationVerbs),
     peek: override?.peek ?? defaults.peek,
     awaitable: spliceList(override?.awaitable, defaults.awaitable),
+    awaitableSessions: spliceList(override?.awaitableSessions, defaults.awaitableSessions),
   };
 }
 
@@ -563,6 +590,8 @@ function parseActor(value: unknown): AuthorityActorPolicyOverride | undefined {
   if (peek !== undefined) actor.peek = peek;
   const awaitable = parseAwaitableList(row.awaitable);
   if (awaitable !== undefined) actor.awaitable = awaitable;
+  const awaitableSessions = parseAwaitableSessionsList(row.awaitableSessions);
+  if (awaitableSessions !== undefined) actor.awaitableSessions = awaitableSessions;
   return Object.keys(actor).length === 0 ? undefined : actor;
 }
 
@@ -573,6 +602,23 @@ function parseAwaitableList(value: unknown): AuthorityAwaitableOverride | undefi
     (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
   )
     ? (value as AuthorityAwaitableOverride)
+    : undefined;
+}
+
+/**
+ * The Session-await list's read path. A separate function rather than one
+ * parameterised over both vocabularies, so a document naming a Ticket kind in
+ * the Session list is dropped rather than quietly admitted.
+ */
+function parseAwaitableSessionsList(
+  value: unknown,
+): AuthorityAwaitableSessionsOverride | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const allowed = [...SESSION_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  return value.every(
+    (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
+  )
+    ? (value as AuthorityAwaitableSessionsOverride)
     : undefined;
 }
 
@@ -790,7 +836,12 @@ function validateActor(
     return undefined;
   }
   const row = value as Record<string, unknown>;
-  rejectUnknownKeys(row, ["coordinationVerbs", "peek", "awaitable"], `${path}.`, errors);
+  rejectUnknownKeys(
+    row,
+    ["coordinationVerbs", "peek", "awaitable", "awaitableSessions"],
+    `${path}.`,
+    errors,
+  );
   const actor: AuthorityActorPolicyOverride = {};
   if (row.coordinationVerbs !== undefined) {
     const list = validateStringList(row.coordinationVerbs, `${path}.coordinationVerbs`, errors);
@@ -799,6 +850,14 @@ function validateActor(
   if (row.awaitable !== undefined) {
     const list = validateAwaitableList(row.awaitable, `${path}.awaitable`, errors);
     if (list !== undefined) actor.awaitable = list;
+  }
+  if (row.awaitableSessions !== undefined) {
+    const list = validateAwaitableSessionsList(
+      row.awaitableSessions,
+      `${path}.awaitableSessions`,
+      errors,
+    );
+    if (list !== undefined) actor.awaitableSessions = list;
   }
   if (row.peek !== undefined) {
     const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
@@ -839,17 +898,44 @@ function validateAwaitableList(
   path: string,
   errors: string[],
 ): AuthorityAwaitableOverride | undefined {
+  return validateAwaitableVocabulary(value, path, errors, TICKET_AWAIT_KINDS) as
+    | AuthorityAwaitableOverride
+    | undefined;
+}
+
+function validateAwaitableSessionsList(
+  value: unknown,
+  path: string,
+  errors: string[],
+): AuthorityAwaitableSessionsOverride | undefined {
+  return validateAwaitableVocabulary(value, path, errors, SESSION_AWAIT_KINDS) as
+    | AuthorityAwaitableSessionsOverride
+    | undefined;
+}
+
+/**
+ * One await list against one vocabulary, reported per entry.
+ *
+ * Shared by the two lists because the RULE is shared — an array, of this
+ * vocabulary or the defaults token — while the vocabularies themselves stay
+ * apart, which is what stops a Ticket kind being accepted into the Session
+ * list. Refused whole rather than filtered, on `validateStringList`'s ground.
+ */
+function validateAwaitableVocabulary(
+  value: unknown,
+  path: string,
+  errors: string[],
+  vocabulary: readonly string[],
+): readonly string[] | undefined {
   if (!Array.isArray(value)) {
     errors.push(`${path} must be an array.`);
     return undefined;
   }
-  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
-  const invalid = value.filter(
-    (entry) => typeof entry !== "string" || !(allowed as readonly string[]).includes(entry),
-  );
+  const allowed = [...vocabulary, AUTHORITY_DEFAULTS_TOKEN];
+  const invalid = value.filter((entry) => typeof entry !== "string" || !allowed.includes(entry));
   if (invalid.length > 0) {
     errors.push(`${path} entries must be one of: ${allowed.join(", ")}.`);
     return undefined;
   }
-  return value as AuthorityAwaitableOverride;
+  return value as readonly string[];
 }

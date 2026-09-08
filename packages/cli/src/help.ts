@@ -125,8 +125,8 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.",
     "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
     "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
-    "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.",
-    "Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
+    "No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command. Two exist: ticket_await parks on a ticket's signals, comments and moves; session_await parks on a Session's turn ending (completed or interrupted), its done/blocked signal, or its stop. Both return a cursor — chain it and nothing between calls is missed.",
+    "Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.",
     "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
     "",
   ].join("\n");
