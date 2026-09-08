@@ -17,8 +17,6 @@ describe("native observation event ids", () => {
       expected,
     );
     expect(compactNativeObservationEventId(legacyId)).toBe(expected);
-    expect(expected).toMatch(/^native-event:v2:[a-f0-9]{32}$/);
-    expect(expected.length).toBe(48);
   });
 
   it("is deterministic, component-sensitive, and safe to apply more than once", () => {

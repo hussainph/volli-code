@@ -31,6 +31,7 @@ import {
   sameCommandReceipt,
   UnknownSessionEventKindError,
 } from "@volli/shared";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 
 type SqlRow = Record<string, unknown>;
 
@@ -353,7 +354,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
                 p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
            FROM session_events e
-           JOIN session_provenances p ON p.id = e.provenance_id
+           LEFT JOIN session_provenances p ON p.id = e.provenance_id
           WHERE e.id = ?`,
       )
       .get(eventId) as unknown;
@@ -385,7 +386,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     }
     this.insertAttachmentEvidence(event);
     this.assertEventForeignKeys(event);
-    const provenanceId = this.internEventProvenance(encodeSessionJson(event.provenance));
+    const provenanceId = internSessionEventProvenance(this.db, encodeSessionJson(event.provenance));
     this.db
       .prepare(
         `INSERT INTO session_events
@@ -462,7 +463,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
               p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
          FROM session_events e
-         JOIN session_provenances p ON p.id = e.provenance_id
+         LEFT JOIN session_provenances p ON p.id = e.provenance_id
         WHERE e.session_id = @sessionId AND e.sequence > @afterSequence
         ORDER BY e.sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
     );
@@ -691,23 +692,6 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     }
   }
 
-  private internEventProvenance(provenance: string): number {
-    const existing = this.db
-      .prepare(
-        `SELECT id
-           FROM session_provenances
-          WHERE provenance = ?
-          ORDER BY id
-          LIMIT 1`,
-      )
-      .get(provenance) as { id: number } | undefined;
-    if (existing !== undefined) return existing.id;
-    const inserted = this.db
-      .prepare("INSERT INTO session_provenances (provenance) VALUES (?)")
-      .run(provenance);
-    return Number(inserted.lastInsertRowid);
-  }
-
   private assertGloballyUnusedId(id: string): void {
     const row = this.db
       .prepare(
@@ -816,6 +800,9 @@ function decodeReceiptRow(row: unknown, context: string): CommandReceipt {
 
 function decodeEvent(row: unknown, context: string): SessionEvent {
   const value = asRecord(row, context);
+  if (value.provenance === null) {
+    throw new Error(`${context} is missing its referenced provenance row`);
+  }
   const attachmentId = readNullableString(value.attachment_id, `${context}.attachment_id`);
   const commandId = readNullableString(value.command_id, `${context}.command_id`);
   const event: SessionEvent = {

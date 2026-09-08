@@ -15,7 +15,6 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@noble/hashes": "2.3.0",
     "@volli/shared": "workspace:*"
   },
   "devDependencies": {

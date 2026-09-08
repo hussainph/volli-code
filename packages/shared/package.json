@@ -7,12 +7,19 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./native-observation-id": {
+      "types": "./src/native-observation-id.ts",
+      "import": "./src/native-observation-id.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.3.0"
   },
   "devDependencies": {
     "@types/culori": "^4.0.1",

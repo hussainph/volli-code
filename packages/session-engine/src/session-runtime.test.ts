@@ -5,7 +5,7 @@ import type {
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
-import { sessionPersonNeed } from "@volli/shared";
+import { nativeObservationEventId, sessionPersonNeed } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -15,7 +15,6 @@ import {
   isSessionStreamCompactionProgress,
   isSessionStreamFrame,
   isSessionStreamOverlay,
-  nativeObservationEventId,
   NativeAttachmentError,
   SessionRuntimeConflictError,
   SessionRuntimeNotFoundError,

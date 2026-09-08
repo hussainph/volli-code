@@ -343,13 +343,28 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
     failure: null,
     created_sequence: 1,
   });
-  const provenance = JSON.stringify({
-    source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/alpha" } },
-    venue: { id: "local", kind: "local" },
-  });
-  // v42 stores this once and events carry the integer; older fixture versions
-  // skip this table and retain their original JSON column below.
-  insert("session_provenances", { id: 1, provenance });
+  const provenances = [
+    JSON.stringify({
+      source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/alpha" } },
+      venue: { id: "local", kind: "local" },
+    }),
+    // Distinct on disk, identical to the first after backup strips `cwd`.
+    // Keeping both proves the intentionally non-unique value index restores
+    // every integer reference rather than coalescing redacted rows.
+    JSON.stringify({
+      source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/beta" } },
+      venue: { id: "local", kind: "local" },
+    }),
+    JSON.stringify({
+      source: { kind: "system", id: "backup-fixture", detail: null },
+      venue: { id: "local", kind: "local" },
+    }),
+  ] as const;
+  // v42 stores these once and events carry the integers; older fixture
+  // versions skip this table and retain their original JSON column below.
+  for (const [index, provenance] of provenances.entries()) {
+    insert("session_provenances", { id: index + 1, provenance });
+  }
   insert("session_commands", {
     id: "command-1",
     session_id: "session-root",
@@ -357,17 +372,19 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
     intent: JSON.stringify({ kind: "message.submit", reference: reference(artifacts.promptId) }),
     route: JSON.stringify({ adapterId: "terminal", attachmentId: "attach-1" }),
   });
-  const events: Array<[string, number, string | null, unknown]> = [
+  const events: Array<[string, number, string | null, number, unknown]> = [
     [
       nativeEventIds ? FIXTURE_NATIVE_RECEIPT_EVENT_ID : "event-1",
       1,
       "command-1",
+      3,
       { kind: "command.accepted", commandId: "command-1" },
     ],
     [
       "event-2",
       2,
       "command-1",
+      1,
       {
         kind: "transcript.referenced",
         attachmentId: "attach-1",
@@ -379,6 +396,7 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
       "event-3",
       3,
       null,
+      2,
       {
         kind: "transcript.referenced",
         attachmentId: "attach-1",
@@ -390,6 +408,7 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
       nativeEventIds ? FIXTURE_NATIVE_USAGE_EVENT_ID : "event-4",
       4,
       null,
+      1,
       {
         kind: "usage.recorded",
         attachmentId: "attach-1",
@@ -409,15 +428,15 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
       },
     ],
   ];
-  for (const [id, sequence, commandId, payload] of events) {
+  for (const [id, sequence, commandId, provenanceId, payload] of events) {
     insert("session_events", {
       id,
       session_id: "session-root",
       sequence,
       occurred_at: 250 + sequence,
       recorded_at: 250 + sequence,
-      provenance,
-      provenance_id: 1,
+      provenance: provenances[provenanceId - 1],
+      provenance_id: provenanceId,
       attachment_id: "attach-1",
       command_id: commandId,
       payload: JSON.stringify(payload),
@@ -429,8 +448,8 @@ function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boole
     sequence: 1,
     occurred_at: 260,
     recorded_at: 260,
-    provenance,
-    provenance_id: 1,
+    provenance: provenances[2],
+    provenance_id: 3,
     attachment_id: null,
     command_id: null,
     payload: JSON.stringify({ kind: "session.signaled", signal: "done", reason: null }),

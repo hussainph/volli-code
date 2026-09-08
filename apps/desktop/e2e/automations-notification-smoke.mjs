@@ -82,6 +82,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+import { internSessionEventProvenance } from "../src/main/db/session-event-provenance.ts";
 import {
   assertBuiltRendererLoaded,
   assertProfileIsolated,
@@ -444,15 +445,7 @@ try {
       source: { kind: "adapter", id: "pi", detail: null },
       venue: { id: "local", kind: "local" },
     });
-    const knownProvenance = db
-      .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
-      .get(provenance);
-    const provenanceId =
-      knownProvenance?.id ??
-      Number(
-        db.prepare("INSERT INTO session_provenances (provenance) VALUES (?)").run(provenance)
-          .lastInsertRowid,
-      );
+    const provenanceId = internSessionEventProvenance(db, provenance);
     db.prepare(
       `INSERT INTO session_events
          (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)

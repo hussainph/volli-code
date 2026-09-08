@@ -115,14 +115,21 @@ function digestSessionUsage(db: BetterSqlite3.Database): TableContentDigest {
   return digestRows(rows, USAGE_COLUMNS, "session-usage-content");
 }
 
-const RECEIPT_COLUMNS = ["session_id", "command_id", "sequence", "recorded_at", "receipt"] as const;
+const RECEIPT_COLUMNS = [
+  "id",
+  "session_id",
+  "command_id",
+  "sequence",
+  "recorded_at",
+  "receipt",
+] as const;
 
 function digestSessionCommandReceipts(db: BetterSqlite3.Database): TableContentDigest {
   const rows = db
     .prepare(
       `SELECT ${RECEIPT_COLUMNS.join(", ")}
          FROM session_command_receipts
-        ORDER BY session_id COLLATE BINARY, command_id COLLATE BINARY,
+        ORDER BY id COLLATE BINARY, session_id COLLATE BINARY, command_id COLLATE BINARY,
                  sequence, recorded_at, receipt COLLATE BINARY`,
     )
     .iterate() as Iterable<DigestRow>;
@@ -131,10 +138,10 @@ function digestSessionCommandReceipts(db: BetterSqlite3.Database): TableContentD
 
 /**
  * Computes the migration's logical before/after digest on an open v41-or-newer
- * database. Event ids, usage event ids, and receipt row/event ids are omitted;
+ * database. Event ids, usage event ids, and receipt event ids are omitted;
  * every value migration 42 must preserve is hashed in a deterministic order.
- * Receipt JSON stays byte-for-byte protected because native receipt ids are not
- * in migration 42's narrowed rewrite scope.
+ * Receipt row ids and JSON stay byte-for-byte protected because native receipt
+ * ids are not in migration 42's narrowed rewrite scope.
  */
 export function computeSessionStorageContentDigest(
   db: BetterSqlite3.Database,

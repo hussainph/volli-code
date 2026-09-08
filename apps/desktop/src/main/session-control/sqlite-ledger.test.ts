@@ -3,6 +3,7 @@ import { createSessionEngine } from "@volli/session-engine";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
@@ -41,11 +42,7 @@ const provenance = {
 };
 
 function provenanceId(): number {
-  return (
-    ctx.db
-      .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
-      .get(JSON.stringify(provenance)) as { id: number }
-  ).id;
+  return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
 }
 
 describe("SqliteSessionLedger", () => {
@@ -763,6 +760,30 @@ describe("SqliteSessionLedger", () => {
     ctx.db.pragma("ignore_check_constraints = OFF");
     await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
       "contains invalid JSON",
+    );
+  });
+
+  it("fails loudly instead of dropping events whose provenance row is missing", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-missing-provenance",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Missing provenance",
+      provenance,
+    });
+    ctx.db.pragma("foreign_keys = OFF");
+    ctx.db
+      .prepare(
+        `DELETE FROM session_provenances
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
+
+    await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
+      /missing.*provenance/i,
     );
   });
 

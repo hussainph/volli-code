@@ -10,6 +10,7 @@
 import type Database from "better-sqlite3";
 import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -35,17 +36,6 @@ function detailFor(record: SessionRecord): TerminalAttachmentDetail {
     launchKind: record.launchKind,
     placement: record.placement,
   };
-}
-
-function testProvenanceId(db: Database.Database): number {
-  const existing = db
-    .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
-    .get(TEST_PROVENANCE) as { id: number } | undefined;
-  if (existing !== undefined) return existing.id;
-  return Number(
-    db.prepare("INSERT INTO session_provenances (provenance) VALUES (?)").run(TEST_PROVENANCE)
-      .lastInsertRowid,
-  );
 }
 
 function nextSequence(db: Database.Database, sessionId: string): number {
@@ -76,7 +66,7 @@ function appendEvent(
     ...input,
     sequence: nextSequence(db, input.sessionId),
     recordedAt: input.occurredAt,
-    provenanceId: testProvenanceId(db),
+    provenanceId: internSessionEventProvenance(db, TEST_PROVENANCE),
     payload: JSON.stringify(input.payload),
   });
 }

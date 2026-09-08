@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { compactNativeObservationEventId, createSessionEngine } from "@volli/session-engine";
+import { createSessionEngine } from "@volli/session-engine";
+import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -45,6 +46,27 @@ function withoutId<T extends { id: string }>(value: T): Omit<T, "id"> {
   return content;
 }
 
+function readV41ProvenanceByPosition(profile: FixtureProfile): unknown[] {
+  return profile.db
+    .prepare(
+      `SELECT session_id, sequence, provenance
+         FROM session_events
+        ORDER BY session_id COLLATE BINARY, sequence`,
+    )
+    .all();
+}
+
+function readV42ProvenanceByPosition(profile: FixtureProfile): unknown[] {
+  return profile.db
+    .prepare(
+      `SELECT e.session_id, e.sequence, p.provenance
+         FROM session_events e
+         LEFT JOIN session_provenances p ON p.id = e.provenance_id
+        ORDER BY e.session_id COLLATE BINARY, e.sequence`,
+    )
+    .all();
+}
+
 function readV41EventContent(profile: FixtureProfile, id: string): Record<string, unknown> {
   const row = profile.db
     .prepare(
@@ -81,6 +103,7 @@ describe("migration 42 — compact native event ids and interned provenance", ()
     installNativeUsageProjection(profile);
     const beforeDigest = computeSessionStorageContentDigest(profile.db);
     const beforeEventContent = readV41EventContent(profile, USAGE_EVENT_ID);
+    const beforeProvenance = readV41ProvenanceByPosition(profile);
 
     migrate(profile.db, profile.dbPath);
 
@@ -99,8 +122,14 @@ describe("migration 42 — compact native event ids and interned provenance", ()
       ),
     ).not.toContain("provenance");
     expect(profile.db.prepare("SELECT COUNT(*) AS n FROM session_provenances").get()).toEqual({
-      n: 1,
+      n: 3,
     });
+    expect(readV42ProvenanceByPosition(profile)).toEqual(beforeProvenance);
+    expect(
+      (profile.db.pragma("index_list(session_events)") as Array<{ name: string }>).map(
+        ({ name }) => name,
+      ),
+    ).not.toContain("session_events_session_sequence");
 
     const afterLedger = new SqliteSessionLedger(profile.db);
     const afterEvent = await afterLedger.transaction((transaction) =>
@@ -193,6 +222,38 @@ describe("migration 42 — compact native event ids and interned provenance", ()
       profile.db.prepare("SELECT COUNT(*) AS n FROM session_events WHERE id = ?").get(compactId),
     ).toEqual({ n: 1 });
     expect(profile.db.prepare("SELECT COUNT(*) AS n FROM session_usage").get()).toEqual({ n: 1 });
+  });
+
+  it("preserves pre-existing orphan and session-mismatched usage rows", () => {
+    const profile = v41Fixture({ nativeEventIds: true });
+    installNativeUsageProjection(profile);
+    const insertUsage = profile.db.prepare(
+      `INSERT INTO session_usage
+        (event_id, session_id, project_id, ticket_id, occurred_at, cause,
+         provider_id, model_id, input_tokens, output_tokens,
+         cache_read_tokens, cache_write_tokens, cost_usd, cost_basis)
+       VALUES (?, ?, 'proj-alpha', 'ticket-live', 255, 'assistant',
+               'anthropic', 'claude-opus-4-1', 1, 1, 0, 0, 0.01, 'catalog-estimate')`,
+    );
+    insertUsage.run("missing-event", "session-root");
+    insertUsage.run("event-child-1", "session-root");
+
+    expect(() => migrate(profile.db, profile.dbPath)).not.toThrow();
+
+    expect(profile.db.pragma("user_version", { simple: true })).toBe(42);
+    expect(
+      profile.db
+        .prepare(
+          `SELECT event_id, session_id
+             FROM session_usage
+            WHERE event_id IN ('missing-event', 'event-child-1')
+            ORDER BY event_id`,
+        )
+        .all(),
+    ).toEqual([
+      { event_id: "event-child-1", session_id: "session-root" },
+      { event_id: "missing-event", session_id: "session-root" },
+    ]);
   });
 
   it("rejects a compact-id collision before changing any row and rolls back", () => {

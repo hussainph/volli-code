@@ -8,12 +8,12 @@
  * nothing to protect yet.
  */
 import { copyFileSync } from "node:fs";
-import { compactNativeObservationEventId } from "@volli/session-engine";
+import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import {
   assertSessionStorageContentUnchanged,
   computeSessionStorageContentDigest,
-} from "./session-storage-digest";
+} from "./session-storage-digest.ts";
 
 export interface Migration {
   version: number;
@@ -1830,7 +1830,6 @@ CREATE TABLE session_events (
   FOREIGN KEY (session_id, command_id)
     REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
 );
-CREATE INDEX session_events_session_sequence ON session_events(session_id, sequence);
 CREATE INDEX session_events_command ON session_events(command_id);
 CREATE INDEX session_events_attachment ON session_events(attachment_id);
 `;
@@ -2077,6 +2076,24 @@ function countRows(db: Database.Database, sql: string): number {
   return (db.prepare(sql).get() as { count: number }).count;
 }
 
+interface SessionUsageReferenceProblems {
+  missingEvents: number;
+  mismatchedSessions: number;
+}
+
+function sessionUsageReferenceProblems(db: Database.Database): SessionUsageReferenceProblems {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN e.id IS NULL THEN 1 ELSE 0 END), 0) AS missingEvents,
+              COALESCE(SUM(CASE
+                WHEN e.id IS NOT NULL AND e.session_id <> u.session_id THEN 1 ELSE 0
+              END), 0) AS mismatchedSessions
+         FROM session_usage u
+         LEFT JOIN session_events e ON e.id = u.event_id`,
+    )
+    .get() as SessionUsageReferenceProblems;
+}
+
 /** Migration 042's verified rewrite, run inside migrate's existing transaction. */
 function applyMigration042SessionEventStorage(db: Database.Database): void {
   const eventColumns = db.pragma("table_info(session_events)") as { name: string }[];
@@ -2094,6 +2111,7 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   }
 
   const before = computeSessionStorageContentDigest(db);
+  const usageReferencesBefore = sessionUsageReferenceProblems(db);
   db.function(
     "compact_native_observation_event_id_v42",
     { deterministic: true },
@@ -2160,9 +2178,10 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   // Copy both sides of the receipt FK to SQLite's TEMP database, then drop the
   // child before its parent. Creating the compact main tables only after the
   // old ones are gone lets SQLite reuse their pages instead of permanently
-  // growing the profile by the size of a second event ledger. TEMP_STORE=FILE
-  // keeps the copy outside the main database and bounds heap use on large
-  // profiles; every object is still covered by migrate's one transaction.
+  // growing the profile by the size of a second event ledger. better-sqlite3's
+  // SQLITE_TEMP_STORE=1 compile default keeps the copy outside the main
+  // database and bounds heap use on large profiles; every object is still
+  // covered by migrate's one transaction.
   db.exec(`
     CREATE TEMP TABLE session_events_v41_copy AS
     SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
@@ -2217,13 +2236,15 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   if (failedRewrites !== 0) {
     throw new Error(`Migration 42 failed to verify ${failedRewrites} compact event id rewrite(s)`);
   }
-  const danglingUsage = countRows(
-    db,
-    `SELECT COUNT(*) AS count
-       FROM session_usage u
-       LEFT JOIN session_events e ON e.id = u.event_id
-      WHERE e.id IS NULL OR e.session_id <> u.session_id`,
-  );
+  const usageReferencesAfter = sessionUsageReferenceProblems(db);
+  if (
+    usageReferencesAfter.missingEvents > usageReferencesBefore.missingEvents ||
+    usageReferencesAfter.mismatchedSessions > usageReferencesBefore.mismatchedSessions
+  ) {
+    throw new Error(
+      `Migration 42 increased broken usage references: missing events ${usageReferencesBefore.missingEvents}→${usageReferencesAfter.missingEvents}, mismatched Sessions ${usageReferencesBefore.mismatchedSessions}→${usageReferencesAfter.mismatchedSessions}`,
+    );
+  }
   const danglingReceipts = countRows(
     db,
     `SELECT COUNT(*) AS count
@@ -2232,10 +2253,8 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
          ON e.id = r.receipt_event_id AND e.session_id = r.session_id
       WHERE r.receipt_event_id IS NOT NULL AND e.id IS NULL`,
   );
-  if (danglingUsage !== 0 || danglingReceipts !== 0) {
-    throw new Error(
-      `Migration 42 left dangling event references: usage=${danglingUsage}, receipts=${danglingReceipts}`,
-    );
+  if (danglingReceipts !== 0) {
+    throw new Error(`Migration 42 left ${danglingReceipts} dangling receipt event reference(s)`);
   }
   const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
   if (foreignKeyViolations.length > 0) {

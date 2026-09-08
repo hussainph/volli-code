@@ -1,4 +1,4 @@
-import { projectSession } from "@volli/shared";
+import { nativeObservationEventId, projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
   CompactionReason,
@@ -35,7 +35,6 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
-import { nativeObservationEventId } from "./native-observation-id";
 import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
 import {
   RuntimeObservationTranslator,
@@ -2027,7 +2026,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       return;
     }
     const base = {
-      id: nativeObservationId(adapter.id, spec.sessionId, spec.attachmentId, observation.id),
+      id: nativeObservationEventId(adapter.id, spec.sessionId, spec.attachmentId, observation.id),
       sessionId: spec.sessionId,
       attachmentId: spec.attachmentId,
       occurredAt: observation.occurredAt,
@@ -3121,15 +3120,6 @@ function messageDeliveryFailureAttentionId(
   commandId: string,
 ): string {
   return ["message-delivery", sessionId, adapterId, commandId].map(encodeURIComponent).join(":");
-}
-
-function nativeObservationId(
-  adapterId: string,
-  sessionId: string,
-  attachmentId: string,
-  observationId: string,
-): string {
-  return nativeObservationEventId(adapterId, sessionId, attachmentId, observationId);
 }
 
 function nativeReceiptId(commandId: string, receipt: DeliveryReceipt): string {

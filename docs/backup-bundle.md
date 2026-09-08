@@ -107,7 +107,7 @@ Redacted values (rows travel, the value does not):
 | `tickets.worktree_path` | `NULL` | a directory on the source machine |
 | `session_attachments.native_id` | `NULL` | a handle to a process that is gone |
 | `session_attachments.native_detail` | `cwd` key stripped | terminal working directory |
-| `session_events.provenance` / `.payload` | `cwd` key stripped | the same directory, inside a fact |
+| `session_provenances.provenance` / `session_events.payload` | `cwd` key stripped | the same directory, inside a fact |
 | `session_commands.route` | `cwd` key stripped | delivery route, never a live directory |
 
 The redactions cover every value the app **acts on** — a directory it would

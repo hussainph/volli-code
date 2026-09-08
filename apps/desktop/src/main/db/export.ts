@@ -734,7 +734,8 @@ interface SessionEventRow {
   sequence: number;
   occurred_at: number;
   recorded_at: number;
-  provenance: string;
+  provenance_id: number;
+  provenance: string | null;
   attachment_id: string | null;
   command_id: string | null;
   payload: string;
@@ -744,22 +745,27 @@ function exportSessionEvents(db: Database.Database): ExportSessionEvent[] {
   const rows = prepared<[], SessionEventRow>(
     db,
     `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
-            p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+            e.provenance_id, p.provenance, e.attachment_id, e.command_id, e.payload
        FROM session_events e
-       JOIN session_provenances p ON p.id = e.provenance_id
+       LEFT JOIN session_provenances p ON p.id = e.provenance_id
       ORDER BY e.session_id COLLATE BINARY, e.sequence, e.id COLLATE BINARY`,
   ).all();
-  return rows.map((event) => ({
-    id: event.id,
-    sessionId: event.session_id,
-    sequence: event.sequence,
-    occurredAt: event.occurred_at,
-    recordedAt: event.recorded_at,
-    provenance: JSON.parse(event.provenance) as unknown,
-    attachmentId: event.attachment_id,
-    commandId: event.command_id,
-    payload: JSON.parse(event.payload) as unknown,
-  }));
+  return rows.map((event) => {
+    if (event.provenance === null) {
+      throw new Error(`Session event ${event.id} is missing provenance row ${event.provenance_id}`);
+    }
+    return {
+      id: event.id,
+      sessionId: event.session_id,
+      sequence: event.sequence,
+      occurredAt: event.occurred_at,
+      recordedAt: event.recorded_at,
+      provenance: JSON.parse(event.provenance) as unknown,
+      attachmentId: event.attachment_id,
+      commandId: event.command_id,
+      payload: JSON.parse(event.payload) as unknown,
+    };
+  });
 }
 
 interface SessionCommandRow {

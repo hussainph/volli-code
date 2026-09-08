@@ -290,6 +290,41 @@ describe("restoreBackupBundle — a clean restore", () => {
     }
   });
 
+  it("keeps distinct intern rows when redaction collapses their provenance text", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT provenance, COUNT(*) AS n
+               FROM session_provenances
+              GROUP BY provenance
+             HAVING COUNT(*) > 1`,
+          )
+          .get(),
+      ).toEqual({
+        provenance: JSON.stringify({
+          source: { kind: "adapter", id: "terminal", detail: {} },
+          venue: { id: "local", kind: "local" },
+        }),
+        n: 2,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("moves the previous profile aside instead of merging into it", async () => {
     const bytes = bundleBytes();
     const target = targetProfile();
