@@ -2606,12 +2606,7 @@ describe("SessionRuntime native adapter contract", () => {
       ({ event }) => event.payload.kind === "turn.started",
     );
     expect(started?.event.id).toBe(
-      nativeObservationEventId(
-        "fake",
-        sessionId,
-        attachmentId,
-        "fake:turn:turn-1:started",
-      ),
+      nativeObservationEventId("fake", sessionId, attachmentId, "fake:turn:turn-1:started"),
     );
   });
 

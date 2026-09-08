@@ -2084,9 +2084,7 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   const hasInternedProvenance = eventColumns.some(({ name }) => name === "provenance_id");
   const provenanceTableExists =
     db
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_provenances'",
-      )
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_provenances'")
       .get() !== undefined;
   // Probe-gated so a deliberately rewound user_version converges rather than
   // trying to rebuild an already-v42 schema.

@@ -72,9 +72,7 @@ function digestSessionEvents(db: BetterSqlite3.Database): TableContentDigest {
     ? "e.provenance"
     : "p.provenance";
   const join =
-    provenance === "e.provenance"
-      ? ""
-      : " JOIN session_provenances p ON p.id = e.provenance_id";
+    provenance === "e.provenance" ? "" : " JOIN session_provenances p ON p.id = e.provenance_id";
   const rows = db
     .prepare(
       `SELECT e.session_id, e.sequence, e.occurred_at, e.recorded_at,
@@ -167,8 +165,7 @@ export function assertSessionStorageContentUnchanged(
 ): void {
   const mismatches = (Object.keys(before) as Array<keyof SessionStorageContentDigest>).filter(
     (table) =>
-      before[table].rows !== after[table].rows ||
-      before[table].sha256 !== after[table].sha256,
+      before[table].rows !== after[table].rows || before[table].sha256 !== after[table].sha256,
   );
   if (mismatches.length > 0) {
     throw new Error(`Session storage content changed during migration: ${mismatches.join(", ")}`);

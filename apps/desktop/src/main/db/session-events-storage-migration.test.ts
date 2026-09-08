@@ -1,8 +1,5 @@
 import { existsSync } from "node:fs";
-import {
-  compactNativeObservationEventId,
-  createSessionEngine,
-} from "@volli/session-engine";
+import { compactNativeObservationEventId, createSessionEngine } from "@volli/session-engine";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -135,7 +132,11 @@ describe("migration 42 — compact native event ids and interned provenance", ()
         .get(),
     ).toEqual({ receipt_event_id: receiptEventId });
     expect(
-      profile.db.prepare("SELECT id, json_extract(receipt, '$.id') AS json_id FROM session_command_receipts").get(),
+      profile.db
+        .prepare(
+          "SELECT id, json_extract(receipt, '$.id') AS json_id FROM session_command_receipts",
+        )
+        .get(),
     ).toEqual({ id: "receipt-1", json_id: "receipt-1" });
     expect(profile.db.pragma("foreign_key_check")).toEqual([]);
     expect(
@@ -207,9 +208,9 @@ describe("migration 42 — compact native event ids and interned provenance", ()
 
     expect(() => migrate(profile.db, profile.dbPath)).toThrow(/collision/i);
     expect(profile.db.pragma("user_version", { simple: true })).toBe(41);
-    expect(profile.db.prepare("SELECT id FROM session_events WHERE id = ?").get(USAGE_EVENT_ID)).toEqual(
-      { id: USAGE_EVENT_ID },
-    );
+    expect(
+      profile.db.prepare("SELECT id FROM session_events WHERE id = ?").get(USAGE_EVENT_ID),
+    ).toEqual({ id: USAGE_EVENT_ID });
     expect(
       profile.db.prepare("SELECT name FROM sqlite_master WHERE name = 'session_provenances'").get(),
     ).toBeUndefined();
@@ -226,7 +227,9 @@ describe("migration 42 — compact native event ids and interned provenance", ()
 
     expect(empty.db.pragma("user_version", { simple: true })).toBe(42);
     expect(empty.db.prepare("SELECT COUNT(*) AS n FROM session_events").get()).toEqual({ n: 0 });
-    expect(empty.db.prepare("SELECT COUNT(*) AS n FROM session_provenances").get()).toEqual({ n: 0 });
+    expect(empty.db.prepare("SELECT COUNT(*) AS n FROM session_provenances").get()).toEqual({
+      n: 0,
+    });
 
     empty.cleanup();
     fixture = createFixtureProfile({ schemaVersion: 41 });

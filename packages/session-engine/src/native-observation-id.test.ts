@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  compactNativeObservationEventId,
-  nativeObservationEventId,
-} from "./native-observation-id";
+import { compactNativeObservationEventId, nativeObservationEventId } from "./native-observation-id";
 
 const adapterId = "pi";
 const sessionId = "c8d1f5dc-1111-4222-8333-0123456789ab";
