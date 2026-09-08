@@ -36,6 +36,7 @@ import type {
   HarnessIpcChannel,
   IpcArgs,
   ModelAccessIpcChannel,
+  PiSessionOrphanIpcChannel,
   ShellIpcChannel,
   ThemeIpcChannel,
   WebAccessIpcChannel,
@@ -330,6 +331,32 @@ export const SHELL_IPC: { readonly [C in ShellIpcChannel]: IpcRequestDescriptor<
 
 /** Every background shell command, derived so handler registration cannot omit one. */
 export const SHELL_CHANNELS = Object.keys(SHELL_IPC) as readonly ShellIpcChannel[];
+
+// ---- Pi session orphan descriptor table (VC-327) -------------------------
+
+export const PI_SESSION_ORPHAN_IPC: {
+  readonly [C in PiSessionOrphanIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:pi-session-orphans-scan": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid Pi session orphan scan request",
+  },
+  "volli:pi-session-orphans-reclaim": {
+    guard: (args): args is IpcArgs<"volli:pi-session-orphans-reclaim"> => {
+      if (args.length !== 1 || !isRecord(args[0])) return false;
+      return (
+        typeof args[0]["scanRevision"] === "string" &&
+        isStringArray(args[0]["itemIds"]) &&
+        args[0]["itemIds"].length > 0
+      );
+    },
+    invalidError: "Invalid Pi session orphan cleanup request",
+  },
+};
+
+export const PI_SESSION_ORPHAN_CHANNELS = Object.keys(
+  PI_SESSION_ORPHAN_IPC,
+) as readonly PiSessionOrphanIpcChannel[];
 
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is

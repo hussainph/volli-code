@@ -24,22 +24,18 @@
  * streaming/progress/cancellation work — to VC-317 and the restore UI.
  */
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
 import { blobsRoot, writeBlob } from "../blob-store";
 import { MIGRATIONS, migrate } from "../db/migrations";
 import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
+import {
+  createFileTranscriptArtifactStore,
+  sessionTranscriptsRoot,
+  transcriptReferenceForId,
+} from "../session-runtime/transcript-artifacts";
 import {
   BLOB_PREFIX,
   readBackupBundle,
@@ -212,12 +208,12 @@ async function rebuildUsageProjections(db: Database.Database, meteredFrom: numbe
 }
 
 /** The checks that run against the staged profile, after it is fully written. */
-function verifyStagedProfile(
+async function verifyStagedProfile(
   db: Database.Database,
   staging: string,
   bundle: ReadBackupBundle,
   counts: Record<string, number>,
-): BackupProblem[] {
+): Promise<BackupProblem[]> {
   const problems: BackupProblem[] = [];
   const violations = db.pragma("foreign_key_check") as unknown[];
   if (violations.length > 0) {
@@ -258,19 +254,42 @@ function verifyStagedProfile(
       ),
     );
   }
-  // Every artifact on disk, re-hashed where it now lives.
+  // Every artifact on disk, re-hashed where it now lives. Transcript hashes
+  // describe canonical bytes, not their compressed storage representation.
+  const transcripts = createFileTranscriptArtifactStore(sessionTranscriptsRoot(staging));
   for (const entry of bundle.manifest.entries) {
     if (entry.kind === "data") continue;
-    const path = stagedArtifactPath(staging, entry.path);
-    if (path === null) {
-      problems.push(problem("verify", `Restored bundle entry ${entry.path} has no place on disk.`));
-      continue;
+    let bytes: Buffer | null;
+    if (entry.kind === "transcript") {
+      try {
+        bytes = await transcripts.readCanonicalBytes(
+          transcriptReferenceForId(`sha256:${entry.sha256}`),
+        );
+      } catch (error) {
+        if (isMissing(error)) {
+          problems.push(
+            problem("artifact-missing", `${entry.path} was not written into the profile.`),
+          );
+          continue;
+        }
+        bytes = null;
+      }
+    } else {
+      const path = stagedBlobArtifactPath(staging, entry.path);
+      if (path === null) {
+        problems.push(
+          problem("verify", `Restored bundle entry ${entry.path} has no place on disk.`),
+        );
+        continue;
+      }
+      if (!existsSync(path)) {
+        problems.push(
+          problem("artifact-missing", `${entry.path} was not written into the profile.`),
+        );
+        continue;
+      }
+      bytes = readFileSyncSafe(path);
     }
-    if (!existsSync(path)) {
-      problems.push(problem("artifact-missing", `${entry.path} was not written into the profile.`));
-      continue;
-    }
-    const bytes = readFileSyncSafe(path);
     if (bytes === null || bytes.length !== entry.sizeBytes) {
       problems.push(problem("artifact-corrupt", `${entry.path} has the wrong size after restore.`));
       continue;
@@ -282,6 +301,14 @@ function verifyStagedProfile(
   return problems;
 }
 
+function isMissing(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 function readFileSyncSafe(path: string): Buffer | null {
   try {
     return readFileSync(path);
@@ -290,23 +317,22 @@ function readFileSyncSafe(path: string): Buffer | null {
   }
 }
 
-/** Where an artifact entry lands inside a staged profile. */
-function stagedArtifactPath(staging: string, entryPath: string): string | null {
-  if (entryPath.startsWith(BLOB_PREFIX)) {
-    const hash = entryPath.slice(BLOB_PREFIX.length);
-    return join(blobsRoot(staging), hash.slice(0, 2), hash);
-  }
-  if (entryPath.startsWith(TRANSCRIPT_PREFIX)) {
-    return join(sessionTranscriptsRoot(staging), entryPath.slice(TRANSCRIPT_PREFIX.length));
-  }
-  return null;
+/** Where a blob entry lands inside a staged profile. */
+function stagedBlobArtifactPath(staging: string, entryPath: string): string | null {
+  if (!entryPath.startsWith(BLOB_PREFIX)) return null;
+  const hash = entryPath.slice(BLOB_PREFIX.length);
+  return join(blobsRoot(staging), hash.slice(0, 2), hash);
 }
 
-function writeArtifacts(staging: string, bundle: ReadBackupBundle): void {
+function transcriptIdFromArchivePath(path: string): string {
+  const hex = path.slice(TRANSCRIPT_PREFIX.length, -".json".length);
+  return `sha256:${hex}`;
+}
+
+async function writeArtifacts(staging: string, bundle: ReadBackupBundle): Promise<void> {
   const blobs = blobsRoot(staging);
-  const transcripts = sessionTranscriptsRoot(staging);
+  const transcripts = createFileTranscriptArtifactStore(sessionTranscriptsRoot(staging));
   mkdirSync(blobs, { recursive: true });
-  mkdirSync(transcripts, { recursive: true, mode: 0o700 });
   for (const [path, bytes] of bundle.artifacts) {
     if (path.startsWith(BLOB_PREFIX)) {
       // The store hashes what it is handed, so a byte string that does not
@@ -314,7 +340,10 @@ function writeArtifacts(staging: string, bundle: ReadBackupBundle): void {
       writeBlob(blobs, bytes);
       continue;
     }
-    writeFileSync(join(transcripts, path.slice(TRANSCRIPT_PREFIX.length)), bytes);
+    await transcripts.writeCanonicalBytes(
+      transcriptReferenceForId(transcriptIdFromArchivePath(path)),
+      bytes,
+    );
   }
 }
 
@@ -425,9 +454,9 @@ export async function restoreBackupBundle(request: RestoreRequest): Promise<Rest
     // for — the same walk a launch would have performed.
     migrate(db, dbPath);
     await rebuildUsageProjections(db, bundle.document.usageCoverage.meteredFrom);
-    writeArtifacts(staging, bundle);
+    await writeArtifacts(staging, bundle);
 
-    const problems = verifyStagedProfile(db, staging, bundle, counts);
+    const problems = await verifyStagedProfile(db, staging, bundle, counts);
     if (problems.length > 0) {
       db.close();
       db = null;

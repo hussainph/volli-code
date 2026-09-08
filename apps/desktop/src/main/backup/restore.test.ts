@@ -18,13 +18,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { gunzipSync } from "node:zlib";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { blobFilePath, blobsRoot } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
 import { MIGRATIONS } from "../db/migrations";
 import { openRawDb } from "../db/test-helpers";
-import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
+import {
+  FileTranscriptArtifactStore,
+  sessionTranscriptsRoot,
+} from "../session-runtime/transcript-artifacts";
 import { createBackupBundle } from "./bundle";
 import { restoreBackupBundle } from "./restore";
 import { createFixtureProfile } from "./test-fixture";
@@ -36,6 +40,7 @@ let source: FixtureProfile;
 const scratch: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   source.cleanup();
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -169,9 +174,9 @@ describe("restoreBackupBundle — a clean restore", () => {
     ).toBe("ticket attachment bytes");
     const transcriptPath = join(
       sessionTranscriptsRoot(target.root),
-      `${source.transcriptIds.prompt.slice("sha256:".length)}.json`,
+      `${source.transcriptIds.prompt.slice("sha256:".length)}.json.gz`,
     );
-    expect(JSON.parse(readFileSync(transcriptPath, "utf8"))).toMatchObject({
+    expect(JSON.parse(gunzipSync(readFileSync(transcriptPath)).toString("utf8"))).toMatchObject({
       message: { id: "message-1", parts: [{ type: "text", text: "restore me" }] },
     });
     expect(result.report.artifactsVerified).toBe(4);
@@ -550,6 +555,31 @@ describe("restoreBackupBundle — refusals", () => {
     if (result.ok) return;
     expect(result.problems[0]?.kind).toBe("artifact-missing");
     expect(result.problems[0]?.message).toContain(source.blobHashes.session);
+    expectUntouched(target.root, before);
+  });
+
+  it("reports a transcript absent from staging as missing rather than corrupt", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+    const before = readFileSync(join(target.root, "volli.db"));
+    const missing = Object.assign(new Error("fixture removed staged transcript"), {
+      code: "ENOENT",
+    });
+    vi.spyOn(FileTranscriptArtifactStore.prototype, "readCanonicalBytes").mockRejectedValue(
+      missing,
+    );
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems.some((entry) => entry.kind === "artifact-missing")).toBe(true);
+    expect(result.problems.some((entry) => entry.kind === "artifact-corrupt")).toBe(false);
     expectUntouched(target.root, before);
   });
 
