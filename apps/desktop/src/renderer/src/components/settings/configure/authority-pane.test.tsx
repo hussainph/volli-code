@@ -25,6 +25,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
+import { configureGroups } from "../configure-groups";
 import { AuthorityPane } from "./authority-pane";
 
 function project(authorityPolicy: Project["authorityPolicy"] = null): Project {
@@ -49,6 +50,27 @@ function render(policy: Project["authorityPolicy"] = null): string {
       <AuthorityPane project={project(policy)} />
     </TooltipProvider>,
   );
+}
+
+/** The rail terms that lead to this pane: the category's own label and its keywords. */
+function authorityKeywords(): readonly string[] {
+  for (const group of configureGroups(project())) {
+    for (const category of group.categories) {
+      if (category.key === "authority") return [category.label, ...(category.keywords ?? [])];
+    }
+  }
+  throw new Error("no Configure category `authority`");
+}
+
+/** Static markup escapes the few entities a label can carry; search compares the words. */
+function decodeEntities(text: string): string {
+  return text
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&rsquo;", "\u2019");
 }
 
 describe("Configure → Authority", () => {
@@ -227,6 +249,33 @@ describe("Configure → Authority", () => {
     expect(render({ judgmentMode: "auto" })).toContain(
       "Reset Decision mode to the app-wide value, Ask me",
     );
+  });
+
+  /**
+   * The rail's search index against the pane it indexes — the same rule
+   * `settings-search-smoke.mjs` states in minutes, stated here in
+   * milliseconds, because a row someone can SEE and cannot FIND is a setting
+   * that may as well not be there.
+   *
+   * It is renaming that breaks this, not adding: VC-285 renamed "Who judges
+   * the rest" to "Decision mode — not active yet" and the keyword stayed
+   * behind, pointing at words nobody could see any more. Only labels are
+   * checked, because the shell matches a stored term against the whole typed
+   * string and a label is what a person types.
+   */
+  it("leaves every row label findable from the rail's search", () => {
+    const labels = [...render(null).matchAll(/data-slot="pref-row-label"[^>]*>([^<]+)</g)].map(
+      (match) => decodeEntities(match[1] ?? "").trim(),
+    );
+    const terms = authorityKeywords().map((term) => term.toLowerCase());
+
+    expect(labels.length).toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `"${label}" is drawn in Configure → Authority and nothing in the rail finds it`,
+      ).toBe(true);
+    }
   });
 
   it("names the unauthenticated caller as its own kind, not a borrowed one", () => {
