@@ -135,6 +135,18 @@ export function createFileTranscriptArtifactStore(baseDirectory: string): Transc
   return new FileTranscriptArtifactStore(baseDirectory);
 }
 
+/**
+ * The transcript store's directory under a given Electron `userData` path.
+ *
+ * Named here rather than joined at the one call site, on `blobsRoot`'s
+ * argument: the backup register has to say what happens to this directory, and
+ * a declaration matched against a string literal somewhere else is a
+ * declaration that goes stale the day the directory moves.
+ */
+export function sessionTranscriptsRoot(userDataPath: string): string {
+  return join(userDataPath, "session-transcripts");
+}
+
 function referenceFor(digest: string): TranscriptReference {
   return { id: digest, digest, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE };
 }

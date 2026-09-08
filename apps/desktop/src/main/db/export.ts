@@ -1,9 +1,18 @@
 /**
- * Full-database JSON export: one versioned document covering the tables in
+ * Limited JSON data export: one versioned document covering the tables in
  * the current schema (`migrations.ts` is the authoritative table list) —
- * user-facing data-export trust, a debug/inspection tool, and a manual
- * backup story alongside the migration backups. Export only: there is
- * deliberately no import/restore path here.
+ * user-facing data-export trust, a debug/inspection tool, and a portable
+ * readable copy. Export only: there is deliberately no import/restore path
+ * here.
+ *
+ * **This is not a backup and must never be described as one** (VC-283). It
+ * carries no attachment bytes (`blobs`/`blob_links` and the files under
+ * `<userData>/blobs`), no transcript files (`<userData>/session-transcripts`),
+ * and several ledgers a restore would need. `backup/` is the restorable
+ * format: a versioned bundle with a manifest, content hashes, and a staged
+ * restore. A reader there must refuse a `volli-export` document, which is why
+ * the two formats carry different markers ({@link EXPORT_FORMAT} vs
+ * `BACKUP_BUNDLE_FORMAT`).
  *
  * {@link REBUILDABLE_PROJECTIONS} names what is left out and why: a read model
  * whose every fact is derived from a table this document does carry is stated
