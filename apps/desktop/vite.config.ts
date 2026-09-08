@@ -400,6 +400,8 @@ export default defineConfig(({ mode }) => ({
         // wrote into the worktree — so a missed branch here is markup reaching
         // a renderer, a path resolving outside the checkout, or a request
         // leaving the machine. None of it is visible in a screenshot.
+        "src/editor/markdown-html-blocks.ts",
+        "src/editor/markdown-preview-html.ts",
         "src/editor/markdown-preview-source.ts",
         "src/editor/markdown-preview-image.ts",
         "src/editor/markdown-preview-rehype.ts",

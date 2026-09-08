@@ -41,10 +41,30 @@ import { cn } from "@renderer/lib/utils";
  */
 type RehypePlugins = NonNullable<React.ComponentProps<typeof Streamdown>["rehypePlugins"]>;
 
-/** The `src` protocol list inside `rehype-sanitize`'s schema, as much as we read of it. */
+/** As much of `rehype-sanitize`'s schema as this app reads: URL protocols, and which tags survive. */
 interface SanitizeSchemaLike {
   protocols?: Record<string, readonly string[] | undefined>;
+  tagNames?: readonly string[];
 }
+
+/**
+ * The schema Streamdown ships, read once. The file Preview's own policy
+ * (`editor/markdown-preview-html.ts`) narrows ITS list against this one, so
+ * there is a single place that knows the shape of somebody else's schema.
+ */
+const chatSanitizeSchema: SanitizeSchemaLike = (() => {
+  const pluggable = defaultRehypePlugins["sanitize"];
+  return Array.isArray(pluggable) ? (pluggable[1] as SanitizeSchemaLike) : {};
+})();
+
+/**
+ * Every element the chat renderer's sanitizer keeps.
+ *
+ * Read leniently: if a future release changed the shape, this is EMPTY, and a
+ * consumer intersecting with it admits nothing rather than everything — the
+ * safe direction for a wrong answer about untrusted markup.
+ */
+export const CHAT_SANITIZED_TAG_NAMES: ReadonlySet<string> = new Set(chatSanitizeSchema.tagNames);
 
 export const chatRehypePlugins: RehypePlugins = sanitizedRehypePlugins();
 
@@ -71,14 +91,14 @@ export function sanitizedRehypePlugins(
       chain.push(pluggable);
       continue;
     }
-    const [plugin, schema] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
+    const [plugin] = pluggable as [RehypePlugins[number], SanitizeSchemaLike];
     chain.push([
       plugin,
       {
-        ...schema,
+        ...chatSanitizeSchema,
         protocols: {
-          ...schema.protocols,
-          src: [...(schema.protocols?.["src"] ?? []), BLOB_URL_SCHEME, "data"],
+          ...chatSanitizeSchema.protocols,
+          src: [...(chatSanitizeSchema.protocols?.["src"] ?? []), BLOB_URL_SCHEME, "data"],
         },
       },
     ] as RehypePlugins[number]);

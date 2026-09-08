@@ -55,7 +55,7 @@
  */
 import { classifyFileKind } from "@volli/shared";
 
-import { MARKDOWN_PARSER } from "./markdown-projection";
+import { htmlBlockRanges } from "./markdown-html-blocks";
 import { buildLineIndex, lineAt } from "./text-position";
 
 /**
@@ -190,19 +190,12 @@ const FRONTMATTER_CLOSE = /\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
  * reason the gate asks the projection's parser instead of a regular expression.
  */
 function rawHtmlRefusal(text: string): DocumentViewRefusal | null {
-  // An array rather than a `let`: the assignment happens inside a callback, and
-  // TypeScript would narrow a captured `let` to its initializer afterwards.
-  const blocks: number[] = [];
-  MARKDOWN_PARSER.parse(text).iterate({
-    enter: (node) => {
-      if (blocks.length > 0) return false; // the first one already answers
-      if (node.name !== "HTMLBlock") return true;
-      blocks.push(node.from);
-      return false;
-    },
-  });
-  if (blocks.length === 0) return null;
-  const line = lineAt(buildLineIndex(text), blocks[0]).number;
+  // The SAME walk the read-only Preview marks its omissions from
+  // (`markdown-html-blocks.ts`), so a file cannot be refused here for a
+  // construct the fallback then fails to acknowledge.
+  const [first] = htmlBlockRanges(text);
+  if (first === undefined) return null;
+  const line = lineAt(buildLineIndex(text), first.from).number;
   return {
     reason: "raw-html",
     line,

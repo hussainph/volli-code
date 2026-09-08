@@ -54,7 +54,7 @@ import {
   previewImageNotice,
   type PreviewImageDisplay,
 } from "@renderer/editor/markdown-preview-image";
-import { previewImageRehypePlugin } from "@renderer/editor/markdown-preview-rehype";
+import { previewHardeningPlugin } from "@renderer/editor/markdown-preview-rehype";
 import { OMITTED_HTML_NOTICE, previewSegments } from "@renderer/editor/markdown-preview-source";
 import { cn } from "@renderer/lib/utils";
 
@@ -85,7 +85,7 @@ export interface MarkdownPreviewProps {
 export function MarkdownPreview({ projectId, ticketId, relPath, text }: MarkdownPreviewProps) {
   const segments = React.useMemo(() => previewSegments(text), [text]);
   const rehypePlugins = React.useMemo(
-    () => sanitizedRehypePlugins([previewImageRehypePlugin(relPath)]),
+    () => sanitizedRehypePlugins([previewHardeningPlugin(relPath)]),
     [relPath],
   );
   const file = React.useMemo<PreviewFile>(

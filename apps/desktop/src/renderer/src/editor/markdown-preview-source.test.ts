@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,6 @@ import { documentViewRefusal } from "./document-view-policy";
 import {
   OMITTED_HTML_NOTICE,
   previewSegments,
-  renderableHtmlBlock,
   type PreviewSegment,
 } from "./markdown-preview-source";
 
@@ -42,11 +42,30 @@ describe("previewSegments — ordinary markdown", () => {
     expect(previewSegments(text)).toEqual([{ kind: "markdown", text }]);
   });
 
-  it("never touches the caller's string — Preview reads and nothing else", () => {
-    const text = "---\ntitle: x\n---\n\n<script>alert(1)</script>\n\nBody.\n";
-    const before = text;
-    previewSegments(text);
-    expect(text).toBe(before);
+  it("only ever CUTS: every segment is a verbatim slice of the file, in order", () => {
+    // The observable form of "Preview reads and nothing else". Comparing the
+    // input string with itself afterwards proves nothing — JavaScript strings
+    // are immutable (review round 1) — so this walks the output back onto the
+    // input and insists each piece is found where it should be, with nothing
+    // rewritten, reordered or invented.
+    const text = "---\ntitle: x\n---\n\n# Real\n\n<script>alert(1)</script>\n\nAfter *it*.\n";
+    let cursor = 0;
+    for (const segment of previewSegments(text)) {
+      if (segment.kind !== "markdown") continue;
+      const at = text.indexOf(segment.text, cursor);
+      expect(at, JSON.stringify(segment.text)).toBeGreaterThanOrEqual(cursor);
+      cursor = at + segment.text.length;
+    }
+    // …and what it cut out is exactly the frontmatter and the refused block:
+    // neither reaches the renderer, and both are still in the file.
+    const rendered = previewSegments(text)
+      .filter((segment) => segment.kind === "markdown")
+      .map((segment) => segment.text)
+      .join("");
+    expect(rendered).not.toContain("title: x");
+    expect(rendered).not.toContain("alert(1)");
+    expect(rendered).toContain("# Real");
+    expect(rendered).toContain("After *it*.");
   });
 
   it("keeps the README's own centred HTML wrappers as one renderable document", () => {
@@ -115,91 +134,6 @@ describe("previewSegments — HTML that cannot be rendered safely", () => {
 
   it("names the marker's words once, so the surface and the tests cannot drift", () => {
     expect(OMITTED_HTML_NOTICE).toBe("HTML block not rendered");
-  });
-});
-
-describe("renderableHtmlBlock", () => {
-  it("renders the wrappers repository READMEs are actually built from", () => {
-    expect(renderableHtmlBlock('<p align="center">\n  <b>hi</b>\n</p>')).toBe(true);
-    expect(renderableHtmlBlock('<h1 align="center">Volli Code</h1>')).toBe(true);
-    expect(renderableHtmlBlock('<img src="docs/shot.png" width="1200" alt="Board" />')).toBe(true);
-    expect(renderableHtmlBlock("<details><summary>More</summary>Body</details>")).toBe(true);
-    expect(renderableHtmlBlock('<a href="https://volli.app">Download</a>')).toBe(true);
-    expect(renderableHtmlBlock("<table><tr><td>1</td></tr></table>")).toBe(true);
-  });
-
-  it("refuses active content outright rather than trusting the sanitizer alone", () => {
-    expect(renderableHtmlBlock("<script>alert(1)</script>")).toBe(false);
-    expect(renderableHtmlBlock('<iframe src="https://evil.example"></iframe>')).toBe(false);
-    expect(renderableHtmlBlock('<object data="x.swf"></object>')).toBe(false);
-    expect(renderableHtmlBlock('<embed src="x.swf">')).toBe(false);
-    expect(
-      renderableHtmlBlock('<form action="https://evil.example"><button>Go</button></form>'),
-    ).toBe(false);
-    expect(renderableHtmlBlock('<svg><use href="#x" /></svg>')).toBe(false);
-    expect(renderableHtmlBlock("<style>body{display:none}</style>")).toBe(false);
-    expect(renderableHtmlBlock('<link rel="stylesheet" href="https://evil.example/x.css">')).toBe(
-      false,
-    );
-    expect(renderableHtmlBlock('<base href="https://evil.example/">')).toBe(false);
-  });
-
-  it("refuses an event handler, however it is spelled", () => {
-    expect(renderableHtmlBlock('<div onclick="steal()">hi</div>')).toBe(false);
-    expect(renderableHtmlBlock("<img src='x.png' ONERROR=alert(1)>")).toBe(false);
-    expect(renderableHtmlBlock('<p\n  onmouseover = "x()"\n>hi</p>')).toBe(false);
-  });
-
-  it("refuses a URL scheme that executes or smuggles a document", () => {
-    expect(renderableHtmlBlock('<a href="javascript:alert(1)">x</a>')).toBe(false);
-    expect(renderableHtmlBlock('<a href="JaVaScRiPt:alert(1)">x</a>')).toBe(false);
-    expect(renderableHtmlBlock('<a href="vbscript:msgbox">x</a>')).toBe(false);
-    expect(renderableHtmlBlock('<img src="data:text/html;base64,PHNjcmlwdD4=">')).toBe(false);
-  });
-
-  it("keeps an inert data image, which is the one data: URL a picture may be", () => {
-    expect(renderableHtmlBlock('<img src="data:image/png;base64,iVBORw0KGgo=" alt="dot">')).toBe(
-      true,
-    );
-  });
-
-  it("refuses a doctype, a processing instruction and CDATA", () => {
-    expect(renderableHtmlBlock("<!DOCTYPE html>")).toBe(false);
-    expect(renderableHtmlBlock("<?php echo 1; ?>")).toBe(false);
-    expect(renderableHtmlBlock("<![CDATA[<script>alert(1)</script>]]>")).toBe(false);
-  });
-
-  it("reads a comment as a comment: dropped on render, and never scanned as markup", () => {
-    // The sanitizer deletes comment nodes, so what is inside one cannot reach
-    // the page — and refusing the whole block over the word `script` inside a
-    // comment would hide the div a person actually wrote.
-    expect(
-      renderableHtmlBlock("<div>\n<!-- <script>alert(1)</script> -->\n<b>hi</b>\n</div>"),
-    ).toBe(true);
-    expect(renderableHtmlBlock("<!-- prettier-ignore -->")).toBe(true);
-  });
-
-  it("refuses markup that would fetch on render, so a preview stays offline", () => {
-    // `srcset` is not protocol-checked by the sanitizer, so a remote candidate
-    // would be a network request made by opening a file.
-    expect(renderableHtmlBlock('<img src="a.png" srcset="https://cdn.example/a.png 2x">')).toBe(
-      false,
-    );
-    expect(renderableHtmlBlock('<picture>\n<img src="a.png" alt="x">\n</picture>')).toBe(false);
-  });
-
-  it("refuses a form control typed into a document", () => {
-    // The sanitizer keeps `input` for markdown task lists; a checkbox written
-    // as raw HTML is chrome a read-only page has no use for.
-    expect(renderableHtmlBlock('<p><input type="checkbox" checked></p>')).toBe(false);
-  });
-
-  it("refuses a tag the sanitizer would not keep, rather than dropping it silently", () => {
-    // `<article>` is not dangerous; it is simply not in the renderer's tag
-    // allowlist, so it would vanish along with the structure it carried. A
-    // marker at least says something was left out.
-    expect(renderableHtmlBlock("<article>Reading</article>")).toBe(false);
-    expect(renderableHtmlBlock("<marquee>hi</marquee>")).toBe(false);
   });
 });
 

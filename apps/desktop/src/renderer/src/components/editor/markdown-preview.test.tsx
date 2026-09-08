@@ -274,6 +274,61 @@ describe("MarkdownPreview — hostile input", () => {
   });
 });
 
+/**
+ * The no-network promise, probed at the DOM rather than at `fetch` (review
+ * round 1, P1). A `fetch` spy cannot see what the BROWSER loads for a page: an
+ * `<img srcset>` or a `<source>` inside a `<picture>` is a request the platform
+ * makes on its own, and the first round of this work left one standing because
+ * the loud gate only sees Lezer HTML BLOCKS and the image pass rewrote only
+ * `<img>`. So the assertion is now about the tree that reaches the document:
+ * nothing in it may name a remote host.
+ */
+describe("MarkdownPreview — nothing that reaches the page can fetch", () => {
+  it("strips a remote <source srcset> from INLINE html beside a good local image", async () => {
+    const view = await preview(
+      'Before <picture><source srcset="https://tracker.invalid/pixel.png 1x"><img src="local.png" alt="x"></picture> after.\n',
+    );
+
+    expect(view.innerHTML).not.toContain("tracker.invalid");
+    expect(view.querySelector("source")).toBeNull();
+    expect(view.querySelector("[srcset]")).toBeNull();
+    // The picture a person actually wrote still draws, from main's bytes.
+    expect(view.querySelector("img")?.getAttribute("src")).toBe(PNG_DATA_URL);
+    expect(view.textContent).toContain("Before");
+    expect(view.textContent).toContain("after.");
+  });
+
+  it("strips srcset from an <img> that also carries a good src", async () => {
+    const view = await preview(
+      'Text <img src="local.png" srcset="https://tracker.invalid/2x.png 2x" alt="x"> more.\n',
+    );
+
+    expect(view.innerHTML).not.toContain("tracker.invalid");
+    expect(view.querySelector("[srcset]")).toBeNull();
+  });
+
+  it("strips every other attribute that loads or beacons on render", async () => {
+    for (const markup of [
+      '<a href="https://volli.app" ping="https://tracker.invalid/beacon">link</a>',
+      '<p style="background:url(https://tracker.invalid/bg.png)">styled</p>',
+      '<span title="t" background="https://tracker.invalid/bg.png">bg</span>',
+      '<video src="https://tracker.invalid/v.mp4" poster="https://tracker.invalid/p.png"></video>',
+      '<object data="https://tracker.invalid/x.swf"></object>',
+      '<embed src="https://tracker.invalid/x.swf">',
+      '<link rel="stylesheet" href="https://tracker.invalid/x.css">',
+      '<meta http-equiv="refresh" content="0;url=https://tracker.invalid/">',
+      '<svg><image href="https://tracker.invalid/x.png"/></svg>',
+      "<math><mtext>x</mtext></math>",
+    ]) {
+      const view = await preview(`Around ${markup} it.\n`);
+      expect(view.innerHTML, markup).not.toContain("tracker.invalid");
+      expect(view.querySelector("svg, math, video, embed, object, link, meta"), markup).toBeNull();
+      // The prose the markup was written into survives — stripped, not truncated.
+      expect(view.textContent, markup).toContain("Around");
+    }
+  });
+});
+
 describe("MarkdownPreview — images it will not draw", () => {
   it("names a remote badge instead of fetching it", async () => {
     const view = await preview("![build status](https://img.shields.io/badge/x.svg)");
