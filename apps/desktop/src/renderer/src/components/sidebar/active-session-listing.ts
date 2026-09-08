@@ -23,7 +23,15 @@
  * listed it would grow by however many helpers the agents happened to open,
  * which is the one number a navigator must not be a function of. The INPUT is
  * filtered rather than the store, because the island reads the same rows — see
- * `isSubagentSession`.
+ * `isListableSession`.
+ *
+ * **A parent is busy while its children are.** Dropping the rows must not drop
+ * the work: a Session that delegated and ended its own turn is `idle` with
+ * helpers running inside it, and a band that showed the project as quiet would
+ * disagree with the board over the same Ticket and then clean the parent away
+ * on a clock its own work should have been resetting. So the children are read
+ * for their parent's liveness and recency before they are dropped, which is
+ * why this module wants the rows whole.
  *
  * **Terminal quiet stamps are volatile.** `lastOutputAt` lives in the renderer
  * store and dies with the window, so after a relaunch a genuinely busy terminal
@@ -39,6 +47,7 @@
  */
 import {
   HARNESS_EVENT_GRACE_MS,
+  isListableSession,
   isSubagentSession,
   sessionActivitySource,
   sessionProvenanceOf,
@@ -449,9 +458,11 @@ export interface BuildActiveSessionListingInput {
    * bands on the same terms a terminal does; optional, and absent reads as
    * none. Defaults to `[]`.
    *
-   * Handed over WHOLE, subagents included: dropping them is this module's rule
-   * to apply (see the module comment), and a caller that had to pre-filter
-   * would be a caller that could forget to.
+   * Handed over WHOLE, subagents included, and not merely as a convenience:
+   * this module reads a parent's children to date and band the parent (see the
+   * module comment), so pre-filtered rows would leave it describing a Session
+   * whose work it could no longer see. Dropping them is its rule to apply, and
+   * a caller that had to pre-filter would be a caller that could forget to.
    */
   chatSessions?: readonly ChatSessionRecord[];
   lastOutputAt: Readonly<Record<string, number>>;
@@ -589,24 +600,44 @@ function sessionRow(
   };
 }
 
-/** A chat Session's row. Its activity is the adapter's own word, never a PTY heuristic. */
+/**
+ * A chat Session's row. Its activity is the adapter's own word, never a PTY
+ * heuristic — with one addition it cannot say for itself.
+ *
+ * A PARENT IS BUSY WHILE ITS CHILDREN ARE. A Session that delegated and ended
+ * its own turn sits `idle` with helpers running inside it, and since VC-279
+ * those helpers have no row of their own: the band would show the project as
+ * quiet, drop the parent to Previous half an hour later, and disagree with the
+ * board — which lights the same Ticket `working` for exactly this work. Only
+ * `idle` is overridden. `waiting` is the parent's own question and outranks
+ * anything happening under it; `stopped` ends the children with it.
+ *
+ * `activitySource` stays `reported` because nothing here is inferred from
+ * output recency: a child's `working` is main's word about the child, exactly
+ * as the parent's own word is main's about the parent.
+ */
 function chatRow(
   record: ChatSessionRecord,
   ticket: Ticket | null,
   provenance: SessionProvenance,
+  delegationBusy: boolean,
+  /** The delegation's freshest stamp — the parent's own, or a child's if newer. */
+  activityAt: number,
 ): ActiveSessionRow {
   return {
     id: `chat:${record.sessionId}`,
     ticket,
     title: record.title,
     source: sessionSourceLabel({ kind: "chat", record }),
-    activity: record.activity,
+    activity: delegationBusy && record.activity === "idle" ? "working" : record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
     // The record's two waiting fields move together by construction in main, so
     // this rides along with the attention above rather than being re-decided.
     waitingOn: record.waitingOn,
-    lastActivityAt: record.lastActivityAt,
+    // The row's own age line, so "last 1m" is true of the Session rather than
+    // of the parent's last sentence while its helpers ran for an hour.
+    lastActivityAt: activityAt,
     provenance,
     // A chat Session's tab id is derivable from the Session, whether or not a
     // tab is open. For a ticket-owned Session this names its ticket-tab
@@ -698,6 +729,48 @@ interface PreviousCandidate {
   bornTicketless: boolean;
 }
 
+/** What one Session's delegated children add to its row. */
+interface DelegationActivity {
+  /** At least one child is still running or is stopped on a person. */
+  busy: boolean;
+  /** The newest stamp any child carries. Every entry has at least one child. */
+  lastActivityAt: number;
+}
+
+/**
+ * Each parent's delegation, read off the children this listing is about to
+ * drop (VC-279).
+ *
+ * WHY A WAITING CHILD COUNTS AS BUSY. Its wait is addressed to the parent
+ * (`sessionWaitAudience`), not to this band — the parent's Activity Island
+ * draws and announces it, and a row here saying `waiting` would offer a
+ * question this navigator cannot answer. What the band must not do is go
+ * quiet: the delegation is unfinished either way, and the board reads the same
+ * pair the same way, so the two navigators agree about one Ticket.
+ *
+ * Keyed by `parentSessionId` and never walked transitively: a Subagent Session
+ * cannot delegate, so the tree is one level deep by construction.
+ */
+function delegationActivity(
+  records: readonly ChatSessionRecord[],
+): ReadonlyMap<string, DelegationActivity> {
+  const byParent = new Map<string, DelegationActivity>();
+  for (const record of records) {
+    if (!isSubagentSession(record) || record.parentSessionId === null) continue;
+    const held = byParent.get(record.parentSessionId);
+    byParent.set(record.parentSessionId, {
+      busy: (held?.busy ?? false) || record.activity === "working" || record.activity === "waiting",
+      // No zero identity for the max: a stamp is an instant, not a magnitude,
+      // and seeding with one would date every delegation from the epoch.
+      lastActivityAt:
+        held === undefined
+          ? record.lastActivityAt
+          : Math.max(held.lastActivityAt, record.lastActivityAt),
+    });
+  }
+  return byParent;
+}
+
 /**
  * Which Active group a row belongs to, or `null` when it has aged out of Active
  * altogether. Order matters: an attention outranks everything (that is the
@@ -736,10 +809,15 @@ export function buildActiveSessionListing(
   const now = input.now;
   const filter = input.filter ?? DEFAULT_FILTER;
   const statusEnteredAt = input.statusEnteredAt ?? EMPTY_STATUS_ENTERED_AT;
+  // The children are READ before they are dropped: a parent that delegated and
+  // ended its own turn is doing nothing itself, and only its children can say
+  // that the Session is still busy. This is why the input arrives whole.
+  const allChats = input.chatSessions ?? [];
+  const delegated = delegationActivity(allChats);
   // The one place the navigator's "no Subagent rows" rule is applied — before
   // anything is grouped, dated or sorted, so a child cannot reach a band, a
   // count, or a boundary the caller then waits on (VC-279).
-  const chatSessions = (input.chatSessions ?? []).filter((record) => !isSubagentSession(record));
+  const chatSessions = allChats.filter((record) => isListableSession(record));
   const recordsById = new Map(input.records.map((record) => [record.id, record]));
   const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
   /**
@@ -981,17 +1059,34 @@ export function buildActiveSessionListing(
     });
   }
 
-  // 2b. Chat Sessions, which carry their own activity and recency.
+  // 2b. Chat Sessions, which carry their own activity and recency — plus, for
+  // one that delegated, its children's.
   for (const record of chatSessions) {
     const ticket = record.ticketId === null ? null : (ticketsById.get(record.ticketId) ?? null);
-    const row = chatRow(record, ticket, provenanceOf(record.sessionId));
-    const group = activeGroup(row, record.lastActivityAt, record.live, now);
+    const delegation = delegated.get(record.sessionId);
+    // The freshest fact in the whole delegation, so a parent sorts and ages by
+    // what its Session is actually doing rather than by when it last spoke.
+    const activityAt =
+      delegation === undefined
+        ? record.lastActivityAt
+        : Math.max(record.lastActivityAt, delegation.lastActivityAt);
+    const row = chatRow(
+      record,
+      ticket,
+      provenanceOf(record.sessionId),
+      delegation?.busy ?? false,
+      activityAt,
+    );
+    // `live` is the parent's own attachment. A busy child keeps the row in the
+    // working group without one, because the work is running in main whether
+    // or not this parent is bound to an executor right now.
+    const group = activeGroup(row, activityAt, record.live || (delegation?.busy ?? false), now);
     if (group !== null) {
       activeEntries.push({
         row,
         group,
-        recency: record.lastActivityAt,
-        quietAt: record.lastActivityAt,
+        recency: activityAt,
+        quietAt: activityAt,
       });
       continue;
     }
@@ -1001,7 +1096,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "chat",
-        endedOrQuietAt: record.lastActivityAt,
+        endedOrQuietAt: activityAt,
         provenance: row.provenance,
         target: row.target,
         cleaned: false,

@@ -13,7 +13,7 @@
  * what each one's liveness is and how they order are decisions, and a decision
  * inside a `.tsx` is a decision no test can reach.
  */
-import { isSubagentSession, type ChatSessionRecord, type SessionRecord } from "@volli/shared";
+import { isListableSession, type ChatSessionRecord, type SessionRecord } from "@volli/shared";
 
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 
@@ -93,7 +93,7 @@ export function homeSessionRows(
 ): readonly HomeSessionRow[] {
   const rows: HomeSessionRow[] = [
     ...chats
-      .filter((row) => !isSubagentSession(row))
+      .filter((row) => isListableSession(row))
       .map((row) => ({
         id: row.sessionId,
         kind: "chat" as const,

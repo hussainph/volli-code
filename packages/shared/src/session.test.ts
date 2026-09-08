@@ -11,6 +11,7 @@ import {
   isSessionActivityState,
   isSessionLaunchKind,
   isSessionPlacement,
+  isListableSession,
   isSubagentSession,
   sessionWaitAudience,
   SESSION_ACTIVITY_STATES,
@@ -42,6 +43,24 @@ describe("isSubagentSession", () => {
     // Fail-open by construction: an unlisted Role reads as listable, which is
     // a Session that shows up rather than one that vanishes.
     expect(SESSION_ROLES.filter((role) => isSubagentSession({ role }))).toEqual(["subagent"]);
+  });
+});
+
+describe("isListableSession", () => {
+  it("is the listing question, and answers it for every Role", () => {
+    expect(SESSION_ROLES.filter((role) => isListableSession({ role }))).toEqual([
+      "project",
+      "ticket",
+    ]);
+  });
+
+  it("is exactly the Sessions that are not delegated children", () => {
+    // Two names for one answer TODAY, and separate on purpose: a Role that
+    // stopped being listable without being a subagent would move this one and
+    // must not move the other.
+    for (const role of SESSION_ROLES) {
+      expect(isListableSession({ role })).toBe(!isSubagentSession({ role }));
+    }
   });
 });
 

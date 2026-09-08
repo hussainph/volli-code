@@ -1,7 +1,7 @@
 import {
   automationOwnership,
   displayTicketId,
-  isSubagentSession,
+  isListableSession,
   sessionProvenanceOf,
   type Automation,
   type AutomationOwnership,
@@ -130,7 +130,7 @@ export function buildCommandPaletteItems(
     }
   }
   for (const record of chatSessions) {
-    if (isSubagentSession(record)) continue;
+    if (!isListableSession(record)) continue;
     const project = projectById.get(record.projectId);
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);

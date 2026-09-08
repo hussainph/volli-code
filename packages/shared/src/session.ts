@@ -289,6 +289,26 @@ export function isSubagentSession(record: Pick<ChatSessionRecord, "role">): bool
 }
 
 /**
+ * Whether a Session listing may DRAW this Session as a row.
+ *
+ * The listing question, which is not the Role question above even though one
+ * answers the other today. Four listings ask it — the sidebar's two bands, the
+ * ticket rail's roster, Home's Sessions page and ⌘K — and asking it by name is
+ * what makes a fifth listing's author read this comment rather than reinvent
+ * `role !== "subagent"`. It is also the one edit a future non-listable Role
+ * would need: `isSubagentSession` has callers that genuinely mean the Role (the
+ * island's own feed, the usage fold, {@link sessionWaitAudience}) and would be
+ * wrong to widen.
+ *
+ * Unlistable is not unreachable, and never means hidden: see
+ * {@link isSubagentSession} for where a child is reached instead, and why the
+ * caches behind these listings stay complete.
+ */
+export function isListableSession(record: Pick<ChatSessionRecord, "role">): boolean {
+  return !isSubagentSession(record);
+}
+
+/**
  * WHO answers this Session's `waiting`.
  *
  * A chat Session says `waiting` for exactly three reasons — a question, a tool

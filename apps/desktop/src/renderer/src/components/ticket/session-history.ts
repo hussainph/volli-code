@@ -2,6 +2,7 @@ import {
   canResumeHarness,
   effectiveHarnessId,
   harnessLabel,
+  isListableSession,
   isSubagentSession,
   shortSessionId,
   type ChatSessionRecord,
@@ -393,7 +394,7 @@ export function buildTicketChatSessionRows(
   records: readonly ChatSessionRecord[],
 ): TicketChatSessionRow[] {
   return records
-    .filter((record) => !isSubagentSession(record))
+    .filter((record) => isListableSession(record))
     .map((record) => ({ record, title: record.title, isOpen: record.live }));
 }
 

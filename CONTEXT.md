@@ -112,7 +112,11 @@ cluster reads, what usage counts, and what `volli session list` still returns
 carrying its Role for an orchestrator reading its own fleet. A working child
 still lights its Ticket's board ring — that is work happening there — but a
 child's wait never draws the `waiting` ring, which would send a person to a
-Ticket holding no row they could answer. A wait is an errand, so dropping the
+Ticket holding no row they could answer. The row that stands for that work is
+the parent's: a Session that delegated reads `working` and stays in the
+sidebar's Active band for as long as any child of it is running, dated by the
+freshest fact in the delegation, so the band and the board never disagree about
+one Ticket. A wait is an errand, so dropping the
 row moves the addressee rather than the errand (`sessionWaitAudience`): a child
 stopped on a permission or an expired credential marks its chip in the parent's
 cluster and is announced there, which is the only surface that can hand that
