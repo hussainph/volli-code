@@ -132,6 +132,7 @@ import {
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
+  repackLegacyTranscriptArtifacts,
   sessionTranscriptsRoot,
 } from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
@@ -2716,6 +2717,28 @@ app.whenReady().then(async () => {
   };
   const mainWindow = createOwnedWindow();
   mainWindow.webContents.once("did-finish-load", () => {
+    // Transcript repack is migration-by-sibling rather than an in-place
+    // rewrite. Give first paint five seconds of quiet, then process only small
+    // batches with a pause between them. Every individual failure is kept for
+    // the next launch, with its legacy bytes untouched.
+    const repackDelay = setTimeout(() => {
+      void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
+        batchSize: 25,
+        onError: (name, error) => {
+          console.error(`[transcript-repack] kept ${name}:`, errorMessage(error));
+        },
+      })
+        .then((report) => {
+          console.info(
+            `[transcript-repack] scanned=${report.scanned} repacked=${report.repacked} skipped=${report.skipped}`,
+          );
+        })
+        .catch((error) => {
+          console.error("[transcript-repack] scan failed:", errorMessage(error));
+        });
+    }, 5_000);
+    repackDelay.unref();
+
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
     // can never become an unhandled rejection from this fire-and-forget path.
