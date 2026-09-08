@@ -27,6 +27,14 @@
  * has nothing to reveal, and a tooltip that opened over every tab in a strip
  * would be noise a person learns to ignore — which is how a reveal that matters
  * gets missed.
+ *
+ * The second shape has a variant, for a value the focusable control does not
+ * itself render: a Select trigger draws the selected ITEM's children, so the
+ * value is a descendant of a control it knows nothing about. `within` names
+ * that host, and the hook then listens where the focus actually lands (VC-288
+ * re-review). It also answers the state that has no host at all — a host that
+ * is `disabled` takes no focus and its subtree gets no pointer events, so the
+ * value has to carry its own stop for exactly as long as that lasts.
  */
 import * as React from "react";
 
@@ -56,17 +64,101 @@ export function isTextClipped(element: HTMLElement | null | undefined): boolean 
  * text is whole, and it is measured at the moment of the request rather than
  * on a resize, because that is the one moment the answer is needed and the
  * cheapest place to ask for it.
+ *
+ * Pass `within` when the focus stop is an ANCESTOR rather than the element
+ * itself. Focus does not travel down: `focusin` on the host bubbles up past
+ * the value, never into it, so a Select trigger taking focus would otherwise
+ * leave its own truncated value silent. See {@link HostedReveal.ownStop} for
+ * the state where there is no usable host at all.
  */
-export function useClippedReveal(ref: React.RefObject<HTMLElement | null>): {
+export function useClippedReveal(
+  ref: React.RefObject<HTMLElement | null>,
+  options: { readonly within?: string } = {},
+): HostedReveal {
+  const { within } = options;
+  const [open, setOpen] = React.useState(false);
+  // Whether the value has to be its own focus stop. `false` until a host is
+  // found and asked, which is also the answer for every surface that passes no
+  // `within` at all: there, the caller's own element is already the stop.
+  const [ownStop, setOwnStop] = React.useState(false);
+  // A press in flight. Clicking a Select trigger focuses it, and a reveal that
+  // opened on THAT focus would draw a label over the list the same click just
+  // opened. Radix's own trigger keeps this ref for the same reason; the host's
+  // focus is not ours to interpret without it.
+  const pressing = React.useRef(false);
+  const reveal = React.useCallback(
+    (next: boolean) => {
+      setOpen(next && isTextClipped(ref.current));
+    },
+    [ref],
+  );
+
+  React.useEffect(() => {
+    if (within === undefined) return;
+    const value = ref.current;
+    const host = value?.closest<HTMLElement>(within) ?? null;
+    // No host: the same value drawn in the list row it was copied FROM, where
+    // it wraps and has nothing to reveal.
+    if (host === null || value === null) return;
+
+    // A frozen host is a `<button disabled>`: out of the tab order, and its
+    // whole subtree is skipped by pointer events too. Reading what the control
+    // says must not depend on being allowed to change it, so the value borrows
+    // a stop — and hands it back the moment the host can take focus again,
+    // rather than leaving two stops on one control.
+    const syncStop = () => {
+      const frozen = host.hasAttribute("disabled");
+      setOwnStop(frozen);
+      // The thaw, with the keyboard standing on the stop that is about to go:
+      // hand the focus to the host rather than dropping it on the body.
+      if (!frozen && value.contains(document.activeElement)) host.focus();
+    };
+    syncStop();
+    const frozenWatch = new MutationObserver(syncStop);
+    frozenWatch.observe(host, { attributes: true, attributeFilter: ["disabled"] });
+
+    const onFocusIn = () => {
+      if (!pressing.current) reveal(true);
+    };
+    const onFocusOut = () => setOpen(false);
+    const onPointerDown = () => {
+      pressing.current = true;
+    };
+    const onPointerUp = () => {
+      pressing.current = false;
+    };
+    host.addEventListener("focusin", onFocusIn);
+    host.addEventListener("focusout", onFocusOut);
+    host.addEventListener("pointerdown", onPointerDown);
+    // On the window, because a press that began on the host can end anywhere.
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      frozenWatch.disconnect();
+      host.removeEventListener("focusin", onFocusIn);
+      host.removeEventListener("focusout", onFocusOut);
+      host.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [ref, reveal, within]);
+
+  return { open, onOpenChange: reveal, ownStop };
+}
+
+/** What {@link useClippedReveal} hands back. */
+export type HostedReveal = {
+  /** The tooltip's open state, for a controlled `Tooltip`. */
   open: boolean;
   onOpenChange(next: boolean): void;
-} {
-  const [open, setOpen] = React.useState(false);
-  return {
-    open,
-    onOpenChange: (next: boolean) => setOpen(next && isTextClipped(ref.current)),
-  };
-}
+  /**
+   * The value must carry `tabIndex={0}` itself: it sits inside a host that
+   * cannot take focus (a disabled control), so nothing else near it can ask
+   * for the reveal. `false` everywhere else — a second stop inside a working
+   * control is a press a person did not ask for.
+   */
+  ownStop: boolean;
+};
 
 /**
  * A truncated value and the focus stop that reveals it.

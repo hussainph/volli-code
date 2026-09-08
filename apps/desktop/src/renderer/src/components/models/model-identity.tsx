@@ -41,10 +41,18 @@
  * no external origins, and an inline `<svg>` takes `currentColor`, a tint and a
  * size like any other glyph in the app.
  */
+import * as React from "react";
 import { MODEL_MARK_TINTS } from "@volli/shared";
 import type { ModelAccessModel, ModelAccessProvider } from "@volli/shared";
 
 import { cn } from "@renderer/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
+import { useClippedReveal } from "@renderer/components/ui/value-reveal";
 
 export type MarkBy = "family" | "provider";
 
@@ -361,46 +369,93 @@ export function ModelName({
 }) {
   const providerLabel = providerLabelProp ?? providerLabelOf(providers, model.providerId);
   const sayProvider = alwaysProvider || needsProvider(models, model);
-  // The whole run, kept as the element's `title` for the pointer (VC-288).
+  // The whole run: the words the reveal below says when the box is too small to
+  // hold them, and the element's `title` (VC-288). The `title` stays because it
+  // is the one thing a pointer still gets over a FROZEN control, whose subtree
+  // the browser hands no pointer events at all — the bubble cannot open there.
   const full = [model.label, sayProvider ? providerLabel : null, trailing ?? null]
     .filter((term) => term !== null)
     .join(" · ");
+  // WHERE IT CLIPS, IT CAN BE ASKED (VC-288 re-review). The reveal rides the
+  // Select trigger rather than bringing a stop of its own, on the tab strip's
+  // reasoning: the trigger is already focusable, and a control nested inside
+  // one is a second press between a person and the list they were opening.
+  // `within` is what makes that possible — focus lands on the trigger and
+  // `focusin` bubbles UP past this run, never into it, so the run cannot hear
+  // its own host without being told where the host is.
+  const runRef = React.useRef<HTMLSpanElement>(null);
+  const reveal = useClippedReveal(runRef, { within: '[data-slot="select-trigger"]' });
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
       <ModelMark model={model} providerLabel={providerLabel} by={by} />
-      {/* IT WRAPS RATHER THAN TRUNCATES (VC-288 review). A `title` was the whole
-          of the way out of a clipped name here, and a `title` is the pointer's
-          alone — on rows a keyboard walks, `Claude Son…` was simply where the
-          fact ended. Every surface drawing this is a row inside a Select or a
-          cmdk list, and both are composite widgets: a focus stop of the kind
-          the venue chips grew (`ui/value-reveal.tsx`) would be a nested
-          interactive control inside a `role="option"`, which breaks the
-          keyboard model of the list to fix the readability of one row in it.
-          A second line costs the list nothing and hides nothing.
+      {/* Its own provider, for the reason `ui/tab-strip.tsx` mounts one: this is
+          drawn by four surfaces and by a good deal of the test suite, some of
+          them outside the app shell that owns the app-wide one, and a Radix
+          tooltip with no provider above it throws rather than degrading. */}
+      <TooltipProvider>
+        <Tooltip open={reveal.open} onOpenChange={reveal.onOpenChange}>
+          <TooltipTrigger asChild>
+            {/* IT WRAPS RATHER THAN TRUNCATES (VC-288 review). A `title` was the
+                whole of the way out of a clipped name here, and a `title` is the
+                pointer's alone — on rows a keyboard walks, `Claude Son…` was
+                simply where the fact ended. Every surface drawing this is a row
+                inside a Select or a cmdk list, and both are composite widgets:
+                a focus stop of the kind the venue chips grew would be a nested
+                interactive control inside a `role="option"`, which breaks the
+                keyboard model of the list to fix the readability of one row in
+                it. A second line costs the list nothing and hides nothing.
 
-          THE ONE PLACE IT STILL CLIPS is the closed Select trigger, because
-          Radix draws the selected ITEM's own children inside a fixed-height
-          control — and that is the one place a reveal already exists: the
-          trigger is focusable and one press opens the list where this same
-          element wraps. */}
-      <span
-        title={full}
-        className={cn(
-          "min-w-0 tabular-nums break-words in-data-[slot=select-trigger]:truncate",
-          muted && "text-muted-foreground",
-        )}
-      >
-        {model.label}
-        {sayProvider ? (
-          <span className="text-muted-foreground in-data-[slot=select-item]:hidden">
-            {" "}
-            · {providerLabel}
-          </span>
-        ) : null}
-        {trailing !== undefined ? (
-          <span className="text-muted-foreground"> · {trailing}</span>
-        ) : null}
-      </span>
+                THE ONE PLACE IT STILL CLIPS is the closed Select trigger, where
+                Radix copies the selected ITEM's children into a fixed-height
+                control. "Press it open" is not the answer there: it changes
+                what the screen shows to read a value already on it, and a
+                frozen Select cannot be pressed at all. So the run reveals
+                itself in full instead — on hover, and on the keyboard's focus.
+
+                `pointer-events-auto` re-enables the half of that gesture Radix
+                takes away: it pins `pointer-events: none` on the value node
+                inside every trigger, so without this the pointer would pass
+                straight over the one word it is asking about. The press still
+                reaches the trigger, because events bubble. */}
+            <span
+              ref={runRef}
+              data-slot="model-name"
+              title={full}
+              // A STOP, BORROWED FOR AS LONG AS THE HOST HAS NONE (`ownStop`).
+              // A disabled Select is a `<button disabled>`: nothing there takes
+              // focus, so reading what the row already says would depend on
+              // being allowed to change it. Unlike `ValueReveal`, this cannot
+              // be a real `<button>` — one inside a button is not markup any
+              // parser accepts — and it does not need to be: the host is inert
+              // for as long as this exists, and there is nothing to press. No
+              // `aria-label` either; the run's own text IS the whole value,
+              // clipped by CSS alone.
+              tabIndex={reveal.ownStop ? 0 : undefined}
+              className={cn(
+                "min-w-0 tabular-nums break-words in-data-[slot=select-trigger]:truncate in-data-[slot=select-trigger]:pointer-events-auto",
+                muted && "text-muted-foreground",
+              )}
+            >
+              {model.label}
+              {sayProvider ? (
+                <span className="text-muted-foreground in-data-[slot=select-item]:hidden">
+                  {" "}
+                  · {providerLabel}
+                </span>
+              ) : null}
+              {trailing !== undefined ? (
+                <span className="text-muted-foreground"> · {trailing}</span>
+              ) : null}
+            </span>
+          </TooltipTrigger>
+          {/* Wrapping, and wide enough for a real name: the bubble IS the
+              reveal, and a reveal that truncates is the thing it was opened to
+              escape. The same width the frozen model pill's takes. */}
+          <TooltipContent side="top" className="max-w-72 text-wrap">
+            {full}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </span>
   );
 }
