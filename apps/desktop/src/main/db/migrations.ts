@@ -5,10 +5,12 @@
  * checkpoints the WAL and copies the db file to `<dbPath>.backup-v<from>`,
  * so a bad migration never destroys the pre-migration data. A brand-new
  * database (`user_version` starts at `0`) skips the backup step — there is
- * nothing to protect yet.
+ * nothing to protect yet. After success, exact-name retention deletes older
+ * migration copies while preserving the new rollback point.
  */
 import { copyFileSync } from "node:fs";
 import type Database from "better-sqlite3";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
 
 export interface Migration {
   version: number;
@@ -2199,4 +2201,12 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
     }
   });
   applyPendingMigrations();
+
+  // Cleanup is deliberately after the transaction has committed and its
+  // foreign-key check passed. Fresh databases made no copy, so they do not
+  // participate in retention even if matching files already exist nearby.
+  if (currentVersion > 0) {
+    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
+    logMigrationBackupRetention(retentionReport);
+  }
 }
