@@ -32,6 +32,18 @@ const ALL_ON: NotificationSettingsView = {
   deliveryFailure: null,
 };
 
+/** A read the test finishes by hand, to see the page before its answer lands. */
+function deferredRead(): {
+  promise: Promise<NotificationSettingsResult>;
+  resolve: (result: NotificationSettingsResult) => void;
+} {
+  let settleRead: ((result: NotificationSettingsResult) => void) | null = null;
+  const promise = new Promise<NotificationSettingsResult>((settle) => {
+    settleRead = settle;
+  });
+  return { promise, resolve: (result) => settleRead?.(result) };
+}
+
 let container: HTMLDivElement;
 let root: Root;
 let settings: () => Promise<NotificationSettingsResult>;
@@ -86,18 +98,15 @@ describe("NotificationsPane", () => {
     // Never a position the database has not confirmed: before the read lands
     // the switches are off and inoperable, which is what "show the accepted
     // value" means for a page whose value lives in another process.
-    let resolveRead: (result: NotificationSettingsResult) => void = () => {};
-    settings = () =>
-      new Promise<NotificationSettingsResult>((resolve) => {
-        resolveRead = resolve;
-      });
+    const read = deferredRead();
+    settings = () => read.promise;
     await render();
 
     expect(switchFor("notify-me").getAttribute("aria-checked")).toBe("false");
     expect(switchFor("notify-me").disabled).toBe(true);
 
     await act(async () => {
-      resolveRead({
+      read.resolve({
         ok: true,
         settings: {
           ...ALL_ON,
