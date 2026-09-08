@@ -78,6 +78,7 @@ const STATUS_LABEL: Record<TicketSessionStatus, string> = {
   parked: "Parked",
   exited: "Exited",
   stopped: "Stopped",
+  interrupted: "Interrupted",
   setup: "Setup",
 };
 

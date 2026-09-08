@@ -18,6 +18,7 @@ import {
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
   errorMessage,
+  sessionInterruptionReason,
   shortSessionId,
   todoListMarkdown,
 } from "@volli/shared";
@@ -213,12 +214,19 @@ export async function sessionListVerb(
           ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
           : null,
       title: record.title,
-      // Liveness on the row itself (VC-86): the same three words and waiting
+      // Liveness on the row itself (VC-86): the same words and waiting
       // reason `session.peek` answers and the app sidebar shows, off the same
       // `chatSessionRecord` fold — never a second derivation. An orchestrator
       // triaging a fleet reads these instead of spending a peek per Session.
       status: record.activity,
       waitingOn: record.waitingOn,
+      // Why the turn died, for the one state that says it did (VC-324). Read
+      // off the same projection the fold read, and guarded by the state word
+      // so the two move together exactly as `waitingOn` and "waiting" do —
+      // a `stopped` row that was interrupted on the way down says `stopped`
+      // and hands the caller no second, older reason.
+      interruptedReason:
+        record.activity === "interrupted" ? sessionInterruptionReason(projection) : null,
       // Age of the newest durable fact, against the caller's clock — beside
       // `ageMs` (age since creation), which stays for sorting what is old.
       lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
@@ -328,10 +336,13 @@ export async function sessionPeekVerb(
     ok: true,
     data: {
       session: shortSessionId(record.sessionId),
-      // The same three words the app's own sidebar row says, so one
-      // vocabulary describes a Session whichever surface asks.
+      // The same words the app's own sidebar row says, so one vocabulary
+      // describes a Session whichever surface asks.
       status: record.activity,
       waitingOn: record.waitingOn,
+      // See `session list` — the state word's reason, on the same guard.
+      interruptedReason:
+        record.activity === "interrupted" ? sessionInterruptionReason(chat.projection) : null,
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
       turns: tail.turns,
       turnDepth: tail.turnDepth,

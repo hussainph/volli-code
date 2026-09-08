@@ -579,6 +579,9 @@ const ACTIVITY_PRIORITY: Record<SessionActivityState, number> = {
   // A pane never produces it (the stop fact is chat-side, VC-86); ranked last
   // so the map stays total without ever outranking a live state.
   stopped: 5,
+  // Chat-side too (VC-324), and for the same reason: a PTY cannot say a turn
+  // died. Ranked below every state a pane can be in.
+  interrupted: 6,
 };
 
 /**

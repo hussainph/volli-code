@@ -117,10 +117,15 @@ export function homeSessionRows(
   return rows.toSorted((left, right) => right.at - left.at);
 }
 
-/** A chat row's dot: waiting outranks working; between turns is simply idle. */
+/**
+ * A chat row's dot: waiting outranks working, a turn that died says so
+ * (VC-324), and between turns is simply idle. The words are the record's own
+ * — `activity` already ranked them; this only spends the dot's vocabulary.
+ */
 function chatState(row: ChatSessionRecord): StatusDotState {
   if (row.activity === "waiting") return "waiting";
   if (row.activity === "working") return "working";
+  if (row.activity === "interrupted") return "interrupted";
   return "idle";
 }
 

@@ -26,6 +26,7 @@ import {
   type AutomationRunAttendance,
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
+  type ChatSessionRecord,
   type CommandReceipt,
   type PromptResource,
   type PromptTemplate,
@@ -129,10 +130,13 @@ export interface AutomationRunnerDeps {
     commandId: string;
     detail: string;
   }): Promise<void>;
-  /** Honest Session activity, or null when its projection cannot be read. */
-  readSessionActivity(
-    sessionId: string,
-  ): Promise<"working" | "waiting" | "idle" | "stopped" | null>;
+  /**
+   * Honest Session activity, or null when its projection cannot be read. The
+   * chat row's own vocabulary rather than a hand-copy of it, so a word added
+   * there (VC-324's `interrupted`) reaches this guard instead of failing to
+   * compile against a list this file forgot it was keeping.
+   */
+  readSessionActivity(sessionId: string): Promise<ChatSessionRecord["activity"] | null>;
   /**
    * Refines the Run's launch title from its Instructions and Ticket context.
    * The Automation name remains the exact fallback and guard baseline, so a
@@ -346,8 +350,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     // than accidentally admitting a second live worker.
     for (const run of runs) {
       // "stopped" admits a new Run exactly as "idle" does: a supervisor ending
-      // an earlier Run's work is the opposite of that work still being live.
-      let activity: "working" | "waiting" | "idle" | "stopped" | null;
+      // an earlier Run's work is the opposite of that work still being live —
+      // and so does "interrupted" (VC-324), whose turn is over by definition.
+      // Only the two live states below refuse.
+      let activity: ChatSessionRecord["activity"] | null;
       try {
         activity = await deps.readSessionActivity(run.sessionId);
       } catch (error) {

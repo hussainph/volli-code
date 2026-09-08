@@ -212,11 +212,18 @@ describe("chatSessionRecord outcome", () => {
       activity: "idle",
       outcome: null,
     });
-    for (const lastTurnOutcome of ["completed", "interrupted", "failed"] as const) {
+    for (const lastTurnOutcome of ["completed", "failed"] as const) {
       expect(
         chatSessionRecord(projectionWith([structuredAttachment()], { lastTurnOutcome })),
       ).toMatchObject({ activity: "idle", outcome: lastTurnOutcome });
     }
+    // `interrupted` is the one outcome the activity word now reads too
+    // (VC-324); the outcome still rides the row unchanged beside it.
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], { lastTurnOutcome: "interrupted" }),
+      ),
+    ).toMatchObject({ activity: "interrupted", outcome: "interrupted" });
   });
 
   it("keeps the outcome beside a stop rather than under it", () => {
@@ -282,6 +289,71 @@ describe("chatSessionRecord activity", () => {
     expect(
       chatSessionRecord(projectionWith([structuredAttachment()], { ...stop, turnActive: true })),
     ).toMatchObject({ activity: "stopped" });
+  });
+
+  // VC-324. The other half of VC-86's hiding: a turn that DIED read "idle",
+  // indistinguishable from one that finished quietly, though the ledger had
+  // already said `turn.interrupted` out loud.
+  it("reads a Session whose last turn was interrupted as interrupted", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment({ status: "closed", closedAt: 5 })], {
+          lastTurnOutcome: "interrupted",
+        }),
+      ),
+    ).toMatchObject({ activity: "interrupted", waitingOn: null, outcome: "interrupted" });
+  });
+
+  it("keeps a quiet Session that finished or failed out of it", () => {
+    for (const outcome of ["completed", "failed", null] as const) {
+      expect(
+        chatSessionRecord(projectionWith([structuredAttachment()], { lastTurnOutcome: outcome })),
+      ).toMatchObject({ activity: "idle" });
+    }
+  });
+
+  it("lets a stop outrank an interruption it happened after", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([], {
+          lastTurnOutcome: "interrupted",
+          stopped: { at: 9, reason: null, by: { kind: "user" as const } },
+        }),
+      ),
+    ).toMatchObject({ activity: "stopped", outcome: "interrupted" });
+  });
+
+  it("lets a resumed Session read as working over its earlier interruption", () => {
+    // The fold agrees on its own: a fresh `turn.started` resets the outcome.
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], { turnActive: true, lastTurnOutcome: null }),
+      ),
+    ).toMatchObject({ activity: "working" });
+  });
+
+  it("lets a question outrank an interruption", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], {
+          lastTurnOutcome: "interrupted",
+          ...openInteraction(),
+        }),
+      ),
+    ).toMatchObject({ activity: "waiting", waitingOn: "question" });
+  });
+
+  // A transport Attention still asks nobody for anything (see
+  // `WAITING_ON_BY_ATTENTION`) — what changed is the word for the quiet.
+  it("keeps a transport Attention out of waiting while naming the dead turn", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment({ status: "closed", closedAt: 5 })], {
+          lastTurnOutcome: "interrupted",
+          ...attentionOf("adapter_unrecoverable"),
+        }),
+      ),
+    ).toMatchObject({ activity: "interrupted", waitingOn: null });
   });
 
   it("reads an unanswered Interaction as waiting on a question", () => {

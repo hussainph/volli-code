@@ -214,6 +214,12 @@ describe("what a row says", () => {
     expect(islandAgentState({ activity: "stopped", outcome: "completed" })).toBe("stopped");
     expect(islandAgentState({ activity: "stopped", outcome: "interrupted" })).toBe("stopped");
   });
+  // VC-324: the state word now says what the outcome already did, and the
+  // chip keeps the presentation it was giving that fact.
+  it("reads an interrupted row as failed, whatever its outcome field says", () => {
+    expect(islandAgentState({ activity: "interrupted", outcome: "interrupted" })).toBe("failed");
+    expect(islandAgentState({ activity: "interrupted", outcome: null })).toBe("failed");
+  });
   it("reads an idle row that completed as done", () => {
     expect(islandAgentState({ activity: "idle", outcome: "completed" })).toBe("done");
   });

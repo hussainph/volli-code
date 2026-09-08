@@ -55,6 +55,7 @@ const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
   parked: "Parked",
   exited: "Exited",
   stopped: "Stopped",
+  interrupted: "Interrupted",
 };
 
 /**
@@ -300,7 +301,18 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
             the gap BETWEEN rows and the two lines stop reading as one entity,
             which is the whole shape of this band. Screenshot-verified against
             the collapse; anything that moves them has to look at the band. */}
-        <StatusDot state={needsYou ? "waiting" : working ? "working" : "idle"} className="mt-1.5" />
+        <StatusDot
+          state={
+            needsYou
+              ? "waiting"
+              : working
+                ? "working"
+                : row.activity === "interrupted"
+                  ? "interrupted"
+                  : "idle"
+          }
+          className="mt-1.5"
+        />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
             <span className="session-row-dim session-title-sweep text-ui">

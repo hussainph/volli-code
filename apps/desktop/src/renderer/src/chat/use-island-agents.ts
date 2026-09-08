@@ -99,6 +99,10 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
  *    appearing and its first `turn.started` landing, before any turn has ever
  *    ended — that is "not finished yet", not "done", so it reads `working`
  *    rather than lying that a freshly delegated helper already finished.
+ *  • `interrupted` (VC-324) is `failed` — the same word an `idle` row with an
+ *    `interrupted` outcome already earned here. The chip's vocabulary is the
+ *    four the cluster draws, so the new activity state joins the presentation
+ *    it was already getting rather than adding a fifth chip.
  */
 export function islandAgentState(
   record: Pick<ChatSessionRecord, "activity" | "outcome">,
@@ -106,6 +110,8 @@ export function islandAgentState(
   switch (record.activity) {
     case "stopped":
       return "stopped";
+    case "interrupted":
+      return "failed";
     case "working":
     case "waiting":
       return "working";

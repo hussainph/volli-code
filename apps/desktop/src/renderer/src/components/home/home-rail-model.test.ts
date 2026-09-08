@@ -127,6 +127,8 @@ describe("homeSessionRows", () => {
     // Attachment is not a visual state. Both quiet rows use the same idle dot.
     expect(chatDot(chat({ activity: "idle", live: true }))).toBe("idle");
     expect(chatDot(chat({ activity: "idle", live: false }))).toBe("idle");
+    // A turn that died is not that quiet (VC-324): it keeps its own dot.
+    expect(chatDot(chat({ activity: "interrupted" }))).toBe("interrupted");
   });
 
   it("calls a terminal live only while a tab holds it and it has not ended", () => {

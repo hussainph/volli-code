@@ -179,10 +179,14 @@ export interface ChatSessionRecord {
    * What is happening in this Session right now, in the honest subset of
    * {@link SessionActivityState} a chat row can be in: there is no PTY to
    * SIGSTOP, so never "parked", and a Session outlives every attachment it has
-   * ever had, so never "exited" — a chat row that goes quiet is "idle", and
-   * one whose work was deliberately ended is "stopped" (VC-86).
+   * ever had, so never "exited" — a chat row that goes quiet is "idle", one
+   * whose work was deliberately ended is "stopped" (VC-86), and one whose last
+   * turn died is "interrupted" (VC-324).
    */
-  activity: Extract<SessionActivityState, "working" | "waiting" | "idle" | "stopped">;
+  activity: Extract<
+    SessionActivityState,
+    "working" | "waiting" | "idle" | "stopped" | "interrupted"
+  >;
   /**
    * What the Session is waiting on, when `activity` is `"waiting"`; `null` in
    * every other state. The two move together by construction — a waiting row
@@ -300,6 +304,13 @@ export function shortSessionId(sessionId: string): string {
  * person, or the watchdog ended the Session's work. Without it a stopped
  * Session reads "idle", which hides exactly the who-ended-this a triaging
  * orchestrator is asking about. A PTY never produces it.
+ *
+ * "interrupted" (VC-324) is the other half of that same hiding: a Session whose
+ * turn DIED — the retry budget ran out, the app was killed mid-turn, a stop
+ * cut the turn short — read "idle", indistinguishable from one that finished
+ * quietly, even though the ledger had said `turn.interrupted` out loud. It is
+ * derived from that committed fact alone ({@link sessionEndedInterrupted}),
+ * never from silence, and a PTY never produces it either.
  */
 export const SESSION_ACTIVITY_STATES = [
   "working",
@@ -308,6 +319,7 @@ export const SESSION_ACTIVITY_STATES = [
   "parked",
   "exited",
   "stopped",
+  "interrupted",
 ] as const;
 
 export type SessionActivityState = (typeof SESSION_ACTIVITY_STATES)[number];

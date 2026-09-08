@@ -34,6 +34,7 @@ describe("SESSION_ACTIVITY_STATES", () => {
       "parked",
       "exited",
       "stopped",
+      "interrupted",
     ]);
   });
 });
