@@ -2410,6 +2410,26 @@ describe("registerFileIpcHandlers", () => {
     });
   });
 
+  it("reports a failed app scan as an error rather than an empty menu", async () => {
+    const externalApps: ExternalAppGateway = {
+      async list() {
+        throw new Error("Couldn't check which apps are installed on this Mac.");
+      },
+      async open() {
+        return { ok: true };
+      },
+    };
+    const setup = setupDbAndHandlers(makeGitRepoDir(), externalApps);
+    ctx = setup.ctx;
+
+    // `{ ok: true, apps: [] }` here would render as "no supported apps" — a
+    // completed scan finding nothing, which is not what happened.
+    await expect(invoke("volli:external-app-list", {})).resolves.toEqual({
+      ok: false,
+      error: "Couldn't check which apps are installed on this Mac.",
+    });
+  });
+
   it("refuses an unsafe external-app path before it reaches a launcher", async () => {
     const opened: { appId: string; path: string }[] = [];
     const externalApps: ExternalAppGateway = {

@@ -1709,6 +1709,11 @@ export function registerFileIpcHandlers(
       return { ok: true, ...run.value };
     },
 
+    // `{ ok: true }` is a claim that the scan RAN: the gateway rejects when a
+    // Launch Services lookup could not, and the shared envelope in
+    // `ipc-registry.ts` turns that rejection into `{ ok: false, error }` for
+    // Integrations to show with its Try again (VC-287). Catching here would
+    // put the failure back into an empty menu.
     "volli:external-app-list": async (): Promise<ExternalAppListResult> => ({
       ok: true,
       apps: await externalApps.list(),
