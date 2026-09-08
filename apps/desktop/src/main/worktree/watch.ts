@@ -387,11 +387,15 @@ function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: stri
     // surface (CLAUDE.md's never-swallow rule). A "worktree maintenance"
     // preference that could hide a failed write would be a mute button on the
     // one thing the pass cannot recover by itself.
+    //
+    // It still opens the ticket it is about. Operational means no preference is
+    // consulted, not that the person is left to find the card themselves — and
+    // this target is one the failure genuinely has rather than an invented one.
     deps.notify({
       producer: "worktree-record-failed",
       title: "Couldn't save discovered PR",
       body: `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
-      target: null,
+      target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
     });
     return false;
   }

@@ -62,12 +62,11 @@
  * to fail the command that triggered it.
  */
 import {
-  SESSION_FAILURE_ATTENTION_KINDS,
+  sessionNotificationItem,
   sessionPersonNeed,
   shortSessionId,
   type AutomationRunAttendance,
-  type NotificationTarget,
-  type SessionAttentionKind,
+  type SessionNotificationTarget,
   type SessionPersonNeed,
   type SessionProjection,
 } from "@volli/shared";
@@ -146,29 +145,28 @@ export function runAttentionNotification(
  * Where a click on that notification goes (VC-295): the exact Session, and the
  * exact thing in it that needs the person.
  *
- * The two ids are the SAME facts the need was decided from, read from the same
- * projection in the same fold — not looked up again later, which is how a click
- * comes to point at a question the rule was not talking about. They may of
- * course have RESOLVED by the time somebody clicks; that is the renderer's
- * problem to state honestly, and it can only state it because the id is here.
+ * The item comes from `sessionNotificationItem`, which is also what a WINDOW
+ * reports about what it is showing — so the click and the focused-target
+ * comparison are talking about the same thing (round 2). It is read from the
+ * same projection in the same fold as the need, not looked up again later,
+ * which is how a click comes to point at a question the rule was not talking
+ * about. It may of course have RESOLVED by the time somebody clicks; that is
+ * the renderer's problem to state honestly, and it can only state it because
+ * the id is here.
+ *
+ * `need` is taken but not read: it is the reason this target exists, and the
+ * precedence inside the item derivation is the same one that produced it.
  */
 export function runAttentionTarget(
-  need: SessionPersonNeed,
+  _need: SessionPersonNeed,
   projection: SessionProjection,
-): NotificationTarget {
-  const failure = projection.attention.active.find((attention) =>
-    (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(attention.kind),
-  );
+): SessionNotificationTarget {
   return {
     kind: "session",
     projectId: projection.session.projectId,
     ticketId: projection.session.ticketId,
     sessionId: projection.session.id,
-    // A `waiting` Session may be waiting on an open Interaction or on a
-    // blocking Attention (`sessionAwaitsUser` accepts either), so both are
-    // reported when both exist rather than guessing which one the person meant.
-    interactionId: need === "waiting" ? (projection.interactions.active[0]?.id ?? null) : null,
-    attentionId: failure?.id ?? null,
+    ...sessionNotificationItem(projection),
   };
 }
 

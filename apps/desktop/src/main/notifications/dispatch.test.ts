@@ -180,7 +180,7 @@ describe("createNotificationDispatcher", () => {
 
   it("suppresses an alert whose exact target is active in a focused window", () => {
     const { dispatcher, alerts } = harness({
-      focusedTargets: [{ ...SESSION_TARGET, interactionId: null }],
+      focusedTargets: [SESSION_TARGET],
     });
     expect(
       dispatcher.deliver({
@@ -191,6 +191,22 @@ describe("createNotificationDispatcher", () => {
       }),
     ).toEqual({ delivered: false, reason: "focused-target" });
     expect(alerts).toHaveLength(0);
+  });
+
+  it("still delivers a different question in the Session already on screen", () => {
+    // Round 2's correction: a person answering one question is not being shown
+    // the failure that just stopped the same Session.
+    const { dispatcher } = harness({
+      focusedTargets: [{ ...SESSION_TARGET, interactionId: null, attentionId: "a1" }],
+    });
+    expect(
+      dispatcher.deliver({
+        producer: "run-attention",
+        title: "…",
+        body: "…",
+        target: SESSION_TARGET,
+      }),
+    ).toEqual({ delivered: true });
   });
 
   it("still delivers when a focused window is showing something else", () => {
@@ -306,6 +322,65 @@ describe("createNotificationDispatcher", () => {
     alerts[0]!.fire("click");
     expect(errors).toHaveLength(1);
     expect(dispatcher.retained()).toBe(0);
+  });
+
+  it("releases the retained alert when show() itself throws", () => {
+    // The alert was constructed and added to the live set before `show()` ran.
+    // A throw there must not leave it held for the life of the process — a leak
+    // whose only symptom is memory nobody can attribute.
+    const errors: unknown[] = [];
+    const dispatcher = createNotificationDispatcher({
+      preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
+      supported: () => true,
+      focusedTargets: () => [],
+      create: () => ({
+        onClick: () => {},
+        onClose: () => {},
+        onFailed: () => {},
+        show: () => {
+          throw new Error("notification centre refused");
+        },
+        close: () => {},
+      }),
+      activate: () => {},
+      onDeliveryFailure: () => {},
+      onError: (error) => errors.push(error),
+    });
+    expect(
+      dispatcher.deliver({ producer: "agent-notify", title: "…", body: "…", target: null }),
+    ).toEqual({ delivered: false, reason: "failed" });
+    expect(errors).toHaveLength(1);
+    expect(dispatcher.retained()).toBe(0);
+  });
+
+  it("binds each producer to the one kind of target it can have", () => {
+    // Compile-time, not runtime: a harness alert pointing at a ticket, or a
+    // merged pull request pointing at a Session, would be a deep link that
+    // opens the wrong surface — and neither is representable.
+    const { dispatcher } = harness();
+    // @ts-expect-error a harness alert names a Session, never a ticket
+    dispatcher.deliver({
+      producer: "harness-input-needed",
+      title: "…",
+      body: "…",
+      target: { kind: "ticket", projectId: "p1", ticketId: "t1" },
+    });
+    // @ts-expect-error a merged pull request names a ticket, never a Session
+    dispatcher.deliver({
+      producer: "pull-request-merged",
+      title: "…",
+      body: "…",
+      target: SESSION_TARGET,
+    });
+    dispatcher.deliver({
+      producer: "update-ready",
+      title: "…",
+      body: "…",
+      // @ts-expect-error the staged update names the update surface and nothing else
+      target: { kind: "ticket", projectId: "p1", ticketId: "t1" },
+    });
+    // @ts-expect-error a free-form `volli notify` has nowhere to point
+    dispatcher.deliver({ producer: "agent-notify", title: "…", body: "…", target: SESSION_TARGET });
   });
 
   it("defaults its diagnostics seam to the console rather than requiring one", () => {

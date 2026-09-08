@@ -61,9 +61,11 @@
 
 import {
   sessionAwaitsUser,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
   type SessionAttentionKind,
   type SessionProjection,
 } from "./session-ledger";
+import { NO_SESSION_NOTIFICATION_ITEM, type SessionNotificationItem } from "./notification-catalog";
 
 /**
  * The Attention kinds that mean the Session's own plumbing failed — VC-112's
@@ -136,4 +138,49 @@ export function sessionPersonNeed(
   );
   if (failing) return "error";
   return sessionAwaitsUser(projection) ? "waiting" : null;
+}
+
+/**
+ * WHICH thing in a Session needs the person right now (VC-295 round 2).
+ *
+ * ── ONE DERIVATION, TWO READERS ───────────────────────────────────────────
+ * A notification names the item it is about so a click can land on it, and a
+ * window reports the item it is showing so an alert about that exact item is
+ * not shouted twice. Round 1 had the producer compute one and the comparison
+ * ignore it, which is how a Session with a question on screen came to swallow
+ * the alert about the failure that had just stopped it. Both sides now call
+ * this, so the comparison is between two answers to the same question.
+ *
+ * ── THE PRECEDENCE IS {@link sessionPersonNeed}'S ─────────────────────────
+ * Deliberately the same order, because the two answers travel together: the
+ * need says a person is wanted and this says what for. A failure outranks a
+ * question (a card over a dead transport cannot be answered), a stopped Session
+ * names nothing, and an Attention nobody can act on — a rate limit, a retry —
+ * is not an item at all. That last one matters for suppression rather than for
+ * clicks: reporting a rate limit as "the thing on screen" would silence the
+ * question that arrives while it stands.
+ *
+ * A blocking question raised as an Attention (`permission_required`,
+ * `auth_required`, `input_required`) is named as an attention, because that is
+ * what it durably is; an `interaction.opened` question is named as an
+ * interaction. `sessionAwaitsUser` already accepts either, and so does this.
+ */
+export function sessionNotificationItem(
+  projection: Pick<SessionProjection, "interactions" | "attention" | "stopped">,
+): SessionNotificationItem {
+  if (projection.stopped !== null) return NO_SESSION_NOTIFICATION_ITEM;
+  const failing = projection.attention.active.find((attention) =>
+    (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(attention.kind),
+  );
+  if (failing !== undefined) return { interactionId: null, attentionId: failing.id };
+  const question = projection.interactions.active[0];
+  if (question !== undefined) return { interactionId: question.id, attentionId: null };
+  const asking = projection.attention.active.find((attention) =>
+    (SESSION_USER_BLOCKING_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(
+      attention.kind,
+    ),
+  );
+  return asking === undefined
+    ? NO_SESSION_NOTIFICATION_ITEM
+    : { interactionId: null, attentionId: asking.id };
 }

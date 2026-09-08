@@ -193,20 +193,54 @@ export function notificationProducerAllowed(
  * optional fields, `null` where a fact is absent — it crosses the IPC seam in
  * both directions.
  */
+export interface SessionNotificationTarget {
+  kind: "session";
+  projectId: string;
+  /** Null for a Board (project-level) Session, which has no ticket. */
+  ticketId: string | null;
+  sessionId: string;
+  /** The open question this alert is about, when it named one. */
+  interactionId: string | null;
+  /** The blocking attention this alert is about, when it named one. */
+  attentionId: string | null;
+}
+
+export interface TicketNotificationTarget {
+  kind: "ticket";
+  projectId: string;
+  ticketId: string;
+}
+
+export interface UpdateNotificationTarget {
+  kind: "update";
+}
+
 export type NotificationTarget =
-  | {
-      kind: "session";
-      projectId: string;
-      /** Null for a Board (project-level) Session, which has no ticket. */
-      ticketId: string | null;
-      sessionId: string;
-      /** The open question this alert is about, when it named one. */
-      interactionId: string | null;
-      /** The blocking attention this alert is about, when it named one. */
-      attentionId: string | null;
-    }
-  | { kind: "ticket"; projectId: string; ticketId: string }
-  | { kind: "update" };
+  | SessionNotificationTarget
+  | TicketNotificationTarget
+  | UpdateNotificationTarget;
+
+/**
+ * The one thing in a Session a person is being sent to — the open question, or
+ * the failure that stopped it.
+ *
+ * Computed by {@link sessionNotificationItem} on BOTH sides of the suppression
+ * comparison: the producer names the item its alert is about, and the window
+ * reports the item it is currently showing. Two different derivations of "which
+ * item" would make the comparison meaningless — a window showing a question
+ * would suppress an alert about the failure beside it, which is the exact bug a
+ * session-id-only match had.
+ */
+export interface SessionNotificationItem {
+  interactionId: string | null;
+  attentionId: string | null;
+}
+
+/** Nothing in particular — a Session with no open question and no failure. */
+export const NO_SESSION_NOTIFICATION_ITEM: SessionNotificationItem = Object.freeze({
+  interactionId: null,
+  attentionId: null,
+});
 
 /** A non-empty string id, or `null` for anything else — including `""`. */
 function optionalId(value: unknown): string | null {
@@ -264,10 +298,13 @@ export function parseNotificationTarget(raw: unknown): NotificationTarget | null
  *    Session, and a Session is not its ticket. Suppression means "the person is
  *    looking at exactly this", and anything looser silences an alert for work
  *    that is merely nearby.
- *  - **Ids, not the question.** A Session alert about interaction `i1` matches a
- *    window showing that Session even if the person has not scrolled to the
- *    card: the renderer owns the on-screen feedback there (a dot, a card, a
- *    badge), and re-announcing it natively is the duplicate this rule prevents.
+ *  - **The ITEM is part of the identity.** A Session match compares the open
+ *    question and the failure as well as the Session id. Round 1 of this ticket
+ *    compared only the id, which meant a person reading one question in a
+ *    Session was never told about the failure that had just stopped it — the
+ *    window was "showing the target", and the thing they needed was not on it.
+ *    Both sides derive the item with `sessionNotificationItem`, so this is a
+ *    comparison between two answers to one question.
  *  - **`null` never matches.** An alert with no target has nowhere to be
  *    already-visible, so it is always delivered.
  *
@@ -281,10 +318,16 @@ export function notificationTargetMatches(
   if (target === null || active === null) return false;
   if (target.kind !== active.kind) return false;
   switch (target.kind) {
-    case "session":
-      return target.sessionId === (active as { sessionId: string }).sessionId;
+    case "session": {
+      const shown = active as SessionNotificationTarget;
+      return (
+        target.sessionId === shown.sessionId &&
+        target.interactionId === shown.interactionId &&
+        target.attentionId === shown.attentionId
+      );
+    }
     case "ticket":
-      return target.ticketId === (active as { ticketId: string }).ticketId;
+      return target.ticketId === (active as TicketNotificationTarget).ticketId;
     case "update":
       return true;
   }

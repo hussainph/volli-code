@@ -50,32 +50,55 @@ import {
   type NotificationPreferences,
   type NotificationProducer,
   type NotificationTarget,
+  type SessionNotificationTarget,
+  type TicketNotificationTarget,
+  type UpdateNotificationTarget,
 } from "@volli/shared";
 
 /**
- * The producers whose alert always knows where it points. Everything else must
- * pass `null` — an invented deep link is worse than none, because it takes the
- * person somewhere unrelated and calls it the thing they were told about.
+ * The one KIND of target each producer can have.
+ *
+ * A total record, so a new producer must say where its alert points before it
+ * compiles — and a producer cannot be given the wrong sort of target. Round 1
+ * only distinguished "has a target" from "has none", which left a harness alert
+ * free to carry a ticket target: a deep link that opens the board instead of the
+ * terminal that is waiting, and nothing to catch it.
+ *
+ * `null` is not an oversight where it appears. A free-form `volli notify` and a
+ * dead CLI socket have nowhere to point, and an invented destination is worse
+ * than none — it spends the interruption and takes the person somewhere
+ * unrelated.
  */
-export type TargetedNotificationProducer = Exclude<
-  NotificationProducer,
-  "agent-notify" | "cli-socket-failed" | "worktree-record-failed"
->;
+export interface NotificationProducerTargets {
+  "run-attention": SessionNotificationTarget;
+  "session-watchdog": SessionNotificationTarget;
+  "harness-input-needed": SessionNotificationTarget;
+  "pull-request-merged": TicketNotificationTarget;
+  "worktree-reclaimed": TicketNotificationTarget;
+  "worktree-record-failed": TicketNotificationTarget;
+  "ticket-moved-to-doing": TicketNotificationTarget;
+  "update-ready": UpdateNotificationTarget;
+  "agent-notify": null;
+  "cli-socket-failed": null;
+}
+
+/**
+ * The producers whose alert always knows where it points — derived from the
+ * table above rather than listed again, so the two cannot disagree.
+ */
+export type TargetedNotificationProducer = {
+  [P in NotificationProducer]: NotificationProducerTargets[P] extends null ? never : P;
+}[NotificationProducer];
 
 /** One alert, as its producer describes it. */
-export type NotificationRequest =
-  | {
-      producer: TargetedNotificationProducer;
-      title: string;
-      body: string;
-      target: NotificationTarget;
-    }
-  | {
-      producer: Exclude<NotificationProducer, TargetedNotificationProducer>;
-      title: string;
-      body: string;
-      target: null;
-    };
+export type NotificationRequest = {
+  [P in NotificationProducer]: {
+    producer: P;
+    title: string;
+    body: string;
+    target: NotificationProducerTargets[P];
+  };
+}[NotificationProducer];
 
 /**
  * The Electron `Notification` surface this module uses, and nothing more.
@@ -143,8 +166,10 @@ export function createNotificationDispatcher(
       ) {
         return { delivered: false, reason: "focused-target" };
       }
+      let retained: NativeAlert | null = null;
       try {
         const alert = ports.create({ title: request.title, body: request.body });
+        retained = alert;
         live.add(alert);
         const release = () => live.delete(alert);
         alert.onClose(release);
@@ -163,6 +188,10 @@ export function createNotificationDispatcher(
         alert.show();
         return { delivered: true };
       } catch (error) {
+        // Including a throw from `show()` itself, which happens AFTER the alert
+        // joined the live set: an alert that was never posted has no click
+        // coming, so holding it would be a leak with no symptom but memory.
+        if (retained !== null) live.delete(retained);
         onError(error);
         return { delivered: false, reason: "failed" };
       }

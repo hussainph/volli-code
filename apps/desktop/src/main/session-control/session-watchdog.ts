@@ -30,7 +30,12 @@
  * take the host down with it.
  */
 
-import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, sessionWedge, shortSessionId } from "@volli/shared";
+import {
+  DEFAULT_SESSION_WATCHDOG_SILENCE_MS,
+  sessionNotificationItem,
+  sessionWedge,
+  shortSessionId,
+} from "@volli/shared";
 import type { SessionProjection } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
@@ -118,16 +123,19 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       producer: "session-watchdog",
       title: "Session may be wedged",
       body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m.`,
-      // The Session itself, and the blocked signal this scan just recorded is
-      // an Attention the renderer will show once the Session is open. No
-      // interaction id: nothing was asked, the turn simply stopped moving.
+      // The Session, and whatever inside it a person can actually act on
+      // (round 2). A wedge is very often a broken transport, and the Attention
+      // carrying that failure is the thing worth landing on — sending someone
+      // to the top of a Session and leaving them to find it is what a deep link
+      // is supposed to prevent. Derived with the same rule a window uses to
+      // report what it is showing, so a wedge alert for the failure already on
+      // screen is suppressed and one for anything else is not.
       target: {
         kind: "session",
         projectId: projection.session.projectId,
         ticketId: projection.session.ticketId,
         sessionId,
-        interactionId: null,
-        attentionId: null,
+        ...sessionNotificationItem(projection),
       },
     });
     if (ports.stopSession !== undefined) {

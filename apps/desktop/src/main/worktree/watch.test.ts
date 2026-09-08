@@ -598,9 +598,14 @@ describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Couldn't save discovered PR");
     // Operational: a durable write that did not land is a fault with no other
-    // surface, so no preference can silence it and it opens nothing.
+    // surface, so no preference can silence it — and it still opens the ticket
+    // it is about, which is a target it genuinely has (round 2).
     expect(notifications[0]!.producer).toBe("worktree-record-failed");
-    expect(notifications[0]!.target).toBeNull();
+    expect(notifications[0]!.target).toEqual({
+      kind: "ticket",
+      projectId: "p1",
+      ticketId: "t1",
+    });
     // Retry path: the write never landed, so pr_url is still null — DISCOVER
     // tries the stamp again next poll.
     expect(getTicketRow(ctx.db, "t1")!.pr_url).toBeNull();

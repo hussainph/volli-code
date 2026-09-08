@@ -29,6 +29,7 @@ import { createNotificationActivation } from "./activation";
 import {
   createNotificationDispatcher,
   type NativeAlert,
+  type NotificationOutcome,
   type NotificationRequest,
 } from "./dispatch";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
@@ -36,8 +37,15 @@ import { createNotificationSettings, type NotificationSettings } from "./setting
 export interface NotificationRuntime {
   /** The Settings service, or null when the database never opened. */
   settings: NotificationSettings | null;
-  /** The one door: posts an alert, or silently does not. Never throws. */
-  deliver(request: NotificationRequest): void;
+  /**
+   * The one door: posts an alert and says what became of it. Never throws.
+   *
+   * The outcome is RETURNED rather than swallowed because one caller is a
+   * person's own request (`volli notify`), and a verb that reported success
+   * over a refused delivery would be lying to the agent that asked (round 2).
+   * Every other caller is a background observer and ignores it.
+   */
+  deliver(request: NotificationRequest): NotificationOutcome;
   /** One window's on-screen target, as the renderer reported it (unvalidated). */
   reportActiveTarget(windowId: number, raw: unknown): void;
   /** Drops a closed window's reported target. */
@@ -86,12 +94,12 @@ let activeRuntime: NotificationRuntime | null = null;
  * rather than dropped in silence — a notification is never worth crashing a
  * background pass for.
  */
-export function deliverNotification(request: NotificationRequest): void {
+export function deliverNotification(request: NotificationRequest): NotificationOutcome {
   if (activeRuntime === null) {
     console.warn(`[volli] notification before boot (${request.producer}): ${request.title}`);
-    return;
+    return { delivered: false, reason: "failed" };
   }
-  activeRuntime.deliver(request);
+  return activeRuntime.deliver(request);
 }
 
 /** Test seam: drops the process runtime so each test starts from nothing. */
@@ -144,7 +152,7 @@ export function createNotificationRuntime(options: {
 
   const runtime: NotificationRuntime = {
     settings,
-    deliver: (request) => void dispatcher.deliver(request),
+    deliver: (request) => dispatcher.deliver(request),
     reportActiveTarget: (windowId, raw) => registry.report(windowId, parseNotificationTarget(raw)),
     forgetWindow: (windowId) => registry.forget(windowId),
     takePendingActivation: () => activation.takePending(),

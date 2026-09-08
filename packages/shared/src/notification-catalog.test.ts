@@ -124,10 +124,47 @@ describe("notificationProducerAllowed", () => {
 });
 
 describe("notificationTargetMatches", () => {
-  it("matches the same Session regardless of which question the alert named", () => {
+  it("matches only when the window is showing the very item the alert names", () => {
+    // VC-295 round 2: a Session id is not the target. A person looking at one
+    // question in a Session must still be told about the failure that just
+    // stopped it, so the whole scoped target has to agree.
+    expect(
+      notificationTargetMatches(
+        session("s1", { interactionId: "i1" }),
+        session("s1", { interactionId: "i1" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match a different question in the same Session", () => {
+    expect(
+      notificationTargetMatches(
+        session("s1", { interactionId: "i2" }),
+        session("s1", { interactionId: "i1" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a failure against the question on screen beside it", () => {
+    expect(
+      notificationTargetMatches(
+        session("s1", { attentionId: "a1" }),
+        session("s1", { interactionId: "i1" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match an item-bearing alert against a Session showing nothing", () => {
+    // A terminal Session, or a chat with no open card: the window is not
+    // showing the question, so the alert is still news.
     expect(notificationTargetMatches(session("s1", { interactionId: "i1" }), session("s1"))).toBe(
-      true,
+      false,
     );
+  });
+
+  it("matches a Session with no item against the same Session showing none", () => {
+    // The harness case: a terminal in front, and an alert about that terminal.
+    expect(notificationTargetMatches(session("s1"), session("s1"))).toBe(true);
   });
 
   it("does not match a different Session", () => {

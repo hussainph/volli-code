@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_FAILURE_ATTENTION_KINDS,
   SESSION_PERSON_NEEDS,
+  sessionNotificationItem,
   sessionPersonNeed,
 } from "./session-need";
 import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "./session-ledger";
@@ -117,5 +118,77 @@ describe("sessionPersonNeed", () => {
 
   it("names exactly the two states VC-112 does", () => {
     expect([...SESSION_PERSON_NEEDS]).toEqual(["waiting", "error"]);
+  });
+});
+
+describe("sessionNotificationItem", () => {
+  /**
+   * The one derivation both sides of the suppression comparison use (VC-295
+   * round 2). A producer names the item its alert is about with it, and a
+   * window reports the item it is showing with it — so "is the person already
+   * looking at this" is a comparison between two answers to the same question,
+   * rather than between two similar-looking guesses.
+   */
+  it("names the open question a waiting Session is blocked on", () => {
+    expect(sessionNotificationItem(waitingOnQuestion())).toEqual({
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("names the failure of a Session whose plumbing broke", () => {
+    expect(sessionNotificationItem(raising("adapter_disconnected"))).toEqual({
+      interactionId: null,
+      attentionId: "attention-adapter_disconnected",
+    });
+  });
+
+  it("lets a failure outrank a question, exactly as the need does", () => {
+    // Otherwise a click would land on a card that cannot be answered, and the
+    // suppression comparison would disagree with the alert that raised it.
+    const both: Reading = {
+      ...waitingOnQuestion(),
+      attention: {
+        active: [attention("adapter_disconnected")],
+        all: [],
+      } as unknown as SessionProjection["attention"],
+    };
+    expect(sessionNotificationItem(both)).toEqual({
+      interactionId: null,
+      attentionId: "attention-adapter_disconnected",
+    });
+  });
+
+  it("names a blocking question raised as an Attention rather than an Interaction", () => {
+    // `sessionAwaitsUser` accepts either; the item has to as well, or an alert
+    // about a permission prompt would carry no item at all.
+    expect(sessionNotificationItem(raising("permission_required"))).toEqual({
+      interactionId: null,
+      attentionId: "attention-permission_required",
+    });
+  });
+
+  it("names nothing for a Session that is merely working", () => {
+    expect(sessionNotificationItem(projection())).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("ignores an Attention nobody can act on", () => {
+    // A rate limit clears itself. Reporting it as the item on screen would
+    // suppress the question that arrives while it stands.
+    expect(sessionNotificationItem(raising("rate_limited"))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("names nothing once the Session was stopped on purpose", () => {
+    const stopped: SessionProjection["stopped"] = { at: 1, reason: null, by: { kind: "user" } };
+    expect(sessionNotificationItem({ ...waitingOnQuestion(), stopped })).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
   });
 });
