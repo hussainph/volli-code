@@ -62,15 +62,26 @@ function authorityKeywords(): readonly string[] {
   throw new Error("no Configure category `authority`");
 }
 
-/** Static markup escapes the few entities a label can carry; search compares the words. */
+const ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#x27;": "'",
+  "&rsquo;": "\u2019",
+};
+
+/**
+ * Static markup escapes the few entities a label can carry; search compares the
+ * words.
+ *
+ * ONE PASS, not a chain of replacements. Decoding `&amp;` before the others
+ * turns `&amp;lt;` into `<` — a label written to show an entity would be read
+ * as the character it names, and the check would then hold the rail to words
+ * the pane never drew.
+ */
 function decodeEntities(text: string): string {
-  return text
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#x27;", "'")
-    .replaceAll("&rsquo;", "\u2019");
+  return text.replace(/&(?:amp|lt|gt|quot|#x27|rsquo);/g, (entity) => ENTITIES[entity] ?? entity);
 }
 
 describe("Configure → Authority", () => {
