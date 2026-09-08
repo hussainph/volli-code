@@ -305,7 +305,7 @@ function PiSessionLogsSection() {
                 {formatFileSize(inventory?.candidateBytes ?? 0)}). Main checks every file and the
                 attachment set again before removal. This can&rsquo;t be undone.
               </span>
-              <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs text-foreground">
+              <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {inventory?.candidates.map((candidate) => candidate.path).join("\n")}
               </span>
             </AlertDialogDescription>
