@@ -63,6 +63,7 @@ import { Message, MessageContent } from "@renderer/components/ui/ai-elements/mes
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
 import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
+  authorityChip,
   composerAnswerPrompt,
   footInteraction,
   gatedToolCallId,
@@ -361,6 +362,17 @@ export function ChatPlane({
   const modelTier = projection?.modelTier ?? null;
   const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
+  /*
+   * What THIS attachment is governed by (VC-285), from the Snapshot the
+   * attachment saved when it opened — never the project's current setting,
+   * which is not on this projection and must not be inferred onto it. Editing
+   * Configure while this Session runs leaves the chip alone, which is the
+   * truth: the running attachment keeps the policy it pinned.
+   */
+  const authority = React.useMemo(
+    () => authorityChip(projection?.authority ?? null),
+    [projection?.authority],
+  );
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
     projection !== null,
   );
@@ -1276,6 +1288,7 @@ export function ChatPlane({
               working={working}
               ready={composable}
               contextUsage={contextUsage}
+              authority={authority}
               queued={strip}
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}

@@ -1,8 +1,15 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { COMPACT_VERB, COMPOSER_VERBS, SKILL_POLICY_DEFAULT } from "@volli/shared";
+import {
+  BUILTIN_RULE_PACK_HASH,
+  BUILTIN_RULE_PACK_ID,
+  COMPACT_VERB,
+  COMPOSER_VERBS,
+  SKILL_POLICY_DEFAULT,
+} from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
+import { authorityChip } from "@volli/session-presentation";
 
 import { PromptInput } from "@renderer/components/ui/ai-elements/prompt-input";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
@@ -435,6 +442,37 @@ describe("the effort control's place in the footer", () => {
     // out of this form, so opening the model list moves focus off the composer
     // and the row would dim under the hand that opened it.
     expect(html).toContain("has-[[data-state=open]]:opacity-100");
+  });
+});
+
+describe("the Authority chip's place in the footer", () => {
+  const OBSERVED = authorityChip({
+    attachmentId: "attachment-1",
+    snapshot: {
+      enforcement: "observe",
+      rulePackId: BUILTIN_RULE_PACK_ID,
+      rulePackHash: BUILTIN_RULE_PACK_HASH,
+    },
+  });
+
+  it("stands with the Session's other standing facts, saying its outcome", () => {
+    const html = renderFooter({ authority: OBSERVED });
+
+    expect(html).toContain("Observe — policy record");
+    expect(html).toContain(`pack ${BUILTIN_RULE_PACK_HASH}`);
+  });
+
+  /*
+   * The footer is a row of controls; this is not one. Authority is app-owned
+   * state the governed surface cannot edit, so the chip must never grow a
+   * press — and a composer with no policy to report draws nothing rather than
+   * an empty chip.
+   */
+  it("draws no chip at all for a composer with no live attachment", () => {
+    const html = renderFooter();
+
+    expect(html).not.toContain("session-authority-chip");
+    expect(html).not.toContain("runtime defaults");
   });
 });
 

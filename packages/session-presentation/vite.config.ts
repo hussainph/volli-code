@@ -19,6 +19,12 @@ export default defineConfig({
         // can reach the empty rule — a pill drawn over the composer with
         // nothing to say is the failure that rule exists to refuse.
         "src/activity-island.ts",
+        // What a running Session says it is governed by (VC-285). In the gate
+        // because the wrong answer here is a false statement about authority:
+        // the chip must read the live attachment's SAVED Snapshot, and the
+        // no-Snapshot state must read as the runtime defaults rather than as
+        // whatever the project happens to be set to today.
+        "src/authority.ts",
         "src/client.ts",
         "src/compaction-boundary.ts",
         "src/composer-effort.ts",

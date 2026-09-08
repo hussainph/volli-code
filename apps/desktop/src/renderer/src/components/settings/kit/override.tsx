@@ -36,6 +36,7 @@ export function OverrideControl({
   label,
   inheritedValue,
   overridden,
+  disabled = false,
   onRevert,
   children,
 }: {
@@ -44,6 +45,8 @@ export function OverrideControl({
   /** What Settings says. Named in the button's accessible label. */
   inheritedValue: string;
   overridden: boolean;
+  /** Keeps revert from remaining as an active mutation when its control is inactive. */
+  disabled?: boolean;
   onRevert: () => void;
   children: React.ReactNode;
 }) {
@@ -54,6 +57,7 @@ export function OverrideControl({
         <Button
           size="icon-xs"
           variant="ghost"
+          disabled={disabled}
           aria-label={`Reset ${label} to the app-wide value, ${inheritedValue}`}
           onClick={onRevert}
         >
