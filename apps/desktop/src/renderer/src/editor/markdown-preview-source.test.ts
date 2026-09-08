@@ -132,6 +132,41 @@ describe("previewSegments — HTML that cannot be rendered safely", () => {
     expect(omissionLines(previewSegments(text))).toEqual([1, 5]);
   });
 
+  /*
+   * Review round 2 found both of these rendering with NO marker: the gate
+   * walked the parsed document's descendants and never its roots, and it made
+   * an allow decision about CSS from a regular expression. They are asserted
+   * here, at the surface, rather than only against the gate — what the ticket
+   * promises is a marker on the page, not a `false` in a predicate.
+   */
+  it("marks a block that authors a document root, handler or not", () => {
+    expect(previewSegments('<body onload="alert(1)">body</body>\n')).toEqual([
+      { kind: "omitted-html", line: 1 },
+    ]);
+    expect(
+      previewSegments('Intro.\n\n<html onclick="alert(1)"><body>html</body></html>\n'),
+    ).toEqual([
+      { kind: "markdown", text: "Intro.\n\n" },
+      { kind: "omitted-html", line: 3 },
+    ]);
+    expect(previewSegments("<body>plain</body>\n")).toEqual([{ kind: "omitted-html", line: 1 }]);
+  });
+
+  it("marks a frameset, which an HTML parser would otherwise swallow whole", () => {
+    expect(
+      previewSegments('<frameset>\n<frame src="https://evil.example/">\n</frameset>\n'),
+    ).toEqual([{ kind: "omitted-html", line: 1 }]);
+  });
+
+  it("marks a style that hides a request behind a CSS escape", () => {
+    const text =
+      'Before.\n\n<div style="background-image:u\\72l(https://tracker.invalid/x.png)">CSS</div>\n';
+    expect(previewSegments(text)).toEqual([
+      { kind: "markdown", text: "Before.\n\n" },
+      { kind: "omitted-html", line: 3 },
+    ]);
+  });
+
   it("names the marker's words once, so the surface and the tests cannot drift", () => {
     expect(OMITTED_HTML_NOTICE).toBe("HTML block not rendered");
   });

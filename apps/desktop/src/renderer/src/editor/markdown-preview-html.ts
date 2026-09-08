@@ -242,8 +242,23 @@ function autoFetchingAttribute(name: string): boolean {
 /** Attributes whose value is a URL a person may follow, rather than one the page loads. */
 const LINK_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "cite", "action", "longdesc"]);
 
-/** `url(…)` inside a `style` value: a stylesheet's own way of making a request. */
-const STYLE_URL = /url\s*\(/i;
+/**
+ * The only shape a `style` value may have: plain `property: value` text.
+ *
+ * An ALLOWLIST over characters rather than a hunt for `url(`, because a regular
+ * expression cannot read CSS — review round 2 walked
+ * `background-image:u\72l(https://…)` straight past the old check, and a
+ * stylesheet has more ways to spell a request than a pattern can enumerate
+ * (escapes, comments, `image-set()`, `@import`, `expression()`, `element()`).
+ * So nothing with structure is admitted: no `\`, no `(`, no `@`, no `/`, no
+ * quotes, no anything outside the characters a flat declaration needs.
+ *
+ * The attribute is dropped downstream either way — the sanitizer keeps no
+ * `style` — so all this decides is whether a block's TEXT is readable or
+ * replaced by a marker, and `style="text-align:center"` is common enough in
+ * repository prose to be worth reading.
+ */
+const PLAIN_STYLE = /^[a-z0-9 \t\-_.,%#:;]*$/i;
 
 /**
  * `<!doctype`, `<![CDATA[`, `<?…`: markup an HTML parser swallows into a
@@ -252,6 +267,22 @@ const STYLE_URL = /url\s*\(/i;
  * became nothing is exactly what the marker exists to announce.
  */
 const NON_ELEMENT_MARKUP = /<[!?](?!--)/;
+
+/**
+ * A block that authors a DOCUMENT ROOT rather than a fragment.
+ *
+ * Refused whole, and asked on the raw text for the same reason the line above
+ * is: after parsing there is nothing left to see. A parser gives every fragment
+ * an `html`, a `head` and a `body` of its own, so the tree cannot tell an
+ * authored root from an invented one — which is how `<body onload="…">` reached
+ * the page unmarked (review round 2), and how a `<frameset>` disappears without
+ * a word. A markdown file is not a document, so a block that declares one is
+ * unsupported by definition, handler or no handler.
+ */
+const DOCUMENT_ROOT = /<\/?(?:html|head|body|frame|frameset)\b/i;
+
+/** Comments, removed before the raw scans above: what is inside one is not markup. */
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 
 /**
  * Whether one raw HTML block may be handed to the renderer at all.
@@ -266,7 +297,9 @@ const NON_ELEMENT_MARKUP = /<[!?](?!--)/;
  * the word `script` in a comment would hide the paragraph written around it.
  */
 export function renderableHtmlBlock(html: string): boolean {
-  if (NON_ELEMENT_MARKUP.test(html)) return false;
+  const markup = html.replace(HTML_COMMENT, "");
+  if (NON_ELEMENT_MARKUP.test(markup)) return false;
+  if (DOCUMENT_ROOT.test(markup)) return false;
   const parsed = new DOMParser().parseFromString(html, "text/html");
   // BOTH roots: the parser hoists `<link>`, `<meta>` and `<base>` into the head
   // of the document it builds, and a gate that walked only the body would never
@@ -291,11 +324,7 @@ function renderableAttribute(tagName: string, rawName: string, value: string): b
   const name = rawName.toLowerCase();
   if (name.startsWith("on")) return false;
   if (autoFetchingAttribute(name)) return false;
-  // A style declaration is inert; a `url()` inside one is a request. The
-  // sanitizer drops the attribute either way, so admitting the inert form only
-  // decides whether the block's TEXT is readable — and half the centred READMEs
-  // in the world carry one.
-  if (name === "style") return !STYLE_URL.test(value);
+  if (name === "style") return PLAIN_STYLE.test(value);
   if (name === "src") return tagName === "img" && !dangerousImageUrl(value);
   if (LINK_ATTRIBUTES.has(name)) return safeLinkUrl(value);
   return true;

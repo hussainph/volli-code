@@ -101,6 +101,23 @@ describe("renderableHtmlBlock", () => {
     );
   });
 
+  it("refuses a block that authors a document root, with or without a handler", () => {
+    // A parser gives every fragment an html/head/body of its own, so the tree
+    // cannot tell an authored root from an invented one — which is how
+    // `<body onload>` reached the page unmarked (review round 2).
+    expect(renderableHtmlBlock('<body onload="alert(1)">body</body>')).toBe(false);
+    expect(renderableHtmlBlock('<html onclick="alert(1)"><body>html</body></html>')).toBe(false);
+    expect(renderableHtmlBlock("<body>plain</body>")).toBe(false);
+    expect(renderableHtmlBlock("<head><title>t</title></head>")).toBe(false);
+    expect(renderableHtmlBlock('<frameset><frame src="https://evil.example/"></frameset>')).toBe(
+      false,
+    );
+  });
+
+  it("still reads a root named inside a comment as a comment", () => {
+    expect(renderableHtmlBlock("<div>\n<!-- <body onload=x> -->\n<b>hi</b>\n</div>")).toBe(true);
+  });
+
   it("refuses a doctype, a processing instruction and CDATA", () => {
     expect(renderableHtmlBlock("<!DOCTYPE html>")).toBe(false);
     expect(renderableHtmlBlock("<?php echo 1; ?>")).toBe(false);
@@ -140,10 +157,29 @@ describe("renderableHtmlBlock", () => {
     );
   });
 
-  it("keeps a style that only styles", () => {
+  it("keeps a style that is plainly a flat declaration", () => {
     // Refusing every `style` would put a marker over half the centred READMEs
     // in the world; the sanitizer drops the attribute and the text still reads.
     expect(renderableHtmlBlock('<p style="text-align:center">hi</p>')).toBe(true);
+    expect(renderableHtmlBlock('<p style="color: #fff; width: 50%">hi</p>')).toBe(true);
+  });
+
+  it("refuses a style with any structure in it, rather than reading the CSS", () => {
+    // The escape below is what review round 2 walked past a `url(` pattern: a
+    // regular expression cannot read CSS, so nothing structural is admitted.
+    expect(
+      renderableHtmlBlock(
+        '<div style="background-image:u\\72l(https://tracker.invalid/x.png)">c</div>',
+      ),
+    ).toBe(false);
+    expect(renderableHtmlBlock('<div style="/* c */ color:red">c</div>')).toBe(false);
+    expect(
+      renderableHtmlBlock('<div style="background:image-set(&quot;a.png&quot; 1x)">c</div>'),
+    ).toBe(false);
+    expect(
+      renderableHtmlBlock('<div style="@import url(https://evil.example/x.css)">c</div>'),
+    ).toBe(false);
+    expect(renderableHtmlBlock('<div style="width:expression(alert(1))">c</div>')).toBe(false);
   });
 
   it("refuses a form control typed into a document", () => {

@@ -257,6 +257,23 @@ describe("MarkdownPreview — hostile input", () => {
     expect((globalThis as { pwned?: boolean }).pwned).toBeUndefined();
   });
 
+  it("marks a block that authors a document root or hides a request in CSS", async () => {
+    // Both rendered with no marker until review round 2: the sanitizer cleaned
+    // them, and the page said nothing about what it had left out.
+    for (const markup of [
+      '<body onload="globalThis.pwned = true">body</body>',
+      '<html onclick="globalThis.pwned = true"><body>html</body></html>',
+      '<div style="background-image:u\\72l(https://tracker.invalid/x.png)">CSS</div>',
+    ]) {
+      const view = await preview(`# Title\n\n${markup}\n`);
+      expect(view.textContent, markup).toContain("HTML block not rendered");
+      expect(view.textContent, markup).toContain("(line 3)");
+      expect(view.innerHTML, markup).not.toContain("tracker.invalid");
+      expect(view.querySelector("h1")?.textContent, markup).toBe("Title");
+    }
+    expect((globalThis as { pwned?: boolean }).pwned).toBeUndefined();
+  });
+
   it("strips an event handler rather than drawing a live one", async () => {
     const view = await preview('<div onclick="globalThis.pwned = true">Click me</div>\n');
 
