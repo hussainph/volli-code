@@ -33,6 +33,7 @@ import type {
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
+  SessionNotificationItem,
   RendererSessionInteraction,
 } from "@volli/shared";
 import {
@@ -137,6 +138,11 @@ import {
   InteractionCard,
   InteractionReceiptLine,
 } from "@renderer/components/chat/interaction-ui";
+import {
+  onSessionItemReveal,
+  preferRevealedInteraction,
+  takeSessionItemReveal,
+} from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -437,6 +443,25 @@ export function ChatPlane({
     projection?.interactions.active ?? NO_INTERACTIONS,
     sameInteractionId,
   );
+
+  /**
+   * The question a notification click asked for (VC-295).
+   *
+   * Claimed on mount AND subscribed to, because a click lands in either order:
+   * the Session may be opening because of it, or it may already be in front. A
+   * reveal only reorders the card slot below — it never answers anything — so a
+   * request naming an item that has since resolved simply changes nothing, and
+   * the click's own toast is what explains the absence.
+   */
+  const [revealed, setRevealed] = React.useState<SessionNotificationItem | null>(null);
+  React.useEffect(() => {
+    const claim = () => {
+      const item = takeSessionItemReveal(sessionId);
+      if (item !== null) setRevealed(item);
+    };
+    claim();
+    return onSessionItemReveal(sessionId, claim);
+  }, [sessionId]);
 
   /**
    * The one road out of this surface for anything a person typed.
@@ -760,7 +785,15 @@ export function ChatPlane({
    * state, and a blocked Session is not streaming anything to compete with.
    */
   const pending =
-    interactions.length > 0 ? footInteraction(interactions, gatedToolCallIds(messages)) : null;
+    interactions.length > 0
+      ? footInteraction(
+          // The revealed question takes the slot, when it is still open: the
+          // card stack draws one at a time, so "select that question" is this
+          // ordering and nothing else.
+          preferRevealedInteraction(interactions, revealed?.interactionId ?? null),
+          gatedToolCallIds(messages),
+        )
+      : null;
 
   // The Session's most recent reply — what `/copy` copies. Held in a ref as
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a

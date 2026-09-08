@@ -164,11 +164,21 @@ export function sessionPersonNeed(
  * `auth_required`, `input_required`) is named as an attention, because that is
  * what it durably is; an `interaction.opened` question is named as an
  * interaction. `sessionAwaitsUser` already accepts either, and so does this.
+ *
+ * ── THE SHAPE IT ASKS FOR ─────────────────────────────────────────────────
+ * Structural, and deliberately narrower than a whole `SessionProjection`: main
+ * hands it the durable projection, while a window hands it the renderer's
+ * presentation projection, which carries no `stopped` at all. Absent reads the
+ * same as `null` — a shape that cannot express a stop is a shape that never
+ * reports one, and the two callers must not answer differently about the same
+ * Session merely because they hold different views of it.
  */
-export function sessionNotificationItem(
-  projection: Pick<SessionProjection, "interactions" | "attention" | "stopped">,
-): SessionNotificationItem {
-  if (projection.stopped !== null) return NO_SESSION_NOTIFICATION_ITEM;
+export function sessionNotificationItem(projection: {
+  interactions: { active: readonly { id: string }[] };
+  attention: { active: readonly { id: string; kind: SessionAttentionKind }[] };
+  stopped?: SessionProjection["stopped"];
+}): SessionNotificationItem {
+  if (projection.stopped != null) return NO_SESSION_NOTIFICATION_ITEM;
   const failing = projection.attention.active.find((attention) =>
     (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(attention.kind),
   );

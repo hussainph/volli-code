@@ -23,9 +23,33 @@
  * on another Space, on a second display), and main pairs this report with
  * Electron's own focus.
  */
-import type { NotificationTarget } from "@volli/shared";
+import type { NotificationTarget, SessionNotificationItem } from "@volli/shared";
 
 import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
+
+/**
+ * Where a terminal Session actually lives, as the terminal store holds it.
+ *
+ * A Session id is not enough to open a terminal: the strip is keyed by the
+ * TAB's root session, the pane inside it is a second id, and which container
+ * holds it (a ticket's, or the project's Board strip) is a third fact. Round 1
+ * turned every Session target into `chat:<sessionId>` and therefore opened a
+ * chat tab that does not exist for a harness that was waiting in a terminal.
+ *
+ * Resolved by the caller from `stores/sessions`, so this module stays pure and
+ * `@volli/shared` never learns desktop tab grammar.
+ */
+export interface TerminalSessionPlacement {
+  /** The terminal store's container key: a ticketId, or a projectId for Board. */
+  ownerId: string;
+  /** The tab's root Session id — also the strip's tab id. */
+  tabId: string;
+  /** The pane inside that tab holding the Session the alert named. */
+  paneId: string;
+  scope:
+    | { kind: "project"; projectId: string }
+    | { kind: "ticket"; projectId: string; ticketId: string };
+}
 
 /** The store reads this decision is a function of. */
 export interface ActiveTargetReading {
@@ -36,40 +60,57 @@ export interface ActiveTargetReading {
   activeTicketTabId: string | null;
   /** Home's active tab id — `board`, or a Session/file/browser tab. */
   homeActiveTab: string;
+  /**
+   * The terminal Session the active tab is showing — its ACTIVE PANE, not the
+   * tab's root — or null when the active tab is not a terminal. Resolved from
+   * the terminal store by the caller, which is what makes a bare-uuid tab id
+   * distinguishable from a file or browser one without guessing at its shape.
+   */
+  terminalSessionId: string | null;
+  /**
+   * What the active chat Session is showing right now, from
+   * `sessionNotificationItem` — the same derivation the producer used. Only
+   * read when the active tab IS a chat tab.
+   */
+  chatItem: SessionNotificationItem;
 }
 
 /** What this window is showing, in the vocabulary main suppresses against. */
 export function activeNotificationTarget(reading: ActiveTargetReading): NotificationTarget | null {
   const { projectId } = reading;
   if (projectId === null || reading.nav !== "home") return null;
-  if (reading.openTicketId !== null) {
-    const sessionId =
-      reading.activeTicketTabId === null ? null : parseChatTabId(reading.activeTicketTabId);
-    return sessionId === null
-      ? { kind: "ticket", projectId, ticketId: reading.openTicketId }
-      : {
-          kind: "session",
-          projectId,
-          ticketId: reading.openTicketId,
-          sessionId,
-          // A window reports WHERE it is, never which question it is looking
-          // at: the match is by Session, and carrying ids here would invite a
-          // comparison this rule does not make.
-          interactionId: null,
-          attentionId: null,
-        };
+  const ticketId = reading.openTicketId;
+  const activeTabId = ticketId === null ? reading.homeActiveTab : reading.activeTicketTabId;
+  const chatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
+  // A chat Session in front is reported WITH the item it is showing (round 2).
+  // Reporting the Session alone made a person reading one question swallow the
+  // alert about the failure that had just stopped it.
+  if (chatSessionId !== null) {
+    return {
+      kind: "session",
+      projectId,
+      ticketId,
+      sessionId: chatSessionId,
+      ...reading.chatItem,
+    };
   }
-  const homeSessionId = parseChatTabId(reading.homeActiveTab);
-  return homeSessionId === null
-    ? null
-    : {
-        kind: "session",
-        projectId,
-        ticketId: null,
-        sessionId: homeSessionId,
-        interactionId: null,
-        attentionId: null,
-      };
+  // A terminal in front is the Session its ACTIVE PANE is running. A harness
+  // alert names that pane, and carries no item — a TUI's question is not a
+  // durable Interaction — so the two compare equal exactly when the person is
+  // looking at the terminal that is asking.
+  if (reading.terminalSessionId !== null) {
+    return {
+      kind: "session",
+      projectId,
+      ticketId,
+      sessionId: reading.terminalSessionId,
+      interactionId: null,
+      attentionId: null,
+    };
+  }
+  // A file, a diff, a browser tab, or a strip with nothing in front: the ticket
+  // is what is on screen. On Home, that is the board, which is nothing at all.
+  return ticketId === null ? null : { kind: "ticket", projectId, ticketId };
 }
 
 /**
@@ -81,6 +122,8 @@ export function activeNotificationTarget(reading: ActiveTargetReading): Notifica
  * two spellings of it is how a click comes to open a tab nobody is watching.
  */
 export type NotificationRouteInstruction =
+  | { kind: "ticket-terminal"; projectId: string; ticketId: string; tabId: string; paneId: string }
+  | { kind: "project-terminal"; projectId: string; tabId: string; paneId: string }
   | {
       kind: "ticket-session";
       projectId: string;
@@ -101,9 +144,35 @@ export type NotificationRouteInstruction =
   | { kind: "ticket"; projectId: string; ticketId: string }
   | { kind: "update" };
 
-export function notificationRoute(target: NotificationTarget): NotificationRouteInstruction {
+export function notificationRoute(
+  target: NotificationTarget,
+  /**
+   * Where this Session lives as a terminal, when it does. Resolved by the
+   * caller against the live terminal store: a Session that IS a terminal must
+   * open its terminal, and only the store knows which tab and pane that is.
+   */
+  terminal: TerminalSessionPlacement | null,
+): NotificationRouteInstruction {
   switch (target.kind) {
     case "session":
+      // The placement wins over what the alert remembered: it is read from the
+      // live strip, while the alert's ids are a memory from when it was posted.
+      if (terminal !== null) {
+        return terminal.scope.kind === "ticket"
+          ? {
+              kind: "ticket-terminal",
+              projectId: terminal.scope.projectId,
+              ticketId: terminal.scope.ticketId,
+              tabId: terminal.tabId,
+              paneId: terminal.paneId,
+            }
+          : {
+              kind: "project-terminal",
+              projectId: terminal.scope.projectId,
+              tabId: terminal.tabId,
+              paneId: terminal.paneId,
+            };
+      }
       return target.ticketId === null
         ? {
             kind: "project-session",
