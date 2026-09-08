@@ -28,6 +28,7 @@ import {
 import type {
   DirtyWorktreeOrphan,
   KeptWorktreeOrphan,
+  PiSessionOrphanInventory,
   RemovedWorktreeOrphan,
 } from "../../../../../ipc/contract";
 import {
@@ -64,6 +65,7 @@ export function StoragePane() {
   return (
     <>
       <RetentionSection />
+      <PiSessionLogsSection />
       <OrphansSection />
       <DatabaseSection />
     </>
@@ -148,6 +150,146 @@ function RetentionSection() {
         <span className="text-ui text-muted-foreground">days</span>
       </PrefRow>
     </PrefSection>
+  );
+}
+
+function PiSessionLogsSection() {
+  const [inventory, setInventory] = React.useState<PiSessionOrphanInventory | null>(null);
+  const [scanning, setScanning] = React.useState(false);
+  const [cleaning, setCleaning] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  async function scan(): Promise<void> {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const result = await window.api.piSessions.scanOrphans();
+      if (!result.ok) {
+        setInventory(null);
+        toastError(`Couldn't scan Pi session logs: ${result.error}`);
+        return;
+      }
+      setInventory(result.inventory);
+    } catch (error) {
+      setInventory(null);
+      toastError(`Couldn't scan Pi session logs: ${errorMessage(error)}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function reclaim(): Promise<void> {
+    if (inventory === null || inventory.candidateCount === 0 || cleaning) return;
+    setCleaning(true);
+    try {
+      const result = await window.api.piSessions.reclaimOrphans({
+        scanRevision: inventory.revision,
+        itemIds: inventory.candidates.map((candidate) => candidate.itemId),
+      });
+      if (!result.ok) {
+        toastError(`Couldn't clean up Pi session logs: ${result.error}`);
+        return;
+      }
+      setConfirmOpen(false);
+      if (result.report.kept.length > 0) {
+        toastError(
+          `Kept ${result.report.kept.length} Pi session log(s) because they changed or became referenced.`,
+        );
+      }
+      await scan();
+    } catch (error) {
+      toastError(`Couldn't clean up Pi session logs: ${errorMessage(error)}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
+  const summary =
+    inventory === null
+      ? "Not scanned"
+      : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
+
+  return (
+    <>
+      <PrefSection
+        title="Pi session logs"
+        icon={DatabaseIcon}
+        action={
+          <SectionIconAction
+            label="Scan for orphaned Pi logs"
+            icon={ArrowsClockwiseIcon}
+            busy={scanning}
+            onAct={() => void scan()}
+          />
+        }
+      >
+        <PrefRow
+          label="Orphaned logs"
+          description="Only logs not referenced by any Volli session are candidates. Scanning never deletes files."
+        >
+          <span className="text-ui text-muted-foreground">{summary}</span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={inventory === null || inventory.candidateCount === 0 || scanning || cleaning}
+            onClick={() => setConfirmOpen(true)}
+          >
+            <TrashIcon />
+            Clean up…
+          </Button>
+        </PrefRow>
+        {inventory?.candidates.map((candidate) => (
+          <ItemRow
+            key={candidate.itemId}
+            name={truncateMiddle(candidate.path)}
+            meta={`${candidate.sessionId} · ${formatFileSize(candidate.sizeBytes)}`}
+          />
+        ))}
+        {inventory?.skipped.map((entry) => (
+          <ItemRow
+            key={`skipped:${entry.path}`}
+            name={truncateMiddle(entry.path)}
+            meta={`Kept — ${entry.reason}`}
+          />
+        ))}
+      </PrefSection>
+
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (!cleaning) setConfirmOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clean up orphaned Pi session logs?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block">
+                Permanently deletes {inventory?.candidateCount ?? 0} confirmed orphan file(s) (
+                {formatFileSize(inventory?.candidateBytes ?? 0)}). Main checks every file and the
+                attachment set again before removal. This can&rsquo;t be undone.
+              </span>
+              <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs text-foreground">
+                {inventory?.candidates.map((candidate) => candidate.path).join("\n")}
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cleaning}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={cleaning}
+              onClick={(event) => {
+                event.preventDefault();
+                void reclaim();
+              }}
+            >
+              {cleaning ? "Cleaning up…" : "Delete orphaned logs"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 

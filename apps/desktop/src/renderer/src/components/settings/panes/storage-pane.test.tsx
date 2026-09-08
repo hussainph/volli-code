@@ -5,6 +5,15 @@ import { DATA_EXPORT_LIMITS } from "../../../../../data-export-copy";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
 
 describe("Settings → Storage database section", () => {
+  it("offers a read-only Pi log scan separately from confirmed cleanup", () => {
+    const html = renderToStaticMarkup(<StoragePane />);
+
+    expect(html).toContain("Pi session logs");
+    expect(html).toContain("Scan for orphaned Pi logs");
+    expect(html).toContain("Clean up…");
+    expect(html).toContain("Only logs not referenced by any Volli session are candidates");
+  });
+
   it("names the action as a data export rather than a database export", () => {
     const html = renderToStaticMarkup(<StoragePane />);
 

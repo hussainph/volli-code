@@ -449,6 +449,12 @@ export interface WorktreeOrphanDeleteInput {
   path: string;
 }
 
+/** The explicit Pi cleanup names only items from one main-owned inventory. */
+export interface PiSessionOrphanReclaimInput {
+  scanRevision: string;
+  itemIds: string[];
+}
+
 /** `{ ticketId, keep }` — sets/clears the durable retention pin. */
 export interface RetentionKeepInput {
   ticketId: string;
@@ -2249,10 +2255,26 @@ export interface VolliSendContract {
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
 }
 
+/**
+ * Pi session-log orphan cleanup has its own main-process seam. It is separate
+ * from worktree cleanup: scanning is read-only, and only the second, confirmed
+ * call can unlink files that main itself proposed in the named revision.
+ */
+export interface VolliPiSessionOrphanIpcContract {
+  "volli:pi-session-orphans-scan": { args: []; result: PiSessionOrphanScanResult };
+  "volli:pi-session-orphans-reclaim": {
+    args: [input: PiSessionOrphanReclaimInput];
+    result: PiSessionOrphanReclaimResult;
+  };
+}
+
+export type PiSessionOrphanIpcChannel = keyof VolliPiSessionOrphanIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
+    VolliPiSessionOrphanIpcContract,
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliCliIpcContract,
@@ -3076,6 +3098,47 @@ export type WorktreeOrphansResult = Result<{
  * lives inside a container this database owns before touching anything.
  */
 export type WorktreeOrphanDeleteResult = Result;
+
+/** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */
+export interface PiSessionOrphanCandidate {
+  itemId: string;
+  path: string;
+  sessionId: string;
+  sizeBytes: number;
+}
+
+/** A jsonl-shaped entry the scanner refused to treat as a deletion candidate. */
+export interface PiSessionOrphanSkipped {
+  path: string;
+  reason: string;
+}
+
+/** The exact proposal displayed before Pi cleanup can be confirmed. */
+export interface PiSessionOrphanInventory {
+  revision: string;
+  scannedAt: number;
+  candidates: PiSessionOrphanCandidate[];
+  candidateCount: number;
+  candidateBytes: number;
+  skipped: PiSessionOrphanSkipped[];
+}
+
+/** One reviewed candidate main kept after its mandatory pre-unlink re-check. */
+export interface PiSessionOrphanKept {
+  candidate: PiSessionOrphanCandidate;
+  reason: string;
+}
+
+/** What one explicit Pi cleanup actually did. */
+export interface PiSessionOrphanReclaimReport {
+  removed: PiSessionOrphanCandidate[];
+  kept: PiSessionOrphanKept[];
+  removedCount: number;
+  removedBytes: number;
+}
+
+export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
+export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;
 
 /**
  * A `volli:worktree-recreate` ack (VC-113): the path the checkout was put back

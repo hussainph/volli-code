@@ -142,6 +142,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
+import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -1116,13 +1117,14 @@ app.whenReady().then(async () => {
   });
 
   let agentToolDoor: AgentToolDoor | null = null;
+  const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
       ? createPiRuntimeHost({
-          sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+          sessionDataDir: piSessionsDirectory,
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -2176,6 +2178,10 @@ app.whenReady().then(async () => {
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
   });
+  // Pi sidecar cleanup is a separate, explicit surface: registration performs
+  // no scan and no deletion. The read-only inventory must run before its
+  // confirmed reclaim can name any main-owned item ids.
+  registerPiSessionOrphanIpcHandlers(dbHandle, piSessionsDirectory);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.

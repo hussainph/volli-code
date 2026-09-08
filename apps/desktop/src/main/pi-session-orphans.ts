@@ -12,48 +12,18 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type Database from "better-sqlite3";
+import type {
+  PiSessionOrphanCandidate,
+  PiSessionOrphanInventory,
+  PiSessionOrphanKept,
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanReclaimReport,
+  PiSessionOrphanSkipped,
+} from "../ipc/contract";
 
 const HEADER_LIMIT_BYTES = 64 * 1024;
 const PI_ADAPTER_ID = "pi";
 const NATIVE_BINDING_KIND = "volli.native-binding.v1";
-
-export interface PiSessionOrphanCandidate {
-  itemId: string;
-  path: string;
-  sessionId: string;
-  sizeBytes: number;
-}
-
-export interface PiSessionOrphanSkipped {
-  path: string;
-  reason: string;
-}
-
-export interface PiSessionOrphanInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: PiSessionOrphanCandidate[];
-  candidateCount: number;
-  candidateBytes: number;
-  skipped: PiSessionOrphanSkipped[];
-}
-
-export interface PiSessionOrphanReclaimInput {
-  scanRevision: string;
-  itemIds: string[];
-}
-
-export interface PiSessionOrphanKept {
-  candidate: PiSessionOrphanCandidate;
-  reason: string;
-}
-
-export interface PiSessionOrphanReclaimReport {
-  removed: PiSessionOrphanCandidate[];
-  kept: PiSessionOrphanKept[];
-  removedCount: number;
-  removedBytes: number;
-}
 
 interface FileIdentity {
   device: number;
@@ -102,6 +72,9 @@ export class PiSessionOrphanService {
 
   /** Read-only inventory. Nothing in this call removes or rewrites a sidecar. */
   async scan(): Promise<PiSessionOrphanInventory> {
+    // A requested re-scan retires the old proposal even if the fresh walk
+    // fails. A failed refresh must not leave an older revision actionable.
+    this.#current = null;
     const protectedIds = protectedPiSessionIds(this.db);
     const skipped: PiSessionOrphanSkipped[] = [];
     const confirmed = await scanPiSidecars(this.#root, skipped);
@@ -227,7 +200,7 @@ function protectedPiSessionIds(db: Database.Database): Set<string> {
       protectedIds.add(locator.sessionId);
       continue;
     }
-    if (row.adapter_id === PI_ADAPTER_ID && row.native_id !== null) malformedAttachment(row.id);
+    if (row.adapter_id === PI_ADAPTER_ID) malformedAttachment(row.id);
   }
   return protectedIds;
 }
@@ -255,10 +228,18 @@ async function scanPiSidecars(
   for (const directoryEntry of await readdir(root, { withFileTypes: true })) {
     const directoryPath = join(root, directoryEntry.name);
     if (directoryEntry.isSymbolicLink()) {
-      skipped.push({ path: directoryPath, reason: "Symlinked directories are never scanned." });
+      skipped.push({ path: directoryPath, reason: "Symlinks are never scanned." });
       continue;
     }
-    if (!directoryEntry.isDirectory()) continue;
+    if (!directoryEntry.isDirectory()) {
+      if (directoryEntry.name.endsWith(".jsonl")) {
+        skipped.push({
+          path: directoryPath,
+          reason: "Pi sidecars must be inside their encoded working-directory folder.",
+        });
+      }
+      continue;
+    }
 
     for (const fileEntry of await readdir(directoryPath, { withFileTypes: true })) {
       if (!fileEntry.name.endsWith(".jsonl")) continue;

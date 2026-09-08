@@ -94,6 +94,7 @@ describe("PiSessionOrphanService inventory", () => {
     const malformed = join(directory, "malformed.jsonl");
     const unrelated = join(directory, "unrelated.jsonl");
     const external = join(root, "external.jsonl");
+    const rootLevel = join(root, "root-level.jsonl");
     const linked = join(directory, piSessionFilename(createdAt, "linked"));
     writeFileSync(malformed, "not-json\n");
     writeFileSync(
@@ -101,13 +102,14 @@ describe("PiSessionOrphanService inventory", () => {
       `${JSON.stringify({ kind: "header", v: 3, id: "old", createdAt, cwd })}\n`,
     );
     writeFileSync(external, "external");
+    writeFileSync(rootLevel, "not in an encoded cwd directory");
     symlinkSync(external, linked);
 
     const report = await new PiSessionOrphanService(ctx.db, root).scan();
 
     expect(report.candidates).toEqual([]);
     expect(report.skipped.map((entry) => entry.path)).toEqual(
-      expect.arrayContaining([malformed, unrelated, linked]),
+      expect.arrayContaining([malformed, unrelated, linked, external, rootLevel]),
     );
     expect(existsSync(linked)).toBe(true);
   });
