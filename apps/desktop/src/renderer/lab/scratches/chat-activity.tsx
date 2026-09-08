@@ -32,12 +32,7 @@ import {
 } from "@volli/shared";
 import type { DynamicToolUIPart, ReasoningUIPart } from "ai";
 
-import {
-  composerAnswerPrompt,
-  enqueueMessage,
-  type BundleRow,
-  type QueuedMessage,
-} from "@volli/session-presentation";
+import { enqueueMessage, type BundleRow, type QueuedMessage } from "@volli/session-presentation";
 import { composerPress } from "@renderer/components/chat/chat-plane-model";
 import { ActivityBundle, AttentionReceipt, ToolRow } from "@renderer/components/chat/activity-ui";
 import { TurnRunningMark } from "@renderer/components/chat/chat-plane";
@@ -1038,9 +1033,9 @@ function Section({ label, children }: React.PropsWithChildren<{ label: string }>
  * tween under a mounted composer reads as motion or as a jump.
  *
  * The composer is wired through `composerPress`, the same router the plane
- * uses, so this is where the answer road is actually driven: a question that
- * takes words is answered from the box below it, and one that does not leaves
- * the box a message box — which the readout under it prints either way.
+ * uses, so this is where the separation is actually driven (VC-289): the card
+ * owns the answer, and words typed into the box below it are a message — which
+ * is what the readout prints for them, whatever is being asked above.
  */
 function AskUserStates() {
   const [shape, setShape] = React.useState<(typeof ASKS)[number]["name"]>("stepped");
@@ -1094,22 +1089,15 @@ function AskUserStates() {
           working={false}
           ready
           interactionOpen={open !== null}
-          answering={open !== null && composerAnswerPrompt(open) !== null}
           queued={[]}
           onQueuedChange={() => undefined}
           onSteerQueued={() => undefined}
           onSubmit={(text) => {
-            const press = composerPress(open, text);
+            const press = composerPress(text);
             setValue("");
-            if (press.kind === "answer") {
-              setAnswered(
-                JSON.stringify(
-                  { resolution: press.submission.resolution, message: press.submission.message },
-                  null,
-                  1,
-                ),
-              );
-            } else setAnswered(JSON.stringify({ message: text }, null, 1));
+            // Never an answer, whatever stands above it: a verb is the client's
+            // own operation and everything else is the reader's message.
+            setAnswered(JSON.stringify({ [press.kind]: text }, null, 1));
           }}
           onStop={() => undefined}
         />

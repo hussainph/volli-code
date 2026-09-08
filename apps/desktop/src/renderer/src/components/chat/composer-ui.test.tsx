@@ -674,40 +674,48 @@ describe("what a composed message actually sends", () => {
 
 describe("the composer while a question is waiting on an answer", () => {
   /** The blocked turn, exactly as the plane hands it over: live, and asked. */
-  function answeringComposer(overrides: Partial<SessionComposerProps> = {}): string {
+  function askedComposer(overrides: Partial<SessionComposerProps> = {}): string {
     return renderToStaticMarkup(
       <SessionComposer
-        {...composerProps({ working: true, interactionOpen: true, answering: true, ...overrides })}
+        {...composerProps({ working: true, interactionOpen: true, ...overrides })}
       />,
     );
   }
 
-  it("is a live box that says where its words are going", () => {
-    const html = answeringComposer();
-    // Never disabled, which is the whole point: a question must not be able to
-    // take the composer away from the person it is asking.
-    expect(html).toContain('placeholder="Your answer"');
-    expect(html).toContain('aria-label="Answer"');
+  it("stays the message box it always was, named as one", () => {
+    // It used to rename itself Answer and take the question's words, which made
+    // two answer fields with two submit paths for one question — and the same
+    // question could be sent twice. The card above owns the answer; this box
+    // owns messages, and it never stops being live or being called one.
+    const html = askedComposer();
+    expect(html).toContain('placeholder="Ask, plan, or implement…"');
+    expect(html).toContain('aria-label="Message"');
+    expect(html).not.toContain('aria-label="Answer"');
+    expect(html).not.toContain('placeholder="Your answer"');
     expect(html).not.toContain("<textarea disabled");
   });
 
-  it("stops calling the press a queue while the queue could not release it", () => {
+  it("keeps the press that sends a message called what it is", () => {
     // `ask_user` blocks INSIDE a turn, so `working` holds for the whole of a
-    // pending question — and a queue drains into an idle Session, which this
-    // one cannot become until the question is answered.
-    expect(answeringComposer()).toContain('aria-label="Answer"');
-    expect(answeringComposer()).not.toContain('aria-label="Queue"');
+    // pending question: a message typed here joins the queue, exactly as one
+    // typed beside any other live turn does.
+    expect(askedComposer()).toContain('aria-label="Queue"');
     // The turn is still live, so the way to stop it is still on the row.
-    expect(answeringComposer()).toContain('aria-label="Stop turn"');
+    expect(askedComposer()).toContain('aria-label="Stop turn"');
   });
 
-  it("is the ordinary message box again the moment nothing is asked", () => {
-    const html = renderToStaticMarkup(
-      <SessionComposer {...composerProps({ working: true, interactionOpen: true })} />,
-    );
-    expect(html).toContain('placeholder="Ask, plan, or implement…"');
-    expect(html).toContain('aria-label="Message"');
-    expect(html).toContain('aria-label="Queue"');
+  it("asks for the same thing whether or not a question stands above it", () => {
+    // The box a reader's hands are already in does not change under them when a
+    // request appears: same name, same placeholder, same press.
+    const unasked = renderToStaticMarkup(<SessionComposer {...composerProps({ working: true })} />);
+    for (const attribute of [
+      'aria-label="Message"',
+      'placeholder="Ask, plan, or implement…"',
+      'aria-label="Queue"',
+    ]) {
+      expect([attribute, unasked.includes(attribute)]).toEqual([attribute, true]);
+      expect([attribute, askedComposer().includes(attribute)]).toEqual([attribute, true]);
+    }
   });
 });
 

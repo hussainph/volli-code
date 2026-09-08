@@ -13,8 +13,8 @@
  *  - **At the foot**, stacked *above* the composer, for an interaction no row
  *    can hold — a question, or a permission the harness raised with no call.
  *    The composer stays: a follow-up can still be typed (or queued) while the
- *    card waits. Cancel request rides the card because withdrawing the question
- *    is not the same act as the composer's Stop turn.
+ *    card waits. Withdraw question rides the card because withdrawing the
+ *    question is not the same act as the composer's Stop turn.
  *
  * The old approval card took a `DynamicToolUIPart` and drew three hardcoded
  * buttons, so an option a harness declared could never reach the screen and an
@@ -44,23 +44,30 @@
  * `interaction.ts`'s decisions (`askFieldOpen`, `promptFieldOpen`,
  * `promptTextCarrier`), not this file's.
  *
- * **The box for those words is on the card, always — never delegated downstairs.**
- * A question the composer could answer used to have its own field removed, on
- * the argument that the card's box and the composer under it are one control
- * drawn twice. They are not. They are two *distances*: the card's box is the
- * last row of the list being answered, directly under the sentence doing the
- * asking; the composer is a separate surface past a border, a gradient and the
- * card's own footer. The first reads as part of the question and the second
- * does not, which is why a card that hid its field was read as a question with
- * no way to answer it — and where the question listed nothing to click, that is
- * literally what it was: a headline, Cancel, Reject, and no box and no commit
- * control anywhere on it.
+ * **The card is the answer form, and it is the only one (VC-289).** Two things
+ * were true at once and could not stay that way: the card drew its own box
+ * because a question with its field four inches downstream reads as a question
+ * with no way to answer it, and the composer *also* answered, because a
+ * question standing over the box a reader's hands are already in must not make
+ * that box a dead end (VC-68). Both readings are right about their own hazard
+ * and the pair of them produced the worse surface: one question with two live
+ * fields, two submit paths, and — since a card disabled by `resolving` cannot
+ * disable a composer that has never heard of it — two ways to send the same
+ * answer twice.
  *
- * The composer still answers (`interaction.ts`'s `composerAnswerPrompt`), and
- * must: a question standing over the box a reader's hands are already in cannot
- * make that box a dead end, which is the whole of what VC-68 fixed. What
- * changed is which of the two is the affordance and which is the fallback.
- * Nothing about the wire moved — both send the same submission.
+ * So the question's whole form is here: its choices, its box, its validation,
+ * and the one control that sends it. The composer keeps its own name, its own
+ * placeholder and its own send, and its words are a message, never an answer.
+ * VC-68's hazard is answered differently rather than dropped — the card no
+ * longer hides its field under any condition, so the thing a reader must not be
+ * able to type into a dead end is always here, under the sentence asking for it.
+ *
+ * **What each act does to the question is in its name.** `Withdraw question`
+ * takes the ask away, `Decline to answer` sends the empty refusal, `Send answer`
+ * sends what is on the card, and once one of them lands the card says which,
+ * in its own place, rather than going quietly inert (`describeInteractionSent`).
+ * All four go through one synchronous latch per interaction id
+ * (`createSubmissionLatch`), so the first press is the one that happens.
  *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
  * plus the handful of things only a mounted card can own: whether a text answer
@@ -92,7 +99,10 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   askFieldOpen,
   COMPOSER_STACK_SHELL,
+  createSubmissionLatch,
+  DECLINE_ANSWER_LABEL,
   describeInteractionResolution,
+  describeInteractionSent,
   emptyInteractionDraft,
   interactionAdvance,
   interactionCarousel,
@@ -112,10 +122,14 @@ import {
   refusalSubmission,
   selectOption,
   setPromptResponse,
+  withdrawLabel,
+  WITHDRAW_QUESTION_LABEL,
   type InteractionCarousel,
   type InteractionDraft,
   type InteractionFieldRole,
   type InteractionQuestion,
+  type InteractionSentKind,
+  type InteractionSentReceipt,
   type InteractionStep,
   type InteractionSubmission,
 } from "@volli/session-presentation";
@@ -247,8 +261,13 @@ export interface InteractionCardProps {
    * Withdraws this durable request, as a control and as Escape. A card on a row
    * leaves it off because only the co-mounted foot offers request withdrawal.
    * This is deliberately distinct from the composer's turn-only interrupt.
+   *
+   * Reported the same way {@link InteractionCardProps.onResolve} is, and for the
+   * same reason: a withdrawal holds the card's one submission latch while it
+   * travels, so a caller that can see it fail is what puts the question back
+   * rather than leaving a card that says it withdrew something it did not.
    */
-  onWithdraw?(): void;
+  onWithdraw?(): void | Promise<boolean | void>;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
   resolving?: boolean;
   ref?: React.Ref<HTMLFormElement>;
@@ -268,38 +287,71 @@ export function InteractionCard(props: InteractionCardProps) {
 }
 
 /**
- * The decision that did not land, and the one door out that reports it.
+ * The one door out of a card, and the two things the card learns from it.
  *
- * `resolving` says a decision is in flight and the harness's own verdict is
- * what clears the card, so the only state left unrepresented was the round trip
- * that came back with nothing: the card re-enabled itself and looked exactly
- * like one nobody had pressed. Shared, so a refusal that never reached the
- * harness reports itself the same way a submitted answer does on either card.
+ * **Everything that ends this request comes through here** — the answer, the
+ * refusal, the withdrawal, and every key that stands for one of them — because
+ * the latch underneath is what makes "exactly one of them happens" true. It is
+ * taken synchronously, before the act begins (`createSubmissionLatch`, which
+ * owns that rule and the reasons); `resolving` cannot do that job, because it
+ * is state set inside the act it guards and read a render later, so two presses
+ * in one tick both find it false.
  *
- * The flag clears on the attempt rather than on the next keystroke: what it
- * says is that the last thing pressed did not land, and that stays true while
- * it is being retried.
+ * The two things it learns:
+ *
+ *  - **That the last press did not land.** `resolving` says a decision is in
+ *    flight and the harness's own verdict is what clears the card, so the state
+ *    left unrepresented was the round trip that came back with nothing: the
+ *    card re-enabled itself and looked exactly like one nobody had pressed. The
+ *    flag clears on the attempt rather than on the next keystroke — what it
+ *    says is that the last thing pressed did not land, and that stays true
+ *    while it is being retried. The draft is untouched, so the retry is the
+ *    same answer rather than a re-typed one.
+ *  - **What it just sent.** A receipt, where the caller has one to give
+ *    ({@link QuestionCard}); null on the verdict card, which is replaced by the
+ *    harness's own reply and has no sentence of its own to leave.
  */
-function useDelivery(onResolve: InteractionCardProps["onResolve"]) {
+function useDelivery(interactionId: string, onResolve: InteractionCardProps["onResolve"]) {
+  const [latch] = React.useState(createSubmissionLatch);
   const [failed, setFailed] = React.useState(false);
-  const send = (sending: InteractionSubmission) => {
+  const [sent, setSent] = React.useState<InteractionSentReceipt | null>(null);
+
+  /**
+   * Takes the latch, or does nothing at all.
+   *
+   * Doing nothing is the point: a press that arrives while another act is in
+   * flight is not queued, not refused out loud, and above all not delivered.
+   * The act that already has the latch is the one this question ends by.
+   */
+  const commit = (
+    receipt: InteractionSentReceipt | null,
+    act: () => void | Promise<boolean | void>,
+  ) => {
+    const landing = latch.run(interactionId, act);
+    if (landing === null) return;
     setFailed(false);
-    const landing = onResolve(sending);
-    if (!(landing instanceof Promise)) return;
-    void landing.then(
-      (landed) => setFailed(landed === false),
-      () => setFailed(true),
-    );
+    setSent(receipt);
+    void landing.then((landed) => {
+      if (landed) return;
+      // Nothing was decided anywhere, so the card comes back exactly as it was
+      // — the same draft, on the same step, with the failure said out loud.
+      setFailed(true);
+      setSent(null);
+    });
   };
-  return { failed, send };
+
+  const send = (sending: InteractionSubmission, receipt: InteractionSentReceipt | null = null) =>
+    commit(receipt, () => onResolve(sending));
+
+  return { failed, sent, commit, send };
 }
 
 /**
  * Escape ends the turn; it never dismisses the question, which outlives the
  * turn and leaves the projection only when it is answered or withdrawn. So it
- * does exactly what Cancel request does, and only where a card offers
- * withdrawal — at the foot, next to the composer that still owns turn-only
- * interrupt.
+ * does exactly what Withdraw question does — the same handler, through the same
+ * latch — and only where a card offers withdrawal at all: at the foot, next to
+ * the composer that still owns turn-only interrupt.
  *
  * Where there is none, the key is left to bubble. Swallowing it there meant a
  * card on a row absorbed the one gesture that interrupts from anywhere and
@@ -347,10 +399,15 @@ function DecisionCard({
     emptyInteractionDraft(interaction),
   );
   const [step, setStep] = React.useState(0);
-  const { failed, send } = useDelivery(onResolve);
+  const { failed, send, commit } = useDelivery(interaction.id, onResolve);
   const reducedMotion = useReducedMotion() ?? false;
   const questions = interactionQuestions(interaction);
   const carousel = interactionCarousel(interaction, draft, step);
+  // Through the same latch the verdict takes, so a withdrawal and a decision
+  // racing each other still end this request exactly once. No receipt: this
+  // card is replaced by the harness's own reply and has no sentence of its own
+  // to leave, but the latch is the same one whatever the card says afterwards.
+  const withdraw = onWithdraw ? () => commit(null, () => onWithdraw()) : undefined;
   const asked = questions[carousel?.index ?? 0];
   const refusable = needsOwnRefusal(interaction);
   const submission = interactionSubmission(interaction, draft);
@@ -373,7 +430,7 @@ function DecisionCard({
         event.preventDefault();
         submit();
       }}
-      onKeyDown={withdrawOnEscape(onWithdraw, resolving)}
+      onKeyDown={withdrawOnEscape(withdraw, resolving)}
       className={cn(
         "pointer-events-auto overflow-hidden outline-none",
         COMPOSER_STACK_SHELL,
@@ -437,25 +494,28 @@ function DecisionCard({
       </div>
 
       <div className="mt-1 flex items-center gap-1 border-t border-border/70 px-4 py-2">
-        {/* Worded, not a bare glyph. Cancel request is not the composer's Stop
-            turn: it withdraws the durable interaction as well as interrupting
-            the turn that asked it.
+        {/* Worded, not a bare glyph, and worded for its effect: it withdraws
+            the durable interaction as well as interrupting the turn that asked
+            it, which the composer's Stop turn does not. "Cancel request" named
+            neither half of that clearly enough to stand beside a refusal
+            (`withdrawLabel`, which also says "question" for the ask-user shapes
+            that are drawn on this card).
 
             Ghost and muted, because withdrawal is not an answer. It reads at the
             weight of the exit it is — below the verdict beside it, which is
             what the card actually asked for. Two controls at one weight said an
             interrupt and a refusal were the same kind of act. */}
-        {onWithdraw ? (
+        {withdraw ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
             disabled={resolving}
-            onClick={onWithdraw}
+            onClick={withdraw}
           >
             <XCircleIcon className="size-3.5" />
-            Cancel request
+            {withdrawLabel(interaction)}
           </Button>
         ) : null}
         {/* The decision that never reached the harness. Two words and the ink
@@ -519,11 +579,17 @@ function DecisionCard({
  * The flow, not the list, is the surface. A verdict card puts every option in
  * view because choosing between them is the act; here the ids are the harness's
  * own encoded values, so there is nothing to weigh a row against and no reason
- * to hold three questions on screen at once. What matters instead is momentum:
- * the row *is* the control, one click answers and advances, and the counter
- * says how much is left without a sentence saying so.
+ * to hold three questions on screen at once. One question at a time, a counter
+ * saying how much is left, and one named control that moves it on.
  *
- * Four things this card owns that `interaction.ts` cannot:
+ * **Choosing is not sending (VC-289).** A single choice used to answer and
+ * advance on the click that made it, which meant the fastest gesture on the
+ * card was also the irreversible one, and the step in view had no control at
+ * all to say what pressing it would do. A click selects; `Send answer` sends;
+ * `Decline to answer` refuses; `Withdraw question` takes the ask away. Four
+ * acts, four names, and each name is the effect.
+ *
+ * Five things this card owns that `interaction.ts` cannot:
  *
  *  - **Where focus goes on a step.** Only when the reader is already driving the
  *    card. Mounting never takes focus: the composer is still there, still
@@ -533,8 +599,12 @@ function DecisionCard({
  *    that the reader pressed at all, and that editing clears it, is state.
  *  - **Which keys answer.** A numeral is the row's name, so pressing it is
  *    pressing the row; arrows move and choose without committing; Enter is the
- *    commit. The always-open box takes Enter as its own commit only where the
- *    options beside it mean plain Enter is not a newline anyone wanted.
+ *    commit — and it is the same commit the control is, through the same latch,
+ *    so a key and a click racing each other still send one answer.
+ *  - **What it has just sent.** Once a response lands the card is the receipt
+ *    for it, in the place the question stood, until the harness clears it.
+ *    Before that it went inert: the same rows, dimmed, saying nothing about
+ *    whether anything had left.
  *  - **Whether the card is standing out of the way.** See {@link MinimizedQuestion}.
  *    Nothing durable turns on it, and nothing below the card can decide it: it
  *    is one reader wanting to see the transcript behind a card, and it lasts
@@ -561,7 +631,7 @@ function QuestionCard({
   // never inherited already minimised by the one before it.
   const [collapsed, setCollapsed] = React.useState(false);
   const stageId = React.useId();
-  const { failed, send } = useDelivery(onResolve);
+  const { failed, sent, commit, send } = useDelivery(interaction.id, onResolve);
   const reducedMotion = useReducedMotion() ?? false;
   const stageRef = React.useRef<HTMLDivElement>(null);
   // Set by the reader's own navigation, so an arriving step takes focus and a
@@ -571,6 +641,21 @@ function QuestionCard({
   const refusable = needsOwnRefusal(interaction);
   const askedId = step?.question.prompt.id ?? "";
   const advanceLabel = step?.advanceLabel ?? null;
+
+  /** What the card will say about a response the moment it leaves. */
+  const receipt = (kind: InteractionSentKind, submission: InteractionSubmission | null) =>
+    describeInteractionSent(interaction, kind, submission);
+
+  const decline = () => {
+    const refusal = refusalSubmission(interaction, draft);
+    send(refusal, receipt("declined", refusal));
+  };
+
+  // Undefined rather than a no-op where the mount offers no withdrawal, so the
+  // control and the Escape key are absent together.
+  const withdraw = onWithdraw
+    ? () => commit(receipt("withdrawn", null), () => onWithdraw())
+    : undefined;
 
   // Both cards in the AnimatePresence are mounted while one leaves, so the entry
   // is matched by the prompt it belongs to rather than by document order — the
@@ -597,9 +682,9 @@ function QuestionCard({
    * Forward, and at the end of the walk, out. What a press means is
    * {@link interactionAdvance}'s; what is left here is where it puts the reader.
    *
-   * Takes the draft rather than reading it, because the click that answers a
-   * single-choice question also advances it — and the state that click set is
-   * one render away.
+   * One function for the control and for the keyboard, because they are one
+   * act: `Send answer` and ⌘⏎ racing each other still take the same latch, and
+   * only the first of them reaches the resolver.
    */
   const advance = (from: InteractionDraft = draft) => {
     if (resolving) return;
@@ -607,7 +692,7 @@ function QuestionCard({
     if (next === null) return;
     if (next.kind === "send") {
       setBlocked(null);
-      send(next.submission);
+      send(next.submission, receipt("answered", next.submission));
       return;
     }
     if (next.kind === "step") {
@@ -627,17 +712,19 @@ function QuestionCard({
     else go(next.at, next.requirement);
   };
 
-  /** The click, and the numeral that is the row's name. */
+  /**
+   * The click, and the numeral that is the row's name.
+   *
+   * It selects, and that is the whole of it. A single choice used to send on
+   * the click that made it, which put the request on the wire from the one
+   * gesture a reader makes while still reading the list — and left the card
+   * with no control saying what a press would do. The answer goes when the
+   * reader says it goes.
+   */
   const choose = (option: SessionInteractionOption) => {
     if (resolving || !step) return;
-    const { prompt } = step.question;
-    const next = selectOption(draft, prompt, option.id);
-    setDraft(next);
+    setDraft(selectOption(draft, step.question.prompt, option.id));
     setBlocked(null);
-    // Several answers accumulate, and the reader says when the question is
-    // done; one answer is done the moment it is given.
-    if (prompt.multiple) return;
-    advance(next);
   };
 
   /** Arrowed onto, which chooses without committing — the radio's own reading. */
@@ -659,6 +746,30 @@ function QuestionCard({
   } as const;
   const offset = reducedMotion ? 0 : 10;
 
+  // The card, once it has done something. It keeps the shell and the question's
+  // own sentence and drops every control, because there is nothing left to
+  // press: the latch is held, the response is on its way, and the harness's
+  // reply is what takes the card off screen. A failed delivery releases the
+  // latch and clears this, so the form below comes back with its draft intact.
+  if (sent) {
+    return (
+      <form
+        ref={ref}
+        tabIndex={-1}
+        aria-label={interaction.title}
+        className={cn(
+          "pointer-events-auto overflow-hidden outline-none",
+          COMPOSER_STACK_SHELL,
+          className,
+        )}
+      >
+        <div className="px-4 py-4">
+          <QuestionSentReceipt heading={step?.heading ?? interaction.title} receipt={sent} />
+        </div>
+      </form>
+    );
+  }
+
   return (
     <form
       ref={ref}
@@ -668,7 +779,7 @@ function QuestionCard({
         event.preventDefault();
         advance();
       }}
-      onKeyDown={withdrawOnEscape(onWithdraw, resolving)}
+      onKeyDown={withdrawOnEscape(withdraw, resolving)}
       className={cn(
         "pointer-events-auto overflow-hidden outline-none",
         COMPOSER_STACK_SHELL,
@@ -741,12 +852,12 @@ function QuestionCard({
         {/* The card standing out of its own transcript's way.
 
             It leads the footer because it is the only control on this card that
-            does not touch the question: Cancel request withdraws it, Reject
-            refuses it, the cluster on the right answers it, and this one only
-            decides how much of the pane the card is holding while all three
-            stay exactly where they were. Nothing durable moves, so it keeps its
-            place in both states rather than rearranging the footer under a
-            reader who is going to press it twice.
+            does not touch the question: Withdraw question takes the ask away,
+            Decline to answer refuses it, Send answer answers it, and this one
+            only decides how much of the pane the card is holding while all
+            three stay exactly where they were. Nothing durable moves, so it
+            keeps its place in both states rather than rearranging the footer
+            under a reader who is going to press it twice.
 
             A glyph, not a word — and the glyph is spatial rather than
             metaphorical. The card is the last thing above a bottom-anchored
@@ -771,17 +882,23 @@ function QuestionCard({
             {collapsed ? <CaretUpIcon /> : <CaretDownIcon />}
           </Button>
         ) : null}
-        {onWithdraw ? (
+        {/* What withdrawal DOES to the question, rather than the machinery it
+            operates on. "Cancel request" named an object no other part of this
+            surface mentions, and stood beside "Reject" and a primary control
+            that renamed itself with the draft — three ways of saying no, and a
+            reader guessing which. Ghost and muted still: taking the question
+            away is not an answer to it. */}
+        {withdraw ? (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
             disabled={resolving}
-            onClick={onWithdraw}
+            onClick={withdraw}
           >
             <XCircleIcon className="size-3.5" />
-            Cancel request
+            {WITHDRAW_QUESTION_LABEL}
           </Button>
         ) : null}
         {/* One notice slot, left-aligned, for the two things that stop a press
@@ -816,24 +933,27 @@ function QuestionCard({
               <ArrowRightIcon className="size-3.5" />
             </Button>
           ) : null}
-          {/* The refusal none of the harness's own ids can carry. Outlined: it
-              stands beside the control that answers because it is the other half
-              of the same decision, and above withdrawal because it is one. */}
+          {/* The refusal none of the harness's own ids can carry, named for
+              what it does to the question rather than borrowed from the verdict
+              card. Outlined: it stands beside the control that answers because
+              it is the other half of the same decision, and above withdrawal
+              because it is one. */}
           {refusable ? (
             <Button
               type="button"
               size="sm"
               variant="outline"
               disabled={resolving}
-              onClick={() => send(refusalSubmission(interaction, draft))}
+              onClick={decline}
             >
-              Reject
+              {DECLINE_ANSWER_LABEL}
             </Button>
           ) : null}
-          {/* Live rather than gated, unlike the verdict card's. There the press
-              is the grant and a stray one is the thing to prevent; here it is a
-              step in a walk, and a control that goes quietly dead says less than
-              one that answers what it is waiting for. */}
+          {/* Always drawn, and it says which of the two acts it is: `Next`
+              while there is a question after this one, `Send answer` where the
+              press ends the request. Live rather than gated, unlike the verdict
+              card's — a control that goes quietly dead says less than one that
+              answers what it is waiting for. */}
           {advanceLabel ? (
             <Button type="submit" size="sm" disabled={resolving}>
               {advanceLabel}
@@ -842,6 +962,59 @@ function QuestionCard({
         </div>
       </div>
     </form>
+  );
+}
+
+/**
+ * The card once its response has gone: what was asked, and what was sent back.
+ *
+ * **A disabled card is not a receipt.** While a response was in flight the card
+ * kept every row and dimmed them, which says "wait" and nothing else — and once
+ * it landed the card sat in that state until the harness got round to clearing
+ * it. A reader who chose `Detailed` and pressed had no confirmation anywhere
+ * that `Detailed` was what left, and the three ways a question can end all
+ * looked identical from the chair.
+ *
+ * So it says which one happened and what it carried, in the place the question
+ * stood: `Sent: Detailed`, `Declined to answer`, `Withdrew question`. The words
+ * are {@link describeInteractionSent}'s — the same vocabulary the controls that
+ * caused them use, in the past tense.
+ *
+ * `role="status"` because the control that was pressed left with the form it
+ * stood in: focus has nowhere to hear this from, and a polite announcement is
+ * how it reaches a reader who is not watching this corner of the pane. The line
+ * wraps rather than truncating — it is one short sentence and the whole of what
+ * the card has left to say, so a narrow pane must not be able to clip it.
+ */
+export function QuestionSentReceipt({
+  heading,
+  receipt,
+}: {
+  heading: string;
+  receipt: InteractionSentReceipt;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      {/* The same rung the open card's ask stood at, so a question that has been
+          answered reads as the same card saying one more thing rather than as a
+          new surface arriving. Truncated: the ask has been dealt with, and the
+          sentence that matters now is the one under it. */}
+      <p className="min-w-0 truncate text-sm font-medium text-foreground" title={heading}>
+        {heading}
+      </p>
+      <p role="status" className="flex min-w-0 items-start gap-1 text-ui text-muted-foreground">
+        {/* Answered is the only one of the three that got what it asked for, and
+            ink is what says so — the same accent the card's palm wears while it
+            is asking. A decline and a withdrawal are ordinary ends, not
+            failures, so neither one is destructive. */}
+        {receipt.kind === "answered" ? (
+          <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="bold" />
+        ) : (
+          <XCircleIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+        )}
+        <span className="min-w-0 break-words">{receipt.line}</span>
+      </p>
+    </div>
   );
 }
 
@@ -856,7 +1029,7 @@ function QuestionCard({
  * transcript no viewport at all — and the reader who wants the paragraph that
  * explains *why* they are being asked is looking for it in exactly the rows
  * the card is standing on. The only gesture that used to clear a card was
- * Cancel request, which throws the question away to read the sentence behind
+ * Withdraw question, which throws the question away to read the sentence behind
  * it. This is the same relief without the loss.
  *
  * One line and the counter — a window title, which is what a put-away card is.
@@ -1108,10 +1281,13 @@ function QuestionStep({
                     </span>
                   ) : null}
                 </span>
-                {/* The row's own verb, and only on the row that is one press
-                    from an answer: a single choice sends on the click, so the
-                    numeral it replaces is standing where the act is. */}
-                {prompt.multiple ? null : <AnswerArrow focus="group-focus-visible:opacity-100" />}
+                {/* No arrow on a question's rows any more, and its absence is
+                    the point. The glyph means "this press is the act", which
+                    was true while a single choice sent on the click and became
+                    a lie the moment choosing stopped sending (VC-289). What
+                    sends is the named control in the footer; a row that offered
+                    the same promise would be inviting the reader to answer with
+                    the gesture that no longer does. */}
               </button>
             );
           })}

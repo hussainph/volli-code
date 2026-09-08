@@ -22,6 +22,7 @@ import {
   InteractionCard,
   InteractionReceiptLine,
   PendingInteractionAnnouncement,
+  QuestionSentReceipt,
 } from "./interaction-ui";
 
 const PERMISSION_OPTIONS = [
@@ -174,15 +175,48 @@ describe("the card's controls", () => {
         onWithdraw={() => undefined}
       />,
     );
-    expect(buttonVariant(html, "Cancel request")).toBe("ghost");
-    expect(buttonVariant(html, "Reject")).toBe("outline");
+    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    expect(buttonVariant(html, "Decline to answer")).toBe("outline");
+  });
+
+  it("names each act by what it does to the question", () => {
+    // "Cancel request" and "Reject" named the mechanism and the verdict; beside
+    // a changing primary control they read as three ways to say no. Each one
+    // now says what happens to the question if it is pressed.
+    const html = renderToStaticMarkup(
+      <InteractionCard
+        interaction={asked()}
+        onResolve={() => undefined}
+        onWithdraw={() => undefined}
+      />,
+    );
+    expect(html).toContain(">Withdraw question</button>");
+    expect(html).toContain(">Decline to answer</button>");
+    expect(html).toContain(">Send answer</button>");
+    expect(html).not.toContain("Cancel request");
+    expect(html).not.toContain(">Reject</button>");
+  });
+
+  it("names withdrawal for the thing being withdrawn on the verdict card too", () => {
+    // The same footer serves an `ask_user` that declared its own yes and no, so
+    // the word follows the interaction rather than the component: a question is
+    // withdrawn as a question, and a permission is a request.
+    const gate = renderToStaticMarkup(
+      <InteractionCard
+        interaction={permission()}
+        onResolve={() => undefined}
+        onWithdraw={() => undefined}
+      />,
+    );
+    expect(gate).toContain(">Withdraw request</button>");
+    expect(gate).not.toContain("Cancel request");
   });
 
   it("leaves request withdrawal off the mount that did not ask for one", () => {
     // A card on a row sits beside a composer that still has its own.
     expect(
       renderToStaticMarkup(<InteractionCard interaction={asked()} onResolve={() => undefined} />),
-    ).not.toContain("Cancel request");
+    ).not.toContain("Withdraw question");
   });
 
   it("names the box it opens rather than repeating the box's own question", () => {
@@ -258,6 +292,16 @@ describe("the ask-user card", () => {
       title: "Write outside the worktree",
     };
     expect(drawn(raised)).toContain('type="radio"');
+    // Drawn as a verdict, withdrawn as the question it still is.
+    expect(
+      renderToStaticMarkup(
+        <InteractionCard
+          interaction={raised}
+          onResolve={() => undefined}
+          onWithdraw={() => undefined}
+        />,
+      ),
+    ).toContain(">Withdraw question</button>");
   });
 
   it("counts the questions only where there is more than one to count", () => {
@@ -303,10 +347,27 @@ describe("the ask-user card", () => {
     const html = drawn(ask([askPrompt({ multiple: true })]));
     expect(html).toContain('role="checkbox"');
     expect(html).toContain('aria-checked="false"');
-    // And it grows the control that says the question is done, which a single
-    // choice does not need — there the click is the whole step.
     expect(html).toContain('type="submit"');
-    expect(drawn(ask([askPrompt(), askPrompt({ id: "prompt:1" })]))).not.toContain('type="submit"');
+  });
+
+  it("gives every shape of question the same control to send it with", () => {
+    // A single choice used to send on the click that made it, so the card in
+    // view had nothing to press and choosing was indistinguishable from
+    // sending. Selecting selects; one named control sends.
+    for (const shape of [
+      askPrompt({ custom: false }),
+      askPrompt({ options: [], custom: true }),
+      askPrompt({ multiple: true }),
+    ]) {
+      const html = drawn(ask([shape]));
+      expect(html).toContain('type="submit"');
+      expect(html).toContain(">Send answer</button>");
+    }
+    // Mid-walk the same control steps, and says so.
+    const walk = drawn(ask([askPrompt(), askPrompt({ id: "prompt:1" })]));
+    expect(walk).toContain('type="submit"');
+    expect(walk).toContain(">Next</button>");
+    expect(walk).not.toContain(">Send answer</button>");
   });
 
   it("names the group with the question it is asking", () => {
@@ -325,8 +386,8 @@ describe("the ask-user card", () => {
           onWithdraw={() => undefined}
         />,
       );
-      expect(buttonVariant(html, "Reject")).toBe("outline");
-      expect(buttonVariant(html, "Cancel request")).toBe("ghost");
+      expect(buttonVariant(html, "Decline to answer")).toBe("outline");
+      expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
     }
   });
 
@@ -488,8 +549,8 @@ describe("the question that stands out of the transcript's way", () => {
 
     expect(labelledControl(html, "Minimize question")).toContain('data-variant="ghost"');
     // And it changed neither of the acts it now stands beside.
-    expect(buttonVariant(html, "Cancel request")).toBe("ghost");
-    expect(buttonVariant(html, "Reject")).toBe("outline");
+    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    expect(buttonVariant(html, "Decline to answer")).toBe("outline");
   });
 
   it("leaves the verdict card alone", () => {
@@ -570,46 +631,74 @@ describe("the two cards as one family", () => {
     }
   });
 
-  it("marks every verdict as one press, and an opaque answer as not", () => {
+  it("marks every verdict as one press, and no answer as one at all", () => {
     // The arrow is the gesture telling the truth about itself: it stands on the
-    // rows `optionSubmitsOnSelect` sends from, which is now every declared
-    // verdict — a gate that cost one click for `once` and two for the option
-    // beside it taught the fastest gesture in the app and then withheld it.
+    // rows `optionSubmitsOnSelect` sends from, which is every declared verdict
+    // — a gate that cost one click for `once` and two for the option beside it
+    // taught the fastest gesture in the app and then withheld it.
     const gate = renderToStaticMarkup(
       <InteractionCard interaction={permission()} onResolve={() => undefined} />,
     );
     for (const label of ["Allow once", "Allow always", "Reject"])
       expect(optionRow(gate, label)).toContain("bg-foreground");
 
-    // A question's ids are the harness's own encoded values and state no
-    // verdict, so a click there answers rather than decides — and the several
-    // answers of a multiple prompt are never one press either.
-    expect(optionRow(drawn(ask([askPrompt({ multiple: true })])), "main")).not.toContain(
-      "bg-foreground",
-    );
+    // A question's rows carry none, whatever their shape: choosing is choosing
+    // now, and an arrow promising the press is the whole act would be the
+    // affordance lying about a gesture that no longer sends (VC-289).
+    for (const shape of [askPrompt(), askPrompt({ multiple: true })])
+      expect(drawn(ask([shape]))).not.toContain("bg-foreground");
   });
 });
 
-/** The foot mount: a card with the real composer standing under it. */
+/**
+ * The foot mount: a card with the real composer standing under it.
+ *
+ * The child is the composer exactly as the plane now hands it over — a message
+ * box, named and placeheld as one, whatever is being asked above it.
+ */
 function stacked(interaction: RendererSessionInteraction): string {
   return renderToStaticMarkup(
     <ComposerInteractionStack interaction={interaction} onResolve={() => undefined}>
-      <textarea aria-label="Answer" placeholder="Your answer" />
+      <textarea aria-label="Message" placeholder="Ask, plan, or implement…" />
     </ComposerInteractionStack>,
   );
 }
 
 describe("where a question's words are typed", () => {
-  it("keeps the box on the card, with the composer standing under it", () => {
-    // The card's field used to be removed wherever the composer could answer
-    // for it — one control drawn twice, the argument went. They are two
-    // distances, not one control: this box is the last row of the list being
-    // answered, and the composer is past a border, a gradient and a footer.
-    // Both boxes stand, and both send the same submission.
+  it("gives the question one answer field, and it is the card's", () => {
+    // Two boxes that both sent the same submission is the fault this closes:
+    // the card's field and the composer under it were one question drawn twice,
+    // each with its own submit path and no way to tell which one was live.
     const html = stacked(ask([askPrompt({ custom: true })]));
     expect(html).toContain('role="radio"');
+    // One on the card, one composer — and the composer's is a message box.
     expect(html.match(/<textarea/g)).toHaveLength(2);
-    expect(html).toContain('placeholder="Your answer"');
+    expect(html).toContain('aria-label="Message"');
+    expect(html).toContain('placeholder="Ask, plan, or implement…"');
+    // The answer field is the one above the composer's own slot.
+    const card = html.slice(0, html.indexOf("composer-interaction-origin"));
+    expect(card.match(/<textarea/g)).toHaveLength(1);
+    expect(card).toContain('placeholder="Your answer"');
+    expect(card).toContain(">Send answer</button>");
+  });
+
+  it("keeps the composer a message box for every shape of question", () => {
+    // A choice-only question, a free-text one and a multi-select each own their
+    // whole answer form; none of them renames the box underneath.
+    for (const shape of [
+      askPrompt({ custom: false }),
+      askPrompt({ options: [], custom: true }),
+      askPrompt({ multiple: true, custom: true }),
+    ]) {
+      const html = stacked(ask([shape]));
+      // The composer's own slot, which is everything below the card: it is a
+      // message box, and the answer field — name, placeholder and all — is
+      // upstairs where the question is.
+      const composer = html.slice(html.indexOf("composer-interaction-origin"));
+      expect(composer).toContain('aria-label="Message"');
+      expect(composer).not.toContain('aria-label="Answer"');
+      expect(composer).not.toContain('placeholder="Your answer"');
+    }
   });
 
   it("gives a question with nothing to click a box and a way to commit it", () => {
@@ -619,7 +708,7 @@ describe("where a question's words are typed", () => {
     const html = stacked(ask([askPrompt({ options: [], custom: true })]));
     expect(html).toContain("<textarea");
     expect(html).toContain('type="submit"');
-    expect(html).toContain(">Reject</button>");
+    expect(html).toContain(">Decline to answer</button>");
   });
 
   it("keeps the rows that answer it, and the control a multi-select needs", () => {
@@ -628,10 +717,10 @@ describe("where a question's words are typed", () => {
     expect(html).toContain('type="submit"');
   });
 
-  it("still draws no box where the harness said words cannot be read back", () => {
-    // The one gate that survives, and it was never the composer's: `custom` is
-    // the harness saying free text has a slot in the reply. Without it an
-    // "Other" row would be typed into, accepted, and dropped on the way out.
+  it("draws no box at all on a choice-only question", () => {
+    // `custom` is the harness saying free text has a slot in the reply. Without
+    // it the question is answered by choosing, and a box — on the card or under
+    // it — would be typed into, accepted, and dropped on the way out.
     const html = stacked(ask([askPrompt({ custom: false })]));
     expect(html).toContain('role="radio"');
     // Only the composer's own, which is the caller's element, not the card's.
@@ -667,6 +756,72 @@ describe("where a question's words are typed", () => {
     );
     expect(several).toContain("Question 1 of 2");
     expect(several.match(/<textarea/g)).toHaveLength(2);
+  });
+});
+
+describe("the receipt the card itself shows once a response is sent", () => {
+  it("says what was sent, beside the question it answered", () => {
+    // A card that has been answered used to go grey and say nothing: the same
+    // rows, dimmed, with no statement anywhere that a response had left. The
+    // receipt is the card's own sentence about what it just did.
+    const html = renderToStaticMarkup(
+      <QuestionSentReceipt
+        heading="How much detail do you want?"
+        receipt={{ kind: "answered", lead: "Sent", value: "Detailed", line: "Sent: Detailed" }}
+      />,
+    );
+    expect(html).toContain("How much detail do you want?");
+    expect(html).toContain("Sent: Detailed");
+    // Announced, because the control that was pressed is gone with the form it
+    // stood in and focus has nowhere to hear this from.
+    expect(html).toContain('role="status"');
+  });
+
+  it("gives a decline and a withdrawal receipts a reader can tell apart", () => {
+    const declined = renderToStaticMarkup(
+      <QuestionSentReceipt
+        heading="How much detail do you want?"
+        receipt={{
+          kind: "declined",
+          lead: "Declined to answer",
+          value: null,
+          line: "Declined to answer",
+        }}
+      />,
+    );
+    const withdrawn = renderToStaticMarkup(
+      <QuestionSentReceipt
+        heading="How much detail do you want?"
+        receipt={{
+          kind: "withdrawn",
+          lead: "Withdrew question",
+          value: null,
+          line: "Withdrew question",
+        }}
+      />,
+    );
+    expect(declined).toContain("Declined to answer");
+    expect(declined).not.toContain("Sent");
+    expect(withdrawn).toContain("Withdrew question");
+    expect(withdrawn).not.toContain("Declined");
+  });
+
+  it("wraps rather than clipping, so a narrow pane can still read it", () => {
+    // VC-288 owns how the footer stacks; what is owed here is that the sentence
+    // this leaves behind is never the thing that gets cut off.
+    const html = renderToStaticMarkup(
+      <QuestionSentReceipt
+        heading="How much detail do you want?"
+        receipt={{
+          kind: "answered",
+          lead: "Sent",
+          value: "Detailed, with the migration steps spelled out",
+          line: "Sent: Detailed, with the migration steps spelled out",
+        }}
+      />,
+    );
+    expect(html).toContain("break-words");
+    expect(html).toContain("Sent: Detailed, with the migration steps spelled out");
   });
 });
 
