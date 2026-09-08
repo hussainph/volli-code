@@ -50,4 +50,5 @@ export {
   FileTranscriptArtifactStore,
   repackLegacyTranscriptArtifacts,
   sessionTranscriptsRoot,
+  transcriptReferenceForId,
 } from "./transcript-artifacts";

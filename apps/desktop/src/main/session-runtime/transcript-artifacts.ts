@@ -316,6 +316,12 @@ export function sessionTranscriptsRoot(userDataPath: string): string {
   return join(userDataPath, "session-transcripts");
 }
 
+/** Builds the stable ledger reference for already-verified canonical bytes. */
+export function transcriptReferenceForId(id: string): TranscriptReference {
+  if (!SHA_256_ID.test(id)) throw new Error("Transcript artifact id must be a SHA-256 digest");
+  return referenceFor(id);
+}
+
 function referenceFor(digest: string): TranscriptReference {
   return { id: digest, digest, mediaType: TRANSCRIPT_ARTIFACT_MEDIA_TYPE };
 }

@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { blobFilePath, blobsRoot } from "../blob-store";
@@ -169,9 +170,9 @@ describe("restoreBackupBundle — a clean restore", () => {
     ).toBe("ticket attachment bytes");
     const transcriptPath = join(
       sessionTranscriptsRoot(target.root),
-      `${source.transcriptIds.prompt.slice("sha256:".length)}.json`,
+      `${source.transcriptIds.prompt.slice("sha256:".length)}.json.gz`,
     );
-    expect(JSON.parse(readFileSync(transcriptPath, "utf8"))).toMatchObject({
+    expect(JSON.parse(gunzipSync(readFileSync(transcriptPath)).toString("utf8"))).toMatchObject({
       message: { id: "message-1", parts: [{ type: "text", text: "restore me" }] },
     });
     expect(result.report.artifactsVerified).toBe(4);
