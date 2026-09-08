@@ -212,9 +212,14 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
  * contract the empty chat cannot keep — a drawing can be absent, but a card
  * that is about the venue and says nothing about it is a card that has gone
  * quiet on the one thing it exists for.
+ *
+ * This card is always the PROJECT's own scope (`venueKey(projectId, null)`), so
+ * `resolving` is not a state it reaches in practice — a main checkout is always
+ * there to measure. It draws the waiting card anyway rather than claiming a
+ * venue it has not read (VC-286).
  */
 function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
-  if (venue === undefined || venue.status === "loading") {
+  if (venue === undefined || venue.status === "loading" || venue.status === "resolving") {
     return <div className="h-16 rounded-row border border-border bg-card" aria-hidden />;
   }
   if (venue.status === "error") {
