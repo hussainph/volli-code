@@ -187,6 +187,23 @@ describe("MarkdownPreview — markdown a document view cannot show", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("still renders what markdown itself is made of, after the hardening pass", async () => {
+    // The pass strips by allowlist, so the risk it carries is the opposite of
+    // the one it removes: a table, a task list or a footnote quietly losing the
+    // chrome that makes it readable.
+    const view = await preview(
+      "| Column | Meaning |\n| --- | --- |\n| Todo | queued |\n\n- [x] done\n- [ ] next\n\nA sentence.[^1]\n\n[^1]: The note.\n",
+    );
+
+    expect(view.querySelector("table")).not.toBeNull();
+    expect(view.querySelectorAll("td")).toHaveLength(2);
+    const boxes = view.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0].checked).toBe(true);
+    expect(boxes[0].disabled).toBe(true);
+    expect(view.textContent).toContain("The note.");
+  });
+
   it("renders a file that alternates HTML blocks and markdown", async () => {
     const view = await preview('# Title\n\n<div align="center">\n\n**bold**\n\n</div>\n\nAfter.\n');
 
