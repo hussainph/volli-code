@@ -1,17 +1,21 @@
 /**
  * Settings → Integrations: the outside applications Volli can hand a file to.
  *
- * Launch Services owns availability, so a successful list both supplies the
- * Select and reconciles a preference whose app has since been removed. The
- * choice itself stays in the app-wide UI store: every Files surface consumes
- * that one value through `external-app-menu.tsx`.
+ * Launch Services owns availability, and this pane is where a look that could
+ * not run is reported: it reads the app-wide discovery state
+ * (`files/external-app-discovery.tsx`) rather than scanning on its own, so the
+ * Try again below is the ONE recovery for every Files menu too, and a failure
+ * can no longer render here as "no supported apps" — a claim only a completed
+ * scan earns. The chosen default stays in the UI store, which every Files
+ * surface reads.
  */
 import * as React from "react";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
-import { errorMessage } from "@volli/shared";
 
 import type { ExternalApp } from "../../../../../ipc/contract";
 
+import { useExternalAppDiscovery } from "@renderer/components/files/external-app-discovery";
+import type { ExternalAppDiscovery } from "@renderer/components/files/external-app-discovery-model";
 import {
   AsyncSection,
   CONTROL_W,
@@ -27,45 +31,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@renderer/components/ui/select";
-import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { useUiStore } from "@renderer/stores/ui";
 
 const ASK_EVERY_TIME_VALUE = "__ask-every-time__";
 
+/** The shared discovery state in this section's four-state vocabulary. */
+function sectionState(
+  discovery: ExternalAppDiscovery,
+  rescan: () => void,
+): AsyncState<readonly ExternalApp[]> {
+  switch (discovery.status) {
+    case "scanning": {
+      return { status: "loading" };
+    }
+    case "failed": {
+      return { status: "error", message: discovery.message, onRetry: rescan };
+    }
+    case "ready": {
+      return { status: "ready", data: discovery.apps };
+    }
+  }
+}
+
 export function IntegrationsPane() {
-  const [state, setState] = React.useState<AsyncState<readonly ExternalApp[]>>({
-    status: "loading",
-  });
+  const { discovery, rescan } = useExternalAppDiscovery();
   const defaultExternalAppId = useUiStore((store) => store.defaultExternalAppId);
   const setDefaultExternalAppId = useUiStore((store) => store.setDefaultExternalAppId);
-  const reconcileDefaultExternalApp = useUiStore((store) => store.reconcileDefaultExternalApp);
-  const fetcher = useLatestAsync();
 
-  const load = React.useCallback(async () => {
-    const token = fetcher.claim();
-    setState({ status: "loading" });
-    try {
-      const result = await window.api.files.listExternalApps();
-      if (!fetcher.isCurrent(token)) return;
-      if (!result.ok) {
-        setState({ status: "error", message: result.error, onRetry: () => void load() });
-        return;
-      }
-      reconcileDefaultExternalApp(result.apps);
-      setState({ status: "ready", data: result.apps });
-    } catch (error) {
-      if (fetcher.isCurrent(token)) {
-        setState({ status: "error", message: errorMessage(error), onRetry: () => void load() });
-      }
-    }
-  }, [fetcher, reconcileDefaultExternalApp]);
-
+  // Opening Settings is the gesture that means "look again" — an app installed
+  // since launch appears without a relaunch, and the result reaches Files too.
+  const opened = React.useRef(false);
   React.useEffect(() => {
-    void load();
-    return () => fetcher.invalidate();
-  }, [load, fetcher]);
+    if (opened.current) return;
+    opened.current = true;
+    rescan();
+  }, [rescan]);
 
-  const apps = state.status === "ready" ? state.data : [];
+  const state = sectionState(discovery, rescan);
+  // The Select speaks for the PREFERENCE, so it reads the last confirmed list
+  // rather than the section's state: a failed rescan must not make a standing
+  // choice read back as "Ask every time", which looks like it was discarded.
+  const apps = discovery.apps;
   const selectedApp =
     defaultExternalAppId === null ? undefined : apps.find((app) => app.id === defaultExternalAppId);
   const selectedValue = selectedApp?.id ?? ASK_EVERY_TIME_VALUE;

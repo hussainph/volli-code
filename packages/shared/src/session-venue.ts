@@ -80,6 +80,24 @@ export interface VenueSnapshot {
   diff: VenueLineDiff | null;
 }
 
+/**
+ * What one venue read ANSWERS: a measurement, or the fact that there is not yet
+ * a checkout to measure (VC-286).
+ *
+ * `pending` is the state a ticket is in between "runs in an isolated worktree"
+ * and "has one": configured for a worktree that has not materialised, had its
+ * worktree removed, or had creation fail. It is deliberately NOT the main
+ * checkout. The Session runtime refuses to bind such a ticket anywhere
+ * (`session-runtime/location.ts` ensures or fails), so a main-checkout
+ * measurement here would be a reading of a tree no Session will run in — two
+ * answers on one screen about where the agent works, which is the bug this
+ * type exists to make unrepresentable.
+ *
+ * A ticket that runs in the main checkout BY CONFIGURATION is `measured` like
+ * any other: that venue is true, and it is where its Session really binds.
+ */
+export type VenueReading = { state: "measured"; venue: VenueSnapshot } | { state: "pending" };
+
 /** The order segments are drawn in, committed first: progress before exposure. */
 export const VENUE_FILE_STATES: readonly VenueFileState[] = [
   "committed",

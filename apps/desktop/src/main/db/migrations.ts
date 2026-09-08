@@ -2146,12 +2146,32 @@ function applyMigration026Automations(db: Database.Database): void {
   db.exec(MIGRATION_026_AUTOMATIONS);
 }
 
+export interface MigrateOptions {
+  /**
+   * Stop after this `user_version` instead of walking to the newest migration.
+   *
+   * The one caller is a restore (VC-283), and the reason is that a bundle's
+   * rows are shaped for the schema they were read out of: a v39 bundle poured
+   * into a v41 database would be poured into columns that did not exist when
+   * it was written. Restore migrates a fresh database TO the bundle's version,
+   * writes the rows, and only then walks the remaining migrations — which is
+   * also what makes an app upgrade testable, since the second walk is the same
+   * one a real upgrade performs.
+   *
+   * A version newer than this build knows is not clamped silently; the caller
+   * checks compatibility first, because a bundle from a future build is a
+   * refusal, not a truncation.
+   */
+  toVersion?: number;
+}
+
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
-export function migrate(db: Database.Database, dbPath: string): void {
+export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
-  const pending = MIGRATIONS.filter((migration) => migration.version > currentVersion).toSorted(
-    (a, b) => a.version - b.version,
-  );
+  const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
+  const pending = MIGRATIONS.filter(
+    (migration) => migration.version > currentVersion && migration.version <= ceiling,
+  ).toSorted((a, b) => a.version - b.version);
   if (pending.length === 0) return;
 
   // Only an already-populated database needs a safety copy — a fresh

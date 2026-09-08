@@ -59,6 +59,7 @@ function openAttachment(
     native: null,
     authority: null,
     status: "open",
+    exitCode: null,
     openedAt: 1,
     closedAt: null,
     outcome: null,

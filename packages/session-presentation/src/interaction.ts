@@ -534,76 +534,168 @@ export function interactionResolution(
   };
 }
 
-/* ------------------------------------------------- answering from the composer */
+/* ------------------------------------------------------ one submission at a time */
 
 /**
- * The question the composer under this card answers, or null where the words
- * typed there are an ordinary message after all.
+ * The latch every way of ending one question has to take first.
  *
- * The composer is never taken away while a request is open — the card stacks
- * above it rather than in its place — so a reader who answers by typing, which
- * is the only thing a chat surface has ever asked of them, must not be writing
- * into a box whose words the question cannot hear. Before this, they were:
- * every keystroke went to the release queue, and the queue drains into an idle
- * Session, and the Session cannot go idle until the question is answered. The
- * words were not lost; they were unreachable, which reads the same from the
- * chair.
+ * **Why a latch and not a flag.** The card already had `resolving`, and
+ * `resolving` is React state: it is set inside the act it guards and read on
+ * the next render, so two presses inside one tick both see `false` and both
+ * reach the resolver. That was survivable while a question had one commit
+ * control and stopped being survivable the moment it had several — Send
+ * answer, the keyboard, Decline to answer, Withdraw question — plus a composer
+ * downstairs with a submit path of its own. The composer's answer road is gone
+ * (VC-289), but the four on the card remain, and "exactly one of these
+ * happens" cannot be expressed by anything that settles a render later.
  *
- * Three conditions, and each of them is a thing that would otherwise be
- * invented on a reader's behalf:
+ * So the latch is taken **synchronously, before the act begins**, and it is
+ * keyed by interaction id because several requests can be open at once — a
+ * subagent's permission beside the parent turn's question — and answering one
+ * must not gate the other.
  *
- *  - **An ask-user question, never a verdict.** A permission declares its own
- *    refusal and every option on it is ours; choosing between them is a
- *    deliberate press, and a verdict inferred from prose is a grant nobody
- *    gave. Words written while a permission waits stay a message.
- *  - **One question.** A request that asked three things is walked on the card,
- *    with a counter saying which one is in view. The composer has no such
- *    position, so its words could only be stamped onto a question the reader
- *    never named.
- *  - **Words the reply can carry.** `custom` is the harness's own statement
- *    that free text can be read back — `ask_user`'s `allowOther`, which
- *    defaults to true and is what the runtime writes for every question. Where
- *    a model closed it, the listed choice is the only answer the reply has a
- *    slot for, so the words stay a message rather than being accepted here and
- *    dropped on the way out.
+ * **What holds it, and for how long.** A landing that reports nothing is taken
+ * at its word and the latch stays held: the harness's own verdict is what
+ * clears the card, and re-opening it under a reader would invite the second
+ * press this exists to refuse. A delivery that comes back `false` or throws
+ * released it again, because nothing was decided anywhere and the card's own
+ * draft is still standing — pressing again is the retry.
  */
-export function composerAnswerPrompt(
-  interaction: RendererSessionInteraction,
-): SessionInteractionPrompt | null {
-  if (!isAskUserInteraction(interaction)) return null;
-  const prompts = readInteractionPrompts(interaction);
-  const only = prompts.length === 1 ? prompts[0] : undefined;
-  if (only === undefined) return null;
-  return promptTextCarrier(only) === "answer" ? only : null;
+export interface InteractionSubmissionLatch {
+  /** Whether this interaction already has an act in flight, or a landed one. */
+  held(interactionId: string): boolean;
+  /**
+   * Runs `act` if nothing else holds this interaction's latch, and reports
+   * whether it landed. Null — and `act` never called — when the latch was
+   * already held, which is the whole of "no second answer path may resolve".
+   */
+  run(interactionId: string, act: () => void | Promise<boolean | void>): Promise<boolean> | null;
 }
 
+export function createSubmissionLatch(): InteractionSubmissionLatch {
+  const held = new Set<string>();
+  return {
+    held: (interactionId) => held.has(interactionId),
+    run: (interactionId, act) => {
+      if (held.has(interactionId)) return null;
+      // Before the act, never after it: everything this type promises rests on
+      // the gap between these two statements being empty.
+      held.add(interactionId);
+      let landing: void | Promise<boolean | void>;
+      try {
+        landing = act();
+      } catch {
+        held.delete(interactionId);
+        return Promise.resolve(false);
+      }
+      if (!(landing instanceof Promise)) return Promise.resolve(true);
+      return landing.then(
+        (landed) => {
+          if (landed === false) held.delete(interactionId);
+          return landed !== false;
+        },
+        () => {
+          held.delete(interactionId);
+          return false;
+        },
+      );
+    },
+  };
+}
+
+/* ------------------------------------------------- the three acts, and their words */
+
 /**
- * What one press of the composer sends while that question is open, or null
- * where the words are an ordinary message.
+ * The three acts an open question offers, named once.
  *
- * Blank text is a message rather than an answer, and the distinction costs
- * nothing to make here: an empty submission never reaches this surface, and if
- * one ever did, answering a question with nothing said is the shape a refusal
- * is defined by ({@link refusalResolution}) — which is the one thing a stray
- * keystroke must never be able to send.
+ * They are here rather than in the card because the card is not the only thing
+ * that has to agree about them: the receipt a sent response leaves is written
+ * from the same vocabulary, and "Reject" on a control with "Declined to answer"
+ * under it is one act reported as two.
  *
- * The submission is built rather than asked of {@link interactionSubmission},
- * and the two agree by construction: a single prompt whose carrier is `answer`
- * has no redirection to outrank it and is answered by the words alone, so the
- * general path would re-decide both of those and arrive here. What it would
- * also do is offer a `null` this function cannot produce — a branch nothing
- * could ever exercise. Pinned by a test that compares the two.
+ * Each one names its **effect on the question**, which is what the footer used
+ * to leave to the reader to infer. "Cancel request" named a mechanism nothing
+ * else on screen mentions, and "Reject" is a verdict word borrowed from the
+ * permission card — beside a primary control that changed its own label with
+ * the draft, the three of them read as three ways of saying no.
  */
-export function composerAnswer(
+export const SEND_ANSWER_LABEL = "Send answer";
+export const DECLINE_ANSWER_LABEL = "Decline to answer";
+export const WITHDRAW_QUESTION_LABEL = "Withdraw question";
+/**
+ * The same act on the card that asks for a verdict, named for what that card
+ * holds. An `ask_user` question that declared its own yes and no is drawn there
+ * (`isAskUserInteraction`), so the wording follows the interaction's kind
+ * rather than the component: "question" for a question wherever it stands, and
+ * "request" for a permission, which is not one.
+ */
+export const WITHDRAW_REQUEST_LABEL = "Withdraw request";
+
+/** What withdrawal is called on the card that is showing this interaction. */
+export function withdrawLabel(interaction: RendererSessionInteraction): string {
+  return interaction.kind === "question" ? WITHDRAW_QUESTION_LABEL : WITHDRAW_REQUEST_LABEL;
+}
+
+/** The three ways one question ends, as the card that ended it reports them. */
+export type InteractionSentKind = "answered" | "declined" | "withdrawn";
+
+/**
+ * The line a card leaves in its own place the moment a response goes.
+ *
+ * Separate from {@link InteractionReceipt}, which is scrollback's: that one is
+ * built from a stored resolution and reads in the past tense at the point in
+ * the transcript where the decision was taken. This one is the card speaking
+ * about the act it has just performed, while the request is still open and the
+ * harness has not yet cleared it. Before it existed, an answered card simply
+ * went inert — the same rows, dimmed, with nothing anywhere saying a response
+ * had left or what it said.
+ */
+export interface InteractionSentReceipt {
+  kind: InteractionSentKind;
+  /** `Sent`, `Declined to answer`, `Withdrew question`. */
+  lead: string;
+  /** What travelled, where there is something to quote back. */
+  value: string | null;
+  /** The whole sentence, as a live region reads it: `Sent: Detailed`. */
+  line: string;
+}
+
+// The past tense of the controls above — written out rather than derived from
+// them, because a receipt reports what happened and a button offers to make it
+// happen. Recognisably the same act, and never the same words.
+const SENT_LEADS: Record<InteractionSentKind, string> = {
+  answered: "Sent",
+  declined: "Declined to answer",
+  withdrawn: "Withdrew question",
+};
+
+/**
+ * What a card says about the response it has just sent.
+ *
+ * The value is read off the submission rather than restated, so the receipt
+ * quotes the labels and the words that actually travelled: the chosen rows and
+ * anything typed beside them ({@link describeInteractionResolution}'s trailer),
+ * falling back to the message a redirection sends after a refusal — which is
+ * the one case where the resolution itself is deliberately empty and the words
+ * are the whole of what was said.
+ */
+export function describeInteractionSent(
   interaction: RendererSessionInteraction,
-  text: string,
-): InteractionSubmission | null {
-  const prompt = composerAnswerPrompt(interaction);
-  if (prompt === null || text.trim().length === 0) return null;
-  const draft = setPromptResponse(emptyInteractionDraft(interaction), prompt.id, text);
-  // The words travel on the resolution itself, which is what `answer` as a
-  // carrier means — so there is nothing left to say after it.
-  return { resolution: interactionResolution(interaction, draft), message: null };
+  kind: InteractionSentKind,
+  submission: InteractionSubmission | null,
+): InteractionSentReceipt {
+  const lead = SENT_LEADS[kind];
+  // A withdrawal decides nothing and so has nothing to quote — its caller has no
+  // submission to hand over, which is what makes `null` the whole of that case
+  // rather than a branch on the kind. What a response did carry is read off the
+  // submission: the labels and words on the resolution, or the message a
+  // redirection sends after the refusal it travels with.
+  const value =
+    submission === null
+      ? null
+      : (describeInteractionResolution(interaction, submission.resolution).trailer ??
+        submission.message);
+  return { kind, lead, value, line: value === null ? lead : `${lead}: ${value}` };
 }
 
 /* -------------------------------------------------------------- questions */
@@ -810,10 +902,18 @@ export interface InteractionStep {
   answered: readonly boolean[];
   skippable: boolean;
   /**
-   * What the control that moves the flow on says, or null where the click on a
-   * row is already the whole step and a second press would ask for it twice.
+   * What the control that moves the flow on says — always something, and only
+   * ever one of two things.
+   *
+   * It used to be null on a single choice, on the reading that the click was
+   * already the whole step. That is what made choosing indistinguishable from
+   * sending: the row committed the answer, and the card in view had no control
+   * at all to say what pressing it would do. Selecting selects; the reader says
+   * when the answer goes. So `Next` while there is a question after this one,
+   * and one name for the act that ends the request — not "Choose", "Answer",
+   * "Submit" and "Send" for the same press under four conditions.
    */
-  advanceLabel: string | null;
+  advanceLabel: string;
   layout: InteractionRowLayout;
 }
 
@@ -832,7 +932,6 @@ export function interactionStep(
   // they are sendable from any step rather than at the end of a walk whose
   // remaining questions they have already contradicted.
   const sendable = last || interactionRedirected(interaction, draft);
-  const written = promptDraft(draft, prompt.id).response.trim().length > 0;
   return {
     index: at,
     count: questions.length,
@@ -842,22 +941,11 @@ export function interactionStep(
     last,
     answered: questions.map((entry) => isPromptAnswered(entry.prompt, draft)),
     skippable: !last,
-    advanceLabel: sendable
-      ? // Names the act and then the verdict, the same control the card has
-        // always ended on — "Send" once a redirection is what would travel.
-        interactionSubmitLabel(interaction, draft)
-      : // A single choice with nothing typed beside it is answered by the click
-        // that chooses it; anything else — several answers, or words that need
-        // a deliberate commit — waits for a control of its own. Once it HAS
-        // been answered the click already happened: a reader who stepped back
-        // is keeping an answer, not making one, and "Skip" mis-names the move
-        // past it — so an answered question always offers its own way forward.
-        !prompt.multiple &&
-          prompt.options.length > 0 &&
-          !written &&
-          !isPromptAnswered(prompt, draft)
-        ? null
-        : "Next",
+    // Two words, because there are two acts: this press either moves the walk
+    // on or ends the request. Where it ends it, the name is the effect — the
+    // same name whether the answer is a chosen row, several of them, or a
+    // paragraph, so that pressing it is never a guess about which.
+    advanceLabel: sendable ? SEND_ANSWER_LABEL : "Next",
     layout: promptRowLayout(prompt),
   };
 }

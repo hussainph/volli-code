@@ -48,4 +48,5 @@ export { createDesktopSessionLocationResolver } from "./location";
 export {
   createFileTranscriptArtifactStore,
   FileTranscriptArtifactStore,
+  sessionTranscriptsRoot,
 } from "./transcript-artifacts";

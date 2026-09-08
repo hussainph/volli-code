@@ -21,6 +21,7 @@
  */
 export * from "./activity";
 export * from "./activity-island";
+export * from "./authority";
 export * from "./client";
 export * from "./compaction-boundary";
 export * from "./composer-effort";
@@ -33,7 +34,9 @@ export * from "./registry";
 export * from "./reasoning-drop-notice";
 export * from "./session-model";
 export * from "./session-slice";
+export * from "./session-source";
 export * from "./surface-store";
+export * from "./terminal-history";
 export * from "./transcript";
 export * from "./transcript-rows";
 export * from "./wire";

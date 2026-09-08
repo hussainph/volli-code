@@ -17,6 +17,7 @@ import {
 } from "@renderer/components/editor/monaco-diff-editor";
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
 import type { MonacoFileSaveResult } from "@renderer/components/editor/monaco-file-editor";
+import { fitDiffPresentation, isDiffInlineFallback } from "@renderer/components/ticket/diff-fit";
 import { DiffControlBand } from "@renderer/components/ticket/diff-presentation-toggle";
 import { DiffStub } from "@renderer/components/ticket/diff-stub";
 import {
@@ -32,6 +33,7 @@ import {
   type DiffLiveRead,
   type DiffViewPlan,
 } from "@renderer/components/ticket/diff-view-plan";
+import { usePaneWidth } from "@renderer/lib/use-pane-width";
 import { documentIdentityKey } from "@renderer/editor/document-identity";
 import type { DocumentLease } from "@renderer/editor/document-registry";
 import { matchesFileChangeIdentity } from "@renderer/editor/file-change-identity";
@@ -114,6 +116,7 @@ export function DiffView({
   const wordWrap = useUiStore((s) => s.wordWrap);
   const toggleWordWrap = useUiStore((s) => s.toggleWordWrap);
   const leasesRef = React.useRef<DiffLeases | null>(null);
+  const paneRef = React.useRef<HTMLDivElement>(null);
   /** In-flight guard for the conflict banner's explicit overwrite. */
   const writingRef = React.useRef(false);
   const lastViewStateRef = React.useRef<unknown>(undefined);
@@ -566,6 +569,19 @@ export function DiffView({
     }
   }, [conflict, handleSave, name]);
 
+  // How much room THIS pane has, not the window (VC-288): a split puts two
+  // diffs side by side, and only the pane's own width says whether two columns
+  // of code are readable. Keyed on `state.status` because the loading, error
+  // and stub states below return other elements entirely, so `paneRef` holds
+  // nothing until the diff itself is the thing on screen.
+  const paneWidth = usePaneWidth(paneRef, [state.status]);
+
+  // What the pane will actually draw, and whether that differs from what was
+  // chosen. Both are read here rather than inside the editor so the band and
+  // the diff under it cannot answer the pane's width differently.
+  const fitted = fitDiffPresentation(presentation, paneWidth);
+  const inlineFallback = isDiffInlineFallback(presentation, paneWidth);
+
   if (state.status === "loading") {
     return <p className="px-gutter py-4 text-ui text-muted-foreground">Loading diff…</p>;
   }
@@ -579,12 +595,21 @@ export function DiffView({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      ref={paneRef}
+      // The measured element is the pane, so every gesture that changes its
+      // width is the same event here: a window resize, a rail opening, a split,
+      // an unsplit, a divider drag. `ResizeObserver` is what makes them one
+      // thing — there is no resize handler to keep in step with a layout store.
+      data-diff-fit={inlineFallback ? "narrow" : "chosen"}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <DiffControlBand
         presentation={presentation}
         onPresentationChange={setDiffPresentation}
         wordWrap={wordWrap}
         onToggleWordWrap={toggleWordWrap}
+        inlineFallback={inlineFallback}
       />
       {liveError !== null ? (
         <LiveReconciliationAffordance kind="error" message={liveError} />
@@ -599,7 +624,7 @@ export function DiffView({
       <MonacoDiffEditor
         originalLease={state.leases.original}
         modifiedLease={state.leases.modified}
-        presentation={presentation}
+        presentation={fitted}
         wordWrap={wordWrap}
         modifiedReadOnly={state.plan.modifiedReadOnly || liveError !== null}
         ariaLabel={`${baseNameOf(relPath)} diff`}

@@ -8,6 +8,7 @@ import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
+import { useVenueStore, venueKey } from "@renderer/stores/venue";
 
 /**
  * A mount check, at the store defaults a static render can see (zustand serves
@@ -39,7 +40,24 @@ afterEach(() => {
   useUiStore.setState({ homeRailMode: "now" });
   useUiStore.getInitialState().homeRailMode = "now";
   useChatSessionsStore.getInitialState().sessions = {};
+  useVenueStore.getInitialState().byScope = {};
 });
+
+/** A venue with values longer than the rail is wide, which is the ordinary case. */
+function seedVenue(): void {
+  useVenueStore.getInitialState().byScope = {
+    [venueKey("p1", null)]: {
+      status: "ready",
+      venue: {
+        kind: "worktree",
+        path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane",
+        branch: "volli/VC-288-narrow-pane-follow-ups-beyond-vc-264",
+        files: { committed: 4, modified: 2, added: 1, untracked: 0 },
+        diff: { added: 12, removed: 3, base: "main" },
+      },
+    },
+  };
+}
 
 describe("HomeRail", () => {
   it("mounts on its resting page and offers all four pages", () => {
@@ -100,6 +118,27 @@ describe("HomeRail", () => {
     expect(markup).toContain('data-testid="file-search-idle"');
   });
 
+  it("puts the whole venue path and branch within a keyboard's reach", () => {
+    // VC-288. Both values truncate in a rail this narrow, and both had their
+    // full form behind a pointer: the path on a tooltip attached to a `<p>`,
+    // and the branch with no reveal at all. The rail is where a reader checks
+    // WHICH tree they are about to change something in, so "hover to find out"
+    // is the wrong last word on it.
+    seedVenue();
+    const markup = draw("chat:s1");
+
+    expect(markup).toContain(
+      'aria-label="Worktree · /Users/someone/.volli/worktrees/volli-code-f3732f45/VC-288-narrow-pane"',
+    );
+    expect(markup).toContain(
+      'aria-label="Branch · volli/VC-288-narrow-pane-follow-ups-beyond-vc-264"',
+    );
+    // Both reveals are buttons — focus stops Radix opens on focus as well as
+    // on hover — rather than the text elements they were.
+    const venueCard = markup.slice(markup.indexOf("Venue"));
+    expect(venueCard.slice(0, venueCard.indexOf("Model"))).toContain("<button");
+  });
+
   it("names the venue block and the session block", () => {
     const markup = draw("chat:s1");
 
@@ -125,6 +164,7 @@ describe("HomeRail", () => {
       },
       status: "open",
       liveExecutor: null,
+      authority: null,
       attention: { active: [], primary: null },
       interactions: { active: [], resolved: [] },
       signal: null,

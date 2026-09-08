@@ -111,9 +111,14 @@ export interface SessionRecord {
   /** Epoch milliseconds; `null` while the session is live. */
   endedAt: number | null;
   /**
-   * The shell's exit code, stamped by the PTY exit path alongside `endedAt`.
-   * `null` while live, for boot-sweep ends (the process outcome was never
-   * observed), and for rows predating the column — outcome labels never guess.
+   * The shell's exit status, carried from the Session's own `attachment.exited`
+   * fact (VC-290) — the durable record of a process status something actually
+   * observed.
+   *
+   * `null` while live, for relaunch-sweep ends (the process outcome was never
+   * seen), and for records written before that fact existed. Never derived from
+   * the attachment's completed/failed outcome, which is what Volli made of the
+   * ending rather than what the process said: outcome labels never guess.
    */
   exitCode: number | null;
   /**

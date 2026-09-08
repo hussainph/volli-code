@@ -93,6 +93,7 @@ function structuredAttachment(
     closedAt: null,
     outcome: null,
     failure: null,
+    exitCode: null,
     ...overrides,
   };
 }
