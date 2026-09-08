@@ -201,3 +201,75 @@ function usageCoverage(requestCount: number, pricedRequestCount: number): Sessio
   if (pricedRequestCount === 0) return "unavailable";
   return pricedRequestCount === requestCount ? "complete" : "partial";
 }
+
+/**
+ * Two or more summaries read as one — the same arithmetic
+ * {@link summarizeSessionUsage} does over operations, done over sums that have
+ * already been taken.
+ *
+ * WHY IT EXISTS RATHER THAN A SPREAD AND SOME `+`. Every field here is either
+ * qualified by another field or derived from several: `knownCostUsd` is null
+ * exactly when nothing was priced, `costCoverage` compares two counts,
+ * `costBasis` becomes `mixed` the moment two bases meet, and
+ * `cachedInputShare` is a ratio that cannot be averaged. A caller adding the
+ * numbers by hand gets the tokens right and those four wrong, and wrong here
+ * reads as an exact bill for an estimated one. Summing is a domain operation,
+ * so it lives beside the summing this module already owns.
+ *
+ * An unpriced summary casts no basis vote, for the reason a single unpriced
+ * operation does not: its `unavailable` describes a number that does not
+ * exist, and letting it vote would turn every merge containing one silent
+ * Session into `mixed`. Its REQUESTS still count, which is what keeps a merged
+ * `costCoverage` honest about how much of the sum is priced.
+ *
+ * Associative and order-free by construction, which is what lets a caller fold
+ * a tree of Sessions into a parent in whatever order the rows arrive.
+ */
+export function mergeSessionUsageSummaries(
+  summaries: readonly SessionUsageSummary[],
+): SessionUsageSummary {
+  if (summaries.length === 0) return EMPTY_SESSION_USAGE_SUMMARY;
+
+  let requestCount = 0;
+  let tokenRequestCount = 0;
+  let pricedRequestCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let costUsd = 0;
+  const bases = new Set<SessionUsageSummaryBasis>();
+
+  for (const summary of summaries) {
+    requestCount += summary.requestCount;
+    tokenRequestCount += summary.tokenRequestCount;
+    pricedRequestCount += summary.pricedRequestCount;
+    inputTokens += summary.inputTokens;
+    outputTokens += summary.outputTokens;
+    cacheReadTokens += summary.cacheReadTokens;
+    cacheWriteTokens += summary.cacheWriteTokens;
+    // `knownCostUsd === null` IS "nothing here was priced" — the two move
+    // together by construction, and reading the money rather than the count
+    // leaves no unpriced summary able to contribute a zero or a basis.
+    if (summary.knownCostUsd === null) continue;
+    costUsd += summary.knownCostUsd;
+    bases.add(summary.costBasis);
+  }
+
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  const soleBasis = bases.size === 1 ? [...bases][0] : undefined;
+  return {
+    requestCount,
+    tokenRequestCount,
+    pricedRequestCount,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    knownCostUsd:
+      pricedRequestCount === 0 ? null : Math.round(costUsd * COST_PRECISION) / COST_PRECISION,
+    costCoverage: usageCoverage(requestCount, pricedRequestCount),
+    costBasis: soleBasis ?? (bases.size === 0 ? "unavailable" : "mixed"),
+    cachedInputShare: promptTokens === 0 ? null : cacheReadTokens / promptTokens,
+  };
+}

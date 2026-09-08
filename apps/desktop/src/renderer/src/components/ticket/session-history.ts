@@ -1,5 +1,6 @@
 import { canResumeTerminalRecord, sessionSourceLabel } from "@volli/session-presentation";
 import {
+  isListableSession,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -316,11 +317,24 @@ export interface TicketChatSessionRow {
   isOpen: boolean;
 }
 
-/** Chat Sessions for a ticket, named and grouped the same way a terminal record's rail row is. */
+/**
+ * Chat Sessions for a ticket, named and grouped the same way a terminal
+ * record's rail row is.
+ *
+ * A Subagent Session inherits its parent's Ticket, so the ticket's own listing
+ * returns it — and this roster drops it (VC-279). It is a child of one turn in
+ * one chat and is reached from that chat's Activity Island; a rail that listed
+ * it would grow by however many helpers the ticket's agents happened to open,
+ * and "History" would fill with the trace of one Session's fan-out rather than
+ * with the Sessions someone worked in. The cached listing behind this keeps
+ * them, which is what the rail's usage block counts.
+ */
 export function buildTicketChatSessionRows(
   records: readonly ChatSessionRecord[],
 ): TicketChatSessionRow[] {
-  return records.map((record) => ({ record, title: record.title, isOpen: record.live }));
+  return records
+    .filter((record) => isListableSession(record))
+    .map((record) => ({ record, title: record.title, isOpen: record.live }));
 }
 
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */

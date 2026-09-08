@@ -996,9 +996,15 @@ function TabsCluster({ tabs, feel, reduce }: ClusterProps & { tabs: readonly Isl
 /**
  * One subagent as a round toned chip — the people idiom ON PURPOSE, because
  * subagents are the pill's workers. State rides the chip without moving it:
- * working wears the arc, failed dims and takes a destructive badge, stopped
- * dims without one, done just rests. Same drawing in the pill stack and the
- * card rows.
+ * working wears the arc, waiting takes an attention badge, failed dims and
+ * takes a destructive badge, stopped dims without one, done just rests. Same
+ * drawing in the pill stack and the card rows.
+ *
+ * The waiting badge is the same shape as the failed one in the other tone the
+ * theme keeps for it (`bg-attention`, as `StatusDot` uses for the state that
+ * is asking for a person). A child with no listing row is asking through this
+ * chip or through nothing at all (VC-279), and a chip that only dimmed on
+ * failure would draw a stalled delegation exactly like a busy one.
  */
 function AgentDot({
   agent,
@@ -1025,6 +1031,9 @@ function AgentDot({
         {agent.label.charAt(0).toUpperCase()}
       </span>
       {agent.state === "working" ? <WorkingArc reduce={reduce} inset={2} /> : null}
+      {agent.state === "waiting" ? (
+        <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-attention ring-2 ring-card" />
+      ) : null}
       {agent.state === "failed" ? (
         <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-destructive ring-2 ring-card" />
       ) : null}

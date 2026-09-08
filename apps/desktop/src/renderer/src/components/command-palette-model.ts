@@ -2,6 +2,7 @@ import { terminalHistoryScope, type TerminalHistoryScope } from "@volli/session-
 import {
   automationOwnership,
   displayTicketId,
+  isListableSession,
   sessionProvenanceOf,
   type Automation,
   type AutomationOwnership,
@@ -89,6 +90,13 @@ export interface CommandPaletteItems {
  * say terminal history was "not a destination until resume exists", and the
  * answer turned out not to be resume: a closed terminal's destination is its
  * own saved record.
+ *
+ * A Subagent Session is in none of those (VC-279). This is the app's one
+ * GLOBAL Session listing — every project's, in one list — which makes it the
+ * surface a turn's delegated helpers would flood first, and the one place a
+ * reader cannot narrow away from them by leaving a ticket. They are reached
+ * from the chat that delegated them, whose Activity Island peeks, promotes and
+ * stops each one.
  */
 export function buildCommandPaletteItems(
   projects: readonly Project[],
@@ -208,6 +216,7 @@ export function buildCommandPaletteItems(
     });
   }
   for (const record of chatSessions) {
+    if (!isListableSession(record)) continue;
     const project = projectById.get(record.projectId);
     if (project === undefined) continue;
     const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);

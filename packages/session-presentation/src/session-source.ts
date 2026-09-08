@@ -12,6 +12,7 @@
 import {
   effectiveHarnessId,
   harnessLabel,
+  isSubagentSession,
   shortSessionId,
   type SessionListingIdentity,
 } from "@volli/shared";
@@ -33,6 +34,14 @@ import {
  * A chat row has none of that — no PTY and no launch — so its source is simply
  * `Chat`. Whether its executor is attached remains a functional grouping fact,
  * not source metadata to display.
+ *
+ * The Subagent arm is the one answer no listing currently asks for: since
+ * VC-279 every Session listing drops those rows (`isListableSession`), so the
+ * words below are what a surface WOULD be told, not what one is showing. It
+ * stays because naming a Session's source and deciding which Sessions a list
+ * draws are different questions, and this contract only answers the first —
+ * every Volli client reaching the same words for the same Session is the whole
+ * reason the rule is written here.
  */
 // Takes the identity half, not a whole row: naming a Session's source has
 // nothing to do with what it spent, and demanding a usage summary would make
@@ -43,7 +52,7 @@ export function sessionSourceLabel(row: SessionListingIdentity): string {
   // the two root Roles it holds.
   if (row.kind === "chat") {
     const record = row.record;
-    if (record.role !== "subagent") return "Chat";
+    if (!isSubagentSession(record)) return "Chat";
     return record.parentSessionId === null
       ? "Subagent"
       : `Subagent · of ${shortSessionId(record.parentSessionId)}`;

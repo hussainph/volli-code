@@ -77,7 +77,7 @@ import {
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { listableChats, useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
@@ -458,9 +458,12 @@ function SessionsPage({ projectId }: { projectId: string }) {
     void ensure(projectId);
   }, [projectId, ensure]);
 
+  // `listableChats` rather than `.chat`: this page draws rows, so it takes the
+  // narrowed read at the door — see the store's own comment for which
+  // consumers take the whole cache instead, and why.
   const chats = useProjectSessionsStore(
     useShallow((state) =>
-      (state.byProject[projectId]?.chat ?? []).filter((row) => row.ticketId === null),
+      listableChats(state.byProject[projectId]).filter((row) => row.ticketId === null),
     ),
   );
   const terminals = useProjectSessionsStore(

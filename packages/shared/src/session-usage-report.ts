@@ -219,7 +219,7 @@ function groupUsage(
   }
   return [...collected.values()]
     .map((bucket) => ({ key: bucket.key, usage: summarizeSessionUsage(bucket.entries) }))
-    .toSorted((left, right) => rank(right.usage) - rank(left.usage));
+    .toSorted((left, right) => sessionUsageRank(right.usage) - sessionUsageRank(left.usage));
 }
 
 /**
@@ -228,8 +228,13 @@ function groupUsage(
  * A group nothing could price sorts as if it were free, because there is no
  * other number to sort it by. Its own summary still says `unavailable`, and
  * the ordering must never be read back as a total.
+ *
+ * Exported because a surface that MERGES groups after the report was built
+ * — a Ticket's rail folds each child's spend into the Session that delegated
+ * it — has to re-order what it merged, and a second idea of "which row is
+ * dearest" would silently reorder rows the report had already ranked.
  */
-function rank(usage: SessionUsageSummary): number {
+export function sessionUsageRank(usage: SessionUsageSummary): number {
   return usage.knownCostUsd ?? 0;
 }
 

@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   childSessionIds,
   createProjectSessionsStore,
+  listableChats,
   sessionTitleOf,
   subscribeProjectSessionActivity,
   useProjectSessionsStore,
@@ -435,6 +436,43 @@ describe("project-sessions store", () => {
     store.getState().setActiveHarness("p1", "unknown-session", "codex");
     expect(store.getState().byProject.p1).toBe(patched);
     expect(before).not.toBe(patched);
+  });
+});
+
+/**
+ * The door a surface that DRAWS rows comes through (VC-279). The cache itself
+ * keeps every child, because the island, the board, the usage count and tab
+ * restore all need them.
+ */
+describe("listableChats", () => {
+  const rows: ProjectSessionRows = {
+    terminal: [record()],
+    chat: [
+      chatRecord({ sessionId: "parent", title: "The chat that delegated" }),
+      chatRecord({ sessionId: "board", title: "A Board Session", role: "project" }),
+      chatRecord({
+        sessionId: "child",
+        title: "Find the auth refresh",
+        role: "subagent",
+        parentSessionId: "parent",
+      }),
+      // Started BY a Session rather than delegated to (VC-183): a full peer,
+      // and a row like any other.
+      chatRecord({ sessionId: "peer", title: "Started by another", parentSessionId: "parent" }),
+    ],
+    provenance: {},
+  };
+
+  it("hands over every Session a person could have started, and no delegated child", () => {
+    expect(listableChats(rows).map((row) => row.sessionId)).toEqual(["parent", "board", "peer"]);
+  });
+
+  it("leaves the cache itself whole — the rule is about drawing, not about holding", () => {
+    expect(rows.chat).toHaveLength(4);
+  });
+
+  it("answers a project whose listing has never been read", () => {
+    expect(listableChats(undefined)).toEqual([]);
   });
 });
 
