@@ -35,6 +35,7 @@ import type {
   Reconciliation,
 } from "./native-adapter";
 import { NativeAttachmentError } from "./native-adapter";
+import { nativeObservationEventId } from "./native-observation-id";
 import type { TranslatedObservation, TranslatedObservationSink } from "./observation-translation";
 import {
   RuntimeObservationTranslator,
@@ -3128,7 +3129,7 @@ function nativeObservationId(
   attachmentId: string,
   observationId: string,
 ): string {
-  return `native-event:${adapterId}:${sessionId}:${attachmentId}:${observationId}`;
+  return nativeObservationEventId(adapterId, sessionId, attachmentId, observationId);
 }
 
 function nativeReceiptId(commandId: string, receipt: DeliveryReceipt): string {

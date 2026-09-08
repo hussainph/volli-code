@@ -424,6 +424,9 @@ importers:
 
   packages/session-engine:
     dependencies:
+      '@noble/hashes':
+        specifier: 2.3.0
+        version: 2.3.0
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
