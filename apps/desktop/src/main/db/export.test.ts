@@ -106,6 +106,19 @@ describe("buildExportDocument — empty db", () => {
 });
 
 describe("buildExportDocument — populated db", () => {
+  it("fails loudly instead of dropping an event whose provenance row is missing", () => {
+    ctx = openTestDb();
+    const project = testProject({ id: "missing-provenance-project" });
+    insertProject(ctx.db, project);
+    insertSession(ctx.db, testSession(project.id, null, { id: "missing-provenance-session" }));
+    ctx.db.pragma("foreign_keys = OFF");
+    ctx.db.exec("DELETE FROM session_provenances");
+
+    expect(() => buildExportDocument(ctx.db, { appVersion: "1.0.0", now: 0 })).toThrow(
+      /missing.*provenance/i,
+    );
+  });
+
   it("dumps every table, camelCased, with the ticket displayId reused from displayTicketId", async () => {
     ctx = openTestDb();
     const project = testProject({
@@ -625,6 +638,12 @@ describe("buildExportDocument — populated db", () => {
       const exported = rows[0];
       expect(exported).toBeDefined();
       for (const { name } of columns) {
+        // The export is logical rather than physical: event provenance is
+        // joined back to its object, while the intern-table key stays private.
+        if (table === "session_events" && name === "provenance_id") {
+          expect(Object.hasOwn(exported as object, "provenance")).toBe(true);
+          continue;
+        }
         expect(Object.hasOwn(exported as object, camelCase(name))).toBe(true);
       }
     }

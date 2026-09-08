@@ -9,8 +9,13 @@
  * migration copies while preserving the new rollback point.
  */
 import { copyFileSync } from "node:fs";
+import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import {
+  assertSessionStorageContentUnchanged,
+  computeSessionStorageContentDigest,
+} from "./session-storage-digest.ts";
 
 export interface Migration {
   version: number;
@@ -1783,6 +1788,73 @@ UPDATE sessions
 
 const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
 
+/**
+ * Migration 042: compact replay-stable native observation ids and intern event
+ * provenance (VC-326).
+ *
+ * The implementation is code because the id derivation is the exact pure
+ * function used by the runtime and because logical before/after digests must be
+ * compared inside the runner's transaction. `sql` remains a truthful marker
+ * for schema inventories; the runner invokes `apply` instead.
+ */
+const MIGRATION_042_SESSION_EVENT_STORAGE = `
+-- Applied by applyMigration042SessionEventStorage: verified id rewrite and table rebuild.
+`;
+
+const MIGRATION_042_CREATE_PROVENANCES = `
+CREATE TABLE session_provenances (
+  id         INTEGER PRIMARY KEY,
+  provenance TEXT NOT NULL CHECK (json_valid(provenance))
+);
+CREATE INDEX session_provenances_value ON session_provenances(provenance);
+
+INSERT INTO session_provenances (id, provenance)
+SELECT ROW_NUMBER() OVER (ORDER BY provenance COLLATE BINARY), provenance
+  FROM (SELECT DISTINCT provenance FROM session_events)
+ ORDER BY provenance COLLATE BINARY;
+`;
+
+const MIGRATION_042_CREATE_SESSION_EVENTS = `
+CREATE TABLE session_events (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL CHECK (sequence > 0),
+  occurred_at   INTEGER NOT NULL,
+  recorded_at   INTEGER NOT NULL,
+  provenance_id INTEGER NOT NULL REFERENCES session_provenances(id) ON DELETE RESTRICT,
+  attachment_id TEXT,
+  command_id    TEXT,
+  payload       TEXT NOT NULL CHECK (json_valid(payload)),
+  UNIQUE (session_id, sequence),
+  UNIQUE (session_id, id),
+  FOREIGN KEY (session_id, attachment_id)
+    REFERENCES session_attachments(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_events_command ON session_events(command_id);
+CREATE INDEX session_events_attachment ON session_events(attachment_id);
+`;
+
+const MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS = `
+CREATE TABLE session_command_receipts (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  command_id  TEXT NOT NULL REFERENCES session_commands(id) ON DELETE CASCADE,
+  sequence    INTEGER NOT NULL CHECK (sequence > 0),
+  recorded_at INTEGER NOT NULL,
+  receipt     TEXT NOT NULL CHECK (json_valid(receipt)),
+  receipt_event_id TEXT,
+  UNIQUE (command_id, sequence),
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, receipt_event_id)
+    REFERENCES session_events(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_receipts_command_sequence ON session_command_receipts(command_id, sequence);
+CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1994,7 +2066,209 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_041_SESSION_PARENT,
     apply: applyMigration041SessionParent,
   },
+  {
+    version: 42,
+    name: "session event storage — compact native ids and interned provenance",
+    sql: MIGRATION_042_SESSION_EVENT_STORAGE,
+    apply: applyMigration042SessionEventStorage,
+  },
 ];
+
+function countRows(db: Database.Database, sql: string): number {
+  return (db.prepare(sql).get() as { count: number }).count;
+}
+
+interface SessionUsageReferenceProblems {
+  missingEvents: number;
+  mismatchedSessions: number;
+}
+
+function sessionUsageReferenceProblems(db: Database.Database): SessionUsageReferenceProblems {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN e.id IS NULL THEN 1 ELSE 0 END), 0) AS missingEvents,
+              COALESCE(SUM(CASE
+                WHEN e.id IS NOT NULL AND e.session_id <> u.session_id THEN 1 ELSE 0
+              END), 0) AS mismatchedSessions
+         FROM session_usage u
+         LEFT JOIN session_events e ON e.id = u.event_id`,
+    )
+    .get() as SessionUsageReferenceProblems;
+}
+
+/** Migration 042's verified rewrite, run inside migrate's existing transaction. */
+function applyMigration042SessionEventStorage(db: Database.Database): void {
+  const eventColumns = db.pragma("table_info(session_events)") as { name: string }[];
+  const hasLegacyProvenance = eventColumns.some(({ name }) => name === "provenance");
+  const hasInternedProvenance = eventColumns.some(({ name }) => name === "provenance_id");
+  const provenanceTableExists =
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_provenances'")
+      .get() !== undefined;
+  // Probe-gated so a deliberately rewound user_version converges rather than
+  // trying to rebuild an already-v42 schema.
+  if (hasInternedProvenance && provenanceTableExists && !hasLegacyProvenance) return;
+  if (!hasLegacyProvenance || hasInternedProvenance || provenanceTableExists) {
+    throw new Error("Migration 42 found a partial Session event storage schema");
+  }
+
+  const before = computeSessionStorageContentDigest(db);
+  const usageReferencesBefore = sessionUsageReferenceProblems(db);
+  db.function(
+    "compact_native_observation_event_id_v42",
+    { deterministic: true },
+    compactNativeObservationEventId,
+  );
+  db.exec(`
+    CREATE TEMP TABLE session_event_id_map_v42 (
+      old_id TEXT PRIMARY KEY,
+      new_id TEXT NOT NULL
+    );
+    INSERT INTO session_event_id_map_v42 (old_id, new_id)
+    SELECT id, compact_native_observation_event_id_v42(id)
+      FROM session_events
+     WHERE id LIKE 'native-event:%'
+       AND id <> compact_native_observation_event_id_v42(id);
+  `);
+
+  const unverifiable = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42
+      WHERE new_id <> compact_native_observation_event_id_v42(old_id)`,
+  );
+  if (unverifiable !== 0) {
+    throw new Error(`Migration 42 found ${unverifiable} unverifiable compact event id(s)`);
+  }
+  const duplicate = db
+    .prepare(
+      `SELECT new_id
+         FROM session_event_id_map_v42
+        GROUP BY new_id
+       HAVING COUNT(*) > 1
+        LIMIT 1`,
+    )
+    .get() as { new_id: string } | undefined;
+  if (duplicate !== undefined) {
+    throw new Error(`Migration 42 compact event id collision: ${duplicate.new_id}`);
+  }
+  const collision = db
+    .prepare(
+      `SELECT ids.kind, ids.id
+         FROM session_event_id_map_v42 m
+         JOIN (
+           SELECT 'session' AS kind, id FROM sessions
+           UNION ALL SELECT 'attachment', id FROM session_attachments
+           UNION ALL SELECT 'command', id FROM session_commands
+           UNION ALL SELECT 'event', e.id
+             FROM session_events e
+            WHERE NOT EXISTS (
+              SELECT 1 FROM session_event_id_map_v42 mapped WHERE mapped.old_id = e.id
+            )
+           UNION ALL SELECT 'receipt', id FROM session_command_receipts
+         ) ids ON ids.id = m.new_id
+        LIMIT 1`,
+    )
+    .get() as { kind: string; id: string } | undefined;
+  if (collision !== undefined) {
+    throw new Error(
+      `Migration 42 compact event id collision with ${collision.kind} ${collision.id}`,
+    );
+  }
+
+  db.exec(MIGRATION_042_CREATE_PROVENANCES);
+  // Copy both sides of the receipt FK to SQLite's TEMP database, then drop the
+  // child before its parent. Creating the compact main tables only after the
+  // old ones are gone lets SQLite reuse their pages instead of permanently
+  // growing the profile by the size of a second event ledger. better-sqlite3's
+  // SQLITE_TEMP_STORE=1 compile default keeps the copy outside the main
+  // database and bounds heap use on large profiles; every object is still
+  // covered by migrate's one transaction.
+  db.exec(`
+    CREATE TEMP TABLE session_events_v41_copy AS
+    SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+           attachment_id, command_id, payload
+      FROM session_events;
+    CREATE TEMP TABLE session_command_receipts_v41_copy AS
+    SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+      FROM session_command_receipts;
+    DROP TABLE session_command_receipts;
+    DROP TABLE session_events;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_EVENTS);
+  db.exec(`
+    INSERT INTO session_events
+      (id, session_id, sequence, occurred_at, recorded_at, provenance_id,
+       attachment_id, command_id, payload)
+    SELECT COALESCE(m.new_id, e.id), e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+           p.id, e.attachment_id, e.command_id, e.payload
+      FROM session_events_v41_copy e
+      JOIN session_provenances p ON p.provenance = e.provenance
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = e.id
+     ORDER BY e.session_id COLLATE BINARY, e.sequence;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS);
+  db.exec(`
+    INSERT INTO session_command_receipts
+      (id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id)
+    SELECT r.id, r.session_id, r.command_id, r.sequence, r.recorded_at, r.receipt,
+           COALESCE(m.new_id, r.receipt_event_id)
+      FROM session_command_receipts_v41_copy r
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = r.receipt_event_id
+     ORDER BY r.command_id COLLATE BINARY, r.sequence;
+
+    UPDATE session_usage
+       SET event_id = (
+         SELECT m.new_id FROM session_event_id_map_v42 m WHERE m.old_id = session_usage.event_id
+       )
+     WHERE event_id IN (SELECT old_id FROM session_event_id_map_v42);
+
+    DROP TABLE session_command_receipts_v41_copy;
+    DROP TABLE session_events_v41_copy;
+  `);
+
+  const failedRewrites = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42 m
+       LEFT JOIN session_events e ON e.id = m.new_id
+      WHERE m.new_id <> compact_native_observation_event_id_v42(m.old_id)
+         OR e.id IS NULL`,
+  );
+  if (failedRewrites !== 0) {
+    throw new Error(`Migration 42 failed to verify ${failedRewrites} compact event id rewrite(s)`);
+  }
+  const usageReferencesAfter = sessionUsageReferenceProblems(db);
+  if (
+    usageReferencesAfter.missingEvents > usageReferencesBefore.missingEvents ||
+    usageReferencesAfter.mismatchedSessions > usageReferencesBefore.mismatchedSessions
+  ) {
+    throw new Error(
+      `Migration 42 increased broken usage references: missing events ${usageReferencesBefore.missingEvents}→${usageReferencesAfter.missingEvents}, mismatched Sessions ${usageReferencesBefore.mismatchedSessions}→${usageReferencesAfter.mismatchedSessions}`,
+    );
+  }
+  const danglingReceipts = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_command_receipts r
+       LEFT JOIN session_events e
+         ON e.id = r.receipt_event_id AND e.session_id = r.session_id
+      WHERE r.receipt_event_id IS NOT NULL AND e.id IS NULL`,
+  );
+  if (danglingReceipts !== 0) {
+    throw new Error(`Migration 42 left ${danglingReceipts} dangling receipt event reference(s)`);
+  }
+  const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `Migration 42 foreign-key check failed: ${JSON.stringify(foreignKeyViolations.slice(0, 3))}`,
+    );
+  }
+
+  const after = computeSessionStorageContentDigest(db);
+  assertSessionStorageContentUnchanged(before, after);
+  db.exec("DROP TABLE session_event_id_map_v42");
+}
 
 /** Migration 041's reconciler, probe-gated like 040's. */
 function applyMigration041SessionParent(db: Database.Database): void {

@@ -27,6 +27,11 @@ import { migrate } from "../db/migrations";
 import { openRawDb } from "../db/test-helpers";
 import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 
+export const FIXTURE_NATIVE_RECEIPT_EVENT_ID =
+  "native-event:terminal:session-root:attach-1:terminal:receipt:command-1:completed";
+export const FIXTURE_NATIVE_USAGE_EVENT_ID =
+  "native-event:terminal:session-root:attach-1:terminal:usage:turn-1:assistant:completed";
+
 export interface FixtureProfile {
   /** The profile root — an Electron `userData` stand-in. */
   root: string;
@@ -70,7 +75,9 @@ function writeTranscript(root: string, bytes: Buffer): string {
  * app-upgrade-window suite produces a bundle from an OLDER profile than the
  * app that will restore it.
  */
-export function createFixtureProfile(options: { schemaVersion?: number } = {}): FixtureProfile {
+export function createFixtureProfile(
+  options: { schemaVersion?: number; nativeEventIds?: boolean } = {},
+): FixtureProfile {
   const root = mkdtempSync(join(tmpdir(), "volli-backup-profile-"));
   const dbPath = join(root, "volli.db");
   const db = openRawDb(dbPath);
@@ -91,7 +98,7 @@ export function createFixtureProfile(options: { schemaVersion?: number } = {}): 
   const promptId = writeTranscript(transcripts, transcriptBytes("message-1", "restore me"));
   const replyId = writeTranscript(transcripts, transcriptBytes("message-2", "restored"));
 
-  seed(db, { ticketBlob, sessionBlob, promptId, replyId });
+  seed(db, { ticketBlob, sessionBlob, promptId, replyId }, options.nativeEventIds ?? false);
 
   return {
     root,
@@ -159,7 +166,7 @@ function inserter(db: Database.Database) {
 }
 
 /* eslint-disable max-lines-per-function -- one fixture, read top to bottom */
-function seed(db: Database.Database, artifacts: Artifacts): void {
+function seed(db: Database.Database, artifacts: Artifacts, nativeEventIds: boolean): void {
   const insert = inserter(db);
 
   // ---- projects, labels, tickets ------------------------------------------
@@ -336,10 +343,28 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
     failure: null,
     created_sequence: 1,
   });
-  const provenance = JSON.stringify({
-    source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/alpha" } },
-    venue: { id: "local", kind: "local" },
-  });
+  const provenances = [
+    JSON.stringify({
+      source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/alpha" } },
+      venue: { id: "local", kind: "local" },
+    }),
+    // Distinct on disk, identical to the first after backup strips `cwd`.
+    // Keeping both proves the intentionally non-unique value index restores
+    // every integer reference rather than coalescing redacted rows.
+    JSON.stringify({
+      source: { kind: "adapter", id: "terminal", detail: { cwd: "/Users/source/code/beta" } },
+      venue: { id: "local", kind: "local" },
+    }),
+    JSON.stringify({
+      source: { kind: "system", id: "backup-fixture", detail: null },
+      venue: { id: "local", kind: "local" },
+    }),
+  ] as const;
+  // v42 stores these once and events carry the integers; older fixture
+  // versions skip this table and retain their original JSON column below.
+  for (const [index, provenance] of provenances.entries()) {
+    insert("session_provenances", { id: index + 1, provenance });
+  }
   insert("session_commands", {
     id: "command-1",
     session_id: "session-root",
@@ -347,12 +372,19 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
     intent: JSON.stringify({ kind: "message.submit", reference: reference(artifacts.promptId) }),
     route: JSON.stringify({ adapterId: "terminal", attachmentId: "attach-1" }),
   });
-  const events: Array<[string, number, string | null, unknown]> = [
-    ["event-1", 1, "command-1", { kind: "command.accepted", commandId: "command-1" }],
+  const events: Array<[string, number, string | null, number, unknown]> = [
+    [
+      nativeEventIds ? FIXTURE_NATIVE_RECEIPT_EVENT_ID : "event-1",
+      1,
+      "command-1",
+      3,
+      { kind: "command.accepted", commandId: "command-1" },
+    ],
     [
       "event-2",
       2,
       "command-1",
+      1,
       {
         kind: "transcript.referenced",
         attachmentId: "attach-1",
@@ -364,6 +396,7 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
       "event-3",
       3,
       null,
+      2,
       {
         kind: "transcript.referenced",
         attachmentId: "attach-1",
@@ -372,9 +405,10 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
       },
     ],
     [
-      "event-4",
+      nativeEventIds ? FIXTURE_NATIVE_USAGE_EVENT_ID : "event-4",
       4,
       null,
+      1,
       {
         kind: "usage.recorded",
         attachmentId: "attach-1",
@@ -394,14 +428,15 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
       },
     ],
   ];
-  for (const [id, sequence, commandId, payload] of events) {
+  for (const [id, sequence, commandId, provenanceId, payload] of events) {
     insert("session_events", {
       id,
       session_id: "session-root",
       sequence,
       occurred_at: 250 + sequence,
       recorded_at: 250 + sequence,
-      provenance,
+      provenance: provenances[provenanceId - 1],
+      provenance_id: provenanceId,
       attachment_id: "attach-1",
       command_id: commandId,
       payload: JSON.stringify(payload),
@@ -413,7 +448,8 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
     sequence: 1,
     occurred_at: 260,
     recorded_at: 260,
-    provenance,
+    provenance: provenances[2],
+    provenance_id: 3,
     attachment_id: null,
     command_id: null,
     payload: JSON.stringify({ kind: "session.signaled", signal: "done", reason: null }),
@@ -432,7 +468,7 @@ function seed(db: Database.Database, artifacts: Artifacts): void {
       recordedAt: 251,
       sequence: 1,
     }),
-    receipt_event_id: "event-1",
+    receipt_event_id: nativeEventIds ? FIXTURE_NATIVE_RECEIPT_EVENT_ID : "event-1",
   });
   insert("ticket_signals", {
     id: "signal-1",

@@ -73,6 +73,7 @@ export * from "./session-usage-report";
 export * from "./session-streak";
 export * from "./session-venue";
 export * from "./session-event-codec";
+export * from "./native-observation-id";
 export * from "./session-rpc-wire";
 export * from "./park";
 export * from "./volli-dir";

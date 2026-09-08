@@ -10,6 +10,7 @@
 import type Database from "better-sqlite3";
 import { EMPTY_SESSION_USAGE_SUMMARY, roleImpliedByTicket } from "@volli/shared";
 import type { SessionNativeReference, SessionRecord, SessionRole } from "@volli/shared";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -58,14 +59,14 @@ function appendEvent(
 ): void {
   db.prepare(
     `INSERT INTO session_events
-       (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
      VALUES
-       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenance, @attachmentId, NULL, @payload)`,
+       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, NULL, @payload)`,
   ).run({
     ...input,
     sequence: nextSequence(db, input.sessionId),
     recordedAt: input.occurredAt,
-    provenance: TEST_PROVENANCE,
+    provenanceId: internSessionEventProvenance(db, TEST_PROVENANCE),
     payload: JSON.stringify(input.payload),
   });
 }

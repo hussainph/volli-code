@@ -275,11 +275,51 @@ describe("restoreBackupBundle — a clean restore", () => {
       ).native_detail;
       expect(JSON.parse(detail)).toEqual({ kind: "volli.terminal.v1", harnessId: "claude-code" });
       const provenance = (
-        db.prepare("SELECT provenance FROM session_events WHERE id = 'event-1'").get() as {
-          provenance: string;
-        }
+        db
+          .prepare(
+            `SELECT p.provenance
+               FROM session_events e
+               JOIN session_provenances p ON p.id = e.provenance_id
+              WHERE e.id = 'event-1'`,
+          )
+          .get() as { provenance: string }
       ).provenance;
       expect(provenance).not.toContain("/Users/source");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps distinct intern rows when redaction collapses their provenance text", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+
+    expect(result.ok).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT provenance, COUNT(*) AS n
+               FROM session_provenances
+              GROUP BY provenance
+             HAVING COUNT(*) > 1`,
+          )
+          .get(),
+      ).toEqual({
+        provenance: JSON.stringify({
+          source: { kind: "adapter", id: "terminal", detail: {} },
+          venue: { id: "local", kind: "local" },
+        }),
+        n: 2,
+      });
     } finally {
       db.close();
     }

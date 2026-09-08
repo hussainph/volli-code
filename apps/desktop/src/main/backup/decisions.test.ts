@@ -172,7 +172,7 @@ describe("column redactions", () => {
     expect(keyed).toContain("tickets.worktree_path");
     expect(keyed).toContain("session_attachments.native_id");
     expect(keyed).toContain("session_attachments.native_detail");
-    expect(keyed).toContain("session_events.provenance");
+    expect(keyed).toContain("session_provenances.provenance");
     expect(keyed).toContain("session_events.payload");
   });
 
