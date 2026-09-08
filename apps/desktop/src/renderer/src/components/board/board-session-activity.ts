@@ -43,11 +43,14 @@
  *
  * What it may NOT say is `waiting`. That word means "a person is blocked here,
  * go and look", and there is nothing on this ticket for them to look at: the
- * child has no row in any listing, and the island chip that DOES represent it
- * folds the same wait into "working" (VC-269 — a child holds no `ask_user`, so
- * its waits are narrow runtime trips rather than a question addressed to
- * anyone). A ring louder than the surface that owns the fact sends a reader to
- * a ticket to find nothing.
+ * child has no row in any listing to click. The wait is real — a child can be
+ * stopped on a permission or an expired credential — so it is not discarded
+ * here, it is READDRESSED: `sessionWaitAudience` says a subagent's errand is
+ * answered by its parent, and the parent chat's Activity Island announces it,
+ * marks the chip and peeks the prompt (`use-island-agents.ts`). This module
+ * owns the `listing` half of that one rule and nothing more; a ring louder
+ * than the surface that owns the fact sends a reader to a ticket to find
+ * nothing.
  *
  * ── THE TWO SOURCES ───────────────────────────────────────────────────────
  * Terminal panes are read from the live sessions store, through the same
@@ -66,7 +69,7 @@
 import { WORKING_WINDOW_MS } from "@renderer/stores/sessions";
 import { sessionActivityState, sessionPanes } from "@renderer/stores/sessions";
 import type { SessionContainer } from "@renderer/stores/sessions";
-import { isSubagentSession } from "@volli/shared";
+import { sessionWaitAudience } from "@volli/shared";
 import type { ChatSessionRecord, SessionActivityState, SessionHarnessState } from "@volli/shared";
 
 /** What a card can say. A ticket with nothing running is simply absent from the map. */
@@ -155,9 +158,14 @@ export function buildBoardSessionActivity(
 
 /**
  * The word one chat Session contributes to its card — its own, except that a
- * subagent's `waiting` reads as `working`. See "Subagents count, but never
- * ask" above; this is the whole of that rule.
+ * wait addressed to a parent rather than to this board reads as `working`. See
+ * "Subagents count, but never ask" above; this is the whole of that rule, and
+ * `sessionWaitAudience` (@volli/shared) is the whole of the decision inside
+ * it, so the island cannot come to disagree with the ring about the same
+ * child.
  */
 function boardChatActivity(record: ChatSessionRecord): SessionActivityState {
-  return record.activity === "waiting" && isSubagentSession(record) ? "working" : record.activity;
+  return record.activity === "waiting" && sessionWaitAudience(record) === "parent"
+    ? "working"
+    : record.activity;
 }

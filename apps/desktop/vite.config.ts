@@ -269,6 +269,12 @@ export default defineConfig(({ mode }) => ({
         // tells an owner their pass was free. Both are one-character mistakes
         // that no view test would catch.
         "src/usage/usage-format.ts",
+        // Which rows a usage breakdown has and whose money each carries — the
+        // Ticket rail folds a delegated child's spend into the Session that
+        // delegated it (VC-279), so a branch missed here either loses money
+        // out of a rail that must add up to the total above it, or attributes
+        // one person's Session to another.
+        "src/components/usage/usage-rail-model.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",

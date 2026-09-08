@@ -916,7 +916,14 @@ describe("buildActiveSessionListing — chat Sessions", () => {
   });
 
   it("hides a Subagent Session from Cleaned up too — it is not a row anyone lost", () => {
-    const now = 5_000_000;
+    // Old enough for rule (d), so cleanup genuinely claims it: `showCleaned`
+    // is the switch that brings concluded business BACK, and a child that was
+    // merely quiet would prove nothing about the row cleanup itself holds.
+    // The parent beside it is the control — same ticket, same age, same
+    // switch — so the assertion below is about the Role and not about the
+    // whole band having been swept.
+    const now = 8 * 24 * 60 * 60_000;
+    const longAgo = now - PREVIOUS_MAX_AGE_MS - 1;
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
       containers: {},
@@ -924,13 +931,20 @@ describe("buildActiveSessionListing — chat Sessions", () => {
       records: [],
       chatSessions: [
         chatSession({
+          sessionId: "parent",
+          ticketId: "t1",
+          title: "The chat that delegated",
+          live: false,
+          lastActivityAt: longAgo,
+        }),
+        chatSession({
           sessionId: "child",
           ticketId: "t1",
           title: "Read the migration",
           role: "subagent",
           parentSessionId: "parent",
           live: false,
-          lastActivityAt: now - ACTIVE_QUIET_WINDOW_MS - 1,
+          lastActivityAt: longAgo,
         }),
       ],
       lastOutputAt: {},
@@ -941,7 +955,9 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     });
 
     expect(result.active).toEqual([]);
-    expect(result.previous).toEqual([]);
+    expect(result.previous.map((row) => ({ title: row.title, cleaned: row.cleaned }))).toEqual([
+      { title: "The chat that delegated", cleaned: true },
+    ]);
   });
 
   it("leaves a `session_start` child listed — a peer Session is not a subagent", () => {

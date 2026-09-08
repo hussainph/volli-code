@@ -172,8 +172,10 @@ describe("buildBoardSessionActivity", () => {
   });
 
   // VC-279: a subagent has no row in any listing, so a card that said "waiting"
-  // for one would send a reader to a ticket with nothing to answer. Its island
-  // chip folds the same wait into "working" (VC-269) and so does this.
+  // for one would send a reader to a ticket with nothing to answer. The wait is
+  // readdressed rather than dropped — `sessionWaitAudience` sends it to the
+  // parent's Activity Island, which draws and announces it — and this board
+  // shows the only thing it can honestly show about a busy child: work.
   describe("a Subagent Session", () => {
     const child = (overrides: Partial<ChatSessionRecord> = {}) =>
       chat({ sessionId: "child", role: "subagent", parentSessionId: "parent", ...overrides });
@@ -195,6 +197,19 @@ describe("buildBoardSessionActivity", () => {
       expect(build({ chatSessions: [child({ activity: "waiting" })] }).byTicket).toEqual({
         t1: "working",
       });
+    });
+
+    it("folds by the Role and not by having a parent — a peer's wait still asks", () => {
+      // `parentSessionId` alone is a Session another Session STARTED (VC-183).
+      // That one keeps its listing row, so its question has a row to be
+      // answered at and must still light the ring.
+      expect(
+        build({
+          chatSessions: [
+            chat({ sessionId: "peer", parentSessionId: "parent", activity: "waiting" }),
+          ],
+        }).byTicket,
+      ).toEqual({ t1: "waiting" });
     });
 
     it("cannot outrank a real question its parent is asking", () => {

@@ -289,6 +289,38 @@ export function isSubagentSession(record: Pick<ChatSessionRecord, "role">): bool
 }
 
 /**
+ * WHO answers this Session's `waiting`.
+ *
+ * A chat Session says `waiting` for exactly three reasons — a question, a tool
+ * call to approve, an expired credential ({@link ChatWaitingReason}) — and
+ * every one of them is cleared by a person, not by time. So the word is an
+ * errand, and an errand needs an addressee:
+ *
+ *  - `listing` — the Session has a row of its own, so a navigator may point at
+ *    it: the sidebar's Active band, the ticket rail, the board's `waiting`
+ *    ring. The reader clicks the row and answers there.
+ *  - `parent` — a Subagent Session ({@link isSubagentSession}). It has no row
+ *    (VC-279), so a navigator pointing at it would send a reader to a Ticket
+ *    holding nothing they could answer. Its errand is delivered where its
+ *    other facts already are: the parent chat's Activity Island, which draws
+ *    the child's chip, announces the wait, and peeks the transcript that holds
+ *    the actual prompt.
+ *
+ * ONE FUNCTION BECAUSE THE TWO ANSWERS PARTITION ONE FACT. A surface that
+ * decided this for itself would be the copy nobody sees drift — the same
+ * argument `session-need.ts` makes for `sessionPersonNeed`, and a wait that
+ * two surfaces both disown is a person never told at all. The board reads it
+ * to know its ring must stay quiet; the island is the `parent` half in code
+ * (`use-island-agents.ts`), which is why the chip draws the wait rather than
+ * folding it away.
+ */
+export type SessionWaitAudience = "listing" | "parent";
+
+export function sessionWaitAudience(record: Pick<ChatSessionRecord, "role">): SessionWaitAudience {
+  return isSubagentSession(record) ? "parent" : "listing";
+}
+
+/**
  * Which harness a session is to be JUDGED by: what announced itself, falling
  * back to what the session launched with.
  *

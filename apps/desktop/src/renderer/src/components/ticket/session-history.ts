@@ -74,7 +74,7 @@ export function sessionSourceLabel(row: SessionListingIdentity): string {
   // the two root Roles it holds.
   if (row.kind === "chat") {
     const record = row.record;
-    if (record.role !== "subagent") return "Chat";
+    if (!isSubagentSession(record)) return "Chat";
     return record.parentSessionId === null
       ? "Subagent"
       : `Subagent · of ${shortSessionId(record.parentSessionId)}`;

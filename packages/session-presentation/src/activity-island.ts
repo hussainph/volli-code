@@ -94,8 +94,15 @@ export interface IslandAgent {
   /**
    * `stopped` is ended-by-decision from the card: it dims like `failed` but
    * takes no badge — a person chose it, nothing went wrong.
+   *
+   * `waiting` is the child stopped on something only a person can clear — a
+   * tool call to approve, a credential that expired. It is the one state here
+   * that is an ERRAND rather than a report, because a Subagent Session has no
+   * row in any Session listing (VC-279) and this cluster is therefore the only
+   * surface that can hand its wait to anyone. It neither dims nor spins: the
+   * work has not failed and it is not progressing.
    */
-  state: "working" | "done" | "failed" | "stopped";
+  state: "working" | "waiting" | "done" | "failed" | "stopped";
   /** Promoted to a full tab from its card row. */
   promoted: boolean;
 }
@@ -404,14 +411,30 @@ export function agentProgressMeasured(agent: IslandAgent): boolean {
   return agent.state === "working" && agent.progress > 0;
 }
 
-/** `72%` while working and measured, `working` unmeasured, the state otherwise; `· tab` once promoted. */
+/**
+ * What each state is called on a row.
+ *
+ * Four of the five are the state itself: the vocabulary was chosen to be read
+ * out loud. `waiting` is the exception, and deliberately so — it is the only
+ * state a reader can act on, and "waiting" describes the child while "needs
+ * you" describes the errand. WHICH errand (approve a call, sign in again)
+ * lives one press away in the peek overlay; a rail row has no width for it and
+ * would be guessing at the fix.
+ */
+const STATE_WORD: Record<IslandAgent["state"], string> = {
+  working: "working",
+  waiting: "needs you",
+  done: "done",
+  failed: "failed",
+  stopped: "stopped",
+};
+
+/** `72%` while working and measured, `working` unmeasured, the state's word otherwise; `· tab` once promoted. */
 export function agentStateWord(agent: IslandAgent): string {
   const base =
-    agent.state !== "working"
-      ? agent.state
-      : agentProgressMeasured(agent)
-        ? `${Math.round(agent.progress * 100)}%`
-        : "working";
+    agent.state === "working" && agentProgressMeasured(agent)
+      ? `${Math.round(agent.progress * 100)}%`
+      : STATE_WORD[agent.state];
   return agent.promoted ? `${base}${FLASH_SEPARATOR}tab` : base;
 }
 

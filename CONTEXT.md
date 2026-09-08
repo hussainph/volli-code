@@ -108,12 +108,18 @@ listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
 Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
 about how the agents worked, not about what the person started. Only the
 listings drop them; the durable records keep every child, which is what the
-cluster reads, what usage counts, and what `volli session list` still prints
-with its Role beside it for an orchestrator reading its own fleet. A working
-child still lights its Ticket's board ring — that is work happening there — but
-a child's wait never draws the `waiting` ring, which would send a person to a
-Ticket holding no row they could answer. Write-capable children in a shared
-tree are VC-266's question.
+cluster reads, what usage counts, and what `volli session list` still returns
+carrying its Role for an orchestrator reading its own fleet. A working child
+still lights its Ticket's board ring — that is work happening there — but a
+child's wait never draws the `waiting` ring, which would send a person to a
+Ticket holding no row they could answer. A wait is an errand, so dropping the
+row moves the addressee rather than the errand (`sessionWaitAudience`): a child
+stopped on a permission or an expired credential marks its chip in the parent's
+cluster and is announced there, which is the only surface that can hand that
+wait to anyone. What a child SPENT is folded the same way — the Ticket's usage
+breakdown adds a child's cost to the Session that delegated it rather than
+naming it in a row of its own, while the per-model breakdown counts every call
+as made. Write-capable children in a shared tree are VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 

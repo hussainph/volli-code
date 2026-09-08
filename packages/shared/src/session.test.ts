@@ -12,11 +12,13 @@ import {
   isSessionLaunchKind,
   isSessionPlacement,
   isSubagentSession,
+  sessionWaitAudience,
   SESSION_ACTIVITY_STATES,
   SESSION_LAUNCH_KINDS,
   SESSION_PLACEMENTS,
   shortSessionId,
 } from "./session";
+import { SESSION_ROLES } from "./agent-runtime";
 import { parseHarnessId } from "./ticket";
 import type { HarnessEvent } from "./harness/types";
 import type {
@@ -34,6 +36,30 @@ describe("isSubagentSession", () => {
   it("is false for both root Roles, so a listing keeps every Session a person started", () => {
     expect(isSubagentSession({ role: "ticket" })).toBe(false);
     expect(isSubagentSession({ role: "project" })).toBe(false);
+  });
+
+  it("answers for every Role the vocabulary holds, so a new one cannot arrive unjudged", () => {
+    // Fail-open by construction: an unlisted Role reads as listable, which is
+    // a Session that shows up rather than one that vanishes.
+    expect(SESSION_ROLES.filter((role) => isSubagentSession({ role }))).toEqual(["subagent"]);
+  });
+});
+
+describe("sessionWaitAudience", () => {
+  it("sends a listed Session's wait to the listing that can point at it", () => {
+    expect(sessionWaitAudience({ role: "ticket" })).toBe("listing");
+    expect(sessionWaitAudience({ role: "project" })).toBe("listing");
+  });
+
+  it("sends a delegated child's wait to its parent, which is the only surface holding it", () => {
+    expect(sessionWaitAudience({ role: "subagent" })).toBe("parent");
+  });
+
+  it("addresses every Role somewhere — a wait nobody owns is a person never told", () => {
+    expect(SESSION_ROLES.every((role) => sessionWaitAudience({ role }) !== undefined)).toBe(true);
+    expect(SESSION_ROLES.filter((role) => sessionWaitAudience({ role }) === "parent")).toEqual([
+      "subagent",
+    ]);
   });
 });
 
