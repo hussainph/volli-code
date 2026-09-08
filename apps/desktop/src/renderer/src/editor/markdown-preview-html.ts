@@ -245,7 +245,12 @@ const LINK_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "cite", "action", 
 /** `url(…)` inside a `style` value: a stylesheet's own way of making a request. */
 const STYLE_URL = /url\s*\(/i;
 
-/** `<!doctype`, `<![CDATA[`, `<?…`: markup an HTML parser turns into a comment or a quirk. */
+/**
+ * `<!doctype`, `<![CDATA[`, `<?…`: markup an HTML parser swallows into a
+ * comment, a quirks mode, or nothing at all. Asked on the raw text, because
+ * after parsing there is nothing left to ask about — and a block that quietly
+ * became nothing is exactly what the marker exists to announce.
+ */
 const NON_ELEMENT_MARKUP = /<[!?](?!--)/;
 
 /**
@@ -263,7 +268,6 @@ const NON_ELEMENT_MARKUP = /<[!?](?!--)/;
 export function renderableHtmlBlock(html: string): boolean {
   if (NON_ELEMENT_MARKUP.test(html)) return false;
   const parsed = new DOMParser().parseFromString(html, "text/html");
-  if (parsed.doctype !== null) return false;
   // BOTH roots: the parser hoists `<link>`, `<meta>` and `<base>` into the head
   // of the document it builds, and a gate that walked only the body would never
   // see them.

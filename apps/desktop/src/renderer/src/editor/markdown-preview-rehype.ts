@@ -60,30 +60,35 @@ export interface PreviewHastNode {
  */
 export function previewHardeningPlugin(markdownRelPath: string) {
   return () => (tree: PreviewHastNode) => {
-    hardenChildren(tree, markdownRelPath);
+    tree.children = hardenedChildren(tree.children ?? [], markdownRelPath);
   };
 }
 
-function hardenChildren(node: PreviewHastNode, markdownRelPath: string): void {
+/** One level of the tree, hardened: dropped, unwrapped and kept children, in order. */
+function hardenedChildren(
+  children: readonly PreviewHastNode[],
+  markdownRelPath: string,
+): PreviewHastNode[] {
   const kept: PreviewHastNode[] = [];
-  for (const child of node.children ?? []) {
+  for (const child of children) {
     if (child.type !== "element") {
       kept.push(child); // text and comments carry no request
       continue;
     }
     const tag = String(child.tagName ?? "").toLowerCase();
     if (PREVIEW_DROPPED_TAGS.has(tag)) continue;
-    hardenChildren(child, markdownRelPath);
+    const inner = hardenedChildren(child.children ?? [], markdownRelPath);
     if (!PREVIEW_TAGS.has(tag)) {
       // Unwrapped rather than dropped: an element this preview has no rule for
       // is usually a wrapper, and the words inside it are the file's content.
-      kept.push(...(child.children ?? []));
+      kept.push(...inner);
       continue;
     }
+    child.children = inner;
     child.properties = hardenProperties(tag, child.properties ?? {}, markdownRelPath);
     kept.push(child);
   }
-  node.children = kept;
+  return kept;
 }
 
 function hardenProperties(

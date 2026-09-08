@@ -161,6 +161,13 @@ describe("previewHardeningPlugin — attributes", () => {
     expect(firstElement(tree, "p")?.properties).toEqual({ title: "kept", align: "center" });
   });
 
+  it("keeps the naming a screen reader needs", () => {
+    const tree = harden([element("img", { src: "shot.png", alt: "Board", ariaLabel: "Board" })]);
+
+    expect(firstElement(tree, "img")?.properties?.["ariaLabel"]).toBe("Board");
+    expect(firstElement(tree, "img")?.properties?.["alt"]).toBe("Board");
+  });
+
   it("removes srcset even where the element itself is allowed", () => {
     const tree = harden([
       element("img", { src: "local.png", srcSet: "https://tracker.invalid/2x.png 2x", alt: "x" }),
@@ -198,6 +205,23 @@ describe("previewHardeningPlugin — attributes", () => {
       "volli-preview:unresolved",
       "volli-preview:unresolved",
     ]);
+  });
+
+  it("survives a node that arrives without children, properties or a name", () => {
+    // Another plugin's node, or a shape a future hast version emits: the pass
+    // must not throw over a missing field on untrusted input.
+    const tree = harden([
+      { type: "element", tagName: "img" },
+      { type: "element", tagName: "article" },
+      { type: "element" },
+    ]);
+
+    expect(tags(tree)).toEqual(["img"]);
+    expect(firstElement(tree, "img")?.properties?.["src"]).toBe("volli-preview:unresolved");
+
+    const empty: PreviewHastNode = { type: "root" };
+    previewHardeningPlugin("README.md")()(empty);
+    expect(empty.children).toEqual([]);
   });
 
   it("leaves text and comments alone rather than rewriting the document", () => {
