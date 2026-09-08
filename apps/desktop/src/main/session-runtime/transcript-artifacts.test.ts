@@ -299,6 +299,29 @@ describe("FileTranscriptArtifactStore", () => {
     await expect(artifacts.read(reference)).resolves.toEqual(value);
   });
 
+  it("keeps both known-bad gzip and good plain bytes when the repair temp fails verification", async () => {
+    await store();
+    const value = artifact("repair source survives");
+    const { bytes, reference } = referenceFor(value);
+    const digest = reference.id.slice("sha256:".length);
+    const plainPath = join(directory!, `${digest}.json`);
+    const compressedPath = join(directory!, `${digest}.json.gz`);
+    const knownBad = Buffer.from([0x1f, 0x8b, 0x08]);
+    await writeFile(plainPath, bytes);
+    await writeFile(compressedPath, knownBad);
+    const artifacts = new FileTranscriptArtifactStore(directory!, {
+      gzipBytes: async () => gzipAsync(canonicalBytes(artifact("wrong repair bytes"))),
+    });
+
+    const report = await repackLegacyTranscriptArtifacts(artifacts, {
+      pause: async () => undefined,
+    });
+
+    expect(report).toMatchObject({ scanned: 1, repacked: 0, skipped: 1 });
+    await expect(readFile(compressedPath)).resolves.toEqual(knownBad);
+    await expect(readFile(plainPath)).resolves.toEqual(bytes);
+  });
+
   it("atomically repairs a known-bad compressed sibling from a verified plain artifact", async () => {
     const artifacts = await store();
     const value = artifact("repair me");
