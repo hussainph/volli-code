@@ -5,13 +5,19 @@
  * checkpoints the WAL and copies the db file to `<dbPath>.backup-v<from>`,
  * so a bad migration never destroys the pre-migration data. A brand-new
  * database (`user_version` starts at `0`) skips the backup step — there is
- * nothing to protect yet. After success, exact-name retention deletes older
- * migration copies while preserving the new rollback point.
+ * nothing to protect yet. After success, an existing database may be compacted
+ * before exact-name retention deletes older migration copies while preserving
+ * the new rollback point.
  */
 import { copyFileSync } from "node:fs";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
 import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import {
+  compactMigrationDatabase,
+  logMigrationCompaction,
+  skippedMigrationCompaction,
+} from "./migration-compaction";
 import {
   assertSessionStorageContentUnchanged,
   computeSessionStorageContentDigest,
@@ -2448,7 +2454,10 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   const pending = MIGRATIONS.filter(
     (migration) => migration.version > currentVersion && migration.version <= ceiling,
   ).toSorted((a, b) => a.version - b.version);
-  if (pending.length === 0) return;
+  if (pending.length === 0) {
+    logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
+    return;
+  }
 
   // Only an already-populated database needs a safety copy — a fresh
   // `user_version = 0` db has nothing pre-migration to protect.
@@ -2476,9 +2485,19 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   });
   applyPendingMigrations();
 
-  // Cleanup is deliberately after the transaction has committed and its
-  // foreign-key check passed. Fresh databases made no copy, so they do not
-  // participate in retention even if matching files already exist nearby.
+  // VACUUM cannot run inside the all-or-nothing migration transaction. Keep
+  // the starting version check here as well: a batch that began at version 0
+  // is fresh even though it now reports the final version. The safety copy for
+  // an existing database remains in place throughout this attempt.
+  const compactionReport =
+    currentVersion === 0
+      ? skippedMigrationCompaction(dbPath, "fresh database")
+      : compactMigrationDatabase(db, dbPath);
+  logMigrationCompaction(compactionReport);
+
+  // Retention is deliberately last, after the transaction committed, its
+  // foreign-key check passed, and compaction returned (including a reported
+  // failure). Fresh databases made no copy, so they do not participate.
   if (currentVersion > 0) {
     const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
     logMigrationBackupRetention(retentionReport);

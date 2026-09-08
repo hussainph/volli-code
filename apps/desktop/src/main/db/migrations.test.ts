@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
+import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -191,6 +193,37 @@ function buildV8DbWithTicket(dbPath: string): Database.Database {
        VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
   ).run();
   return db;
+}
+
+/**
+ * Builds a v40 WAL database with a real Session row and more than 32 MiB of
+ * reclaimable pages. VC-326's migration 42 and digest helper are not on this
+ * branch's base, so the integration test below applies migration 41 and uses a
+ * non-empty `SELECT *` Session row dump as its content digest.
+ */
+function buildV40DbWithReclaimableSpace(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath, { toVersion: 40 });
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', 'Preserved', 1)",
+  ).run();
+  db.exec(`
+    CREATE TABLE deleted_compaction_payload (payload BLOB NOT NULL);
+    INSERT INTO deleted_compaction_payload (payload) VALUES (zeroblob(${40 * 1024 * 1024}));
+    DELETE FROM deleted_compaction_payload;
+  `);
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  return db;
+}
+
+function sessionRowDump(db: Database.Database): string {
+  return JSON.stringify(db.prepare("SELECT * FROM sessions ORDER BY id").all());
 }
 
 /** Builds a populated v10 db to exercise the attachment-storage upgrade path. */
@@ -521,6 +554,181 @@ describe("migrate — 002 to 004 upgrade path", () => {
     // No backup should exist for the already-latest version — the second
     // migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
+    db.close();
+  });
+});
+
+describe("migrate — post-success compaction", () => {
+  it("compacts a qualifying WAL database after commit while preserving Session content", () => {
+    const dbPath = tempDbPath();
+    const db = buildV40DbWithReclaimableSpace(dbPath);
+    const beforeBytes = statSync(dbPath).size;
+    let digestBeforeVacuum: string | undefined;
+    let freeBytesBeforeVacuum: number | undefined;
+    let thresholdBytes: number | undefined;
+    const originalExec = db.exec.bind(db);
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((source: string) => {
+      if (source === "VACUUM") {
+        expect(db.inTransaction).toBe(false);
+        expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+        digestBeforeVacuum = sessionRowDump(db);
+        const pageSize = db.pragma("page_size", { simple: true }) as number;
+        const pageCount = db.pragma("page_count", { simple: true }) as number;
+        const freelistCount = db.pragma("freelist_count", { simple: true }) as number;
+        freeBytesBeforeVacuum = freelistCount * pageSize;
+        thresholdBytes = Math.max(32 * 1024 * 1024, 0.2 * pageCount * pageSize);
+        expect(freeBytesBeforeVacuum).toBeGreaterThanOrEqual(thresholdBytes);
+      }
+      return originalExec(source);
+    });
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    const vacuumCalls = execSpy.mock.calls.filter(([source]) => source === "VACUUM");
+    const afterBytes = statSync(dbPath).size;
+    expect(vacuumCalls).toHaveLength(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(41);
+    expect(db.pragma("freelist_count", { simple: true })).toBe(0);
+    expect(afterBytes).toBeLessThan(beforeBytes);
+    expect(sessionRowDump(db)).toBe(digestBeforeVacuum);
+    expect(digestBeforeVacuum).toContain('"id":"s1"');
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      {
+        ran: true,
+        beforeBytes,
+        afterBytes,
+        freelistBefore: expect.any(Number),
+        reason: `compacted: freeBytes=${freeBytesBeforeVacuum} thresholdBytes=${thresholdBytes}`,
+      },
+    ]);
+    db.close();
+  });
+
+  it("does not issue VACUUM below the threshold and logs the measured decision", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 40 });
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        beforeBytes: expect.any(Number),
+        afterBytes: "unknown",
+        freelistBefore: expect.any(Number),
+        reason: expect.stringMatching(/^below threshold: freeBytes=\d+ thresholdBytes=\d+$/),
+      }),
+    ]);
+    db.close();
+  });
+
+  it("respects toVersion when no migration is selected and logs the no-pending reason", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 40 });
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath, { toVersion: 40 });
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy).toHaveBeenCalledExactlyOnceWith(MIGRATION_COMPACTION_LOG_PREFIX, {
+      ran: false,
+      beforeBytes: expect.any(Number),
+      afterBytes: "unknown",
+      freelistBefore: "unknown",
+      reason: "no pending migrations",
+    });
+    db.close();
+  });
+
+  it("keeps migration success and defers retention when VACUUM throws", () => {
+    const dbPath = tempDbPath();
+    const db = buildV40DbWithReclaimableSpace(dbPath);
+    writeFileSync(`${dbPath}.backup-v1`, "old safety copy");
+    writeFileSync(`${dbPath}.backup-v2`, "newest other safety copy");
+    const sqliteFull = Object.assign(new Error("database or disk is full"), {
+      code: "SQLITE_FULL",
+    });
+    const originalExec = db.exec.bind(db);
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((source: string) => {
+      if (source === "VACUUM") {
+        // Both copies must still protect the profile throughout the attempt;
+        // retention is allowed to remove the old one only after this returns.
+        expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+        expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
+        expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
+        throw sqliteFull;
+      }
+      return originalExec(source);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toHaveLength(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(41);
+    expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+    expect(existsSync(`${dbPath}.backup-v1`)).toBe(false);
+    expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
+    expect(errorSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        afterBytes: "unknown",
+        reason: "VACUUM failed: SQLITE_FULL: database or disk is full",
+      }),
+    ]);
+    db.close();
+  });
+
+  it("never issues VACUUM for a fresh database", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        freelistBefore: "unknown",
+        reason: "fresh database",
+      }),
+    ]);
+    db.close();
+  });
+
+  it("never reaches compaction after a rolled-back migration", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.exec("CREATE TABLE sessions (id TEXT)");
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(() => migrate(db, dbPath)).toThrow();
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    const compactionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
+      ([prefix]) => prefix === MIGRATION_COMPACTION_LOG_PREFIX,
+    );
+    expect(compactionLogs).toEqual([]);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
     db.close();
   });
 });
