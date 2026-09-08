@@ -51,7 +51,7 @@ describe("Pi session orphan IPC", () => {
   it("registers its own complete two-channel surface", () => {
     registerPiSessionOrphanIpcHandlers({ ok: true, db: ctx.db }, root);
 
-    expect([...handlers.keys()].sort()).toEqual([...PI_SESSION_ORPHAN_CHANNELS].sort());
+    expect([...handlers.keys()].toSorted()).toEqual([...PI_SESSION_ORPHAN_CHANNELS].toSorted());
   });
 
   it("keeps scan read-only and requires a current main-owned revision for reclaim", async () => {

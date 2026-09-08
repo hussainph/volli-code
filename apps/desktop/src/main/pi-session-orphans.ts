@@ -252,7 +252,7 @@ async function scanPiSidecars(
       }
     }
   }
-  return confirmed.sort((left, right) => left.path.localeCompare(right.path));
+  return confirmed.toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 async function inspectPiSidecar(root: string, path: string): Promise<ConfirmedPiSidecar> {

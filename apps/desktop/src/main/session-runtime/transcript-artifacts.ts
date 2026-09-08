@@ -116,7 +116,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     await this.ensureDirectory();
     return (await readdir(this.baseDirectory))
       .filter((name) => LEGACY_ARTIFACT_NAME.test(name))
-      .sort();
+      .toSorted();
   }
 
   /**
