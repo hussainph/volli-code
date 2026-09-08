@@ -19,15 +19,13 @@
  *    a person reading one question swallow the alert about the failure beside
  *    it. `sessionNotificationItem` is the same derivation the producer used.
  *
- * ── ONE KNOWN, DELIBERATE IMPRECISION ────────────────────────────────────
- * A click can ask the blocker row to show an OLDER live attention than the
- * primary (`sessionBlocker`'s `revealedAttentionId`). While that override
- * stands, this reports the primary-derived item rather than the revealed one,
- * so an alert about the primary is suppressed although the row is showing
- * something else. It is left that way on purpose: the person is looking at that
- * exact Session, in a focused window, having just clicked into it — and the
- * alternative is a reactive channel out of the plane's local override, which
- * would make what a window reports depend on a render.
+ * ── AND WHICH ITEM, WHEN A CLICK HAS OVERRIDDEN THE ROW ──────────────────
+ * A click can ask the blocker to draw an OLDER live Attention than the primary.
+ * Round 3 reported the primary-derived item anyway, so the row showed one
+ * problem while this told main another was visible — and the alert for the
+ * problem that was NOT on screen got suppressed. There is now one record of
+ * what a plane was asked to show (`chat/session-item-reveal.ts`) and one rule
+ * over it (`shownSessionNotificationItem`), read here and by the blocker alike.
  *
  * The report is advisory and one-way. If it never arrives — a dropped send, a
  * window still booting — the cost is one duplicate notification, which is the
@@ -40,8 +38,12 @@
  * display nobody is looking at.
  */
 import * as React from "react";
-import { NO_SESSION_NOTIFICATION_ITEM, sessionNotificationItem } from "@volli/shared";
+import { NO_SESSION_NOTIFICATION_ITEM, shownSessionNotificationItem } from "@volli/shared";
 
+import {
+  claimedSessionItem,
+  subscribeClaimedSessionItems,
+} from "@renderer/chat/session-item-reveal";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { activeNotificationTarget } from "@renderer/lib/notification-target";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -89,10 +91,19 @@ export function useNotificationTargetReport(): void {
   const projection = useChatSessionsStore((state) =>
     chatSessionId === null ? null : (state.sessions[chatSessionId]?.projection ?? null),
   );
+  // What a notification click asked this Session's plane to draw, if anything.
+  // Subscribed rather than read once: the override arrives after this window is
+  // already reporting, and a report that missed it would go on describing a row
+  // nobody is drawing.
+  const claimed = React.useSyncExternalStore(subscribeClaimedSessionItems, () =>
+    chatSessionId === null ? null : claimedSessionItem(chatSessionId),
+  );
   const chatItem = React.useMemo(
     () =>
-      projection === null ? NO_SESSION_NOTIFICATION_ITEM : sessionNotificationItem(projection),
-    [projection],
+      projection === null
+        ? NO_SESSION_NOTIFICATION_ITEM
+        : shownSessionNotificationItem(projection, claimed?.attentionId ?? null),
+    [claimed, projection],
   );
 
   React.useEffect(() => {

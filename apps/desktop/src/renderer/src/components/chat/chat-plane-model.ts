@@ -17,7 +17,12 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/shared";
+import {
+  findComposerVerb,
+  REASONING_LEVELS,
+  revealedSessionAttention,
+  type ComposerVerb,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
@@ -823,8 +828,11 @@ export function sessionBlocker(
   }
   // The one a click asked for, when it is still live; otherwise the newest,
   // which is what this row has always drawn.
+  // `revealedSessionAttention` is the SAME call the window reporting what it
+  // shows makes, so the row and that report cannot name different problems
+  // (VC-295 round 4).
   const attention =
-    input.attention.active.find((candidate) => candidate.id === input.revealedAttentionId) ??
+    revealedSessionAttention(input.attention.active, input.revealedAttentionId) ??
     input.attention.primary;
   if (attention) {
     return asked && answeredByCard(attention.kind)

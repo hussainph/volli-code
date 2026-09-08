@@ -141,6 +141,7 @@ import {
 import {
   onSessionItemReveal,
   preferRevealedInteraction,
+  releaseSessionItemReveal,
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
@@ -460,7 +461,14 @@ export function ChatPlane({
       if (item !== null) setRevealed(item);
     };
     claim();
-    return onSessionItemReveal(sessionId, claim);
+    const off = onSessionItemReveal(sessionId, claim);
+    return () => {
+      off();
+      // The override describes what THIS plane is drawing; a plane that is gone
+      // must not go on describing the window (VC-295 round 4).
+      releaseSessionItemReveal(sessionId);
+      setRevealed(null);
+    };
   }, [sessionId]);
 
   /**

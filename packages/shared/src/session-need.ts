@@ -182,6 +182,56 @@ export function sessionPersonNeed(
  * Session merely because they hold different views of it. `primary` is READ
  * rather than recomputed, so this cannot drift from the fold that produced it.
  */
+/**
+ * The Attention a notification click asked to be shown, while it is still live
+ * (VC-295 round 4).
+ *
+ * THE one answer to "which Attention is that row drawing", asked by the chat
+ * plane's blocker and by the window reporting what it shows. Two derivations of
+ * it is precisely how round 3 shipped a row displaying one problem while the
+ * window told main a different one was visible — which suppressed the alert for
+ * the problem that was NOT on screen.
+ *
+ * `null` for "no click named one" and for "the one it named has cleared" alike:
+ * both mean the caller falls back to what it would have drawn anyway.
+ */
+export function revealedSessionAttention<T extends { id: string }>(
+  active: readonly T[],
+  revealedAttentionId: string | null,
+): T | null {
+  if (revealedAttentionId === null) return null;
+  return active.find((attention) => attention.id === revealedAttentionId) ?? null;
+}
+
+/**
+ * What a Session is showing right now, given a click that revealed an Attention.
+ *
+ * {@link sessionNotificationItem} answers for the resting case — the row draws
+ * `primary`. This wraps it with the one override the plane has: a click can ask
+ * for an older live Attention, and while that stands, that is the row.
+ *
+ * The override applies only where the ROW is the item. With a card open the
+ * blocker stands down for the kind the card answers, so the question stays what
+ * is on screen and a reveal changes nothing — which is why this defers to the
+ * base answer whenever that answer is an interaction.
+ */
+export function shownSessionNotificationItem(
+  projection: {
+    interactions: { active: readonly { id: string }[] };
+    attention: {
+      active: readonly { id: string; kind: SessionAttentionKind }[];
+      primary: { id: string; kind: SessionAttentionKind } | null;
+    };
+    stopped?: SessionProjection["stopped"];
+  },
+  revealedAttentionId: string | null,
+): SessionNotificationItem {
+  const base = sessionNotificationItem(projection);
+  if (base.attentionId === null) return base;
+  const revealed = revealedSessionAttention(projection.attention.active, revealedAttentionId);
+  return revealed === null ? base : { interactionId: null, attentionId: revealed.id };
+}
+
 export function sessionNotificationItem(projection: {
   interactions: { active: readonly { id: string }[] };
   attention: {

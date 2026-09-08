@@ -5,9 +5,12 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  claimedSessionItem,
   onSessionItemReveal,
   preferRevealedInteraction,
+  releaseSessionItemReveal,
   requestSessionItemReveal,
+  subscribeClaimedSessionItems,
   takeSessionItemReveal,
 } from "./session-item-reveal";
 
@@ -16,6 +19,8 @@ afterEach(() => {
   // next test any more than it may leak into the next click.
   takeSessionItemReveal("s1");
   takeSessionItemReveal("s2");
+  releaseSessionItemReveal("s1");
+  releaseSessionItemReveal("s2");
 });
 
 describe("the reveal slot", () => {
@@ -74,6 +79,58 @@ describe("two planes on one Session", () => {
     requestSessionItemReveal("s1", { interactionId: "i1", attentionId: null });
     expect(seen).toEqual(["a", "b", "b"]);
     offB();
+  });
+});
+
+describe("what a plane is currently showing (round 4)", () => {
+  /**
+   * The claim's second reader is the window's own report to main. Without it,
+   * the row drew the revealed Attention while the report named the primary —
+   * and the alert for the primary, which is NOT on screen, was suppressed.
+   */
+  it("remembers what a plane claimed, until it releases it", () => {
+    requestSessionItemReveal("s1", { interactionId: null, attentionId: "a1" });
+    expect(claimedSessionItem("s1")).toBeNull();
+
+    takeSessionItemReveal("s1");
+    expect(claimedSessionItem("s1")).toEqual({ interactionId: null, attentionId: "a1" });
+
+    releaseSessionItemReveal("s1");
+    expect(claimedSessionItem("s1")).toBeNull();
+  });
+
+  it("keeps each Session's claim to itself", () => {
+    requestSessionItemReveal("s1", { interactionId: null, attentionId: "a1" });
+    takeSessionItemReveal("s1");
+
+    expect(claimedSessionItem("s2")).toBeNull();
+  });
+
+  it("announces a claim and its release to whoever is reporting", () => {
+    const beats: string[] = [];
+    const off = subscribeClaimedSessionItems(() => beats.push("changed"));
+
+    requestSessionItemReveal("s1", { interactionId: null, attentionId: "a1" });
+    expect(beats).toEqual([]);
+    takeSessionItemReveal("s1");
+    expect(beats).toEqual(["changed"]);
+    releaseSessionItemReveal("s1");
+    expect(beats).toEqual(["changed", "changed"]);
+
+    off();
+    requestSessionItemReveal("s1", { interactionId: null, attentionId: "a2" });
+    takeSessionItemReveal("s1");
+    expect(beats).toEqual(["changed", "changed"]);
+  });
+
+  it("says nothing when a release had nothing to release", () => {
+    const beats: string[] = [];
+    const off = subscribeClaimedSessionItems(() => beats.push("changed"));
+
+    releaseSessionItemReveal("s1");
+
+    expect(beats).toEqual([]);
+    off();
   });
 });
 

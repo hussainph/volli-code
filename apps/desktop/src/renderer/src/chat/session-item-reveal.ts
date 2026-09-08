@@ -35,6 +35,28 @@ let pending: { sessionId: string; item: SessionNotificationItem } | null = null;
 const listeners = new Map<string, Set<() => void>>();
 
 /**
+ * What each mounted plane was asked to show, and still is (VC-295 round 4).
+ *
+ * The pending slot above is a one-shot instruction; this is its CONSEQUENCE,
+ * and it has a second reader: the window telling main what it is showing. Round
+ * 3 left that reader deriving the item from the projection alone, so after a
+ * click revealed an older Attention the row drew one problem while the window
+ * reported another as visible — and the alert for the problem NOT on screen was
+ * suppressed. One record, two readers, no disagreement.
+ *
+ * Cleared by the plane that claimed it ({@link releaseSessionItemReveal}) when
+ * it unmounts or changes Session: an override nobody is drawing must not go on
+ * describing a window.
+ */
+const claimed = new Map<string, SessionNotificationItem>();
+
+const claimListeners = new Set<() => void>();
+
+function announceClaims(): void {
+  for (const listener of claimListeners) listener();
+}
+
+/**
  * Ask for `sessionId` to be shown at `item`.
  *
  * One slot, latest wins: somebody clicking two alerts in a row means the
@@ -46,12 +68,43 @@ export function requestSessionItemReveal(sessionId: string, item: SessionNotific
   for (const listener of listeners.get(sessionId) ?? []) listener();
 }
 
-/** Claims the pending request for `sessionId`, or `null` when there is none for it. */
+/**
+ * Claims the pending request for `sessionId`, or `null` when there is none for
+ * it. A claim is REMEMBERED (see {@link claimed}): the plane will be drawing it
+ * until it says otherwise, and the window's report has to say the same thing.
+ */
 export function takeSessionItemReveal(sessionId: string): SessionNotificationItem | null {
   if (pending === null || pending.sessionId !== sessionId) return null;
   const { item } = pending;
   pending = null;
+  claimed.set(sessionId, item);
+  announceClaims();
   return item;
+}
+
+/** What the plane for `sessionId` was last asked to show, or null. */
+export function claimedSessionItem(sessionId: string): SessionNotificationItem | null {
+  return claimed.get(sessionId) ?? null;
+}
+
+/** The claiming plane is gone (unmounted, or moved to another Session). */
+export function releaseSessionItemReveal(sessionId: string): void {
+  if (claimed.delete(sessionId)) announceClaims();
+}
+
+/**
+ * Subscribes to every change in what planes have been asked to show; the
+ * returned call unsubscribes.
+ *
+ * Deliberately not keyed by Session: its one reader is the window's own report,
+ * which follows whichever Session happens to be in front and would otherwise
+ * have to re-subscribe on every navigation.
+ */
+export function subscribeClaimedSessionItems(listener: () => void): () => void {
+  claimListeners.add(listener);
+  return () => {
+    claimListeners.delete(listener);
+  };
 }
 
 /** Subscribes a mounted plane to later requests for `sessionId`; the returned call unsubscribes. */

@@ -11,8 +11,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_FAILURE_ATTENTION_KINDS,
   SESSION_PERSON_NEEDS,
+  revealedSessionAttention,
   sessionNotificationItem,
   sessionPersonNeed,
+  shownSessionNotificationItem,
 } from "./session-need";
 import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "./session-ledger";
 import type { SessionAttention, SessionAttentionKind, SessionProjection } from "./session-ledger";
@@ -218,6 +220,76 @@ describe("sessionNotificationItem", () => {
   it("names nothing once the Session was stopped on purpose", () => {
     const stopped: SessionProjection["stopped"] = { at: 1, reason: null, by: { kind: "user" } };
     expect(sessionNotificationItem({ ...waitingOnQuestion(), stopped })).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+});
+
+describe("revealedSessionAttention", () => {
+  /**
+   * The one answer to "which Attention is the row drawing" (VC-295 round 4).
+   * The blocker asks it, and so does the window reporting what it shows — two
+   * derivations is how the row came to draw one problem while the window
+   * claimed another was visible.
+   */
+  const active = [attention("adapter_disconnected"), attention("configuration_invalid")];
+
+  it("finds the named Attention while it is live", () => {
+    expect(revealedSessionAttention(active, "attention-adapter_disconnected")).toBe(active[0]);
+  });
+
+  it("answers null for one that has cleared, so the caller falls back", () => {
+    expect(revealedSessionAttention(active, "attention-gone")).toBeNull();
+  });
+
+  it("answers null when no click named one", () => {
+    expect(revealedSessionAttention(active, null)).toBeNull();
+  });
+});
+
+describe("shownSessionNotificationItem", () => {
+  const older = "attention-adapter_disconnected";
+  const newer = "attention-configuration_invalid";
+  const twoLive = attending("adapter_disconnected", "configuration_invalid");
+
+  it("names the newest Attention when no click has revealed one", () => {
+    expect(shownSessionNotificationItem(twoLive, null)).toEqual({
+      interactionId: null,
+      attentionId: newer,
+    });
+  });
+
+  it("names the revealed Attention, because that is the one the row draws", () => {
+    // The round-3 gap: the row showed `older` while the window reported
+    // `newer`, so the alert for `newer` — the problem NOT on screen — was
+    // suppressed.
+    expect(shownSessionNotificationItem(twoLive, older)).toEqual({
+      interactionId: null,
+      attentionId: older,
+    });
+  });
+
+  it("falls back to what the row falls back to when the revealed one has cleared", () => {
+    expect(shownSessionNotificationItem(twoLive, "attention-gone")).toEqual({
+      interactionId: null,
+      attentionId: newer,
+    });
+  });
+
+  it("leaves an open question in front of a reveal a card answers", () => {
+    // With a card open the blocker stands down for the kind that card answers,
+    // so the card is what is on screen and the report must say so.
+    expect(
+      shownSessionNotificationItem(
+        askingAndAttending("permission_required"),
+        "attention-permission_required",
+      ),
+    ).toEqual({ interactionId: "ask-1", attentionId: null });
+  });
+
+  it("says nothing about a Session that shows nothing", () => {
+    expect(shownSessionNotificationItem(projection(), older)).toEqual({
       interactionId: null,
       attentionId: null,
     });
