@@ -168,6 +168,7 @@ describe("collectTranscriptReferences", () => {
         null,
       ],
     ];
+    (document.tables.session_provenances as unknown as { rows: unknown[] }).rows = [[1, "{}"]];
     (document.tables.session_events as unknown as { rows: unknown[] }).rows = [
       [
         "event-1",
@@ -175,7 +176,7 @@ describe("collectTranscriptReferences", () => {
         1,
         0,
         0,
-        "{}",
+        1,
         null,
         null,
         JSON.stringify({

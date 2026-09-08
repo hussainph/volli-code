@@ -743,10 +743,11 @@ interface SessionEventRow {
 function exportSessionEvents(db: Database.Database): ExportSessionEvent[] {
   const rows = prepared<[], SessionEventRow>(
     db,
-    `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-            attachment_id, command_id, payload
-       FROM session_events
-      ORDER BY session_id COLLATE BINARY, sequence, id COLLATE BINARY`,
+    `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+            p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+       FROM session_events e
+       JOIN session_provenances p ON p.id = e.provenance_id
+      ORDER BY e.session_id COLLATE BINARY, e.sequence, e.id COLLATE BINARY`,
   ).all();
   return rows.map((event) => ({
     id: event.id,

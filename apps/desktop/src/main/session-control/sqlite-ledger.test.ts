@@ -40,6 +40,14 @@ const provenance = {
   venue: { id: "local", kind: "local" as const },
 };
 
+function provenanceId(): number {
+  return (
+    ctx.db
+      .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
+      .get(JSON.stringify(provenance)) as { id: number }
+  ).id;
+}
+
 describe("SqliteSessionLedger", () => {
   it("stores and reads back the Role and the parent link as Session columns (VC-9)", async () => {
     const { control, projectId } = setup();
@@ -694,12 +702,12 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('invalid-signal', ?, 4, 104, 104, ?, NULL, NULL, ?)`,
       )
       .run(
         created.session.id,
-        JSON.stringify(provenance),
+        provenanceId(),
         JSON.stringify({ kind: "session.signaled", signal: "unexpected", reason: "Corrupt row" }),
       );
 
@@ -745,7 +753,13 @@ describe("SqliteSessionLedger", () => {
     ).toEqual({ created_sequence: 5, observed_kind: "opened" });
 
     ctx.db.pragma("ignore_check_constraints = ON");
-    ctx.db.prepare("UPDATE session_events SET provenance = '{' WHERE id = ?").run(created.event.id);
+    ctx.db
+      .prepare(
+        `UPDATE session_provenances
+            SET provenance = '{'
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
     ctx.db.pragma("ignore_check_constraints = OFF");
     await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
       "contains invalid JSON",
@@ -1276,14 +1290,10 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('retired-kind-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
       )
-      .run(
-        created.session.id,
-        JSON.stringify(provenance),
-        JSON.stringify({ kind: "capabilities.retired" }),
-      );
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
     await ledger.transaction((transaction) => {
       transaction.appendEvent({
         id: "after-retired-kind-event",
@@ -1325,7 +1335,7 @@ describe("SqliteSessionLedger", () => {
       ctx.db
         .prepare(
           `INSERT INTO session_events
-             (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+             (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
         )
         .run(
@@ -1334,7 +1344,7 @@ describe("SqliteSessionLedger", () => {
           sequence,
           sequence * 100,
           sequence * 100,
-          JSON.stringify(provenance),
+          provenanceId(),
           JSON.stringify({ kind: "capabilities.retired" }),
         );
     }
@@ -1372,14 +1382,10 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('retired-kind-get-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
       )
-      .run(
-        created.session.id,
-        JSON.stringify(provenance),
-        JSON.stringify({ kind: "capabilities.retired" }),
-      );
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
 
     const event = await ledger.transaction((transaction) =>
       transaction.getEvent("retired-kind-get-event"),

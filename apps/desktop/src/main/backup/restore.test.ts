@@ -275,9 +275,14 @@ describe("restoreBackupBundle — a clean restore", () => {
       ).native_detail;
       expect(JSON.parse(detail)).toEqual({ kind: "volli.terminal.v1", harnessId: "claude-code" });
       const provenance = (
-        db.prepare("SELECT provenance FROM session_events WHERE id = 'event-1'").get() as {
-          provenance: string;
-        }
+        db
+          .prepare(
+            `SELECT p.provenance
+               FROM session_events e
+               JOIN session_provenances p ON p.id = e.provenance_id
+              WHERE e.id = 'event-1'`,
+          )
+          .get() as { provenance: string }
       ).provenance;
       expect(provenance).not.toContain("/Users/source");
     } finally {

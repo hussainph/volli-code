@@ -37,6 +37,17 @@ function detailFor(record: SessionRecord): TerminalAttachmentDetail {
   };
 }
 
+function testProvenanceId(db: Database.Database): number {
+  const existing = db
+    .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
+    .get(TEST_PROVENANCE) as { id: number } | undefined;
+  if (existing !== undefined) return existing.id;
+  return Number(
+    db.prepare("INSERT INTO session_provenances (provenance) VALUES (?)").run(TEST_PROVENANCE)
+      .lastInsertRowid,
+  );
+}
+
 function nextSequence(db: Database.Database, sessionId: string): number {
   const row = db
     .prepare(
@@ -58,14 +69,14 @@ function appendEvent(
 ): void {
   db.prepare(
     `INSERT INTO session_events
-       (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+       (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
      VALUES
-       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenance, @attachmentId, NULL, @payload)`,
+       (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, NULL, @payload)`,
   ).run({
     ...input,
     sequence: nextSequence(db, input.sessionId),
     recordedAt: input.occurredAt,
-    provenance: TEST_PROVENANCE,
+    provenanceId: testProvenanceId(db),
     payload: JSON.stringify(input.payload),
   });
 }

@@ -625,6 +625,12 @@ describe("buildExportDocument — populated db", () => {
       const exported = rows[0];
       expect(exported).toBeDefined();
       for (const { name } of columns) {
+        // The export is logical rather than physical: event provenance is
+        // joined back to its object, while the intern-table key stays private.
+        if (table === "session_events" && name === "provenance_id") {
+          expect(Object.hasOwn(exported as object, "provenance")).toBe(true);
+          continue;
+        }
         expect(Object.hasOwn(exported as object, camelCase(name))).toBe(true);
       }
     }

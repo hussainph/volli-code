@@ -365,26 +365,31 @@ export function tablesAtVersion(schemaVersion: number): Set<string> {
   }
 }
 
-let cachedSchema: {
+interface ReferenceSchema {
   foreignKeys: Map<string, ForeignKey[]>;
   columns: Map<string, string[]>;
-} | null = null;
+}
+
+const cachedSchemas = new Map<number, ReferenceSchema>();
 
 /**
- * The live schema, read once from a throwaway in-memory migrated database.
+ * One bundle version's live schema, read from a throwaway migrated database.
  *
  * Derived rather than hand-listed for the reason the decision register is
  * derived: a link check written out by hand is a link check that stops
  * matching the schema the first time a migration adds a reference nobody
- * remembered to add here.
+ * remembered to add here. Versioning matters when a migration replaces a
+ * column: an older bundle must be validated against the schema that wrote it,
+ * before restore migrates those rows forward.
  */
-function referenceSchema(): NonNullable<typeof cachedSchema> {
-  if (cachedSchema !== null) return cachedSchema;
+function referenceSchema(schemaVersion: number): ReferenceSchema {
+  const cached = cachedSchemas.get(schemaVersion);
+  if (cached !== undefined) return cached;
   const db = new Database(":memory:");
   try {
     // A fresh (user_version 0) database takes no safety copy, so the path is
     // never touched — see `migrate`.
-    migrate(db, ":memory:");
+    migrate(db, ":memory:", { toVersion: schemaVersion });
     const foreignKeys = new Map<string, ForeignKey[]>();
     const columns = new Map<string, string[]>();
     for (const table of BACKUP_INCLUDED_TABLES) {
@@ -428,8 +433,9 @@ function referenceSchema(): NonNullable<typeof cachedSchema> {
       }
       foreignKeys.set(table, keys);
     }
-    cachedSchema = { foreignKeys, columns };
-    return cachedSchema;
+    const schema = { foreignKeys, columns };
+    cachedSchemas.set(schemaVersion, schema);
+    return schema;
   } finally {
     db.close();
   }
@@ -448,7 +454,7 @@ function keyOf(values: readonly BackupValue[]): string {
  * detached Session is a real state, not a broken link).
  */
 export function validateRecordLinks(document: BackupDataDocument): BackupProblem[] {
-  const { foreignKeys, columns: liveColumns } = referenceSchema();
+  const { foreignKeys, columns: liveColumns } = referenceSchema(document.schemaVersion);
   const problems: BackupProblem[] = [];
   const indexOf = (table: string, column: string): number =>
     document.tables[table]?.columns.indexOf(column) ?? -1;

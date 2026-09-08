@@ -440,17 +440,27 @@ try {
     // A person is being asked something — the real Attention kind a permission
     // question leaves behind, and one of the three
     // `SESSION_USER_BLOCKING_ATTENTION_KINDS` that mean `waiting`.
+    const provenance = JSON.stringify({
+      source: { kind: "adapter", id: "pi", detail: null },
+      venue: { id: "local", kind: "local" },
+    });
+    const knownProvenance = db
+      .prepare("SELECT id FROM session_provenances WHERE provenance = ? ORDER BY id LIMIT 1")
+      .get(provenance);
+    const provenanceId =
+      knownProvenance?.id ??
+      Number(
+        db.prepare("INSERT INTO session_provenances (provenance) VALUES (?)").run(provenance)
+          .lastInsertRowid,
+      );
     db.prepare(
       `INSERT INTO session_events
-         (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
        VALUES (?, ?, 900000, 2000, 2000, ?, NULL, NULL, ?)`,
     ).run(
       randomUUID(),
       session.sessionId,
-      JSON.stringify({
-        source: { kind: "adapter", id: "pi", detail: null },
-        venue: { id: "local", kind: "local" },
-      }),
+      provenanceId,
       JSON.stringify({
         kind: "attention.raised",
         attention: {
