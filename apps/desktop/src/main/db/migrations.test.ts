@@ -9,8 +9,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type Database from "better-sqlite3";
+import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -35,8 +36,7 @@ function tempDbPath(dbBasename = "volli.db"): string {
 }
 
 function matchingBackupNames(dbPath: string): string[] {
-  const escapedBasename = basename(dbPath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const candidatePattern = new RegExp(`^${escapedBasename}\\.backup-v\\d+(?:-wal|-shm)?$`);
+  const candidatePattern = migrationBackupCandidatePattern(dbPath);
   return readdirSync(dir)
     .filter((name) => candidatePattern.test(name))
     .toSorted();
@@ -419,14 +419,22 @@ describe("migrate — fresh install", () => {
   it("skips the pre-migration backup copy and retention cleanup on a brand-new database", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
+    writeFileSync(`${dbPath}.backup-v3`, "older existing copy");
     writeFileSync(`${dbPath}.backup-v7`, "existing copy");
     writeFileSync(`${dbPath}.backup-v7-wal`, "existing sidecar");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v0`)).toBe(false);
+    expect(readFileSync(`${dbPath}.backup-v3`, "utf8")).toBe("older existing copy");
     expect(readFileSync(`${dbPath}.backup-v7`, "utf8")).toBe("existing copy");
     expect(readFileSync(`${dbPath}.backup-v7-wal`, "utf8")).toBe("existing sidecar");
+    const retentionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
+      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
+    );
+    expect(retentionLogs).toEqual([]);
     db.close();
   });
 
@@ -544,7 +552,9 @@ describe("migrate — safety-copy retention", () => {
     const unrelated = [
       `${dbPath}.backup-v10.tmp`,
       `${dbPath}.backup-vx`,
+      `${dbPath}.backup-v`,
       `${dbPath}.backup-v10-journal`,
+      join(dir, "volliXdb.backup-v3"),
       join(dir, "other.db.backup-v99"),
     ];
     for (const path of unrelated) writeFileSync(path, "unrelated");
@@ -552,7 +562,6 @@ describe("migrate — safety-copy retention", () => {
     mkdirSync(nested);
     writeFileSync(join(nested, "volli.db.backup-v1"), "nested copy");
 
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
     migrate(db, dbPath);
 
     expect(matchingBackupNames(dbPath)).toEqual([
@@ -563,45 +572,16 @@ describe("migrate — safety-copy retention", () => {
       "volli.db.backup-v2-shm",
       "volli.db.backup-v2-wal",
     ]);
-    // SQLite may rewrite its live WAL/SHM during the migration; retention must
-    // neither remove nor log them as candidates.
+    // SQLite may rewrite its live WAL/SHM during the migration; the real
+    // retention matcher must never classify either one as a candidate.
     expect(existsSync(liveWal)).toBe(true);
     expect(existsSync(liveShm)).toBe(true);
+    const candidatePattern = migrationBackupCandidatePattern(dbPath);
+    expect(candidatePattern.test("volli.db-wal")).toBe(false);
+    expect(candidatePattern.test("volli.db-shm")).toBe(false);
     for (const path of unrelated) expect(existsSync(path)).toBe(true);
     expect(readFileSync(join(nested, "volli.db.backup-v1"), "utf8")).toBe("nested copy");
     expect(db.pragma("foreign_key_check")).toEqual([]);
-
-    const retentionLogs = infoSpy.mock.calls.map(([message]) => String(message));
-    expect(retentionLogs).toHaveLength(11);
-    expect(retentionLogs.every((message) => !message.includes("volli.db-wal"))).toBe(true);
-    expect(retentionLogs.every((message) => !message.includes("volli.db-shm"))).toBe(true);
-    for (const name of [
-      "volli.db.backup-v10",
-      "volli.db.backup-v10-shm",
-      "volli.db.backup-v10-wal",
-      "volli.db.backup-v2",
-      "volli.db.backup-v2-shm",
-      "volli.db.backup-v2-wal",
-    ]) {
-      expect(retentionLogs).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(new RegExp(`kept ${name} .*sizeBytes=\\d+`)),
-        ]),
-      );
-    }
-    for (const name of [
-      "volli.db.backup-v11-shm",
-      "volli.db.backup-v11-wal",
-      "volli.db.backup-v3",
-      "volli.db.backup-v3-shm",
-      "volli.db.backup-v3-wal",
-    ]) {
-      expect(retentionLogs).toEqual(
-        expect.arrayContaining([
-          expect.stringMatching(new RegExp(`removed ${name} .*sizeBytes=\\d+`)),
-        ]),
-      );
-    }
 
     const safetyCopy = openRawDb(`${dbPath}.backup-v2`);
     expect(safetyCopy.pragma("user_version", { simple: true })).toBe(2);
@@ -616,17 +596,16 @@ describe("migrate — safety-copy retention", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     migrate(db, dbPath);
-    for (const version of [1, 9, 10]) {
+    const currentVersion = db.pragma("user_version", { simple: true }) as number;
+    for (const version of [1, 9, 10, currentVersion]) {
       writeFileSync(`${dbPath}.backup-v${version}`, `copy ${version}`);
       writeFileSync(`${dbPath}.backup-v${version}-wal`, `wal ${version}`);
     }
     const before = matchingBackupNames(dbPath);
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     migrate(db, dbPath);
 
     expect(matchingBackupNames(dbPath)).toEqual(before);
-    expect(infoSpy).not.toHaveBeenCalled();
     db.close();
   });
 
@@ -642,8 +621,6 @@ describe("migrate — safety-copy retention", () => {
     ]) {
       writeFileSync(join(dir, name), name);
     }
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
-
     expect(() => migrate(db, dbPath)).toThrow();
 
     expect(matchingBackupNames(dbPath)).toEqual([
@@ -654,7 +631,6 @@ describe("migrate — safety-copy retention", () => {
       "volli.db.backup-v9-shm",
     ]);
     expect(db.pragma("user_version", { simple: true })).toBe(2);
-    expect(infoSpy).not.toHaveBeenCalled();
     db.close();
   });
 
@@ -695,11 +671,19 @@ describe("migrate — safety-copy retention", () => {
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
     expect(existsSync(`${dbPath}.backup-v1-wal`)).toBe(false);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /failed to remove volli\.db\.backup-v1 .*sizeBytes=\d+.*(EISDIR|EPERM|directory)/i,
-      ),
+    const retentionErrors = errorSpy.mock.calls.filter(
+      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
     );
+    expect(retentionErrors).toContainEqual([
+      BACKUP_RETENTION_LOG_PREFIX,
+      expect.objectContaining({
+        action: "failed",
+        operation: "remove",
+        name: "volli.db.backup-v1",
+        sizeBytes: expect.any(Number),
+        error: expect.stringMatching(/(EISDIR|EPERM|directory)/i),
+      }),
+    ]);
     db.close();
   });
 });

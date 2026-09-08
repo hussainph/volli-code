@@ -5,11 +5,12 @@
  * checkpoints the WAL and copies the db file to `<dbPath>.backup-v<from>`,
  * so a bad migration never destroys the pre-migration data. A brand-new
  * database (`user_version` starts at `0`) skips the backup step — there is
- * nothing to protect yet.
+ * nothing to protect yet. After success, exact-name retention deletes older
+ * migration copies while preserving the new rollback point.
  */
-import { copyFileSync, lstatSync, readdirSync, unlinkSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { copyFileSync } from "node:fs";
 import type Database from "better-sqlite3";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
 
 export interface Migration {
   version: number;
@@ -2166,126 +2167,6 @@ export interface MigrateOptions {
   toVersion?: number;
 }
 
-interface MigrationBackupCandidate {
-  name: string;
-  path: string;
-  version: bigint;
-  sidecar: "-wal" | "-shm" | undefined;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-
-function backupSize(path: string): number | "unknown" {
-  try {
-    return lstatSync(path).size;
-  } catch {
-    return "unknown";
-  }
-}
-
-function logBackupAction(action: "kept" | "removed", candidate: MigrationBackupCandidate): void {
-  console.info(
-    `[migration backup retention] ${action} ${candidate.name} sizeBytes=${backupSize(candidate.path)}`,
-  );
-}
-
-/**
- * Keeps the pre-batch rollback point just written by this run and the newest
- * other base copy. Every candidate is an exact basename match in this one
- * directory; sidecars follow the numeric version of a retained base.
- */
-function pruneMigrationBackups(dbPath: string, currentVersion: number): void {
-  const directory = dirname(dbPath);
-  const dbBasename = basename(dbPath);
-  const currentBackupName = `${dbBasename}.backup-v${currentVersion}`;
-  const candidatePattern = new RegExp(`^${escapeRegExp(dbBasename)}\\.backup-v(\\d+)(-wal|-shm)?$`);
-
-  let candidates: MigrationBackupCandidate[];
-  try {
-    candidates = readdirSync(directory).flatMap((name) => {
-      const match = candidatePattern.exec(name);
-      if (match === null) return [];
-      return [
-        {
-          name,
-          path: join(directory, name),
-          version: BigInt(match[1]),
-          sidecar: match[2] as "-wal" | "-shm" | undefined,
-        },
-      ];
-    });
-  } catch (error) {
-    console.error(
-      `[migration backup retention] failed to list ${directory}: ${describeError(error)}`,
-    );
-    return;
-  }
-
-  const currentBackup = candidates.find(
-    (candidate) => candidate.name === currentBackupName && candidate.sidecar === undefined,
-  );
-  try {
-    if (currentBackup === undefined || !lstatSync(currentBackup.path).isFile()) {
-      console.error(
-        `[migration backup retention] skipped cleanup because this run's copy ${currentBackupName} is not a file`,
-      );
-      return;
-    }
-  } catch (error) {
-    console.error(
-      `[migration backup retention] skipped cleanup because this run's copy ${currentBackupName} could not be read: ${describeError(error)}`,
-    );
-    return;
-  }
-
-  let newestOtherBase: MigrationBackupCandidate | undefined;
-  for (const candidate of candidates) {
-    if (candidate.sidecar !== undefined || candidate.name === currentBackupName) continue;
-    if (
-      newestOtherBase === undefined ||
-      candidate.version > newestOtherBase.version ||
-      (candidate.version === newestOtherBase.version && candidate.name > newestOtherBase.name)
-    ) {
-      newestOtherBase = candidate;
-    }
-  }
-
-  const keptBaseNames = new Set([currentBackupName]);
-  if (newestOtherBase !== undefined) keptBaseNames.add(newestOtherBase.name);
-  const keptVersions = new Set(
-    candidates
-      .filter((candidate) => candidate.sidecar === undefined && keptBaseNames.has(candidate.name))
-      .map((candidate) => candidate.version.toString()),
-  );
-
-  for (const candidate of candidates) {
-    const keep =
-      candidate.sidecar === undefined
-        ? keptBaseNames.has(candidate.name)
-        : keptVersions.has(candidate.version.toString());
-    if (keep) {
-      logBackupAction("kept", candidate);
-      continue;
-    }
-
-    const size = backupSize(candidate.path);
-    try {
-      unlinkSync(candidate.path);
-      console.info(`[migration backup retention] removed ${candidate.name} sizeBytes=${size}`);
-    } catch (error) {
-      console.error(
-        `[migration backup retention] failed to remove ${candidate.name} sizeBytes=${size}: ${describeError(error)}`,
-      );
-    }
-  }
-}
-
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
 export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
@@ -2324,5 +2205,8 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   // Cleanup is deliberately after the transaction has committed and its
   // foreign-key check passed. Fresh databases made no copy, so they do not
   // participate in retention even if matching files already exist nearby.
-  if (currentVersion > 0) pruneMigrationBackups(dbPath, currentVersion);
+  if (currentVersion > 0) {
+    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
+    logMigrationBackupRetention(retentionReport);
+  }
 }
