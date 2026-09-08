@@ -27,7 +27,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   Select,
@@ -89,6 +89,7 @@ let container: HTMLElement | null = null;
 let root: Root | null = null;
 
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -99,6 +100,7 @@ afterEach(() => {
   container?.remove();
   container = null;
   root = null;
+  vi.unstubAllGlobals();
 });
 
 /** One model in one Select, closed, with that model already selected. */
