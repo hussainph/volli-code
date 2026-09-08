@@ -17,6 +17,8 @@
  * door: it is the second half of a notification click, and a click's target is
  * not planning data.
  */
+import type { WebContents } from "electron";
+
 import { NOTIFICATION_CHANNELS, NOTIFICATION_IPC } from "../ipc-descriptors";
 import type {
   NotificationIpcChannel,
@@ -47,21 +49,54 @@ const answer = (settings: NotificationSettingsView): NotificationSettingsResult 
 export function registerNotificationIpcHandlers(ports: {
   settings: NotificationSettings | null;
   takePendingActivation: () => NotificationTarget | null;
+  /** The asking window's renderer is now listening for notification clicks. */
+  markRendererReady: (sender: WebContents) => void;
   unavailableReason?: string;
 }): void {
   const unavailable = ports.unavailableReason ?? "Notification settings are unavailable.";
-  if (ports.settings === null) {
-    registerDegradedIpcHandlers(NOTIFICATION_CHANNELS, unavailable);
+  const settings = ports.settings;
+  // The parked click is registered FIRST and unconditionally, and the two
+  // preference channels are degraded around it (round 2). Alerts keep working
+  // without a database — `readNotificationPreferences` answers all-on — so a
+  // click on one has to keep working too; refusing this channel would strand a
+  // deep link on precisely the launch where the app is already degraded.
+  //
+  // The ask is also the subscription: a renderer registers its listener and
+  // then collects, so this call is the one moment main can know that window can
+  // receive a click at all.
+  const pending: IpcHandlerTable<"volli:notifications-pending-activation"> = {
+    "volli:notifications-pending-activation": (sender) => {
+      ports.markRendererReady(sender);
+      return { ok: true, target: ports.takePendingActivation() };
+    },
+  };
+  registerGuardedIpcHandlers(
+    {
+      "volli:notifications-pending-activation":
+        NOTIFICATION_IPC["volli:notifications-pending-activation"],
+    },
+    pending,
+  );
+  if (settings === null) {
+    registerDegradedIpcHandlers(
+      NOTIFICATION_CHANNELS.filter(
+        (channel) => channel !== "volli:notifications-pending-activation",
+      ),
+      unavailable,
+    );
     return;
   }
-  const settings = ports.settings;
-  const handlers: IpcHandlerTable<NotificationIpcChannel> = {
+  const handlers: IpcHandlerTable<
+    Exclude<NotificationIpcChannel, "volli:notifications-pending-activation">
+  > = {
     "volli:notifications-get": () => answer(settings.view()),
     "volli:notifications-set": (update) => answer(settings.set(update)),
-    "volli:notifications-pending-activation": () => ({
-      ok: true,
-      target: ports.takePendingActivation(),
-    }),
   };
-  registerGuardedIpcHandlers(NOTIFICATION_IPC, handlers);
+  registerGuardedIpcHandlers(
+    {
+      "volli:notifications-get": NOTIFICATION_IPC["volli:notifications-get"],
+      "volli:notifications-set": NOTIFICATION_IPC["volli:notifications-set"],
+    },
+    handlers,
+  );
 }

@@ -31,6 +31,7 @@ import { registerNotificationIpcHandlers } from "./ipc";
 let ctx: TestDb;
 let settings: NotificationSettings;
 let pending: (() => NotificationTarget | null) & { calls: number };
+let ready: number[];
 
 /** A `takePendingActivation` port that counts how often it was asked. */
 function pendingPort(target: NotificationTarget | null): (() => NotificationTarget | null) & {
@@ -49,7 +50,10 @@ function pendingPort(target: NotificationTarget | null): (() => NotificationTarg
 async function invoke(channel: VolliIpcChannel, ...args: unknown[]): Promise<unknown> {
   const handler = handlers.get(channel);
   if (handler === undefined) throw new Error(`No handler registered for ${channel}`);
-  return (handler as (event: unknown, ...rest: unknown[]) => unknown)({ sender: {} }, ...args);
+  return (handler as (event: unknown, ...rest: unknown[]) => unknown)(
+    { sender: { id: 7 } },
+    ...args,
+  );
 }
 
 beforeEach(() => {
@@ -61,13 +65,18 @@ beforeEach(() => {
     now: () => 1000,
   });
   pending = pendingPort(null);
+  ready = [];
 });
 
 afterEach(() => ctx.cleanup());
 
 describe("registerNotificationIpcHandlers", () => {
   it("answers a read with the whole view", async () => {
-    registerNotificationIpcHandlers({ settings, takePendingActivation: pending });
+    registerNotificationIpcHandlers({
+      settings,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     expect(await invoke("volli:notifications-get")).toEqual({
       ok: true,
       settings: {
@@ -82,7 +91,11 @@ describe("registerNotificationIpcHandlers", () => {
   });
 
   it("writes a switch and answers with the stored result", async () => {
-    registerNotificationIpcHandlers({ settings, takePendingActivation: pending });
+    registerNotificationIpcHandlers({
+      settings,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     const result = (await invoke("volli:notifications-set", {
       event: "swept",
       enabled: false,
@@ -93,7 +106,11 @@ describe("registerNotificationIpcHandlers", () => {
   });
 
   it("returns a refusal as data rather than rejecting", async () => {
-    registerNotificationIpcHandlers({ settings, takePendingActivation: pending });
+    registerNotificationIpcHandlers({
+      settings,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     expect(await invoke("volli:notifications-set", { event: "sessions", enabled: false })).toEqual({
       ok: false,
       error: 'This build has no "sessions" notification category.',
@@ -101,7 +118,11 @@ describe("registerNotificationIpcHandlers", () => {
   });
 
   it("refuses a malformed request before it reaches the command", async () => {
-    registerNotificationIpcHandlers({ settings, takePendingActivation: pending });
+    registerNotificationIpcHandlers({
+      settings,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     expect(await invoke("volli:notifications-set", { enabled: "yes" })).toEqual({
       ok: false,
       error: "Invalid notification preference",
@@ -114,16 +135,28 @@ describe("registerNotificationIpcHandlers", () => {
 
   it("hands over a target parked while no window existed", async () => {
     pending = pendingPort({ kind: "update" });
-    registerNotificationIpcHandlers({ settings, takePendingActivation: pending });
+    registerNotificationIpcHandlers({
+      settings,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     expect(await invoke("volli:notifications-pending-activation")).toEqual({
       ok: true,
       target: { kind: "update" },
     });
     expect(pending.calls).toBe(1);
+    // The ask IS the subscription (round 2): the renderer registers its
+    // listener and then collects, so this is the one moment main can know a
+    // window can actually receive a click.
+    expect(ready).toEqual([7]);
   });
 
-  it("claims every channel with an honest refusal when the database never opened", async () => {
-    registerNotificationIpcHandlers({ settings: null, takePendingActivation: pending });
+  it("claims the preference channels with an honest refusal when the database never opened", async () => {
+    registerNotificationIpcHandlers({
+      settings: null,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
     expect(await invoke("volli:notifications-get")).toEqual({
       ok: false,
       error: "Notification settings are unavailable.",
@@ -134,10 +167,29 @@ describe("registerNotificationIpcHandlers", () => {
     });
   });
 
+  it("still hands over a clicked target with the database degraded", async () => {
+    // Alerts keep working without a database (the all-on default), so a click
+    // on one has to keep working too — refusing this channel would strand the
+    // one launch where a deep link matters most. Round 2.
+    pending = pendingPort({ kind: "update" });
+    registerNotificationIpcHandlers({
+      settings: null,
+      takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
+    });
+
+    expect(await invoke("volli:notifications-pending-activation")).toEqual({
+      ok: true,
+      target: { kind: "update" },
+    });
+    expect(ready).toEqual([7]);
+  });
+
   it("carries the recorded database reason into that refusal", async () => {
     registerNotificationIpcHandlers({
       settings: null,
       takePendingActivation: pending,
+      markRendererReady: (sender) => ready.push((sender as { id: number }).id),
       unavailableReason: "Notification settings are unavailable. Disk is full.",
     });
     expect(await invoke("volli:notifications-get")).toEqual({

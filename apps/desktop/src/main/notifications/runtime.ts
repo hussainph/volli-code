@@ -48,8 +48,13 @@ export interface NotificationRuntime {
   deliver(request: NotificationRequest): NotificationOutcome;
   /** One window's on-screen target, as the renderer reported it (unvalidated). */
   reportActiveTarget(windowId: number, raw: unknown): void;
-  /** Drops a closed window's reported target. */
+  /**
+   * Drops a closed window's reported target AND its click subscription: a
+   * window that is gone is showing nothing and listening to nothing.
+   */
   forgetWindow(windowId: number): void;
+  /** This window's renderer has subscribed to notification clicks. */
+  markRendererReady(windowId: number): void;
   /** The target of a click that arrived with no window open, taken once. */
   takePendingActivation(): NotificationTarget | null;
   /**
@@ -123,6 +128,7 @@ export function createNotificationRuntime(options: {
   const activation = createNotificationActivation({
     windows: () =>
       BrowserWindow.getAllWindows().map((window) => ({
+        id: window.id,
         isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
         isMinimized: () => window.isMinimized(),
         isFocused: () => window.isFocused(),
@@ -154,7 +160,11 @@ export function createNotificationRuntime(options: {
     settings,
     deliver: (request) => dispatcher.deliver(request),
     reportActiveTarget: (windowId, raw) => registry.report(windowId, parseNotificationTarget(raw)),
-    forgetWindow: (windowId) => registry.forget(windowId),
+    forgetWindow: (windowId) => {
+      registry.forget(windowId);
+      activation.forgetWindow(windowId);
+    },
+    markRendererReady: (windowId) => activation.markRendererReady(windowId),
     takePendingActivation: () => activation.takePending(),
     bindWindowOpener: (open) => {
       openWindow = open;
