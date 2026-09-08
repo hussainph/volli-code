@@ -1,4 +1,5 @@
 import type {
+  BaseWindow,
   BrowserWindow,
   Session,
   WebContentsView,
@@ -71,11 +72,14 @@ class FakeWebContents {
   setDevToolsWebContents = vi.fn();
   setBackgroundThrottling = vi.fn();
   // The host encodes JPEG, so the fake answers the same door: a NativeImage
-  // whose `toJPEG` returns the bytes the frame should carry.
+  // whose `toJPEG` returns the bytes the frame should carry. `isEmpty` is the
+  // real one's answer for a view with no surface — the 0x0 image Chromium hands
+  // back rather than failing (VC-278) — so a test can ask for that too.
   captureBytes = "page";
   capturePage = vi.fn(async () => ({
     toDataURL: () => `data:image/png;base64,${this.captureBytes}`,
     toJPEG: () => Buffer.from(this.captureBytes),
+    isEmpty: () => this.captureBytes.length === 0,
   }));
   zoomFactor = 1;
   getZoomFactor(): number {
@@ -138,6 +142,19 @@ const fakeWindow = {
   },
 };
 
+/**
+ * The off-screen stage (VC-278). Never shown, so a test that finds a view here
+ * is finding a tab the person cannot see — which is the whole point of it.
+ */
+const fakeStage = {
+  isDestroyed: () => false,
+  destroy: vi.fn(),
+  contentView: {
+    addChildView: vi.fn(),
+    removeChildView: vi.fn(),
+  },
+};
+
 let views: FakeView[];
 let viewOptions: WebContentsViewConstructorOptions[];
 let sessions: Map<string, FakeSession>;
@@ -190,6 +207,7 @@ beforeEach(() => {
       return isolated as unknown as Session;
     },
     getWindow: () => fakeWindow as unknown as BrowserWindow,
+    createStageWindow: () => fakeStage as unknown as BaseWindow,
     publishState: (event) => published.push(event),
     publishClosed: (tabId) => published.push({ closedTabId: tabId }),
   });
@@ -953,6 +971,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: () => fakeStage as unknown as BaseWindow,
       publishState: (event) => published.push(event),
       publishClosed: (tabId) => published.push({ closedTabId: tabId }),
       pictures,
@@ -986,6 +1005,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => fakeWindow as unknown as BrowserWindow,
+      createStageWindow: () => fakeStage as unknown as BaseWindow,
       publishState: (event) => published.push(event),
       publishClosed: (tabId) => published.push({ closedTabId: tabId }),
       pictures,
@@ -1012,6 +1032,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => null,
+      createStageWindow: () => fakeStage as unknown as BaseWindow,
       publishState: () => undefined,
       publishClosed: () => undefined,
       pictures,
@@ -1509,6 +1530,70 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     );
   });
 
+  it("parks every new tab in the off-screen stage, before its first navigation", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+    // The surface has to exist before the load commits, or the compositor never
+    // allocates one and the tab is uncapturable and unclickable for life
+    // (VC-278). The view is in the stage and NOT in the app window.
+    expect(fakeStage.contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
+    // Staged is not shown: nothing about presentation moved.
+    expect(host.list({ projectId: "project-1" })[0]?.presentation).toBe("headless");
+    expect(host.isOnScreen(tab.tabId)).toBe(false);
+    expect(host.attachedTabIds()).toEqual([]);
+  });
+
+  it("moves a tab between the stage and the window, never leaving it in both", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    host.setPresentation(tab.tabId, "preview");
+
+    host.show(tab.tabId);
+    // Out of the stage, into the window — a view has one parent, so showing has
+    // to take it back before the window can adopt it.
+    expect(fakeStage.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(host.isOnScreen(tab.tabId)).toBe(true);
+
+    fakeStage.contentView.addChildView.mockClear();
+    host.hide(tab.tabId);
+    // Hiding returns it to the stage rather than to nowhere: off screen is a
+    // place. Otherwise every hidden tab would lose its surface again.
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(fakeStage.contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(host.isOnScreen(tab.tabId)).toBe(false);
+  });
+
+  it("takes a closed tab out of the stage instead of leaving its view parented", () => {
+    const tab = host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+    host.close(tab.tabId);
+
+    expect(fakeStage.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    // And the stage itself goes when the last window does, rather than outliving
+    // the app as an invisible window holding nothing.
+    host.closeAll();
+    expect(fakeStage.destroy).toHaveBeenCalled();
+  });
+
   it("refuses to attach a headless tab: revealing is the person's act, and main owns the fact", () => {
     const tab = host.open({
       url: "https://agent.example.com",
@@ -1675,6 +1760,27 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     views[0]!.webContents.emit("input-event", { type: "keyDown" });
 
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+  });
+
+  it("declines an empty capture rather than minting a picture of nothing", async () => {
+    const tab = agentTab();
+    // What Chromium hands back for a view with no compositor surface: a 0x0
+    // image, not a failure. Stored, it became `data:image/jpeg;base64,` in a
+    // transcript card — a broken frame nobody could tell from a real one
+    // (VC-278).
+    views[0]!.webContents.captureBytes = "";
+
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+    expect(persisted.size).toBe(0);
+  });
+
+  it("refuses to keep a screenshot with no pixels, at the store's door too", () => {
+    const tab = agentTab();
+
+    expect(() => host.keepScreenshot(tab.tabId, "")).toThrow(
+      "Refusing to keep an empty Browser Tab screenshot",
+    );
+    expect(persisted.size).toBe(0);
   });
 
   it("keeps a screenshot the model asked for as a persisted picture, attributed to its Session", () => {

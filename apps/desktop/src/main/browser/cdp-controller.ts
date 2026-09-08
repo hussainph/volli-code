@@ -229,7 +229,7 @@ export class BrowserTabController {
         finish(() =>
           reject(
             new Error(
-              `The Browser Tab's engine did not answer ${what} within ${this.#limits.maxCommandMs}ms.`,
+              `The Browser Tab's page did not answer ${what} within ${this.#limits.maxCommandMs}ms: it is still busy, or too heavy to answer in time. Take a snapshot to see where the page got to, and try again.`,
             ),
           ),
         );
@@ -437,7 +437,7 @@ export class BrowserTabController {
       data?: string;
     };
     if (typeof captured.data !== "string" || captured.data.length === 0) {
-      throw new Error("Chromium returned no Browser Tab screenshot data");
+      throw new Error("The Browser Tab's page produced no screenshot pixels to return");
     }
     const metrics = (await this.#command("Page.getLayoutMetrics", undefined, signal)) as {
       cssVisualViewport?: { clientWidth?: number; clientHeight?: number };

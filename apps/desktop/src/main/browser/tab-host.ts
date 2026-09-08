@@ -1,4 +1,5 @@
 import type {
+  BaseWindow,
   BrowserWindow,
   NativeImage,
   Rectangle,
@@ -84,6 +85,13 @@ export interface BrowserTabHostDependencies {
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView;
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;
+  /**
+   * Creates the window headless tabs are parked in — created once, never
+   * shown, never given to the person. See {@link BrowserTabHost.requireStage}
+   * for why a tab nobody looks at still needs a window to belong to, and why
+   * this is a {@link BaseWindow} rather than a BrowserWindow (VC-278).
+   */
+  createStageWindow: () => BaseWindow;
   publishState: (event: BrowserTabState) => void;
   publishClosed: (tabId: string) => void;
   /** Where captured pixels wait for the card that shows them (VC-238). */
@@ -111,6 +119,12 @@ interface BrowserTabEntry {
    * split each hold a tab, so the host attaches a SET of views keyed by tab.
    */
   attachedTo: BrowserWindow | null;
+  /**
+   * Whether this tab's view is parked in the off-screen stage rather than the
+   * app window. Mutually exclusive with {@link attachedTo}: a view has exactly
+   * one parent, and the stage holds every tab the app window does not (VC-278).
+   */
+  staged: boolean;
   devToolsView: WebContentsView | null;
   devToolsOpen: boolean;
   devToolsAttached: boolean;
@@ -326,8 +340,90 @@ export class BrowserTabHost {
   private readonly sessionColors = new Map<string, string>();
   /** Names learned from {@link BrowserTabHostDependencies.sessionName}, so a second hold does not ask twice. */
   private readonly sessionNames = new Map<string, string>();
+  /** The off-screen stage, built on the first tab that needs one; see {@link requireStage}. */
+  private stageWindow: BaseWindow | null = null;
 
   constructor(private readonly deps: BrowserTabHostDependencies) {}
+
+  /**
+   * The window every tab lives in while it is not on screen — created once,
+   * never shown, never handed to the person.
+   *
+   * A WebContentsView with no parent window has no compositor surface, and
+   * Chromium answers that state far more quietly than it looks. Measured on
+   * Electron 44 / Chromium 152 / macOS arm64
+   * (`e2e/browser-headless-capture-probe.mjs`), a view that has NEVER been
+   * added to a window:
+   *
+   *   Page.captureScreenshot        never answers (the 15s bound fires)
+   *   webContents.capturePage()     a 0x0 image, `toJPEG` -> zero bytes
+   *   Input.dispatchMouseEvent      click and hover reach nothing at all
+   *   Accessibility.getFullAXTree   fine — which is what hid this
+   *
+   * The last two lines are the trap. A snapshot reads correctly off a tab whose
+   * clicks land nowhere, so `browser_act` reported a target it had not touched
+   * and the model read back a page that never changed. That is the state a
+   * Session-created tab was born in and stayed in: `open` never attaches, and
+   * `show` refuses a headless tab by design, so a tab the person never revealed
+   * had no surface for its whole life.
+   *
+   * The wake hold does not help and was never the fix — the same probe times
+   * out with the hold applied before the navigation, during it, and after the
+   * load settles, on a heavy page and a light one. VC-252's bench read as if it
+   * did only because it measured a tab attached ONCE and then detached, which
+   * is the workspace-switch shape and not the shape agent tabs run in.
+   *
+   * Parking the view in a window that is never shown gives it the surface and
+   * nothing else: clicks land, captures answer in ~50ms with pixels identical
+   * to an attached tab, and the page stays exactly as invisible as VC-238
+   * requires — presentation is still the person's to change, and this window is
+   * not a presentation. Several tabs stack in it harmlessly; capture and input
+   * are per-WebContents, and the probe drives three stacked tabs with no
+   * occlusion between them.
+   *
+   * A {@link BaseWindow} rather than a BrowserWindow, and that is not a
+   * detail. `BrowserWindow.getAllWindows()` is how this app finds its real
+   * window in twenty-odd places — the window a shown tab attaches to, the one
+   * the cursor overlay draws into, the count `activate` checks before
+   * re-creating a window on a dock click, and every broadcast loop. A
+   * BrowserWindow stage would have joined all of them: a shown tab could
+   * attach to the stage instead of the app, and a dock click would find a
+   * window already open and re-create nothing. A BaseWindow holds views and
+   * has no webContents of its own, so it never appears in that list, and the
+   * blast radius of adding it is nil.
+   *
+   * It does still count for `window-all-closed`, which is why {@link closeAll}
+   * destroys it — the app window's own `closed` handler calls that, and the
+   * order is right: the stage is gone before Electron asks whether every
+   * window has closed.
+   */
+  private requireStage(): BaseWindow | null {
+    if (this.stageWindow === null || this.stageWindow.isDestroyed()) {
+      this.stageWindow = this.deps.createStageWindow();
+    }
+    return this.stageWindow.isDestroyed() ? null : this.stageWindow;
+  }
+
+  /**
+   * Parks one tab's view in the stage, unless the app window already holds it.
+   * A view has one parent, so this is the other half of {@link detachEntry}:
+   * every tab is in exactly one of the two places for its whole life.
+   */
+  private stageEntry(entry: BrowserTabEntry): void {
+    if (entry.staged || entry.attachedTo !== null) return;
+    const stage = this.requireStage();
+    if (stage === null) return;
+    stage.contentView.addChildView(entry.view);
+    entry.staged = true;
+  }
+
+  /** Takes one tab's view out of the stage, so a real window may adopt it. */
+  private unstageEntry(entry: BrowserTabEntry): void {
+    if (!entry.staged) return;
+    entry.staged = false;
+    const stage = this.stageWindow;
+    if (stage !== null && !stage.isDestroyed()) stage.contentView.removeChildView(entry.view);
+  }
 
   private requireTab(tabId: string): BrowserTabEntry {
     const entry = this.tabs.get(tabId);
@@ -412,13 +508,25 @@ export class BrowserTabHost {
     entry.devToolsAttached = false;
   }
 
-  /** Detaches the page and its DevTools from whichever window holds them; quiet when none does. */
-  private detachEntry(entry: BrowserTabEntry): void {
+  /**
+   * Takes the page and its DevTools off screen, and returns the page to the
+   * stage — off screen is a place, not an absence (VC-278). Quiet when the tab
+   * was not on screen to begin with.
+   *
+   * `andStage` is false on exactly one path: {@link close}, where the view is
+   * about to be destroyed and re-parenting it would only add a child the stage
+   * has to drop again.
+   */
+  private detachEntry(entry: BrowserTabEntry, andStage = true): void {
     const window = entry.attachedTo;
-    if (window === null) return;
+    if (window === null) {
+      if (andStage) this.stageEntry(entry);
+      return;
+    }
     this.detachDevTools(entry, window);
     if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
     entry.attachedTo = null;
+    if (andStage) this.stageEntry(entry);
     // Every path that takes a page off screen — hide, close, a crash, going
     // headless — is a plane change the cursor overlay has to hear (VC-239).
     this.emitPlane();
@@ -752,6 +860,8 @@ export class BrowserTabHost {
     // A Session-created tab may never be selected by the renderer, but it still
     // needs a real viewport for layout, screenshots, and pointer coordinates.
     // Renderer measurement replaces this default whenever a person shows it.
+    // The viewport alone is not enough to make those work: the view also needs
+    // a window to belong to, which is what the stage is for (VC-278).
     view.setBounds(BROWSER_DEFAULT_BOUNDS);
     const state: BrowserTabState = {
       tabId,
@@ -775,6 +885,7 @@ export class BrowserTabHost {
       view,
       bounds: { ...BROWSER_DEFAULT_BOUNDS },
       attachedTo: null,
+      staged: false,
       devToolsView: null,
       devToolsOpen: false,
       devToolsAttached: false,
@@ -785,6 +896,10 @@ export class BrowserTabHost {
       hold: null,
     };
     this.tabs.set(tabId, entry);
+    // Before the load below, not after: the first navigation is what allocates
+    // the surface the compositor then hands to captures and hit-testing, and a
+    // view with no window when it commits never gets one (VC-278).
+    this.stageEntry(entry);
     // Everything that means "the person is using this tab", stamped in one
     // place: `input-event` covers keys, clicks and the wheel, and `focus`
     // covers a tab entered by keyboard alone.
@@ -899,7 +1014,8 @@ export class BrowserTabHost {
   /** Closes and forgets one product tab without allowing page unload code to veto it. */
   close(tabId: string): void {
     const entry = this.requireTab(tabId);
-    this.detachEntry(entry);
+    this.detachEntry(entry, false);
+    this.unstageEntry(entry);
     this.destroyDevTools(entry);
     this.tabs.delete(tabId);
     this.endHoldOnClose(tabId, entry);
@@ -1105,6 +1221,13 @@ export class BrowserTabHost {
     const contents = entry.view.webContents;
     if (entry.state.presentation !== "headless" && this.isBeingUsed(entry)) return null;
     const image = await contents.capturePage();
+    // A capture with no pixels is a picture of nothing, and minting an id for it
+    // puts `data:image/jpeg;base64,` in a transcript card as if it were a frame.
+    // Declining says the same thing honestly, through the null this already
+    // returns when it decides not to look. Chromium answers a surfaceless view
+    // this way rather than by failing (VC-278), so the check is cheap insurance
+    // against ever silently storing emptiness again.
+    if (image.isEmpty()) return null;
     return this.deps.pictures.put({
       tabId,
       generation: entry.state.generation,
@@ -1129,6 +1252,9 @@ export class BrowserTabHost {
    */
   keepScreenshot(tabId: string, base64Png: string): string {
     const entry = this.requireTab(tabId);
+    // The controller already rejects an empty answer from the engine; this is
+    // the same rule at the store's door, so no path mints an id for no pixels.
+    if (base64Png.length === 0) throw new Error("Refusing to keep an empty Browser Tab screenshot");
     return this.deps.pictures.put({
       tabId,
       generation: entry.state.generation,
@@ -1165,6 +1291,9 @@ export class BrowserTabHost {
     if (entry.attachedTo !== null) return;
     const window = this.deps.getWindow();
     if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");
+    // Out of the stage before into the window: a view has one parent, and
+    // adding it to a second silently takes it from the first (VC-278).
+    this.unstageEntry(entry);
     window.contentView.addChildView(entry.view);
     entry.attachedTo = window;
     if (entry.devToolsOpen) this.attachDevTools(entry, window);
@@ -1240,10 +1369,17 @@ export class BrowserTabHost {
    * a plane a person can touch is attached, and an attached plane was never
    * throttled.
    *
-   * Both halves of the fix are load-bearing, and the bench shows why: a tab
-   * detached since birth and never held answers `Page.captureScreenshot`
-   * never at all (the bench gives up at the controller's own 15s bound),
-   * while the same tab under a hold answers in ~100ms.
+   * What this hold is NOT is the reason captures work. An earlier version of
+   * this comment read the bench as saying a hold restores
+   * `Page.captureScreenshot` on a tab detached since birth; it does not, and
+   * the bench never measured that combination. The tab it measured at ~100ms
+   * had been ATTACHED to the window once and then detached, which is the
+   * workspace-switch shape. A tab that has never been attached at all times
+   * out with a hold applied before its navigation, during it, or after its
+   * load settles (VC-278, `e2e/browser-headless-capture-probe.mjs`). Frames
+   * need a compositor surface, a surface needs a parent window, and that is
+   * the stage's job ({@link requireStage}) — not this lease's. This one buys
+   * timers and animation frames, which is what it was always measured for.
    *
    * Returns the release. Releasing twice releases once, and a hold on a tab
    * that is unknown or has since closed releases into nothing — wakefulness
@@ -1284,9 +1420,12 @@ export class BrowserTabHost {
     };
   }
 
-  /** Closes every live view when its owning app window goes away. */
+  /** Closes every live view when its owning app window goes away, and the stage with them. */
   closeAll(): void {
     for (const tabId of this.tabs.keys()) this.close(tabId);
+    const stage = this.stageWindow;
+    this.stageWindow = null;
+    if (stage !== null && !stage.isDestroyed()) stage.destroy();
   }
 
   /**
