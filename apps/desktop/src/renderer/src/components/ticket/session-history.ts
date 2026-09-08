@@ -1,8 +1,6 @@
+import { canResumeTerminalRecord, sessionSourceLabel } from "@volli/session-presentation";
 import {
-  canResumeHarness,
-  effectiveHarnessId,
-  harnessLabel,
-  shortSessionId,
+  isListableSession,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -38,48 +36,6 @@ export interface TicketSessionRow {
   isOpen: boolean;
   isRoot: boolean;
   tabId?: string;
-}
-
-/**
- * Truthful, compact source metadata: the sidebar's session rows carry it in
- * their hover `title` (their meta line now prints the ticket's status, which is
- * what a long band is scanned by), and the rail's history search matches on it
- * — the rail's own rows stopped drawing it when they went to one line and put
- * the kind in a leading glyph. Only agent launches expose a harness. Bare
- * shells and pre-metadata sessions never inherit the default Claude label;
- * split placement remains visible without becoming the title.
- *
- * The harness named is the one RUNNING, not the one the session launched with:
- * a pane whose agent was quit and replaced reads as what is in it now. A shell
- * launch that later ran an agent still reads as "Shell" — `launchKind` is a
- * fact about the pane's origin and no announce changes it.
- *
- * A chat row has none of that — no PTY and no launch — so its source is simply
- * `Chat`. Whether its executor is attached remains a functional grouping fact,
- * not source metadata to display.
- */
-// Takes the identity half, not a whole row: naming a Session's source has
-// nothing to do with what it spent, and demanding a usage summary would make
-// every caller holding a bare record invent one.
-export function sessionSourceLabel(row: SessionListingIdentity): string {
-  // A helper another Session started is named as one, with the parent it
-  // answers to (VC-9); every other structured Session is a chat, whichever of
-  // the two root Roles it holds.
-  if (row.kind === "chat") {
-    const record = row.record;
-    if (record.role !== "subagent") return "Chat";
-    return record.parentSessionId === null
-      ? "Subagent"
-      : `Subagent · of ${shortSessionId(record.parentSessionId)}`;
-  }
-  const record = row.record;
-  const source =
-    record.launchKind === "agent"
-      ? harnessLabel(effectiveHarnessId(record))
-      : record.launchKind === "shell"
-        ? "Shell"
-        : "Terminal";
-  return record.placement === "split" ? `${source} · Split` : source;
 }
 
 export interface TicketSessionRowsInput {
@@ -284,14 +240,15 @@ export function groupSessionRows(rows: readonly TicketSessionRow[]): {
 }
 
 /**
- * Whether `row` can be resumed (interrupt/resume, issue #78). A chat row never
- * qualifies — there is no terminal to resume as, only a future deep-activation
- * path this is not it. A terminal row qualifies only when it actually launched
- * an agent (a bare shell or pre-metadata `unknown` record has no harness
- * session to resume), has actually ended (a still-live session has nothing to
- * resume INTO — it's already running), and its harness knows how to resume at
- * all — an unrecognized/generic harness id makes {@link canResumeHarness} false
- * for both its by-id and latest-in-cwd fallbacks.
+ * Whether `row` can be resumed (interrupt/resume, issue #78) — the listing-row
+ * door onto the portable rule.
+ *
+ * A chat row never qualifies: there is no terminal to resume as, only a future
+ * deep-activation path this is not it. Everything else the rule decides —
+ * agent launch, actually ended, a harness that knows how to resume — belongs to
+ * {@link canResumeTerminalRecord} in `@volli/session-presentation`, so the
+ * sidebar, the ticket rail and a closed terminal's saved record cannot drift
+ * into three answers about one Session.
  *
  * Capability, not a command line: the resume line names the generated wrapper
  * by absolute path, and those paths are main's alone.
@@ -309,17 +266,7 @@ export function canResumeSession(
   row: SessionListingIdentity,
   lookup: HarnessAdapterLookup,
 ): boolean {
-  if (row.kind === "chat") return false;
-  const record = row.record;
-  return (
-    record.launchKind === "agent" &&
-    record.endedAt !== null &&
-    // The harness that was running when it ended is the one a resume restarts
-    // (main builds the resume line off the same id) — so the affordance must be
-    // decided about that harness, or the rail offers Resume for a harness the
-    // session had not been running since the moment it was opened.
-    canResumeHarness(effectiveHarnessId(record), record.harnessSessionId, lookup)
-  );
+  return row.kind === "chat" ? false : canResumeTerminalRecord(row.record, lookup);
 }
 
 /**
@@ -370,11 +317,24 @@ export interface TicketChatSessionRow {
   isOpen: boolean;
 }
 
-/** Chat Sessions for a ticket, named and grouped the same way a terminal record's rail row is. */
+/**
+ * Chat Sessions for a ticket, named and grouped the same way a terminal
+ * record's rail row is.
+ *
+ * A Subagent Session inherits its parent's Ticket, so the ticket's own listing
+ * returns it — and this roster drops it (VC-279). It is a child of one turn in
+ * one chat and is reached from that chat's Activity Island; a rail that listed
+ * it would grow by however many helpers the ticket's agents happened to open,
+ * and "History" would fill with the trace of one Session's fan-out rather than
+ * with the Sessions someone worked in. The cached listing behind this keeps
+ * them, which is what the rail's usage block counts.
+ */
 export function buildTicketChatSessionRows(
   records: readonly ChatSessionRecord[],
 ): TicketChatSessionRow[] {
-  return records.map((record) => ({ record, title: record.title, isOpen: record.live }));
+  return records
+    .filter((record) => isListableSession(record))
+    .map((record) => ({ record, title: record.title, isOpen: record.live }));
 }
 
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */

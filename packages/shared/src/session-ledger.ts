@@ -537,6 +537,30 @@ export type SessionEventPayload =
       attachmentId: string;
       outcome: "completed" | "failed" | "interrupted";
     }
+  /**
+   * The process behind this attachment ended, and something watched it do so
+   * (VC-290): `exitCode` is the status it reported.
+   *
+   * A fact of its own, and product-owned, because `attachment.closed` cannot
+   * carry it. That event says an OUTCOME — completed, failed, interrupted —
+   * which is what Volli decided the ending meant, and the relaunch sweep
+   * writes one for every attachment whose process nobody was there to see.
+   * So a closed attachment with no exit fact is precisely "the code was never
+   * observed", and `0` is a value like any other rather than the shape an
+   * absence happens to take.
+   *
+   * Written ONLY where a real process status was read (a PTY exit today), never
+   * synthesized from an outcome — a fabricated `0` would report success for a
+   * process that may have crashed. Absent for every executor that has no
+   * process to report one, which is why it is a separate kind and not a field
+   * every close would have to answer for.
+   *
+   * NOT `attachment.native_referenced`: {@link SessionNativeReference} is
+   * adapter correlation, scrubbed on its way to a renderer, and a client that
+   * had to reparse an adapter's opaque payload to learn how a Session ended
+   * would be reimplementing one host's private encoding.
+   */
+  | { kind: "attachment.exited"; attachmentId: string; exitCode: number }
   | { kind: "run.started"; attachmentId: string; runId: string }
   | { kind: "run.completed"; attachmentId: string; runId: string }
   | { kind: "turn.started"; attachmentId: string; turnId: string }
@@ -732,6 +756,7 @@ type ObservedSessionEventKind =
   | "attachment.native_referenced"
   | "attachment.failed"
   | "attachment.closed"
+  | "attachment.exited"
   | "run.started"
   | "run.completed"
   | "turn.started"
@@ -830,6 +855,12 @@ export function observationPayload(
         kind: observation.kind,
         attachmentId: observation.attachmentId,
         outcome: observation.outcome,
+      };
+    case "attachment.exited":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        exitCode: observation.exitCode,
       };
     case "run.started":
     case "run.completed":
@@ -1171,6 +1202,17 @@ export interface SessionAttachmentProjection extends SessionAttachment {
   closedAt: number | null;
   outcome: "completed" | "failed" | "interrupted" | null;
   failure: SessionAttachmentFailure | null;
+  /**
+   * The status the executor's process reported, from `attachment.exited`, or
+   * `null` when nothing observed one (VC-290).
+   *
+   * The one projection of that fact, so no client re-derives it: `null` is
+   * "unobserved" and never "fine", and `0` is a clean exit somebody actually
+   * watched happen. It is deliberately independent of {@link
+   * SessionAttachmentProjection.outcome}, which is what Volli made of the
+   * ending rather than what the process said about it.
+   */
+  exitCode: number | null;
 }
 
 export interface SessionAttentionProjection {
@@ -1363,6 +1405,18 @@ export function projectSession(
         }
         break;
       }
+      // The process this attachment ran reported its status. Applied wherever
+      // the fact lands in the log — before or after the close it belongs to —
+      // because it is an append beside that close, not a rewrite of it, and a
+      // reader must not depend on which of two independent observations
+      // reached the ledger first.
+      case "attachment.exited": {
+        const existing = attachments.get(event.payload.attachmentId);
+        if (existing) {
+          attachments.set(existing.id, { ...existing, exitCode: event.payload.exitCode });
+        }
+        break;
+      }
       case "attachment.opened": {
         const { attachment } = event.payload;
         attachments.set(attachment.id, {
@@ -1372,6 +1426,9 @@ export function projectSession(
           closedAt: null,
           outcome: null,
           failure: null,
+          // A fresh process has reported nothing yet, and a re-attach must not
+          // inherit the code the previous one ended with.
+          exitCode: null,
         });
         // Work resuming ends a stop: the record stays in history, the state
         // does not (VC-86).
@@ -1388,6 +1445,8 @@ export function projectSession(
           closedAt: event.occurredAt,
           outcome: "failed",
           failure: event.payload.failure,
+          // It never opened, so no process of its own ever reported a status.
+          exitCode: null,
         });
         // A turn still open when its executor failed is a failed turn; one
         // that had already ended keeps its own outcome (the process ending is

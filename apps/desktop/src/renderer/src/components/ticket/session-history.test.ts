@@ -23,7 +23,6 @@ import {
   nextSessionRailAgeChangeAt,
   nextTicketSessionStatusChangeAt,
   sessionRailRowStampAt,
-  sessionSourceLabel,
   ticketOutputStamps,
   ticketSessionProvenance,
   type SessionRailRow,
@@ -50,7 +49,6 @@ const resumable = (session: SessionRecord) =>
   canResumeSession(terminalRow(session), getHarnessAdapter);
 const latestResumable = (records: readonly SessionRecord[]) =>
   latestResumableSession(records.map(terminalRow), getHarnessAdapter);
-const sourceLabel = (session: SessionRecord) => sessionSourceLabel(terminalRow(session));
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -252,67 +250,6 @@ describe("buildTicketSessionRows", () => {
   });
 });
 
-describe("sessionSourceLabel", () => {
-  it("uses the actual harness only for sessions that launched an agent", () => {
-    expect(sourceLabel(record({ launchKind: "agent", harnessId: "codex", placement: "tab" }))).toBe(
-      "Codex",
-    );
-  });
-
-  it("describes bare terminal tabs and splits without pretending they are Claude Code", () => {
-    expect(sourceLabel(record({ launchKind: "shell", placement: "tab" }))).toBe("Shell");
-    expect(sourceLabel(record({ launchKind: "shell", placement: "split" }))).toBe("Shell · Split");
-  });
-
-  // The pane says what is IN it. A terminal opened by opencode that the user
-  // quit and replaced with claude reads as Claude Code.
-  it("names the harness that is running, not the one that opened the pane", () => {
-    expect(
-      sourceLabel(
-        record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
-      ),
-    ).toBe("Claude Code");
-  });
-
-  // `launchKind` is a fact about the pane's origin, and no announce changes it:
-  // a shell that later ran an agent is still a shell tab.
-  it("still reads as a shell when a harness announced itself inside one", () => {
-    expect(sourceLabel(record({ launchKind: "shell", activeHarnessId: "claude-code" }))).toBe(
-      "Shell",
-    );
-  });
-
-  it("keeps legacy records honest when their launch kind was never recorded", () => {
-    expect(sourceLabel(record())).toBe("Terminal");
-    expect(sourceLabel(record({ placement: "split" }))).toBe("Terminal · Split");
-  });
-
-  // A chat row has no PTY to describe, and attachment is not source metadata.
-  it("names a chat row without displaying its attachment state", () => {
-    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: true }) })).toBe("Chat");
-    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ live: false }) })).toBe("Chat");
-  });
-
-  // The Role is the row's source (VC-9): a helper another Session started is
-  // named as one, so a person scanning the list can tell it from the chat
-  // that started it.
-  it("names a Subagent Session by its Role and the parent it answers to", () => {
-    expect(
-      sessionSourceLabel({
-        kind: "chat",
-        record: chatRecord({
-          role: "subagent",
-          parentSessionId: "aaaaaaaa-0000-0000-0000-000000000000",
-        }),
-      }),
-    ).toBe("Subagent · of aaaaaaaa");
-    // A helper whose parent the ledger does not name is still a helper.
-    expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ role: "subagent" }) })).toBe(
-      "Subagent",
-    );
-  });
-});
-
 describe("groupSessionRows", () => {
   it("keeps only open non-exited panes in the current working set", () => {
     const working = row({ record: record({ id: "working" }), status: "working" });
@@ -332,34 +269,15 @@ describe("groupSessionRows", () => {
 });
 
 describe("canResumeSession", () => {
-  it("is false for a still-live agent session — nothing has ended to resume into", () => {
+  // The rule itself (agent launch, actually ended, a harness that can resume)
+  // is `canResumeTerminalRecord` in @volli/session-presentation and is tested
+  // there. What this door owns is the row kind and the caller's catalogue.
+  it("carries the portable rule's answer for a terminal row", () => {
+    expect(resumable(record({ launchKind: "agent", endedAt: 10, harnessId: "claude-code" }))).toBe(
+      true,
+    );
     expect(resumable(record({ launchKind: "agent", endedAt: null }))).toBe(false);
-  });
-
-  it("is false for a bare shell, whether live or ended", () => {
-    expect(resumable(record({ launchKind: "shell", endedAt: null }))).toBe(false);
     expect(resumable(record({ launchKind: "shell", endedAt: 10 }))).toBe(false);
-  });
-
-  it("is false for an ended session whose harness has no known resume support", () => {
-    expect(
-      resumable(
-        record({ launchKind: "agent", endedAt: 10, harnessId: "my-custom-harness" as HarnessId }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is true for an ended Claude Code agent session", () => {
-    expect(
-      resumable(
-        record({
-          launchKind: "agent",
-          endedAt: 10,
-          harnessId: "claude-code",
-          harnessSessionId: null,
-        }),
-      ),
-    ).toBe(true);
   });
 
   // The whole reason the lookup is a parameter. A registered manifest that
@@ -381,32 +299,6 @@ describe("canResumeSession", () => {
 
     expect(canResumeSession(terminalRow(ended), knows)).toBe(true);
     expect(resumable(ended)).toBe(false);
-  });
-
-  // Main builds the resume line off the running harness, so the affordance has
-  // to be decided about that one or the rail offers a Resume that cannot happen
-  // — and hides one that can.
-  it("judges resumability by the harness that was running when it ended", () => {
-    expect(
-      resumable(
-        record({
-          launchKind: "agent",
-          endedAt: 10,
-          harnessId: "my-custom-harness" as HarnessId,
-          activeHarnessId: "claude-code",
-        }),
-      ),
-    ).toBe(true);
-    expect(
-      resumable(
-        record({
-          launchKind: "agent",
-          endedAt: 10,
-          harnessId: "claude-code",
-          activeHarnessId: "my-custom-harness" as HarnessId,
-        }),
-      ),
-    ).toBe(false);
   });
 
   // There is no terminal behind a chat row to resume as — deep chat
@@ -522,6 +414,40 @@ describe("buildTicketChatSessionRows", () => {
 
   it("is empty for a ticket with no chat Sessions", () => {
     expect(buildTicketChatSessionRows([])).toEqual([]);
+  });
+
+  // A subagent inherits its parent's Ticket, so the ticket's own listing hands
+  // one over; the roster is where it stops (VC-279). Both lifecycle halves,
+  // because the rail splits these rows into Sessions and History and a child
+  // must reach neither.
+  it("drops a Subagent Session, live or finished", () => {
+    expect(
+      buildTicketChatSessionRows([
+        chatRecord({ sessionId: "parent", title: "The chat that delegated" }),
+        chatRecord({
+          sessionId: "child-live",
+          title: "Find the auth refresh",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: true,
+        }),
+        chatRecord({
+          sessionId: "child-done",
+          title: "Summarise the diff",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: false,
+        }),
+      ]).map((chatRow) => chatRow.record.sessionId),
+    ).toEqual(["parent"]);
+  });
+
+  it("keeps a Session another Session STARTED — a peer is not a subagent", () => {
+    expect(
+      buildTicketChatSessionRows([
+        chatRecord({ sessionId: "peer", parentSessionId: "parent" }),
+      ]).map((chatRow) => chatRow.record.sessionId),
+    ).toEqual(["peer"]);
   });
 });
 

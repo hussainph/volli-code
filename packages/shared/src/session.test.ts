@@ -11,11 +11,15 @@ import {
   isSessionActivityState,
   isSessionLaunchKind,
   isSessionPlacement,
+  isListableSession,
+  isSubagentSession,
+  sessionWaitAudience,
   SESSION_ACTIVITY_STATES,
   SESSION_LAUNCH_KINDS,
   SESSION_PLACEMENTS,
   shortSessionId,
 } from "./session";
+import { SESSION_ROLES } from "./agent-runtime";
 import { parseHarnessId } from "./ticket";
 import type { HarnessEvent } from "./harness/types";
 import type {
@@ -24,6 +28,59 @@ import type {
   SessionHarnessState,
   SessionRecord,
 } from "./session";
+
+describe("isSubagentSession", () => {
+  it("is true for the Role a delegated child holds", () => {
+    expect(isSubagentSession({ role: "subagent" })).toBe(true);
+  });
+
+  it("is false for both root Roles, so a listing keeps every Session a person started", () => {
+    expect(isSubagentSession({ role: "ticket" })).toBe(false);
+    expect(isSubagentSession({ role: "project" })).toBe(false);
+  });
+
+  it("answers for every Role the vocabulary holds, so a new one cannot arrive unjudged", () => {
+    // Fail-open by construction: an unlisted Role reads as listable, which is
+    // a Session that shows up rather than one that vanishes.
+    expect(SESSION_ROLES.filter((role) => isSubagentSession({ role }))).toEqual(["subagent"]);
+  });
+});
+
+describe("isListableSession", () => {
+  it("is the listing question, and answers it for every Role", () => {
+    expect(SESSION_ROLES.filter((role) => isListableSession({ role }))).toEqual([
+      "project",
+      "ticket",
+    ]);
+  });
+
+  it("is exactly the Sessions that are not delegated children", () => {
+    // Two names for one answer TODAY, and separate on purpose: a Role that
+    // stopped being listable without being a subagent would move this one and
+    // must not move the other.
+    for (const role of SESSION_ROLES) {
+      expect(isListableSession({ role })).toBe(!isSubagentSession({ role }));
+    }
+  });
+});
+
+describe("sessionWaitAudience", () => {
+  it("sends a listed Session's wait to the listing that can point at it", () => {
+    expect(sessionWaitAudience({ role: "ticket" })).toBe("listing");
+    expect(sessionWaitAudience({ role: "project" })).toBe("listing");
+  });
+
+  it("sends a delegated child's wait to its parent, which is the only surface holding it", () => {
+    expect(sessionWaitAudience({ role: "subagent" })).toBe("parent");
+  });
+
+  it("addresses every Role somewhere — a wait nobody owns is a person never told", () => {
+    expect(SESSION_ROLES.every((role) => sessionWaitAudience({ role }) !== undefined)).toBe(true);
+    expect(SESSION_ROLES.filter((role) => sessionWaitAudience({ role }) === "parent")).toEqual([
+      "subagent",
+    ]);
+  });
+});
 
 describe("SESSION_ACTIVITY_STATES", () => {
   it("lists working, waiting, idle, parked, exited in order", () => {

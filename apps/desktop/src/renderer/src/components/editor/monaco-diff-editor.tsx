@@ -43,6 +43,11 @@ type MonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>
  * `monaco.editor.setTheme` after create.
  */
 export function diffEditorConstructionOptions(input: {
+  /**
+   * The presentation this pane will DRAW, already fitted to its width by
+   * `ticket/diff-fit.ts` — not the stored preference. See the note on
+   * `useInlineViewWhenSpaceIsLimited` below.
+   */
   presentation: DiffPresentation;
   /** The app-wide word-wrap choice (stores/ui); both sides wrap together. */
   wordWrap?: boolean;
@@ -51,9 +56,17 @@ export function diffEditorConstructionOptions(input: {
     automaticLayout: true,
     renderSideBySide: input.presentation !== "inline",
     ...(input.wordWrap === undefined ? {} : { wordWrap: wordWrapOption(input.wordWrap) }),
-    // Honor the user's Side-by-side choice even in a narrow ticket pane —
-    // Monaco's default collapses to inline below ~900px and makes the toggle
-    // look broken (issue #109 smoke).
+    // MONACO'S OWN HEURISTIC STAYS OFF, and the reason has changed shape.
+    // Issue #109 turned it off because it collapses below ~900px — wider than
+    // the ticket pane usually is, so a Side-by-side toggle did nothing in the
+    // app's ordinary layout and read as broken. VC-288 then measured the other
+    // end of that trade: at 150% zoom in a split, two columns are two gutters
+    // and an ellipsis.
+    //
+    // So a diff DOES fall back now — on our number, `diff-fit.ts`'s, resolved
+    // before this function is called. Monaco's stays off because two heuristics
+    // over one pane means the band can say `Side by side` while the editor
+    // silently disagrees at a width nobody chose.
     useInlineViewWhenSpaceIsLimited: false,
     originalEditable: false,
     readOnly: false,
@@ -147,6 +160,11 @@ export interface MonacoDiffEditorProps {
   originalLease: MonacoLease;
   /** Registry lease for the live modified side (ticket `file` identity). */
   modifiedLease: MonacoLease;
+  /**
+   * What to draw, already fitted to the pane's width (`ticket/diff-fit.ts`).
+   * The host measures nothing itself: the band above the editor has to name the
+   * same fit, and a rule computed twice is a rule that can disagree with itself.
+   */
   presentation: DiffPresentation;
   /** Wrap long lines? The app-wide preference (stores/ui), applied to both sides. */
   wordWrap: boolean;
@@ -355,6 +373,9 @@ export function MonacoDiffEditor({
   }, [originalLease, modifiedLease, syncDirty]);
 
   // Presentation toggle updates the same DiffEditor — never a second tab (#51).
+  // A pane that crossed the fit threshold arrives here as the same prop change
+  // a press of the toggle makes, so a resize restyles the live editor rather
+  // than rebuilding one (`diff-fit.ts`, VC-288).
   React.useEffect(() => {
     diffEditorRef.current?.updateOptions({
       renderSideBySide: presentation !== "inline",

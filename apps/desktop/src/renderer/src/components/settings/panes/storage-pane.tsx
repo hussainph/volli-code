@@ -19,9 +19,16 @@ import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { errorMessage } from "@volli/shared";
 
+import {
+  DATA_EXPORT_ACTION_LABEL,
+  DATA_EXPORT_CONFIRM_TITLE,
+  DATA_EXPORT_CONTENTS,
+  DATA_EXPORT_LIMITS,
+} from "../../../../../data-export-copy";
 import type {
   DirtyWorktreeOrphan,
   KeptWorktreeOrphan,
+  PiSessionOrphanInventory,
   RemovedWorktreeOrphan,
 } from "../../../../../ipc/contract";
 import {
@@ -58,6 +65,7 @@ export function StoragePane() {
   return (
     <>
       <RetentionSection />
+      <PiSessionLogsSection />
       <OrphansSection />
       <DatabaseSection />
     </>
@@ -145,6 +153,182 @@ function RetentionSection() {
   );
 }
 
+function PiSessionLogsSection() {
+  const [state, setState] = React.useState<AsyncState<PiSessionOrphanInventory | null>>({
+    status: "ready",
+    data: null,
+  });
+  const [scanning, setScanning] = React.useState(false);
+  const [cleaning, setCleaning] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const fetcher = useLatestAsync();
+  const inventory = state.status === "ready" ? state.data : null;
+
+  async function scan(): Promise<void> {
+    if (scanning) return;
+    const token = fetcher.claim();
+    setScanning(true);
+    setState({ status: "loading" });
+    try {
+      const result = await window.api.piSessions.scanOrphans();
+      if (!fetcher.isCurrent(token)) return;
+      if (!result.ok) {
+        setState({
+          status: "error",
+          message: `Couldn't scan Pi session logs: ${result.error}`,
+          onRetry: () => void scan(),
+        });
+        return;
+      }
+      setState({ status: "ready", data: result.inventory });
+    } catch (error) {
+      if (fetcher.isCurrent(token)) {
+        setState({
+          status: "error",
+          message: `Couldn't scan Pi session logs: ${errorMessage(error)}`,
+          onRetry: () => void scan(),
+        });
+      }
+    } finally {
+      if (fetcher.isCurrent(token)) setScanning(false);
+    }
+  }
+
+  React.useEffect(() => () => fetcher.invalidate(), [fetcher]);
+
+  async function reclaim(): Promise<void> {
+    if (inventory === null || inventory.candidateCount === 0 || cleaning) return;
+    setCleaning(true);
+    try {
+      const result = await window.api.piSessions.reclaimOrphans({
+        scanRevision: inventory.revision,
+        itemIds: inventory.candidates.map((candidate) => candidate.itemId),
+      });
+      if (!result.ok) {
+        toastError(`Couldn't clean up Pi session logs: ${result.error}`);
+        return;
+      }
+      setConfirmOpen(false);
+      if (result.report.kept.length > 0) {
+        toastError(
+          `Kept ${result.report.kept.length} Pi session log(s) because they changed or became referenced.`,
+        );
+      }
+      await scan();
+    } catch (error) {
+      toastError(`Couldn't clean up Pi session logs: ${errorMessage(error)}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
+  const summary =
+    state.status === "loading"
+      ? "Scanning…"
+      : inventory === null
+        ? "Not scanned"
+        : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
+
+  return (
+    <>
+      <AsyncSection
+        title="Pi session logs"
+        icon={DatabaseIcon}
+        action={
+          <SectionIconAction
+            label="Scan for orphaned Pi logs"
+            icon={ArrowsClockwiseIcon}
+            busy={scanning}
+            onAct={() => void scan()}
+          />
+        }
+        before={
+          <PrefRow
+            label="Orphaned logs"
+            hint={
+              <>
+                Only logs not referenced by any Volli session are candidates. Scanning never deletes
+                files.
+              </>
+            }
+          >
+            <span className="text-ui text-muted-foreground">{summary}</span>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={
+                inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+              }
+              onClick={() => setConfirmOpen(true)}
+            >
+              <TrashIcon />
+              Clean up…
+            </Button>
+          </PrefRow>
+        }
+        state={state}
+      >
+        {(report) =>
+          report === null ? null : (
+            <>
+              {report.candidates.map((candidate) => (
+                <ItemRow
+                  key={candidate.itemId}
+                  name={truncateMiddle(candidate.path)}
+                  meta={`${candidate.sessionId} · ${formatFileSize(candidate.sizeBytes)}`}
+                />
+              ))}
+              {report.skipped.map((entry) => (
+                <ItemRow
+                  key={`skipped:${entry.path}`}
+                  name={truncateMiddle(entry.path)}
+                  meta={`Kept — ${entry.reason}`}
+                />
+              ))}
+            </>
+          )
+        }
+      </AsyncSection>
+
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (!cleaning) setConfirmOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clean up orphaned Pi session logs?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block">
+                Permanently deletes {inventory?.candidateCount ?? 0} confirmed orphan file(s) (
+                {formatFileSize(inventory?.candidateBytes ?? 0)}). Main checks every file and the
+                attachment set again before removal. This can&rsquo;t be undone.
+              </span>
+              <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
+                {inventory?.candidates.map((candidate) => candidate.path).join("\n")}
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cleaning}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={cleaning}
+              onClick={(event) => {
+                event.preventDefault();
+                void reclaim();
+              }}
+            >
+              {cleaning ? "Cleaning up…" : "Delete orphaned logs"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 function DatabaseSection() {
   const [sizeBytes, setSizeBytes] = React.useState<number | null>(null);
   const [sizeLoaded, setSizeLoaded] = React.useState(false);
@@ -196,13 +380,13 @@ function DatabaseSection() {
     try {
       const result = await window.api.database("export");
       if (!result.ok) {
-        toastError(`Couldn't export database: ${result.error}`);
+        toastError(`Couldn't export data: ${result.error}`);
         return;
       }
       setSizeBytes(result.sizeBytes);
       setSizeLoaded(true);
     } catch (error) {
-      toastError(`Couldn't export database: ${errorMessage(error)}`);
+      toastError(`Couldn't export data: ${errorMessage(error)}`);
     } finally {
       setExporting(false);
       setExportOpen(false);
@@ -232,7 +416,7 @@ function DatabaseSection() {
               : "Loading…"}
           </span>
         </PrefRow>
-        <PrefRow label="Database export">
+        <PrefRow label={DATA_EXPORT_ACTION_LABEL}>
           <Button size="xs" variant="outline" onClick={() => setExportOpen(true)}>
             Export…
           </Button>
@@ -247,10 +431,9 @@ function DatabaseSection() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Export database?</AlertDialogTitle>
+            <AlertDialogTitle>{DATA_EXPORT_CONFIRM_TITLE}</AlertDialogTitle>
             <AlertDialogDescription>
-              Creates a JSON file containing every project, ticket, comment, session, label, and
-              setting in Volli.
+              <DataExportConfirmBody />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -267,6 +450,26 @@ function DatabaseSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * What the export is, said before it runs.
+ *
+ * A named component rather than inline JSX because the sentence is the
+ * feature: the dialog it sits in only mounts when opened, so this is what a
+ * test can hold, and the limits cannot quietly drift back into a promise of
+ * "every project, ticket, comment, session, label, and setting" (VC-283).
+ *
+ * The exported/limited split is deliberate — the limits come FIRST, because a
+ * person skimming reads one sentence and the one that matters is the one that
+ * says a rescue is not possible from this file.
+ */
+export function DataExportConfirmBody() {
+  return (
+    <>
+      {DATA_EXPORT_LIMITS} {DATA_EXPORT_CONTENTS}
     </>
   );
 }

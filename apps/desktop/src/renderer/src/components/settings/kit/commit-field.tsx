@@ -15,6 +15,7 @@
 import * as React from "react";
 
 import { Input } from "@renderer/components/ui/input";
+import { cn } from "@renderer/lib/utils";
 
 import { CONTROL_W, type ControlWidth } from "./control-width";
 
@@ -31,6 +32,7 @@ export function CommitField({
   placeholder,
   disabled,
   ariaLabel,
+  suffix,
   validate,
   confirm,
   onCommit,
@@ -43,6 +45,16 @@ export function CommitField({
   disabled?: boolean;
   /** For a field whose `<label>` is not adjacent — a table cell, say. */
   ariaLabel?: string;
+  /**
+   * The unit the number in the box counts in, drawn beside it.
+   *
+   * Inside the control rather than in the row's label or its `(i)`, because a
+   * bare `3` is not a setting anyone can read: VC-285 found two authority
+   * thresholds whose units lived only in a popover and in the revert button's
+   * accessible name. It joins the field's `aria-describedby` so the unit is
+   * announced with the value rather than being visual-only.
+   */
+  suffix?: string;
   /** Cheap local check. Return a message to refuse. */
   validate?: (next: string) => string | null;
   /** Last gate before a destructive write. Return false to abandon. */
@@ -56,6 +68,7 @@ export function CommitField({
   const autoId = React.useId();
   const fieldId = id ?? autoId;
   const errorId = `${fieldId}-error`;
+  const unitId = `${fieldId}-unit`;
 
   const [draft, setDraft] = React.useState(value);
   const [error, setError] = React.useState<string | null>(null);
@@ -124,7 +137,9 @@ export function CommitField({
           placeholder={placeholder}
           aria-label={ariaLabel}
           aria-invalid={error !== null}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={
+            [error ? errorId : null, suffix ? unitId : null].filter(Boolean).join(" ") || undefined
+          }
           className={CONTROL_W[width]}
           onChange={(event) => {
             dirty.current = true;
@@ -144,6 +159,19 @@ export function CommitField({
             }
           }}
         />
+        {/* Dims with the field it belongs to: a live unit beside a dead number
+            would read as the control being half on. */}
+        {suffix ? (
+          <span
+            id={unitId}
+            className={cn(
+              "text-ui whitespace-nowrap text-muted-foreground",
+              (disabled || busy) && "opacity-50",
+            )}
+          >
+            {suffix}
+          </span>
+        ) : null}
       </div>
       {error ? (
         <p id={errorId} role="alert" className="text-ui text-destructive">

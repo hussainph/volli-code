@@ -14,6 +14,7 @@ import { EffortPill } from "./composer-effort-ui";
 import { ComposerPicker } from "./composer-picker-ui";
 import {
   ComposerPickerStack,
+  modelIdentityLabel,
   modelPillLabel,
   ModelPill,
   SessionComposer,
@@ -468,6 +469,47 @@ describe("what the model pill is willing to say", () => {
     ).toBe("Azure OpenAI · sonnet-4.5");
   });
 
+  it("says the whole identity where the pill has room for a fragment of it", () => {
+    // VC-288. The pill's visible label is capped at 56px — eight characters and
+    // an ellipsis — and that cap is right: it is the elastic member of a row
+    // that has to survive a 313px composer. What was wrong is that the eight
+    // characters were ALL there was: the tier, the provider and the rest of the
+    // name were unreachable without changing the selection to find out.
+    expect(
+      modelIdentityLabel(
+        MODELS,
+        { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "medium" },
+        { tier: "Fast" },
+      ),
+      // The provider is said even where the pill would leave it out: this is
+      // the answer to "what exactly am I about to send to", and a name that is
+      // unambiguous among today's signed-in providers is still not an account.
+    ).toBe("Fast · sonnet-4.5 · Anthropic");
+
+    expect(
+      modelIdentityLabel(MODELS, {
+        providerId: "anthropic",
+        modelId: "sonnet-4.5",
+        reasoningLevel: "medium",
+      }),
+    ).toBe("sonnet-4.5 · Anthropic");
+  });
+
+  it("names a selection the catalog no longer holds by what is left of it", () => {
+    // A Session pinned to a provider nobody is signed in to. The id is all
+    // there is, and it is still the honest answer.
+    expect(
+      modelIdentityLabel(
+        [],
+        { providerId: "azure", modelId: "gpt-5.6-luna", reasoningLevel: "high" },
+        { providerLabel: "Azure OpenAI" },
+      ),
+    ).toBe("gpt-5.6-luna · Azure OpenAI");
+    expect(modelIdentityLabel([], { providerId: "", modelId: "", reasoningLevel: "" })).toBe(
+      "Model",
+    );
+  });
+
   it("falls back to a noun when there is no model to name", () => {
     expect(modelPillLabel([], { providerId: "", modelId: "", reasoningLevel: "" })).toBe("Model");
   });
@@ -548,6 +590,19 @@ describe("the model pill's controlled open", () => {
     expect(pillMarkup()).toContain('data-state="closed"');
     expect(pillMarkup({ open: false })).toContain('data-state="closed"');
   });
+
+  it("carries the whole identity as its own name, however little it can draw", () => {
+    // VC-288: the visible label is eight characters at a narrow pane, so the
+    // pill's accessible name is where the rest of the fact lives. `title` is
+    // the pointer's half of the same answer; neither is the whole reveal,
+    // because a `title` is not keyboard-reachable and a name is not readable.
+    const tiered = pillMarkup({ selectionTier: "Fast" });
+    expect(tiered).toContain('aria-label="Model: Fast · sonnet-4.5 · Anthropic"');
+    expect(tiered).toContain('title="Fast · sonnet-4.5 · Anthropic"');
+  });
+
+  // The line the open list leads with is portalled, so it exists only in a
+  // real document: `composer-model-picker.test.tsx` is where it is pinned.
 });
 
 describe("what a composed message actually sends", () => {
@@ -636,40 +691,48 @@ describe("what a composed message actually sends", () => {
 
 describe("the composer while a question is waiting on an answer", () => {
   /** The blocked turn, exactly as the plane hands it over: live, and asked. */
-  function answeringComposer(overrides: Partial<SessionComposerProps> = {}): string {
+  function askedComposer(overrides: Partial<SessionComposerProps> = {}): string {
     return renderToStaticMarkup(
       <SessionComposer
-        {...composerProps({ working: true, interactionOpen: true, answering: true, ...overrides })}
+        {...composerProps({ working: true, interactionOpen: true, ...overrides })}
       />,
     );
   }
 
-  it("is a live box that says where its words are going", () => {
-    const html = answeringComposer();
-    // Never disabled, which is the whole point: a question must not be able to
-    // take the composer away from the person it is asking.
-    expect(html).toContain('placeholder="Your answer"');
-    expect(html).toContain('aria-label="Answer"');
+  it("stays the message box it always was, named as one", () => {
+    // It used to rename itself Answer and take the question's words, which made
+    // two answer fields with two submit paths for one question — and the same
+    // question could be sent twice. The card above owns the answer; this box
+    // owns messages, and it never stops being live or being called one.
+    const html = askedComposer();
+    expect(html).toContain('placeholder="Ask, plan, or implement…"');
+    expect(html).toContain('aria-label="Message"');
+    expect(html).not.toContain('aria-label="Answer"');
+    expect(html).not.toContain('placeholder="Your answer"');
     expect(html).not.toContain("<textarea disabled");
   });
 
-  it("stops calling the press a queue while the queue could not release it", () => {
+  it("keeps the press that sends a message called what it is", () => {
     // `ask_user` blocks INSIDE a turn, so `working` holds for the whole of a
-    // pending question — and a queue drains into an idle Session, which this
-    // one cannot become until the question is answered.
-    expect(answeringComposer()).toContain('aria-label="Answer"');
-    expect(answeringComposer()).not.toContain('aria-label="Queue"');
+    // pending question: a message typed here joins the queue, exactly as one
+    // typed beside any other live turn does.
+    expect(askedComposer()).toContain('aria-label="Queue"');
     // The turn is still live, so the way to stop it is still on the row.
-    expect(answeringComposer()).toContain('aria-label="Stop turn"');
+    expect(askedComposer()).toContain('aria-label="Stop turn"');
   });
 
-  it("is the ordinary message box again the moment nothing is asked", () => {
-    const html = renderToStaticMarkup(
-      <SessionComposer {...composerProps({ working: true, interactionOpen: true })} />,
-    );
-    expect(html).toContain('placeholder="Ask, plan, or implement…"');
-    expect(html).toContain('aria-label="Message"');
-    expect(html).toContain('aria-label="Queue"');
+  it("asks for the same thing whether or not a question stands above it", () => {
+    // The box a reader's hands are already in does not change under them when a
+    // request appears: same name, same placeholder, same press.
+    const unasked = renderToStaticMarkup(<SessionComposer {...composerProps({ working: true })} />);
+    for (const attribute of [
+      'aria-label="Message"',
+      'placeholder="Ask, plan, or implement…"',
+      'aria-label="Queue"',
+    ]) {
+      expect([attribute, unasked.includes(attribute)]).toEqual([attribute, true]);
+      expect([attribute, askedComposer().includes(attribute)]).toEqual([attribute, true]);
+    }
   });
 });
 

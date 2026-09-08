@@ -252,6 +252,11 @@ export default defineConfig(({ mode }) => ({
         // looked, and the two-layer safety in main would have refused it with a
         // sentence written for a channel rather than for a person.
         "src/components/files/navigator-mutations.ts",
+        // What one external-app scan MEANS for every Files menu and for
+        // Integrations (VC-287): whether a failed look keeps the confirmed
+        // list or replaces it. The shipped defect was exactly a branch here —
+        // a scan that could not run rendered as one that found nothing.
+        "src/components/files/external-app-discovery-model.ts",
         "src/components/board/new-ticket/branch-picker.ts",
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
@@ -269,6 +274,12 @@ export default defineConfig(({ mode }) => ({
         // tells an owner their pass was free. Both are one-character mistakes
         // that no view test would catch.
         "src/usage/usage-format.ts",
+        // Which rows a usage breakdown has and whose money each carries — the
+        // Ticket rail folds a delegated child's spend into the Session that
+        // delegated it (VC-279), so a branch missed here either loses money
+        // out of a rail that must add up to the total above it, or attributes
+        // one person's Session to another.
+        "src/components/usage/usage-rail-model.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -303,6 +314,13 @@ export default defineConfig(({ mode }) => ({
         "src/components/theme/terminal-settings-model.ts",
         "src/components/ticket/activity.ts",
         "src/components/ticket/clamp-policy.ts",
+        // Whether a pane can hold two columns of diff (VC-288). Gated for
+        // `clamp-policy.ts`'s reason one line up: it is a threshold read by two
+        // surfaces that must agree — the control band that says the pane is
+        // narrow, and the editor that draws one column because it is — and a
+        // wrong answer here is a diff nobody can read at a width a screenshot
+        // of a wide window would never show.
+        "src/components/ticket/diff-fit.ts",
         "src/components/ticket/label-picker-model.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",

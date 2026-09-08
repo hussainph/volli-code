@@ -160,7 +160,9 @@ function sessionRowDragPayload(
   projectId: string,
 ): SplitDragPayload | null {
   const target = row.target;
-  if (target === null) return null;
+  // A closed terminal's saved record is not draggable: a pane holds a live
+  // surface, and this Session no longer has one (VC-290).
+  if (target === null || target.kind === "session-detail") return null;
   const ticketId = row.ticket?.id ?? null;
   const origin =
     ticketId === null

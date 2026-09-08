@@ -102,8 +102,28 @@ parked on it, and stopping the parent stops its children. In the parent's chat
 its children show in the Activity Island's agents cluster (VC-269): one chip per
 child, working / done / failed / stopped, where a row peeks the child's
 transcript read-only in an overlay, opens it as a full tab, or stops it as the
-person (`sessions.stop`, recorded with the `user` actor). Write-capable children
-in a shared tree are VC-266's question.
+person (`sessions.stop`, recorded with the `user` actor). That cluster is the
+only place a child is a ROW: a Subagent Session never appears in a Session
+listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
+Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
+about how the agents worked, not about what the person started. Only the
+listings drop them; the durable records keep every child, which is what the
+cluster reads, what usage counts, and what `volli session list` still returns
+carrying its Role for an orchestrator reading its own fleet. A working child
+still lights its Ticket's board ring — that is work happening there — but a
+child's wait never draws the `waiting` ring, which would send a person to a
+Ticket holding no row they could answer. The row that stands for that work is
+the parent's: a Session that delegated reads `working` and stays in the
+sidebar's Active band for as long as any child of it is running, dated by the
+freshest fact in the delegation, so the band and the board never disagree about
+one Ticket. A wait is an errand, so dropping the
+row moves the addressee rather than the errand (`sessionWaitAudience`): a child
+stopped on a permission or an expired credential marks its chip in the parent's
+cluster and is announced there, which is the only surface that can hand that
+wait to anyone. What a child SPENT is folded the same way — the Ticket's usage
+breakdown adds a child's cost to the Session that delegated it rather than
+naming it in a row of its own, while the per-model breakdown counts every call
+as made. Write-capable children in a shared tree are VC-266's question.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 

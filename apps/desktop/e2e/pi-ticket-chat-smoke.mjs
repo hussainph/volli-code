@@ -1066,8 +1066,7 @@ async function main() {
         )
           .then(() => true)
           .catch(() => false);
-        const placeholderShown =
-          (await page.getByRole("button", { name: "Model", exact: true }).count()) > 0;
+        const placeholderShown = (await page.getByRole("button", { name: /^Model: / }).count()) > 0;
         return {
           ok: shown && !placeholderShown,
           detail: `label=${defaultModel.label} shown=${shown} placeholderShown=${placeholderShown}`,

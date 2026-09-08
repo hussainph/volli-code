@@ -1,6 +1,12 @@
 import { app, BrowserWindow, dialog, Menu, type MenuItemConstructorOptions } from "electron";
 import { writeFile } from "node:fs/promises";
 import { errorMessage } from "@volli/shared";
+import {
+  DATA_EXPORT_ACTION_LABEL,
+  DATA_EXPORT_CONTENTS,
+  DATA_EXPORT_LIMITS,
+  DATA_EXPORT_MENU_LABEL,
+} from "../data-export-copy";
 import type { UiZoomCommand, VolliIpcEvent } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
 import { buildExportDocument, defaultExportFilename, serializeExportDocument } from "./db/export";
@@ -27,12 +33,18 @@ function sendZoom(cmd: UiZoomCommand): void {
 }
 
 /**
- * File > Export Database as JSON… and Settings → Storage: prompts for a save
+ * File > Export data as JSON… and Settings → Storage: prompts for a save
  * location, then writes a full `buildExportDocument` dump there. A degraded db
  * (open/migrate failed at boot — the same `DbHandle` the data/artifact IPC
  * handlers degrade against) surfaces immediately rather than opening a dialog
  * for a write that can never happen. Every failure — a degraded db or a write
  * error — goes through `dialog.showErrorBox`, never swallowed (CLAUDE.md).
+ *
+ * The save dialog carries the limits (VC-283). This is the last surface before
+ * a file exists, and macOS renders `message` above the filename field, so the
+ * sentence that says this document cannot be restored sits in front of the
+ * person at the moment they choose where to keep it — not only in the Settings
+ * confirm they may never have opened.
  */
 export async function exportDatabase(dbHandle: DbHandle): Promise<void> {
   if (!dbHandle.ok) {
@@ -44,6 +56,8 @@ export async function exportDatabase(dbHandle: DbHandle): Promise<void> {
   const now = new Date();
   const win = BrowserWindow.getFocusedWindow();
   const saveDialogOptions: Electron.SaveDialogOptions = {
+    title: DATA_EXPORT_ACTION_LABEL,
+    message: `${DATA_EXPORT_LIMITS} ${DATA_EXPORT_CONTENTS}`,
     defaultPath: defaultExportFilename(now),
     filters: [{ name: "JSON", extensions: ["json"] }],
   };
@@ -102,7 +116,7 @@ export function registerAppMenu(
       submenu: [
         ...agentToolsItems,
         {
-          label: "Export Database as JSON…",
+          label: DATA_EXPORT_MENU_LABEL,
           click: () => {
             void exportDatabase(dbHandle);
           },

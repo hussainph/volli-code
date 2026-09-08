@@ -186,7 +186,6 @@ function terminalDetailFor(
   scope: Pick<SessionScope, "harnessId" | "launchKind" | "placement">,
   cwd: string,
   harnessSessionId: string | null,
-  exitCode: number | null,
 ): TerminalAttachmentDetail {
   return {
     kind: "volli.terminal.v1",
@@ -196,7 +195,6 @@ function terminalDetailFor(
     harnessSessionId,
     launchKind: scope.launchKind,
     placement: scope.placement,
-    exitCode,
   };
 }
 
@@ -375,7 +373,7 @@ export class PtyManager {
     const attachmentId = randomUUID();
     let startCommandId: string | undefined;
     const recordAttachmentFailure = async (failure: unknown, cwd: string): Promise<void> => {
-      const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null, null);
+      const detail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null);
       try {
         await sessionEngine.observe({
           id: randomUUID(),
@@ -611,12 +609,7 @@ export class PtyManager {
         );
         return { ok: false, error: "Window was closed before the terminal could start" };
       }
-      const terminalDetail = terminalDetailFor(
-        scope,
-        cwd,
-        scope.resume?.harnessSessionId ?? null,
-        null,
-      );
+      const terminalDetail = terminalDetailFor(scope, cwd, scope.resume?.harnessSessionId ?? null);
       try {
         await sessionEngine.observe({
           id: randomUUID(),
@@ -816,11 +809,8 @@ export class PtyManager {
     exitCode: number,
   ): Promise<void> {
     const occurredAt = Date.now();
+    await this.recordTerminalExitCode(sessionEngine, sessionId, session, exitCode, occurredAt);
     try {
-      // `session.terminalDetail` is the launch snapshot. The hook/socket path
-      // may have since linked a newer harness id or active harness to this
-      // attachment; re-emitting that snapshot on exit would overwrite that
-      // newer evidence. Closing is the only fact the PTY itself observed.
       await sessionEngine.observe({
         id: randomUUID(),
         kind: "attachment.closed",
@@ -833,6 +823,50 @@ export class PtyManager {
     } catch (error) {
       console.error(
         `[volli] failed to close terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Reports the status the PTY just gave us, before the close that ends the
+   * attachment (VC-290).
+   *
+   * The close records an OUTCOME — completed or failed — which cannot tell `0`
+   * from "nobody was watching", and the relaunch sweep's own closes are exactly
+   * the second case. So the number itself is observed, or nothing is: a session
+   * detail that says "Exit status unavailable" is honest about a code nobody
+   * saw, while a fabricated `0` would report success for a process that may
+   * have crashed.
+   *
+   * The adapter only EMITS the fact. It reads no projection, merges nothing,
+   * and writes no adapter payload: `attachment.exited` is product vocabulary
+   * the Session ledger owns and projects once, so there is no window in which a
+   * harness link recorded between a read and a write could be lost.
+   *
+   * Its own try/catch, and awaited before the close rather than raced with it:
+   * the close is the fact that makes the Session navigable as history, so a
+   * failure to record the code must cost the code and nothing else.
+   */
+  private async recordTerminalExitCode(
+    sessionEngine: SessionEngine,
+    sessionId: string,
+    session: Session,
+    exitCode: number,
+    occurredAt: number,
+  ): Promise<void> {
+    try {
+      await sessionEngine.observe({
+        id: randomUUID(),
+        kind: "attachment.exited",
+        sessionId,
+        attachmentId: session.attachmentId,
+        occurredAt,
+        provenance: terminalAdapterProvenance(),
+        exitCode,
+      });
+    } catch (error) {
+      console.error(
+        `[volli] failed to record exit code for terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
       );
     }
   }

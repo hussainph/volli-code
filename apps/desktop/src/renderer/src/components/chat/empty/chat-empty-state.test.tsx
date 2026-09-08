@@ -1,13 +1,16 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { VenueSnapshot } from "@volli/shared";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import type { VenueReading, VenueSnapshot } from "@volli/shared";
 
 import { ChatEmptyState } from "./chat-empty-state";
 import { VenueChips } from "./venue-chips";
 import { VenueVisual } from "./venue-visual";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore } from "@renderer/stores/venue";
+import { useVenueStore, venueKey } from "@renderer/stores/venue";
 
 function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
   return {
@@ -24,7 +27,39 @@ function draw(node: React.ReactElement): string {
   return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
 }
 
-afterEach(() => {
+/**
+ * A live mount, for the cases that read a store state set by the test: a
+ * static render reads zustand's initial snapshot and would draw the empty
+ * store whatever was seeded. The venue door answers the mount-time refresh
+ * with `reading` — the same answer the seeded entry came from — so the read
+ * settles (nothing is left in flight on the singleton for a later test to
+ * inherit) and lands on the state the test drew.
+ */
+let mounted: { root: Root; host: HTMLElement } | null = null;
+function mount(node: React.ReactElement, reading: VenueReading): string {
+  Object.assign(window, {
+    api: { venue: { snapshot: vi.fn().mockResolvedValue({ ok: true, reading }) } },
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  act(() => root.render(<TooltipProvider>{node}</TooltipProvider>));
+  mounted = { root, host };
+  return host.innerHTML;
+}
+
+afterEach(async () => {
+  if (mounted !== null) {
+    // Let the mount-time read settle before the store is reset, so its answer
+    // cannot land in the next test's store.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => mounted?.root.unmount());
+    mounted.host.remove();
+    mounted = null;
+  }
+  Reflect.deleteProperty(window, "api");
   useVenueStore.setState({ byScope: {} });
   useUiStore.setState({ homeEmptyVisual: "streak" });
 });
@@ -85,6 +120,26 @@ describe("VenueChips", () => {
     expect(markup).toContain("Worktree");
     expect(markup).not.toContain("HEAD");
   });
+
+  it("puts the untruncated value one focus away, not only one hover", () => {
+    // VC-288. The chip caps at `max-w-48` and truncates, which is right — a
+    // caption wider than the drawing above it is what made the two read as
+    // thrown together. What was wrong is where the whole value lived: a
+    // tooltip on a `<span>`, which a pointer can reach and a keyboard cannot.
+    const markup = draw(<VenueChips venue={venue()} />);
+    const chips = markup.split("<button").slice(1);
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) {
+      // A real button: in the tab order, and therefore a trigger Radix opens
+      // on focus as well as on hover.
+      expect(chip).toContain('type="button"');
+      expect(chip).not.toContain("disabled");
+    }
+    // And the full value is the control's own name, so nothing has to be
+    // opened at all to hear it.
+    expect(markup).toContain('aria-label="Worktree · /worktrees/volli-code-abc/VC-81"');
+    expect(markup).toContain('aria-label="Branch · volli/VC-81-auto-title"');
+  });
 });
 
 /**
@@ -121,5 +176,41 @@ describe("ChatEmptyState", () => {
 
     expect(markup).not.toContain("Worktree");
     expect(markup).not.toContain('data-empty-visual="venue"');
+  });
+
+  it("draws the waiting shape, not the main checkout, for a ticket still resolving its worktree (VC-286)", () => {
+    useVenueStore.setState({
+      byScope: {
+        // The project's own reading exists and is the main checkout — the
+        // one thing this ticket's chat must not borrow while it waits.
+        [venueKey("p1", null)]: {
+          status: "ready",
+          venue: venue({ kind: "main-checkout", diff: null }),
+        },
+        [venueKey("p1", "t1")]: { status: "resolving" },
+      },
+    });
+
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, { state: "pending" });
+
+    expect(markup).toContain('data-venue-state="resolving"');
+    expect(markup).not.toContain("Main checkout");
+    expect(markup).not.toContain("Worktree");
+    expect(markup).not.toContain('data-empty-visual="venue"');
+  });
+
+  it("draws the venue once the ticket's checkout is measured", () => {
+    useVenueStore.setState({
+      byScope: { [venueKey("p1", "t1")]: { status: "ready", venue: venue() } },
+    });
+
+    const markup = mount(<ChatEmptyState projectId="p1" ticketId="t1" />, {
+      state: "measured",
+      venue: venue(),
+    });
+
+    expect(markup).toContain('data-empty-visual="venue"');
+    expect(markup).toContain("Worktree");
+    expect(markup).not.toContain("data-venue-state");
   });
 });

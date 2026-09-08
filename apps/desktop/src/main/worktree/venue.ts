@@ -9,17 +9,19 @@
  * kept apart. See {@link import("@volli/shared").VenueFileState}.
  *
  * WHICH DIRECTORY is not decided here. {@link readVenue} resolves it with
- * exactly the rule `session-runtime/location.ts` resolves a Session's own
- * directory by — `ticket.worktreePath ?? project.path` — so the tree drawn is
- * always the tree the agent would write to, including for a ticket that runs in
- * the main checkout (VC-96) and for one whose worktree has not materialised yet.
+ * exactly the rule `session-runtime/location.ts` binds a Session's own
+ * directory by, INCLUDING that rule's refusal (VC-286): a ticket that runs in
+ * an isolated worktree is measured in that worktree or not at all, because
+ * `prepare` would rather fail than start such a Session in the main checkout.
+ * A ticket that runs in the main checkout by configuration (VC-96) is measured
+ * there, exactly where its Session binds.
  *
  * Async git throughout, like the Change Set reads and for the same reason: this
  * runs on the main process, and a status over a big tree is not something to
  * block a cursor on.
  */
 import type Database from "better-sqlite3";
-import type { VenueFileCounts, VenueKind, VenueSnapshot } from "@volli/shared";
+import type { VenueFileCounts, VenueKind, VenueReading, VenueSnapshot } from "@volli/shared";
 
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
@@ -79,15 +81,24 @@ export interface VenueTarget {
 }
 
 /**
- * The venue a Session of this scope runs in, measured.
+ * The venue a Session of this scope runs in — measured, or reported as not yet
+ * existing.
  *
- * The directory is resolved by the SAME rule the Session runtime binds one by
- * (`session-runtime/location.ts`: `ticket.worktreePath ?? project.path`), so
- * this can never draw a tree the agent is not standing in. Three cases fall out
- * of that one rule rather than needing branches of their own: a Board Session
- * (no ticket), a Ticket Session in its worktree, and a Ticket Session in the
- * main checkout — whether because the ticket runs unisolated (VC-96) or because
- * its worktree has not been materialised yet.
+ * The directory is resolved by the SAME rule the Session runtime binds one by,
+ * so this can never draw a tree the agent is not standing in. Four cases fall
+ * out of that one rule: a Board Session (the project's main checkout), a Ticket
+ * Session in its materialised worktree, a Ticket Session in the main checkout
+ * because its ticket runs unisolated (VC-96), and — the case that is NOT a
+ * measurement — a worktree-scoped ticket with no worktree yet.
+ *
+ * That last one answers `pending` rather than falling back to the project path
+ * (VC-286). `session-runtime/location.ts` does not fall back either: it runs
+ * `ensure` and throws rather than starting such a Session in the user's own
+ * checkout. A main-checkout snapshot here would therefore be a reading of a
+ * tree nothing will run in — which is exactly how the empty chat came to caption
+ * a ticket with `Main checkout` while every other surface named its worktree.
+ * It stays `pending` for as long as that is true: while creation is in flight,
+ * after a removal, and after a creation that failed.
  *
  * A ticket from another project is refused rather than silently measured under
  * the project it was asked for; a git failure (including a stamped worktree
@@ -97,7 +108,7 @@ export interface VenueTarget {
 export async function readVenue(
   deps: VenueReadDeps,
   target: VenueTarget,
-): Promise<WorktreeResult<VenueSnapshot>> {
+): Promise<WorktreeResult<VenueReading>> {
   const project = getProjectById(deps.db, target.projectId);
   if (project === undefined) return err("Unknown project");
   const ticket = target.ticketId === null ? undefined : getTicketRow(deps.db, target.ticketId);
@@ -106,12 +117,18 @@ export async function readVenue(
     return err("Ticket belongs to another project");
   }
   const worktreePath = ticket?.worktree_path ?? null;
-  return venueSnapshot(
+  // Asked BEFORE any git runs: an unresolved destination is not a slow read,
+  // it is the absence of anything to read.
+  if (worktreePath === null && ticket !== undefined && ticket.uses_worktree !== 0) {
+    return ok({ state: "pending" });
+  }
+  const measured = await venueSnapshot(
     deps.gitAsync ?? runGitCapturingAsync,
     worktreePath === null
       ? { path: project.path, kind: "main-checkout", baseBranch: null }
       : { path: worktreePath, kind: "worktree", baseBranch: ticket?.base_branch ?? null },
   );
+  return measured.ok ? ok({ state: "measured", venue: measured.value }) : measured;
 }
 
 /** One dirty path and which of the three loose states it is in. */

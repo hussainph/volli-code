@@ -13,25 +13,27 @@
  * A timer would spend an indexed read every few seconds to be told nothing
  * happened, on a surface whose whole argument is that spend should be cheap to
  * watch.
+ *
+ * WHICH ROWS a breakdown has, and whose money each one carries, is decided in
+ * `usage-rail-model.ts` — pure, beside this file, so a test can reach it.
  */
 import * as React from "react";
 
-import {
-  EMPTY_SESSION_USAGE_SUMMARY,
-  shortSessionId,
-  type SessionListingRow,
-  type SessionUsageReport,
-  type SessionUsageScope,
-} from "@volli/shared";
+import { type SessionUsageReport, type SessionUsageScope } from "@volli/shared";
 
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
+import {
+  groupRows,
+  modelLabel,
+  ticketSessionRows,
+} from "@renderer/components/usage/usage-rail-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { USAGE_WINDOW_MS, useUsageStore, usageKey, type UsageQuery } from "@renderer/stores/usage";
-import type { UsageGroupRow, UsageWindow } from "@renderer/usage/usage-format";
+import type { UsageWindow } from "@renderer/usage/usage-format";
 
 /**
  * A value that changes whenever any chat Session's lifecycle moves.
@@ -150,8 +152,14 @@ export function HomeUsageRailCard({
   // metered` only means anything if the first number counts this project's
   // Sessions and all of them: the resident chat slices are keyed by whatever
   // is open in the window, which drops every closed and terminal Session and
-  // counts other projects' as well. The same rows the sidebar's bands and ⌘K
-  // read, so the count agrees with what a reader can see.
+  // counts other projects' as well.
+  //
+  // It is the durable POPULATION, and since VC-279 that is deliberately wider
+  // than any listing a reader can scroll: the sidebar's bands, ⌘K and Home all
+  // drop Subagent Sessions, and this count keeps them because they are
+  // Sessions that ran and spent. The number beside it is what was metered, so
+  // the pair still reads as "this is everything, this much of it cost money" —
+  // it was never a count of rows on screen.
   const ensureProjectSessions = useProjectSessionsStore((state) => state.ensure);
   React.useEffect(() => {
     void ensureProjectSessions(projectId);
@@ -204,95 +212,4 @@ export function TicketUsageRailBlock({ ticketId }: { ticketId: string }) {
       topModelLabel={topModel === undefined ? null : modelLabel(topModel.key)}
     />
   );
-}
-
-/**
- * Every Session on this Ticket, metered or not — the union of the roster and
- * the report's groups.
- *
- * THE ROSTER IS NOT JUST A SOURCE OF LABELS. Passing only the metered groups
- * would drop every manual terminal companion and every chat that never reached
- * a model, which is the majority of Sessions on a Ticket someone has been
- * poking at — and the card's own count would then say "2 sessions" about a
- * Ticket with six. An unmetered Session appears at `—`, which reads as
- * unmeasured rather than free and is exactly the gap a reader needs to see:
- * it is where the spend Volli never mediated went.
- *
- * A metered group the roster no longer holds is kept too, at the bottom by
- * cost order. Its Session has been deleted; the money it spent has not.
- */
-function ticketSessionRows(
-  report: SessionUsageReport,
-  roster: readonly SessionListingRow[] | undefined,
-): readonly UsageGroupRow[] {
-  const metered = groupRows(report, (key) => sessionLabel(key, roster));
-  const meteredKeys = new Set(report.groups.map((group) => group.key));
-  const unmetered = (roster ?? [])
-    .map((row) => rowSessionId(row))
-    .filter((sessionId) => !meteredKeys.has(sessionId))
-    .map((sessionId) => ({
-      key: sessionId,
-      label: sessionLabel(sessionId, roster),
-      usage: EMPTY_SESSION_USAGE_SUMMARY,
-    }));
-  // After the metered rows rather than interleaved: the list is ordered by what
-  // things cost, and every row here cost an amount nobody can compare.
-  return [...metered, ...unmetered];
-}
-
-/** A report's groups as display rows, already ordered by known cost. */
-function groupRows(
-  report: SessionUsageReport,
-  label: (key: string | null) => string,
-): readonly UsageGroupRow[] {
-  return report.groups.map((group) => ({
-    // `null` is a real group — unticketed spend, or a Session the roster no
-    // longer holds — so it needs a stable key rather than being dropped.
-    key: group.key ?? "\u0000none",
-    label: label(group.key),
-    usage: group.usage,
-  }));
-}
-
-/**
- * `anthropic/claude-opus-4-1` → `claude-opus-4-1`.
- *
- * The provider prefix is dropped rather than prettified: at a rail's width the
- * model is the part that distinguishes two rows, and a catalogue of display
- * names would be a second copy of something that moves with every provider
- * release. The full id stays available in the ledger.
- */
-function modelLabel(key: string | null): string {
-  if (key === null) return "Unknown model";
-  const slash = key.indexOf("/");
-  return slash === -1 ? key : key.slice(slash + 1);
-}
-
-/**
- * A Session id resolved to its title, or its short id when the roster does not
- * hold it.
- *
- * `shortSessionId` is the app's own stable human-facing identifier, so a
- * Session whose title never landed still reads as the same thing the CLI and
- * the sidebar would call it.
- */
-function sessionLabel(
-  key: string | null,
-  roster: readonly SessionListingRow[] | undefined,
-): string {
-  if (key === null) return "Unattributed";
-  const title = roster?.find((row) => rowSessionId(row) === key)?.record.title;
-  return title !== undefined && title !== "" ? title : `Session ${shortSessionId(key)}`;
-}
-
-/**
- * A listing row's Session id, whichever arm it is.
- *
- * The two records spell it differently (`SessionRecord.id` against
- * `ChatSessionRecord.sessionId`), so the union has to be narrowed rather than
- * read through. Spelled once here because getting it wrong silently yields no
- * match, which renders as a bare id rather than as an error.
- */
-function rowSessionId(row: SessionListingRow): string {
-  return row.kind === "terminal" ? row.record.id : row.record.sessionId;
 }

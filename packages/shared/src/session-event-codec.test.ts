@@ -3,6 +3,7 @@ import {
   assertSession,
   assertSessionEvent,
   parseRendererSessionEvent,
+  scrubSessionAuthority,
   scrubSessionCommand,
   scrubSessionEvent,
   scrubSessionEventPayload,
@@ -173,6 +174,11 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       failure: { code: "spawn", detail: null, diagnostic: null },
     },
     { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+    // The executor's process status (VC-290). `0` is a value like any other
+    // here: a round trip that turned it into an absence would be the exact
+    // confusion the fact exists to end.
+    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
+    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 137 },
     { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
     { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
     { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
@@ -1369,6 +1375,57 @@ describe("the renderer-safe scrub", () => {
     expect(scrubbed.kind === "attachment.opened" && "native" in scrubbed.attachment).toBe(false);
   });
 
+  /*
+   * The Authority summary (VC-285) is the ONE thing the attachment scrub keeps
+   * withholding and a surface now needs: a chip that says what the live
+   * attachment was pinned to. It is derived beside the scrub rather than added
+   * back to `RendererSessionAttachment`, so the durable Snapshot's recovery-
+   * adjacent remainder — the tool surface, the classifier model, the location,
+   * the thresholds — stays behind the product edge.
+   */
+  it("summarizes the live attachment's saved policy without shipping the Snapshot", () => {
+    const summary = scrubSessionAuthority({ ...attachment, authority: recordedAuthority });
+
+    expect(summary).toEqual({
+      attachmentId: "attachment-1",
+      snapshot: {
+        enforcement: "enforce",
+        rulePackId: BUILTIN_RULE_PACK_ID,
+        rulePackHash: BUILTIN_RULE_PACK_HASH,
+      },
+    });
+    // Everything else the Snapshot carries stays host-side.
+    for (const withheld of ["tools", "classifierModel", "fallback", "location", "judgmentMode"]) {
+      expect(withheld in (summary?.snapshot ?? {})).toBe(false);
+    }
+  });
+
+  it("keeps observe distinguishable from enforce, because they are different outcomes", () => {
+    expect(
+      scrubSessionAuthority({
+        ...attachment,
+        authority: { ...recordedAuthority, enforcement: "observe" },
+      })?.snapshot?.enforcement,
+    ).toBe("observe");
+  });
+
+  /*
+   * A `null` Snapshot is a permanent answer, not a gap: `enforcement: "off"`
+   * hands the attachment none, and so does every attachment written before
+   * VC-44. The summary says so rather than letting a reader infer today's
+   * project setting.
+   */
+  it("reports an attachment that saved no Snapshot as exactly that", () => {
+    expect(scrubSessionAuthority(attachment)).toEqual({
+      attachmentId: "attachment-1",
+      snapshot: null,
+    });
+  });
+
+  it("has nothing to say when no attachment is live", () => {
+    expect(scrubSessionAuthority(null)).toBeNull();
+  });
+
   it("nulls a failure's diagnostic beside its scrubbed attachment", () => {
     const scrubbed = scrubSessionEventPayload({
       kind: "attachment.failed",
@@ -1533,6 +1590,10 @@ describe("the renderer-safe scrub", () => {
       { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
       { kind: "session.signaled", signal: "done", reason: null },
       { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+      // Product vocabulary, not adapter correlation: the exit code crosses to
+      // the renderer whole, which is what lets a client show it without
+      // reparsing an adapter's opaque native detail.
+      { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
       { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
       { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
       { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },

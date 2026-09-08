@@ -1,9 +1,21 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
+import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
+import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
 import { openRawDb } from "./test-helpers";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
 
 /**
@@ -16,12 +28,20 @@ const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
 let dir: string;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-function tempDbPath(): string {
+function tempDbPath(dbBasename = "volli.db"): string {
   dir = mkdtempSync(join(tmpdir(), "volli-migrations-test-"));
-  return join(dir, "volli.db");
+  return join(dir, dbBasename);
+}
+
+function matchingBackupNames(dbPath: string): string[] {
+  const candidatePattern = migrationBackupCandidatePattern(dbPath);
+  return readdirSync(dir)
+    .filter((name) => candidatePattern.test(name))
+    .toSorted();
 }
 
 /** Column names for a table, via `PRAGMA table_info` — used to assert migration 003's additive columns. */
@@ -173,6 +193,37 @@ function buildV8DbWithTicket(dbPath: string): Database.Database {
        VALUES ('t1', 'p1', 1, 'Ticket', '', 'todo', 'medium', 1, 0, 1, 0, 0)`,
   ).run();
   return db;
+}
+
+/**
+ * Builds a v40 WAL database with a real Session row and more than 32 MiB of
+ * reclaimable pages. VC-326's migration 42 and digest helper are not on this
+ * branch's base, so the integration test below applies migration 41 and uses a
+ * non-empty `SELECT *` Session row dump as its content digest.
+ */
+function buildV40DbWithReclaimableSpace(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath, { toVersion: 40 });
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 1, 0, 0)`,
+  ).run();
+  db.prepare(
+    "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', 'Preserved', 1)",
+  ).run();
+  db.exec(`
+    CREATE TABLE deleted_compaction_payload (payload BLOB NOT NULL);
+    INSERT INTO deleted_compaction_payload (payload) VALUES (zeroblob(${40 * 1024 * 1024}));
+    DELETE FROM deleted_compaction_payload;
+  `);
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  return db;
+}
+
+function sessionRowDump(db: Database.Database): string {
+  return JSON.stringify(db.prepare("SELECT * FROM sessions ORDER BY id").all());
 }
 
 /** Builds a populated v10 db to exercise the attachment-storage upgrade path. */
@@ -398,12 +449,25 @@ describe("migrate — fresh install", () => {
     db.close();
   });
 
-  it("skips the pre-migration backup copy on a brand-new database", () => {
+  it("skips the pre-migration backup copy and retention cleanup on a brand-new database", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
+    writeFileSync(`${dbPath}.backup-v3`, "older existing copy");
+    writeFileSync(`${dbPath}.backup-v7`, "existing copy");
+    writeFileSync(`${dbPath}.backup-v7-wal`, "existing sidecar");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
     migrate(db, dbPath);
 
     expect(existsSync(`${dbPath}.backup-v0`)).toBe(false);
+    expect(readFileSync(`${dbPath}.backup-v3`, "utf8")).toBe("older existing copy");
+    expect(readFileSync(`${dbPath}.backup-v7`, "utf8")).toBe("existing copy");
+    expect(readFileSync(`${dbPath}.backup-v7-wal`, "utf8")).toBe("existing sidecar");
+    const retentionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
+      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
+    );
+    expect(retentionLogs).toEqual([]);
     db.close();
   });
 
@@ -490,6 +554,344 @@ describe("migrate — 002 to 004 upgrade path", () => {
     // No backup should exist for the already-latest version — the second
     // migrate() call had nothing to apply.
     expect(existsSync(`${dbPath}.backup-v${latestVersion}`)).toBe(false);
+    db.close();
+  });
+});
+
+describe("migrate — post-success compaction", () => {
+  it("compacts a qualifying WAL database after commit while preserving Session content", () => {
+    const dbPath = tempDbPath();
+    const db = buildV40DbWithReclaimableSpace(dbPath);
+    const beforeBytes = statSync(dbPath).size;
+    let digestBeforeVacuum: string | undefined;
+    let freeBytesBeforeVacuum: number | undefined;
+    let thresholdBytes: number | undefined;
+    const originalExec = db.exec.bind(db);
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((source: string) => {
+      if (source === "VACUUM") {
+        expect(db.inTransaction).toBe(false);
+        expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+        digestBeforeVacuum = sessionRowDump(db);
+        const pageSize = db.pragma("page_size", { simple: true }) as number;
+        const pageCount = db.pragma("page_count", { simple: true }) as number;
+        const freelistCount = db.pragma("freelist_count", { simple: true }) as number;
+        freeBytesBeforeVacuum = freelistCount * pageSize;
+        thresholdBytes = Math.max(32 * 1024 * 1024, 0.2 * pageCount * pageSize);
+        expect(freeBytesBeforeVacuum).toBeGreaterThanOrEqual(thresholdBytes);
+      }
+      return originalExec(source);
+    });
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    const vacuumCalls = execSpy.mock.calls.filter(([source]) => source === "VACUUM");
+    const afterBytes = statSync(dbPath).size;
+    expect(vacuumCalls).toHaveLength(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(db.pragma("freelist_count", { simple: true })).toBe(0);
+    expect(afterBytes).toBeLessThan(beforeBytes);
+    expect(sessionRowDump(db)).toBe(digestBeforeVacuum);
+    expect(digestBeforeVacuum).toContain('"id":"s1"');
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      {
+        ran: true,
+        beforeBytes,
+        afterBytes,
+        freelistBefore: expect.any(Number),
+        reason: `compacted: freeBytes=${freeBytesBeforeVacuum} thresholdBytes=${thresholdBytes}`,
+      },
+    ]);
+    db.close();
+  });
+
+  it("does not issue VACUUM below the threshold and logs the measured decision", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 40 });
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        beforeBytes: expect.any(Number),
+        afterBytes: "unknown",
+        freelistBefore: expect.any(Number),
+        reason: expect.stringMatching(/^below threshold: freeBytes=\d+ thresholdBytes=\d+$/),
+      }),
+    ]);
+    db.close();
+  });
+
+  it("respects toVersion when no migration is selected and logs the no-pending reason", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    migrate(db, dbPath, { toVersion: 40 });
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath, { toVersion: 40 });
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy).toHaveBeenCalledExactlyOnceWith(MIGRATION_COMPACTION_LOG_PREFIX, {
+      ran: false,
+      beforeBytes: expect.any(Number),
+      afterBytes: "unknown",
+      freelistBefore: "unknown",
+      reason: "no pending migrations",
+    });
+    db.close();
+  });
+
+  it("keeps migration success and defers retention when VACUUM throws", () => {
+    const dbPath = tempDbPath();
+    const db = buildV40DbWithReclaimableSpace(dbPath);
+    writeFileSync(`${dbPath}.backup-v1`, "old safety copy");
+    writeFileSync(`${dbPath}.backup-v2`, "newest other safety copy");
+    const sqliteFull = Object.assign(new Error("database or disk is full"), {
+      code: "SQLITE_FULL",
+    });
+    const originalExec = db.exec.bind(db);
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((source: string) => {
+      if (source === "VACUUM") {
+        // Both copies must still protect the profile throughout the attempt;
+        // retention is allowed to remove the old one only after this returns.
+        expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+        expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
+        expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
+        throw sqliteFull;
+      }
+      return originalExec(source);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toHaveLength(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
+    expect(existsSync(`${dbPath}.backup-v1`)).toBe(false);
+    expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
+    expect(errorSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        afterBytes: "unknown",
+        reason: "VACUUM failed: SQLITE_FULL: database or disk is full",
+      }),
+    ]);
+    db.close();
+  });
+
+  it("never issues VACUUM for a fresh database", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("journal_mode = WAL");
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    migrate(db, dbPath);
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    expect(infoSpy.mock.calls).toContainEqual([
+      MIGRATION_COMPACTION_LOG_PREFIX,
+      expect.objectContaining({
+        ran: false,
+        freelistBefore: "unknown",
+        reason: "fresh database",
+      }),
+    ]);
+    db.close();
+  });
+
+  it("never reaches compaction after a rolled-back migration", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    db.pragma("journal_mode = WAL");
+    db.exec("CREATE TABLE sessions (id TEXT)");
+    const execSpy = vi.spyOn(db, "exec");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(() => migrate(db, dbPath)).toThrow();
+
+    expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
+    const compactionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
+      ([prefix]) => prefix === MIGRATION_COMPACTION_LOG_PREFIX,
+    );
+    expect(compactionLogs).toEqual([]);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    db.close();
+  });
+});
+
+describe("migrate — safety-copy retention", () => {
+  it("keeps this run and the numerically newest other copy, with sidecars, regardless of mtimes", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    db.pragma("journal_mode = DELETE");
+
+    const writeBackup = (version: number, suffix = "", content = `v${version}${suffix}`) => {
+      writeFileSync(`${dbPath}.backup-v${version}${suffix}`, content);
+    };
+    writeBackup(2, "-wal");
+    writeBackup(2, "-shm");
+    for (const suffix of ["", "-wal", "-shm"]) {
+      writeBackup(3, suffix);
+      writeBackup(10, suffix);
+    }
+    writeBackup(11, "-wal");
+    writeBackup(11, "-shm");
+    utimesSync(`${dbPath}.backup-v3`, new Date("2030-01-01"), new Date("2030-01-01"));
+    utimesSync(`${dbPath}.backup-v10`, new Date("2020-01-01"), new Date("2020-01-01"));
+
+    const liveWal = `${dbPath}-wal`;
+    const liveShm = `${dbPath}-shm`;
+    writeFileSync(liveWal, "live wal sentinel");
+    writeFileSync(liveShm, "live shm sentinel");
+    const unrelated = [
+      `${dbPath}.backup-v10.tmp`,
+      `${dbPath}.backup-vx`,
+      `${dbPath}.backup-v`,
+      `${dbPath}.backup-v10-journal`,
+      join(dir, "volliXdb.backup-v3"),
+      join(dir, "other.db.backup-v99"),
+    ];
+    for (const path of unrelated) writeFileSync(path, "unrelated");
+    const nested = join(dir, "nested");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "volli.db.backup-v1"), "nested copy");
+
+    migrate(db, dbPath);
+
+    expect(matchingBackupNames(dbPath)).toEqual([
+      "volli.db.backup-v10",
+      "volli.db.backup-v10-shm",
+      "volli.db.backup-v10-wal",
+      "volli.db.backup-v2",
+      "volli.db.backup-v2-shm",
+      "volli.db.backup-v2-wal",
+    ]);
+    // SQLite may rewrite its live WAL/SHM during the migration; the real
+    // retention matcher must never classify either one as a candidate.
+    expect(existsSync(liveWal)).toBe(true);
+    expect(existsSync(liveShm)).toBe(true);
+    const candidatePattern = migrationBackupCandidatePattern(dbPath);
+    expect(candidatePattern.test("volli.db-wal")).toBe(false);
+    expect(candidatePattern.test("volli.db-shm")).toBe(false);
+    for (const path of unrelated) expect(existsSync(path)).toBe(true);
+    expect(readFileSync(join(nested, "volli.db.backup-v1"), "utf8")).toBe("nested copy");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    const safetyCopy = openRawDb(`${dbPath}.backup-v2`);
+    expect(safetyCopy.pragma("user_version", { simple: true })).toBe(2);
+    expect(safetyCopy.prepare("SELECT title FROM tickets WHERE id = 't1'").get()).toEqual({
+      title: "Existing ticket",
+    });
+    safetyCopy.close();
+    db.close();
+  });
+
+  it("does not prune when no migration is pending", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    migrate(db, dbPath);
+    const currentVersion = db.pragma("user_version", { simple: true }) as number;
+    for (const version of [1, 9, 10, currentVersion]) {
+      writeFileSync(`${dbPath}.backup-v${version}`, `copy ${version}`);
+      writeFileSync(`${dbPath}.backup-v${version}-wal`, `wal ${version}`);
+    }
+    const before = matchingBackupNames(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(matchingBackupNames(dbPath)).toEqual(before);
+    db.close();
+  });
+
+  it("leaves every old copy and this run's new safety copy in place when migration rolls back", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    db.exec("CREATE TABLE sessions (id TEXT)");
+    for (const name of [
+      "volli.db.backup-v1",
+      "volli.db.backup-v1-wal",
+      "volli.db.backup-v9",
+      "volli.db.backup-v9-shm",
+    ]) {
+      writeFileSync(join(dir, name), name);
+    }
+    expect(() => migrate(db, dbPath)).toThrow();
+
+    expect(matchingBackupNames(dbPath)).toEqual([
+      "volli.db.backup-v1",
+      "volli.db.backup-v1-wal",
+      "volli.db.backup-v2",
+      "volli.db.backup-v9",
+      "volli.db.backup-v9-shm",
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    db.close();
+  });
+
+  it("matches a custom database basename without touching default-name copies", () => {
+    const dbPath = tempDbPath("custom.sqlite");
+    const db = buildV2DbWithRows(dbPath);
+    for (const name of [
+      "custom.sqlite.backup-v1",
+      "custom.sqlite.backup-v9",
+      "custom.sqlite.backup-v10",
+      "custom.sqlite.backup-v10-wal",
+      "volli.db.backup-v99",
+    ]) {
+      writeFileSync(join(dir, name), name);
+    }
+
+    migrate(db, dbPath);
+
+    expect(matchingBackupNames(dbPath)).toEqual([
+      "custom.sqlite.backup-v10",
+      "custom.sqlite.backup-v10-wal",
+      "custom.sqlite.backup-v2",
+    ]);
+    expect(readFileSync(join(dir, "volli.db.backup-v99"), "utf8")).toBe("volli.db.backup-v99");
+    db.close();
+  });
+
+  it("logs a removal failure, continues pruning, and preserves migration success", () => {
+    const dbPath = tempDbPath();
+    const db = buildV2DbWithRows(dbPath);
+    mkdirSync(`${dbPath}.backup-v1`);
+    writeFileSync(`${dbPath}.backup-v1-wal`, "remove after failure");
+    writeFileSync(`${dbPath}.backup-v10`, "keep");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
+    expect(existsSync(`${dbPath}.backup-v1-wal`)).toBe(false);
+    const retentionErrors = errorSpy.mock.calls.filter(
+      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
+    );
+    expect(retentionErrors).toContainEqual([
+      BACKUP_RETENTION_LOG_PREFIX,
+      expect.objectContaining({
+        action: "failed",
+        operation: "remove",
+        name: "volli.db.backup-v1",
+        sizeBytes: expect.any(Number),
+        error: expect.stringMatching(/(EISDIR|EPERM|directory)/i),
+      }),
+    ]);
     db.close();
   });
 });

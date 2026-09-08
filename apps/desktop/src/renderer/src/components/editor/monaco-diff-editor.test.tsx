@@ -21,9 +21,18 @@ describe("diffEditorConstructionOptions", () => {
     expect(options).not.toHaveProperty("theme");
   });
 
-  it('maps "side-by-side" to renderSideBySide: true and keeps it in narrow panes', () => {
+  it('maps "side-by-side" to renderSideBySide: true and leaves the fit to its caller', () => {
+    // Monaco's own narrow-pane heuristic stays off (VC-288): the fall back to
+    // one column is `ticket/diff-fit.ts`'s decision, made on the pane's
+    // measured width before this function is called, so what arrives here is
+    // already what the pane will draw. Two heuristics over one pane would let
+    // the control band and the editor disagree.
     expect(diffEditorConstructionOptions({ presentation: "side-by-side" })).toMatchObject({
       renderSideBySide: true,
+      useInlineViewWhenSpaceIsLimited: false,
+    });
+    expect(diffEditorConstructionOptions({ presentation: "inline" })).toMatchObject({
+      renderSideBySide: false,
       useInlineViewWhenSpaceIsLimited: false,
     });
   });
