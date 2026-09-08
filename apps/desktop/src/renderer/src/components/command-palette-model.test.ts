@@ -4,6 +4,7 @@ import type {
   ChatSessionRecord,
   Project,
   SessionProvenance,
+  SessionRecord,
   Ticket,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
@@ -60,6 +61,26 @@ function ticket(
 
 function container(...tabs: SessionContainer["tabs"]): SessionContainer {
   return { tabs, activeSessionId: tabs[0]?.sessionId ?? null };
+}
+
+function terminal(overrides: Partial<SessionRecord> & { id: string }): SessionRecord {
+  return {
+    id: overrides.id,
+    projectId: overrides.projectId ?? "p1",
+    ticketId: overrides.ticketId ?? null,
+    harnessId: "claude-code",
+    activeHarnessId: null,
+    harnessSessionId: null,
+    launchKind: "agent",
+    placement: overrides.placement ?? "tab",
+    title: overrides.title ?? "Session 2",
+    cwd: "/repo",
+    createdAt: 0,
+    endedAt: overrides.endedAt === undefined ? 5_000 : overrides.endedAt,
+    exitCode: overrides.exitCode ?? null,
+    lastActivityAt: 5_000,
+    bornTicketless: overrides.bornTicketless ?? (overrides.ticketId ?? null) === null,
+  };
 }
 
 function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
@@ -247,6 +268,177 @@ describe("buildCommandPaletteItems", () => {
       ]);
 
       expect(result.sessions[0]?.provenance).toBe(PERSON_STARTED);
+    });
+  });
+
+  /**
+   * ⌘K fetched every project's saved Session rows and then dropped every closed
+   * terminal among them, so a terminal you closed this morning was unfindable
+   * in the app's one global search (VC-290). It is now a row — pointed at its
+   * saved record, which is the only thing left to open.
+   */
+  describe("closed terminals", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
+
+    it("lists a closed ticket terminal, addressed to its saved record", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", ticketId: linked.id, title: "Session 2" })],
+      );
+
+      expect(result.sessions).toEqual([
+        expect.objectContaining({
+          sessionId: "s1",
+          sessionKind: "terminal",
+          title: "Session 2",
+          destination: "detail",
+          ticketDisplayId: "ALP-1",
+          ticketTitle: "Fix auth",
+        }),
+      ]);
+    });
+
+    it("lists a closed project terminal too", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", ticketId: null, title: "Poke at the repo" })],
+      );
+
+      expect(result.sessions).toEqual([
+        expect.objectContaining({
+          sessionId: "s1",
+          destination: "detail",
+          scope: projectScope(alpha.id),
+          ticketDisplayId: null,
+        }),
+      ]);
+    });
+
+    // An open tab is still the live terminal; its record is the same Session
+    // seen from the durable side, and two rows for one Session would make the
+    // reader choose between a terminal and a description of it.
+    it("keeps the open tab as the destination for a terminal that is still open", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {
+          [linked.id]: container({
+            sessionId: "s1",
+            title: "Live tab title",
+            scope: ticketScope(alpha.id, linked.id),
+            layout: { kind: "pane", sessionId: "s1", exitCode: null },
+            activePaneId: "s1",
+          }),
+        },
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", ticketId: linked.id, title: "Stale record title", endedAt: null })],
+      );
+
+      expect(result.sessions).toEqual([
+        expect.objectContaining({ sessionId: "s1", title: "Live tab title", destination: "tab" }),
+      ]);
+    });
+
+    it("omits a live record with no tab, which is a Session this window cannot show", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", ticketId: linked.id, endedAt: null })],
+      );
+
+      expect(result.sessions).toEqual([]);
+    });
+
+    // A split pane is part of a tab, never a destination of its own — the same
+    // rule the sidebar's Previous band applies to the same records.
+    it("omits a closed split pane", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", ticketId: linked.id, placement: "split" })],
+      );
+
+      expect(result.sessions).toEqual([]);
+    });
+
+    it("drops a closed terminal only when its project is no longer tracked", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [terminal({ id: "s1", projectId: "gone", ticketId: null })],
+      );
+
+      expect(result.sessions).toEqual([]);
+    });
+
+    it("keeps an unavailable Ticket Session without relabelling it as project-scoped", () => {
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        {},
+        [
+          terminal({ id: "s1", ticketId: "missing-ticket", bornTicketless: false }),
+          // The database uses ON DELETE SET NULL, so this is the ordinary
+          // deleted-ticket shape: only the immutable birth fact survives.
+          terminal({ id: "s2", ticketId: null, bornTicketless: false }),
+        ],
+      );
+
+      expect(result.sessions).toEqual([
+        expect.objectContaining({ sessionId: "s1", scope: { kind: "unavailable" } }),
+        expect.objectContaining({ sessionId: "s2", scope: { kind: "unavailable" } }),
+      ]);
+    });
+
+    it("marks a closed terminal a Run started, like every other row", () => {
+      const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+      const result = buildCommandPaletteItems(
+        [alpha],
+        { [alpha.id]: [linked] },
+        {},
+        alpha.id,
+        [],
+        {},
+        { s1: RUN },
+        [terminal({ id: "s1", ticketId: linked.id })],
+      );
+
+      expect(result.sessions[0]?.provenance).toEqual(RUN);
     });
   });
 });

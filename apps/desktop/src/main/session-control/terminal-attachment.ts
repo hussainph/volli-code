@@ -7,7 +7,15 @@ import type {
 import type { HarnessId, SessionLaunchKind, SessionPlacement, SessionRecord } from "@volli/shared";
 import { isSessionLaunchKind, isSessionPlacement, parseHarnessId } from "@volli/shared";
 
-/** The terminal adapter's opaque native payload. It never becomes a Session column. */
+/**
+ * The terminal adapter's opaque native payload. It never becomes a Session
+ * column.
+ *
+ * Adapter correlation and launch metadata ONLY. How the process ended is not
+ * in here: an exit status is product vocabulary the Session ledger owns
+ * (`attachment.exited`, VC-290), and a client that had to reparse this object
+ * to learn it would be reimplementing one host's private encoding.
+ */
 export interface TerminalAttachmentDetail {
   readonly [key: string]: SessionNativeDetail;
   kind: "volli.terminal.v1";
@@ -17,7 +25,6 @@ export interface TerminalAttachmentDetail {
   harnessSessionId: string | null;
   launchKind: SessionLaunchKind;
   placement: SessionPlacement;
-  exitCode: number | null;
 }
 
 export function terminalNativeReference(detail: TerminalAttachmentDetail): SessionNativeReference {
@@ -43,12 +50,13 @@ export function readTerminalAttachmentDetail(
     (activeHarnessId === null && value.activeHarnessId !== null) ||
     (value.harnessSessionId !== null && typeof value.harnessSessionId !== "string") ||
     !isSessionLaunchKind(value.launchKind) ||
-    !isSessionPlacement(value.placement) ||
-    (value.exitCode !== null &&
-      (!Number.isInteger(value.exitCode) || !Number.isFinite(value.exitCode)))
+    !isSessionPlacement(value.placement)
   ) {
     return null;
   }
+  // Named fields only, so a key an older build wrote (an `exitCode` that never
+  // carried a value, before the exit became a Session fact) is dropped rather
+  // than carried forward as a second answer about how the terminal ended.
   return {
     kind: "volli.terminal.v1",
     cwd: value.cwd,
@@ -57,7 +65,6 @@ export function readTerminalAttachmentDetail(
     harnessSessionId: value.harnessSessionId,
     launchKind: value.launchKind,
     placement: value.placement,
-    exitCode: value.exitCode === null ? null : (value.exitCode as number),
   };
 }
 
@@ -94,7 +101,10 @@ export function terminalSessionRecord(projection: SessionProjection): SessionRec
     cwd: detail?.cwd ?? "",
     createdAt: projection.session.createdAt,
     endedAt: attachment.status === "open" ? null : attachment.closedAt,
-    exitCode: detail?.exitCode ?? null,
+    // The ledger's own answer, carried along and not re-derived: `null` is an
+    // exit nothing observed, and it must never be softened by the close's
+    // completed/failed outcome (VC-290).
+    exitCode: attachment.exitCode,
     lastActivityAt: projection.lastActivityAt,
     bornTicketless: projection.bornTicketless,
   };

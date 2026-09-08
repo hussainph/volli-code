@@ -13,6 +13,7 @@ import type {
   ChatSessionRecord,
   SessionListingRow,
   SessionProvenance,
+  SessionRecord,
   SessionUsageSummary,
 } from "@volli/shared";
 
@@ -83,7 +84,38 @@ const fixture = vi.hoisted(() => {
     waitingOn: null,
     outcome: null,
   };
+  // A terminal that exited and had its tab closed: no live tab, so History is
+  // where it lives and its saved record is all there is of it (VC-290).
+  const closedTerminal: SessionRecord = {
+    id: "terminal-0",
+    projectId: "project-1",
+    ticketId: "ticket-6",
+    harnessId: "claude-code",
+    activeHarnessId: null,
+    harnessSessionId: null,
+    launchKind: "shell",
+    placement: "tab",
+    title: "Closed shell",
+    cwd: "/repo",
+    createdAt: 1,
+    endedAt: 3,
+    exitCode: 0,
+    lastActivityAt: 3,
+    bornTicketless: false,
+  };
+  // A startup listing may briefly contain an open durable attachment before
+  // recovery settles it, while this renderer has no live tab for it. It is not
+  // a closed record yet and must not borrow the detail destination.
+  const recoveringTerminal: SessionRecord = {
+    ...closedTerminal,
+    id: "terminal-recovering",
+    title: "Recovering shell",
+    endedAt: null,
+    exitCode: null,
+  };
   const rows: SessionListingRow[] = [
+    { kind: "terminal", record: closedTerminal, usage: unmetered, provenance: personStarted },
+    { kind: "terminal", record: recoveringTerminal, usage: unmetered, provenance: personStarted },
     { kind: "chat", record, usage: unmetered, provenance: personStarted },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
     {
@@ -103,7 +135,7 @@ const fixture = vi.hoisted(() => {
       },
     },
   ];
-  return { record, ended, byRun, byAgent, rows };
+  return { record, ended, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
 });
 
 vi.mock("@renderer/stores/ticket-session-records", async () => {
@@ -205,6 +237,27 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain(fixture.ended.title);
     expect(html).not.toContain("collapsible");
     expect(html).not.toContain("border-t border-sidebar-border");
+  });
+
+  // It used to be inert — a row you could read and not open, with the saved
+  // record it names reachable from nowhere. It now opens that record, which is
+  // the same destination the sidebar's Previous row and ⌘K reach (VC-290).
+  it("lets a closed terminal in History be opened, not just read", () => {
+    const html = panel();
+    const at = html.indexOf(fixture.closedTerminal.title);
+
+    expect(at).toBeGreaterThan(-1);
+    // `ListRow` renders an activatable row as a button and an inert one as a
+    // div, so the element the title sits in IS the assertion.
+    expect(html.lastIndexOf("<button", at)).toBeGreaterThan(html.lastIndexOf("<div", at));
+  });
+
+  it("does not offer details for a durable record that has not closed", () => {
+    const html = panel();
+    const at = html.indexOf(fixture.recoveringTerminal.title);
+
+    expect(at).toBeGreaterThan(-1);
+    expect(html.lastIndexOf("<div", at)).toBeGreaterThan(html.lastIndexOf("<button", at));
   });
 
   it("keeps a stopped chat visibly stopped after it moves to History", () => {

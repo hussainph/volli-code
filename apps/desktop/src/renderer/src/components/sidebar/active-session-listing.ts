@@ -30,6 +30,7 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
+import { sessionSourceLabel } from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
   sessionActivitySource,
@@ -45,7 +46,6 @@ import {
   type LatestSessionSignal,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "../ticket/session-history";
 import { chatTabId } from "../ticket/ticket-chat-tab";
 import {
   sessionActivityState,
@@ -78,17 +78,29 @@ export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
  * target is the tab in front of you, the only thing that makes a row look
  * current.
  *
- * The two kinds are different doors, not one door with an optional field. A
+ * The kinds are different doors, not one door with an optional field. A
  * terminal tab can be split, so the row names the pane it speaks for and the
  * sessions store has to be told which pane is in front; a chat tab is one
  * surface, and reaching it means adopting the Session through the chat store
- * before the tab has anything behind it. A row with no target at all is a
- * Session whose tab is gone — an ended terminal — and it can only offer its
- * ticket.
+ * before the tab has anything behind it.
+ *
+ * `session-detail` is the door for a terminal whose tab is GONE (VC-290). Such a
+ * row used to carry no target at all, and the view answered a targetless row
+ * with the row's ticket workspace — or with Home when it had no ticket — so
+ * clicking a saved-looking "Session 2" opened whatever chat happened to be in
+ * front of that ticket, with nothing on screen admitting the substitution. The
+ * Session is still durable and still addressable: project plus Session id names
+ * the saved record itself, which is a destination the row can honestly claim.
+ * It is deliberately not a tab id — there is no tab, and inventing one is how a
+ * history entry ends up reopening a live surface.
+ *
+ * A row with no target at all is now only a row whose Session has no reachable
+ * surface of any kind; the two fallbacks below it are kept for that case alone.
  */
 export type ActiveSessionTarget =
   | { kind: "terminal"; tabId: string; paneId: string }
-  | { kind: "chat"; tabId: string; sessionId: string };
+  | { kind: "chat"; tabId: string; sessionId: string }
+  | { kind: "session-detail"; projectId: string; sessionId: string };
 
 /** Which execution surface a row speaks for — one of the two axes the Previous band filters on. */
 export type SessionRowKind = "terminal" | "chat";
@@ -214,7 +226,10 @@ export function isProjectSessionRowSelected(
 ): boolean {
   if (!homeVisible || row.ticket !== null) return false;
   const target = row.target;
-  if (target === null || homeActiveTab !== target.tabId) return false;
+  // A saved record is not a tab, so it is never the tab in front of you — and
+  // it has no tab id that could accidentally collide with one (VC-290).
+  if (target === null || target.kind === "session-detail") return false;
+  if (homeActiveTab !== target.tabId) return false;
   if (target.kind === "chat") return true;
   const activeTab = projectContainer?.tabs.find(({ sessionId }) => sessionId === target.tabId);
   return activeTab?.activePaneId === target.paneId;
@@ -382,6 +397,63 @@ export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): Prev
     existing.rows.push(row);
   }
   return entries;
+}
+
+/**
+ * Where a row's click actually GOES — {@link ActiveSessionTarget} resolved
+ * against the row's ticket, which is the other half of the address.
+ *
+ * A separate, pure step because the sidebar's answer to "what does this row
+ * open" is a product rule with a history of being wrong: a row that named no
+ * surface used to fall through to its ticket's workspace or to Home, which is
+ * how a closed terminal's history entry came to open an unrelated chat
+ * (VC-290). Stated as data, the rule is checkable without a store, a window or
+ * a click — the view's job is reduced to performing the writes each case names.
+ */
+export type SessionRowRoute =
+  | { kind: "session-detail"; projectId: string; sessionId: string }
+  | { kind: "ticket-terminal"; ticketId: string; tabId: string; paneId: string }
+  | { kind: "ticket-chat"; ticketId: string; tabId: string; sessionId: string }
+  | { kind: "ticket-workspace"; ticketId: string }
+  | { kind: "home-terminal"; tabId: string; paneId: string }
+  | { kind: "home-chat"; tabId: string; sessionId: string }
+  | { kind: "home" };
+
+/**
+ * What selecting `row` opens.
+ *
+ * The saved-record door is answered FIRST and for every row, ticketed or not:
+ * its whole point is that it does not degrade into a neighbouring surface. The
+ * two remaining fallbacks — a ticket's workspace, and Home — belong only to a
+ * row that names no surface at all, which after VC-290 is a Session with
+ * nothing reachable behind it rather than an ordinary ended terminal.
+ */
+export function sessionRowRoute(row: ActiveSessionRow | PreviousSessionRow): SessionRowRoute {
+  const target = row.target;
+  if (target !== null && target.kind === "session-detail") {
+    return { kind: "session-detail", projectId: target.projectId, sessionId: target.sessionId };
+  }
+  const ticket = row.ticket;
+  if (ticket !== null) {
+    if (target === null) return { kind: "ticket-workspace", ticketId: ticket.id };
+    return target.kind === "chat"
+      ? {
+          kind: "ticket-chat",
+          ticketId: ticket.id,
+          tabId: target.tabId,
+          sessionId: target.sessionId,
+        }
+      : {
+          kind: "ticket-terminal",
+          ticketId: ticket.id,
+          tabId: target.tabId,
+          paneId: target.paneId,
+        };
+  }
+  if (target === null) return { kind: "home" };
+  return target.kind === "chat"
+    ? { kind: "home-chat", tabId: target.tabId, sessionId: target.sessionId }
+    : { kind: "home-terminal", tabId: target.tabId, paneId: target.paneId };
 }
 
 export interface ActiveSessionListing {
@@ -956,7 +1028,13 @@ export function buildActiveSessionListing(
         kind: "terminal",
         endedOrQuietAt: record.endedAt,
         provenance: provenanceOf(record.id),
-        target: null,
+        // The Session's own saved record, addressed by the two things that
+        // outlive its PTY (VC-290). This used to be `null`, and a null target
+        // is what let the view answer a terminal's row with its ticket's
+        // current tab. The project comes off the RECORD rather than off the
+        // listing being built, so the address always names the Session it is
+        // about.
+        target: { kind: "session-detail", projectId: record.projectId, sessionId: record.id },
         cleaned: false,
       },
       ticketId: record.ticketId,

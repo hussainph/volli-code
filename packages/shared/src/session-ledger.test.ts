@@ -398,6 +398,15 @@ describe("observationPayload", () => {
         failure: { code: "spawn_failed", detail: "Unavailable", diagnostic: { retryable: false } },
       },
       {
+        id: "2-exited",
+        sessionId: session.id,
+        occurredAt: 2,
+        provenance,
+        kind: "attachment.exited",
+        attachmentId: attachment.id,
+        exitCode: 0,
+      },
+      {
         id: "2",
         sessionId: session.id,
         occurredAt: 2,
@@ -523,6 +532,11 @@ describe("observationPayload", () => {
       },
     ];
 
+    expect(observationPayload(observations[3]!, attribution)).toEqual({
+      kind: "attachment.exited",
+      attachmentId: attachment.id,
+      exitCode: 0,
+    });
     expect(observationPayload(observations.at(-1)!, attribution)).toEqual({
       kind: "interaction.cancelled",
       attachmentId: attachment.id,
@@ -537,6 +551,7 @@ describe("observationPayload", () => {
       "attachment.opened",
       "attachment.native_referenced",
       "attachment.failed",
+      "attachment.exited",
       "attachment.closed",
       "run.started",
       "run.completed",
@@ -1080,6 +1095,118 @@ describe("projectSession", () => {
       }),
     ]);
     expect(settled).toMatchObject({ pendingExecutorStart: null });
+  });
+});
+
+// The executor's own process status (VC-290). `outcome` says completed or
+// failed; only this fact can say WHICH code, and only when something actually
+// watched the process end.
+describe("projectSession attachment exit", () => {
+  const attachment = {
+    id: "attachment-exit",
+    sessionId: session.id,
+    adapterId: "terminal",
+    venue: localVenue,
+    continuity: "fresh" as const,
+    native: null,
+    authority: null,
+  };
+
+  it("leaves the exit code null until something observes one", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      // The relaunch sweep's own close: nobody was there to see the process go.
+      event(2, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([
+      { id: attachment.id, status: "closed", outcome: "completed", exitCode: null },
+    ]);
+  });
+
+  it("records a clean exit as the number 0, never as an absence", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attachment.exited", attachmentId: attachment.id, exitCode: 0 }),
+      event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "completed" }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([
+      { id: attachment.id, status: "closed", outcome: "completed", exitCode: 0 },
+    ]);
+  });
+
+  it("keeps a non-zero code exactly, through the close that follows it", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attachment.exited", attachmentId: attachment.id, exitCode: 137 }),
+      event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "failed" }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([{ id: attachment.id, exitCode: 137 }]);
+  });
+
+  // Two appends, not one read-modify-write: the fold applies the code wherever
+  // the fact lands, so a close that beats the exit through the ledger cannot
+  // lose it.
+  it("applies an exit observed after its own close", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "failed" }),
+      event(3, { kind: "attachment.exited", attachmentId: attachment.id, exitCode: 2 }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([
+      { id: attachment.id, status: "closed", outcome: "failed", exitCode: 2 },
+    ]);
+  });
+
+  it("ignores an exit for an attachment it has never seen", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.exited", attachmentId: "unknown", exitCode: 1 }),
+      event(2, { kind: "attachment.opened", attachment }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([{ id: attachment.id, exitCode: null }]);
+  });
+
+  // A re-attach is a new process. The code belonged to the one that ended.
+  it("keeps each attachment's own exit code", () => {
+    const second = { ...attachment, id: "attachment-exit-2" };
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attachment.exited", attachmentId: attachment.id, exitCode: 1 }),
+      event(3, { kind: "attachment.closed", attachmentId: attachment.id, outcome: "failed" }),
+      event(4, { kind: "attachment.opened", attachment: second }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([
+      { id: attachment.id, exitCode: 1 },
+      { id: second.id, exitCode: null },
+    ]);
+  });
+
+  it("never reports an exit code for an attachment that failed to open", () => {
+    const projection = projectSession(session, [
+      event(1, {
+        kind: "attachment.failed",
+        attachment,
+        failure: { code: "spawn_failed", detail: null, diagnostic: null },
+      }),
+    ]);
+
+    expect(projection.attachments).toMatchObject([
+      { id: attachment.id, status: "failed", exitCode: null },
+    ]);
+  });
+
+  it("counts an observed exit as activity in this Session", () => {
+    const projection = projectSession(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attachment.exited", attachmentId: attachment.id, exitCode: 0 }),
+    ]);
+
+    expect(projection.lastActivityAt).toBe(20);
   });
 });
 

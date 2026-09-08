@@ -61,6 +61,7 @@ const terminalAttachment: SessionAttachmentProjection = {
   closedAt: 42,
   outcome: "failed",
   failure: { code: "terminal_start_failed", detail: null, diagnostic: null },
+  exitCode: null,
 };
 
 describe("readTerminalAttachmentDetail", () => {
@@ -149,5 +150,74 @@ describe("readTerminalAttachmentDetail", () => {
         bornTicketless: false,
       }),
     ).toMatchObject({ bornTicketless: false });
+  });
+});
+
+/**
+ * The exit code the PTY observed, on its way out of the durable record
+ * (VC-290).
+ *
+ * Before this, `onExit` sent the number to the live renderer and the ledger
+ * saved only a completed/failed outcome, so every CLOSED terminal read back
+ * `exitCode: null` — indistinguishable from a boot sweep that never saw the
+ * process at all. The code is now the ledger's own `attachment.exited` fact and
+ * this DTO only carries the projection's answer along; nothing here reparses an
+ * adapter's native payload to find it.
+ */
+describe("terminalSessionRecord exit code", () => {
+  const closedTerminal: SessionAttachmentProjection = {
+    ...terminalAttachment,
+    status: "closed",
+    openedAt: 10,
+    closedAt: 42,
+    outcome: "completed",
+    failure: null,
+  };
+
+  it("reports a clean exit as the number 0, not as an absence", () => {
+    expect(
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: 0 }])),
+    ).toMatchObject({ endedAt: 42, exitCode: 0 });
+  });
+
+  it("reports a non-zero code exactly", () => {
+    expect(
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: 137 }])),
+    ).toMatchObject({ endedAt: 42, exitCode: 137 });
+  });
+
+  // The relaunch sweep closes attachments whose process nobody watched end.
+  // That record must stay unavailable rather than borrow the close's outcome.
+  it("leaves an unobserved exit null however the attachment was closed", () => {
+    expect(
+      terminalSessionRecord(projectionWith([{ ...closedTerminal, exitCode: null }])),
+    ).toMatchObject({ endedAt: 42, exitCode: null });
+  });
+
+  // The projection is the only source. A stale `exitCode` inside an adapter's
+  // native detail is not product vocabulary and must not be read back as one.
+  it("ignores an exit code left in the adapter's native detail", () => {
+    const withNativeExit: SessionAttachmentProjection = {
+      ...closedTerminal,
+      native: {
+        id: null,
+        detail: {
+          kind: "volli.terminal.v1",
+          cwd: "/repo",
+          harnessId: "claude-code",
+          activeHarnessId: null,
+          harnessSessionId: null,
+          launchKind: "agent",
+          placement: "tab",
+          exitCode: 3,
+        },
+      },
+      exitCode: null,
+    };
+
+    expect(terminalSessionRecord(projectionWith([withNativeExit]))).toMatchObject({
+      cwd: "/repo",
+      exitCode: null,
+    });
   });
 });

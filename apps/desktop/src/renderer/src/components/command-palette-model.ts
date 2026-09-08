@@ -1,3 +1,4 @@
+import { terminalHistoryScope, type TerminalHistoryScope } from "@volli/session-presentation";
 import {
   automationOwnership,
   displayTicketId,
@@ -7,10 +8,23 @@ import {
   type ChatSessionRecord,
   type Project,
   type SessionProvenance,
+  type SessionRecord,
   type Ticket,
 } from "@volli/shared";
 
 import type { SessionContainer, SessionScope } from "@renderer/stores/sessions";
+
+/**
+ * The contract's scope answer, carrying the project id a palette row needs to
+ * navigate. The two shapes differ only in that id: the decision is not remade.
+ */
+function paletteSessionScope(
+  scope: TerminalHistoryScope,
+  projectId: string,
+): SessionScope | { kind: "unavailable" } {
+  if (scope.kind === "ticket") return { kind: "ticket", projectId, ticketId: scope.ticketId };
+  return scope.kind === "project" ? { kind: "project", projectId } : { kind: "unavailable" };
+}
 
 export interface CommandPaletteTicketItem {
   kind: "ticket";
@@ -22,14 +36,13 @@ export interface CommandPaletteTicketItem {
   updatedAt: number;
 }
 
-export interface CommandPaletteSessionItem {
+interface CommandPaletteSessionBase {
   kind: "session";
   projectId: string;
   projectName: string;
   sessionId: string;
   sessionKind: "terminal" | "chat";
   title: string;
-  scope: SessionScope;
   ticketDisplayId: string | null;
   ticketTitle: string | null;
   /**
@@ -42,6 +55,24 @@ export interface CommandPaletteSessionItem {
   provenance: SessionProvenance;
 }
 
+/**
+ * What selecting a Session row opens (VC-290), paired with the scope evidence
+ * that destination can honestly carry.
+ *
+ * A live tab always has a current project/ticket scope. A durable detail may
+ * instead belong to a Ticket that is no longer available: `bornTicketless`
+ * distinguishes that orphan from a Session that was project-scoped at birth,
+ * and `unavailable` keeps the palette from relabelling it as a Board Session.
+ */
+export type CommandPaletteSessionItem = CommandPaletteSessionBase &
+  (
+    | { destination: "tab"; scope: SessionScope }
+    | {
+        destination: "detail";
+        scope: SessionScope | { kind: "unavailable" };
+      }
+  );
+
 export interface CommandPaletteItems {
   tickets: CommandPaletteTicketItem[];
   sessions: CommandPaletteSessionItem[];
@@ -49,8 +80,15 @@ export interface CommandPaletteItems {
 
 /**
  * Builds the universal command surface from planning state, open terminal
- * tabs, and durable chat rows. Terminal history is not a destination until
- * resume exists; a durable chat is directly reopenable and belongs here.
+ * tabs, durable chat rows, and durable CLOSED terminals.
+ *
+ * The last of those is VC-290. The palette already fetched every project's
+ * saved Session rows (it needs them for chats and for provenance) and then
+ * discarded every terminal among them, so the app's one global search could
+ * not find a terminal you closed an hour ago — the note in this comment used to
+ * say terminal history was "not a destination until resume exists", and the
+ * answer turned out not to be resume: a closed terminal's destination is its
+ * own saved record.
  */
 export function buildCommandPaletteItems(
   projects: readonly Project[],
@@ -66,6 +104,13 @@ export function buildCommandPaletteItems(
    * other surface takes.
    */
   provenance: Readonly<Record<string, SessionProvenance>> = {},
+  /**
+   * Durable TERMINAL records, straight off the same listing fetch the chat rows
+   * and the provenance map come from. Only the closed, top-level ones become
+   * rows; see {@link buildCommandPaletteItems}'s body for why each of the other
+   * kinds is left out.
+   */
+  terminalSessions: readonly SessionRecord[] = [],
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -118,8 +163,49 @@ export function buildCommandPaletteItems(
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
         provenance: sessionProvenanceOf(provenance, tab.sessionId),
+        destination: "tab",
       });
     }
+  }
+  // Closed terminals, after the open tabs above so `openTerminalIds` is
+  // complete: a Session that still has a tab is reachable AS that tab, and its
+  // durable row would be a second entry for the same Session pointing at a
+  // description of it.
+  const openTerminalIds = new Set(sessions.map((item) => item.sessionId));
+  for (const record of terminalSessions) {
+    // A split pane is part of a tab and never a destination of its own (the
+    // sidebar's Previous band draws the same line over the same records), and a
+    // record with no end is either open above or a live-looking leftover this
+    // window has no surface for.
+    if (record.endedAt === null || record.placement === "split") continue;
+    if (openTerminalIds.has(record.id)) continue;
+    const project = projectById.get(record.projectId);
+    if (project === undefined) continue;
+    const linked = record.ticketId === null ? undefined : ticketById.get(record.ticketId);
+    sessions.push({
+      kind: "session",
+      projectId: project.id,
+      projectName: project.name,
+      sessionId: record.id,
+      sessionKind: "terminal",
+      title: record.title,
+      // The scope decision is the Session Presentation Contract's, not this
+      // row's: the same record's detail asks `terminalHistoryScope` the same
+      // question, and a second copy here is how a palette row comes to call an
+      // orphaned Ticket Session a Board Session while its detail calls it
+      // unavailable. Only the navigation `projectId` is added on top.
+      scope: paletteSessionScope(
+        terminalHistoryScope(record, linked?.ticket ?? null, project.ticketPrefix),
+        project.id,
+      ),
+      ticketDisplayId:
+        linked === undefined
+          ? null
+          : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
+      ticketTitle: linked?.ticket.title ?? null,
+      provenance: sessionProvenanceOf(provenance, record.id),
+      destination: "detail",
+    });
   }
   for (const record of chatSessions) {
     const project = projectById.get(record.projectId);
@@ -145,6 +231,7 @@ export function buildCommandPaletteItems(
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
       provenance: sessionProvenanceOf(provenance, record.sessionId),
+      destination: "tab",
     });
   }
 
