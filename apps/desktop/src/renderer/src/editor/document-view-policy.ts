@@ -43,14 +43,30 @@
  * a Document view that ejected you mid-sentence because you typed a `<` would
  * be a worse lie than the one it prevents. Typing frontmatter and saving it is
  * how a file leaves Document view, and it then says why.
+ *
+ * ## The read-only third view (VC-307)
+ *
+ * Refusing Document view is right, and it used to leave the repo's own README
+ * with no readable surface at all. So a refusal now OFFERS something: a
+ * read-only **Preview** (`markdown-preview.tsx`), available exactly where
+ * Document view is refused and nowhere else. Nothing above changes — Preview
+ * renders a picture of the file and can never write it, which is precisely why
+ * it is allowed to draw constructs the editable projection must refuse.
  */
 import { classifyFileKind } from "@volli/shared";
 
-import { MARKDOWN_PARSER } from "./markdown-projection";
+import { htmlBlockRanges } from "./markdown-html-blocks";
 import { buildLineIndex, lineAt } from "./text-position";
 
-/** Which of a markdown file tab's two views is in front (VC-192). */
-export type MarkdownFileView = "source" | "document";
+/**
+ * Which of a markdown file tab's views is in front (VC-192, VC-307).
+ *
+ * `source` and `document` are two surfaces over ONE editable registry document.
+ * `preview` is not an editor at all: it renders the bytes and offers no way to
+ * change them, and it is on the menu only for a file {@link documentViewRefusal}
+ * turned down.
+ */
+export type MarkdownFileView = "source" | "document" | "preview";
 
 /**
  * Source, and that is a decision rather than an oversight: a file tab is a view
@@ -92,15 +108,31 @@ export function documentViewRefusal(text: string): DocumentViewRefusal | null {
 }
 
 /**
+ * Whether the read-only Preview is on offer for this file (VC-307).
+ *
+ * Exactly the refused files, and that narrowness is the decision: Preview is
+ * the fallback for bytes the editable projection cannot honestly show, not a
+ * third way to read a file that already has one. A file the projection accepts
+ * would otherwise gain a read-only surface whose only difference from Document
+ * view is that it cannot be typed into.
+ */
+export function offersMarkdownPreview(refusal: DocumentViewRefusal | null): boolean {
+  return refusal !== null;
+}
+
+/**
  * The view a markdown tab actually renders: the remembered choice, unless the
- * file refuses Document view — a stored preference can never outvote the bytes,
- * because the file may have grown frontmatter since the choice was made.
+ * bytes have stopped offering it. A stored preference can never outvote them,
+ * because the file may have grown frontmatter (or lost its raw HTML) since the
+ * choice was made — and each direction falls back to Source, the one view every
+ * markdown file always has.
  */
 export function resolveMarkdownFileView(input: {
   preferred: MarkdownFileView;
   refusal: DocumentViewRefusal | null;
 }): MarkdownFileView {
-  return input.refusal === null ? input.preferred : "source";
+  if (input.refusal === null) return input.preferred === "document" ? "document" : "source";
+  return input.preferred === "preview" ? "preview" : "source";
 }
 
 /**
@@ -114,12 +146,35 @@ export function resolveMarkdownFileView(input: {
  * as prose puts the misparse above on screen.
  */
 function frontmatterRefusal(text: string): DocumentViewRefusal | null {
-  if (!FRONTMATTER_OPEN.test(text) || !FRONTMATTER_CLOSE.test(text)) return null;
+  if (frontmatterSpan(text) === null) return null;
   return {
     reason: "frontmatter",
     line: 1,
     message: "Document view can't show this file: YAML frontmatter (line 1) renders as a heading.",
   };
+}
+
+/**
+ * The `[from, to)` the leading frontmatter block occupies, or `null` when the
+ * file opens with none. `to` is one past the closing fence's own line
+ * terminator, so `text.slice(span.to)` is the document a reader came for.
+ *
+ * The refusal above is the reason this exists, and Preview is the reason it is
+ * exported: the two must agree about which bytes are metadata, because Preview
+ * HIDES exactly the span this measures, and a second, slightly different rule
+ * living beside this one is how a file ends up refused for frontmatter that the
+ * preview then renders as a heading.
+ */
+export function frontmatterSpan(text: string): { from: number; to: number } | null {
+  const open = FRONTMATTER_OPEN.exec(text);
+  if (open === null) return null;
+  // Search from the newline that ENDED the opening fence, so an empty block
+  // (`---\n---\n`) is found: that newline is also the close's leading one.
+  const close = new RegExp(FRONTMATTER_CLOSE.source, "g");
+  close.lastIndex = open[0].length - 1;
+  const found = close.exec(text);
+  if (found === null) return null;
+  return { from: 0, to: found.index + found[0].length };
 }
 
 /** The opening fence: `---` alone on the file's FIRST line (`\r` is a terminator, not content). */
@@ -135,19 +190,12 @@ const FRONTMATTER_CLOSE = /\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
  * reason the gate asks the projection's parser instead of a regular expression.
  */
 function rawHtmlRefusal(text: string): DocumentViewRefusal | null {
-  // An array rather than a `let`: the assignment happens inside a callback, and
-  // TypeScript would narrow a captured `let` to its initializer afterwards.
-  const blocks: number[] = [];
-  MARKDOWN_PARSER.parse(text).iterate({
-    enter: (node) => {
-      if (blocks.length > 0) return false; // the first one already answers
-      if (node.name !== "HTMLBlock") return true;
-      blocks.push(node.from);
-      return false;
-    },
-  });
-  if (blocks.length === 0) return null;
-  const line = lineAt(buildLineIndex(text), blocks[0]).number;
+  // The SAME walk the read-only Preview marks its omissions from
+  // (`markdown-html-blocks.ts`), so a file cannot be refused here for a
+  // construct the fallback then fails to acknowledge.
+  const [first] = htmlBlockRanges(text);
+  if (first === undefined) return null;
+  const line = lineAt(buildLineIndex(text), first.from).number;
   return {
     reason: "raw-html",
     line,

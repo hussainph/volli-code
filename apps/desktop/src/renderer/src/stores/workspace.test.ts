@@ -366,6 +366,66 @@ describe("setMarkdownFileView", () => {
     ]);
     expect(relaunched.getState().byProject["project-b"]?.markdownDocumentFiles).toEqual([]);
   });
+
+  it("remembers the read-only Preview choice in a list of its own (VC-307)", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "README.md", "preview");
+
+    expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual(["README.md"]);
+    expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([]);
+  });
+
+  it("keeps the two rendered views exclusive — a file reads in one or the other", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "README.md", "document");
+    store.getState().setMarkdownFileView("project-a", "README.md", "preview");
+
+    expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual([]);
+    expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual(["README.md"]);
+
+    store.getState().setMarkdownFileView("project-a", "README.md", "document");
+    expect(store.getState().byProject["project-a"]?.markdownDocumentFiles).toEqual(["README.md"]);
+    expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual([]);
+  });
+
+  it("records Source by forgetting a Preview choice too, and stays a no-op when nothing moves", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().setMarkdownFileView("project-a", "README.md", "preview");
+    store.getState().setMarkdownFileView("project-a", "README.md", "source");
+    expect(store.getState().byProject["project-a"]?.markdownPreviewFiles).toEqual([]);
+
+    const before = store.getState().byProject;
+    store.getState().setMarkdownFileView("project-a", "README.md", "source");
+    expect(store.getState().byProject).toBe(before);
+    store.getState().setMarkdownFileView("project-a", "README.md", "preview");
+    const previewing = store.getState().byProject;
+    store.getState().setMarkdownFileView("project-a", "README.md", "preview");
+    expect(store.getState().byProject).toBe(previewing);
+  });
+
+  it("survives relaunch, and reads a stored Preview list as tolerantly as the other", () => {
+    const storage = createMemoryStorage();
+    createWorkspaceStore(storage)
+      .getState()
+      .setMarkdownFileView("project-a", "README.md", "preview");
+    expect(
+      createWorkspaceStore(storage).getState().byProject["project-a"]?.markdownPreviewFiles,
+    ).toEqual(["README.md"]);
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:workspace",
+      JSON.stringify({
+        state: {
+          byProject: { "project-a": { markdownPreviewFiles: ["README.md", 7, "README.md"] } },
+        },
+        version: 1,
+      }),
+    );
+    expect(
+      createWorkspaceStore(corrupt).getState().byProject["project-a"]?.markdownPreviewFiles,
+    ).toEqual(["README.md"]);
+  });
 });
 
 describe("setBoardSort", () => {
@@ -3507,6 +3567,7 @@ describe("forget", () => {
       homeTabOrder: [],
       homeTabHistory: [],
       markdownDocumentFiles: [],
+      markdownPreviewFiles: [],
       dependencyOfferDismissed: false,
     });
   });
@@ -3544,6 +3605,7 @@ describe("persistence", () => {
       "homeActiveTab",
       "homeTabOrder",
       "markdownDocumentFiles",
+      "markdownPreviewFiles",
       "openTicketId",
       "projectFileViewStates",
       "projectFiles",

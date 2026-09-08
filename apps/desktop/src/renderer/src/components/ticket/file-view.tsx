@@ -3,6 +3,7 @@ import { FileIcon } from "@phosphor-icons/react/dist/csr/File";
 import { baseNameOf, errorMessage, fileSavePolicy, type FileSource } from "@volli/shared";
 
 import { LiveReconciliationAffordance } from "@renderer/components/editor/live-reconciliation-affordance";
+import { MarkdownPreview } from "@renderer/components/editor/markdown-preview";
 import { MarkdownViewToggle } from "@renderer/components/editor/markdown-view-toggle";
 import {
   MonacoFileEditor,
@@ -170,13 +171,21 @@ export function FileView({
   // App-wide (stores/ui), toggled from the file tab's menu or the diff's band.
   // Source mode only: Document Mode's prose always wraps.
   const wordWrap = useUiStore((ui) => ui.wordWrap);
-  // Per FILE, per project, persisted (VC-192): repository markdown opens in
-  // Source unless this tab was told otherwise. Artifacts never ask — they take
-  // the autosave path below and are always a document.
+  // Per FILE, per project, persisted (VC-192, VC-307): repository markdown opens
+  // in Source unless this tab was told otherwise. Two boolean selectors rather
+  // than one derived object, so the store cannot hand this component a new value
+  // on every render. Artifacts never ask — they take the autosave path below and
+  // are always a document.
   const prefersDocumentView = useWorkspaceStore((workspace) =>
     (workspace.byProject[projectId]?.markdownDocumentFiles ?? []).includes(relPath),
   );
+  const prefersPreviewView = useWorkspaceStore((workspace) =>
+    (workspace.byProject[projectId]?.markdownPreviewFiles ?? []).includes(relPath),
+  );
   const setMarkdownFileView = useWorkspaceStore((workspace) => workspace.setMarkdownFileView);
+  // Mirrors `sourceDirtyRef` for the one thing a RENDER needs it for: Preview
+  // draws the file as last read or saved, so while a draft is open it says so.
+  const [sourceDirty, setSourceDirty] = React.useState(false);
 
   const draftRef = React.useRef(""); // current autosave-editor content
   const syncedRef = React.useRef(""); // last content loaded or saved (disk baseline)
@@ -623,6 +632,7 @@ export function FileView({
   const handleSourceDirtyChange = React.useCallback(
     (next: boolean) => {
       sourceDirtyRef.current = next;
+      setSourceDirty(next);
       onDirtyChange?.(next);
     },
     [onDirtyChange],
@@ -762,21 +772,31 @@ export function FileView({
     // remembered cursor.
     const identity = fileDocumentIdentity({ projectId, ticketId, relPath, source: state.source });
     // The remembered choice, unless these bytes refuse it (frontmatter, raw
-    // HTML). ONE editor either way: the surface changes, the save contract does
-    // not — ⌘S goes out through the same conflict-guarded `saveSource`, the
-    // dirty flag is the same registry document's, and the close guard is
-    // therefore unchanged (plan §4.6).
+    // HTML). Source and Document are ONE editor: the surface changes, the save
+    // contract does not — ⌘S goes out through the same conflict-guarded
+    // `saveSource`, the dirty flag is the same registry document's, and the
+    // close guard is therefore unchanged (plan §4.6).
+    //
+    // Preview (VC-307) is the third case and the only one that is not that
+    // editor at all: a rendering of the bytes, offered exactly where the
+    // projection refuses them. It mounts INSTEAD of Monaco, which costs
+    // nothing a draft would notice — an unsaved document keeps its model and
+    // its dirty flag in the shared registry when its view releases, so
+    // switching away and back returns the same buffer, and the tab's close
+    // guard never stopped seeing it.
     const view = resolveMarkdownFileView({
-      preferred: prefersDocumentView ? "document" : "source",
+      preferred: prefersDocumentView ? "document" : prefersPreviewView ? "preview" : "source",
       refusal,
     });
     const documentView = markdownTab && view === "document";
+    const previewView = markdownTab && view === "preview";
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         {markdownTab && (
           <MarkdownViewToggle
             view={view}
             refusal={refusal}
+            sourceDirty={sourceDirty}
             onChange={(next) => setMarkdownFileView(projectId, relPath, next)}
           />
         )}
@@ -788,48 +808,60 @@ export function FileView({
           <div
             className={cn(
               "min-h-0 flex-1 overflow-hidden",
-              documentView
+              documentView || previewView
                 ? // A document is a page, at the canonical reading measure — the
                   // same Tier A treatment the artifact surface above takes,
                   // because it is the same surface (docs/DESIGN.md).
-                  "mx-auto w-full max-w-content"
+                  "mx-auto flex w-full max-w-content flex-col"
                 : // Source is a workbench object: fluid, in its own box.
                   "rounded-md border border-border bg-background",
             )}
           >
-            <MonacoFileEditor
-              // The editor's own dirty/saving/stale/failure state is per-document,
-              // so a change of identity (a repo path that starts resolving from
-              // the ticket's worktree copy, or the reverse) has to remount it —
-              // exactly why this view itself is documented as `key={relPath}`.
-              // The surface joins the key for a smaller reason: construction
-              // options and contributions are read once, at creation.
-              key={`${documentIdentityKey(identity)}:${documentView ? "document" : "source"}`}
-              identity={identity}
-              value={state.text}
-              revision={state.revision}
-              // Two views of ONE document, so they remember two cursors — the
-              // same reason the diff's modified side has a viewId of its own.
-              viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:${documentView ? "document" : "source"}`}
-              // How a Search result that opened this file says which line to land
-              // on (VC-193). The key is the REQUEST pair, which is what the rail
-              // that made the request has.
-              revealKey={fileRevealKey({ projectId, ticketId, relPath })}
-              ariaLabel={`${name} contents`}
-              readOnly={!state.editable || liveError !== null}
-              surface={documentView ? "document" : "source"}
-              // Document Mode's prose always wraps; the app-wide preference is
-              // about reading code.
-              wordWrap={documentView ? undefined : wordWrap}
-              contribute={documentView ? REPO_DOCUMENT_MODE : undefined}
-              onSave={saveSource}
-              onDirtyChange={handleSourceDirtyChange}
-              // Shared across both surfaces on purpose: one document, one set of
-              // coordinates, so a tab that comes back after relaunch lands where
-              // it was left whichever view it was left in.
-              initialViewState={initialViewState}
-              onViewStateChange={onViewStateChange}
-            />
+            {previewView ? (
+              <MarkdownPreview
+                projectId={projectId}
+                ticketId={ticketId}
+                relPath={relPath}
+                // The bytes this tab last read or saved — never the live draft.
+                // Preview renders; the draft belongs to the editor that holds
+                // it, and the band says so while one is open.
+                text={state.text}
+              />
+            ) : (
+              <MonacoFileEditor
+                // The editor's own dirty/saving/stale/failure state is per-document,
+                // so a change of identity (a repo path that starts resolving from
+                // the ticket's worktree copy, or the reverse) has to remount it —
+                // exactly why this view itself is documented as `key={relPath}`.
+                // The surface joins the key for a smaller reason: construction
+                // options and contributions are read once, at creation.
+                key={`${documentIdentityKey(identity)}:${documentView ? "document" : "source"}`}
+                identity={identity}
+                value={state.text}
+                revision={state.revision}
+                // Two views of ONE document, so they remember two cursors — the
+                // same reason the diff's modified side has a viewId of its own.
+                viewId={`file:${projectId}:${ticketId ?? "main"}:${relPath}:${documentView ? "document" : "source"}`}
+                // How a Search result that opened this file says which line to land
+                // on (VC-193). The key is the REQUEST pair, which is what the rail
+                // that made the request has.
+                revealKey={fileRevealKey({ projectId, ticketId, relPath })}
+                ariaLabel={`${name} contents`}
+                readOnly={!state.editable || liveError !== null}
+                surface={documentView ? "document" : "source"}
+                // Document Mode's prose always wraps; the app-wide preference is
+                // about reading code.
+                wordWrap={documentView ? undefined : wordWrap}
+                contribute={documentView ? REPO_DOCUMENT_MODE : undefined}
+                onSave={saveSource}
+                onDirtyChange={handleSourceDirtyChange}
+                // Shared across both surfaces on purpose: one document, one set of
+                // coordinates, so a tab that comes back after relaunch lands where
+                // it was left whichever view it was left in.
+                initialViewState={initialViewState}
+                onViewStateChange={onViewStateChange}
+              />
+            )}
           </div>
         </div>
       </div>

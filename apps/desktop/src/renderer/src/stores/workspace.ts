@@ -298,6 +298,20 @@ export interface WorkspaceUiState {
    */
   markdownDocumentFiles: readonly string[];
   /**
+   * The repository Markdown files this project reads in the read-only PREVIEW
+   * (VC-307) — the same shape as {@link markdownDocumentFiles}, and a second
+   * list rather than a state per file for the same reason: Source is still the
+   * default, and only a file that asked for something else is worth a row.
+   *
+   * Two lists rather than one "rendered view" list because the two choices are
+   * different answers to different questions. Document view is editable and is
+   * offered only where the bytes allow it; Preview is read-only and is offered
+   * only where they do not. A file that lost its raw HTML must come back to the
+   * editable pair rather than silently staying on a surface that cannot be
+   * typed into — which is what one merged list would have done.
+   */
+  markdownPreviewFiles: readonly string[];
+  /**
    * Whether this project's owner has waved off the uninstalled-dependencies
    * offer (VC-156). Persisted, and that is the point: the notice it replaces
    * kept its dismissal in component state keyed by the exact alert string, so
@@ -343,6 +357,7 @@ export const DEFAULT_WORKSPACE_UI: WorkspaceUiState = {
   homeTabOrder: EMPTY_TAB_ORDER,
   homeTabHistory: [],
   markdownDocumentFiles: [],
+  markdownPreviewFiles: [],
   dependencyOfferDismissed: false,
 };
 
@@ -1001,6 +1016,7 @@ interface WorkspaceState {
    * front notifies nobody.
    */
   setMarkdownFileView(projectId: string, relPath: string, view: MarkdownFileView): void;
+
   /** Drop a removed project's record so re-adding it starts fresh. */
   forget(projectId: string): void;
   /**
@@ -1036,6 +1052,7 @@ type PersistedWorkspaceUi = Pick<
   | "homeTabOrder"
   | "homeSplitView"
   | "markdownDocumentFiles"
+  | "markdownPreviewFiles"
   | "dependencyOfferDismissed"
 >;
 
@@ -1213,14 +1230,15 @@ function sanitizeTicketDiffViewStates(
 }
 
 /**
- * Validate a rehydrated `markdownDocumentFiles` list: relPaths only, deduped,
- * order preserved. Unlike the view-state maps beside it this is NOT pruned
- * against open tabs — the choice is remembered for the FILE, so closing its tab
- * (or relaunching with nothing open) must not forget which view it reads in.
- * The list only ever holds files that asked for the non-default view, so it
- * cannot accrete an entry per file visited.
+ * Validate a rehydrated markdown view list — `markdownDocumentFiles` or
+ * `markdownPreviewFiles`: relPaths only, deduped, order preserved. Unlike the
+ * view-state maps beside it this is NOT pruned against open tabs — the choice
+ * is remembered for the FILE, so closing its tab (or relaunching with nothing
+ * open) must not forget which view it reads in. Each list only ever holds files
+ * that asked for a non-default view, so neither can accrete an entry per file
+ * visited.
  */
-function sanitizeMarkdownDocumentFiles(raw: unknown): readonly string[] {
+function sanitizeMarkdownFileList(raw: unknown): readonly string[] {
   if (!Array.isArray(raw)) return [];
   const paths = raw.filter((path): path is string => typeof path === "string" && path.length > 0);
   return [...new Set(paths)];
@@ -1271,7 +1289,8 @@ function sanitizePersistedUi(persisted: Partial<PersistedWorkspaceUi>): Persiste
     // allowed to name a Session the strip has not put back yet (VC-189).
     homeTabOrder: sanitizeTabOrder(persisted.homeTabOrder),
     ...(homeSplitView === null ? {} : { homeSplitView }),
-    markdownDocumentFiles: sanitizeMarkdownDocumentFiles(persisted.markdownDocumentFiles),
+    markdownDocumentFiles: sanitizeMarkdownFileList(persisted.markdownDocumentFiles),
+    markdownPreviewFiles: sanitizeMarkdownFileList(persisted.markdownPreviewFiles),
     // Only an explicit `true` dismisses: anything else in the JSON — a missing
     // key from a build before this existed, a corrupt value — means the offer
     // stands, which is the recoverable side of the mistake.
@@ -1294,8 +1313,23 @@ function isDefaultPersistedUi(ui: WorkspaceUiState): boolean {
     ui.homeTabOrder.length === 0 &&
     (ui.homeSplitView ?? null) === null &&
     ui.markdownDocumentFiles.length === 0 &&
+    ui.markdownPreviewFiles.length === 0 &&
     ui.dependencyOfferDismissed === DEFAULT_WORKSPACE_UI.dependencyOfferDismissed
   );
+}
+
+/**
+ * One markdown view list with `relPath` present or absent, returned BY IDENTITY
+ * when it already says that — which is what lets `setMarkdownFileView` notice
+ * that a re-picked view changes nothing at all.
+ */
+function withMarkdownFile(
+  files: readonly string[],
+  relPath: string,
+  member: boolean,
+): readonly string[] {
+  if (files.includes(relPath) === member) return files;
+  return member ? [...files, relPath] : files.filter((path) => path !== relPath);
 }
 
 /** Record the current Home tab and then the one being brought forward. */
@@ -2267,13 +2301,27 @@ export function createWorkspaceStore(
         setMarkdownFileView(projectId, relPath, view) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
-            const chosen = current.markdownDocumentFiles.includes(relPath);
-            if (chosen === (view === "document")) return state;
+            const markdownDocumentFiles = withMarkdownFile(
+              current.markdownDocumentFiles,
+              relPath,
+              view === "document",
+            );
+            const markdownPreviewFiles = withMarkdownFile(
+              current.markdownPreviewFiles,
+              relPath,
+              view === "preview",
+            );
+            // Identity in, identity out: re-picking the view already in front
+            // must notify nobody (the same contract the segmented control keeps).
+            if (
+              markdownDocumentFiles === current.markdownDocumentFiles &&
+              markdownPreviewFiles === current.markdownPreviewFiles
+            ) {
+              return state;
+            }
             return patchWorkspace(state, projectId, {
-              markdownDocumentFiles:
-                view === "document"
-                  ? [...current.markdownDocumentFiles, relPath]
-                  : current.markdownDocumentFiles.filter((path) => path !== relPath),
+              markdownDocumentFiles,
+              markdownPreviewFiles,
             });
           });
         },
@@ -2346,9 +2394,11 @@ export function createWorkspaceStore(
                   // writes no key, so the persisted blob of a workspace that
                   // never split is byte-identical to one from before panes.
                   ...(ui.homeSplitView == null ? {} : { homeSplitView: ui.homeSplitView }),
-                  // Which markdown files open as documents. A choice, not a
-                  // sitting's state, and remembered past the tab's close.
+                  // Which markdown files open as documents, and which in the
+                  // read-only preview. A choice, not a sitting's state, and
+                  // remembered past the tab's close.
                   markdownDocumentFiles: ui.markdownDocumentFiles,
+                  markdownPreviewFiles: ui.markdownPreviewFiles,
                   // A standing answer, not a sitting's state: the offer this
                   // dismisses would otherwise return on every relaunch.
                   dependencyOfferDismissed: ui.dependencyOfferDismissed,
