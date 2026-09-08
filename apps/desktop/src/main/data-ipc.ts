@@ -172,6 +172,7 @@ import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
+  acquireDeletionLease,
   type AgentSiteReleaseReport,
   archiveAndClean,
   busyRefusal,
@@ -1246,6 +1247,25 @@ export function registerDataIpcHandlers(
       // more (review S1). The renderer names a scan revision and item ids; main
       // resolves them against the proposal IT minted, so no client can point
       // this channel at a directory no completed scan offered (review C1).
+      const engine = orphanCleanupEngine(db);
+      // FIRST, before any live fact is consulted: has this exact command id
+      // already been answered? (VC-284 re-review S1, the rule
+      // `automations/service.ts` follows.) A completed cleanup invalidates the
+      // scan it ran against, so validating a retry against the CURRENT scan
+      // would tell a caller whose reply was lost that its command was
+      // superseded — a completed deletion reported as a failure, with a second
+      // deletion as the obvious next step. The durable record answers instead,
+      // and it needs no scan to do it.
+      const replayed = await engine.replay({
+        commandId: input.commandId,
+        scanRevision: input.scanRevision,
+        itemIds: input.itemIds,
+      });
+      if (replayed !== null) {
+        return replayed.ok
+          ? { ok: true, run: replayed.run, receipt: replayed.receipt }
+          : { ok: false, error: replayed.error, code: replayed.code };
+      }
       const plan = await resolveCleanupPlan({
         scanRevision: input.scanRevision,
         itemIds: input.itemIds,
@@ -1253,9 +1273,10 @@ export function registerDataIpcHandlers(
       if (!plan.ok) {
         // Refused requests are durable too: "something asked to delete against a
         // scan we no longer hold" is exactly what an audit wants to find.
-        await orphanCleanupEngine(db).reject({
+        await engine.reject({
           commandId: input.commandId,
           scanRevision: input.scanRevision,
+          requestedItemIds: input.itemIds,
           code: plan.code,
           error: plan.error,
         });
@@ -1269,13 +1290,19 @@ export function registerDataIpcHandlers(
         outcome = await cleanupOrphans(
           {
             worktree: worktreeDeps(db),
-            engine: orphanCleanupEngine(db),
+            engine,
             busyWorktreeSites: options.busyWorktreeSites,
             releaseAgentSites: options.releaseAgentSites,
           },
           {
             commandId: input.commandId,
             scanRevision: input.scanRevision,
+            requestedItemIds: input.itemIds,
+            // The window the confirmation was MEASURED against, carried from the
+            // scan itself rather than re-read here: if the setting has moved
+            // since, the executor must skip rather than apply a policy nobody
+            // confirmed (review C1/C2).
+            retentionDays: plan.retentionDays,
             items: plan.items,
             source: "settings",
           },
@@ -1311,35 +1338,53 @@ export function registerDataIpcHandlers(
       if (!isOwnedWorktreePath(ownedContainers(db, worktreeHomeDir()), target)) {
         return { ok: false, error: "That path is outside this project's worktree folder." };
       }
-      // Re-verify RIGHT before the irreversible delete — the Settings report is
-      // a snapshot that can have gone stale since it was shown.
-      //   (b) never delete a worktree the DB still tracks (live OR archived —
-      //       listWorktreePaths includes archived rows by design), else a still-
-      //       linked ticket dead-ends at a vanished path.
-      // `isInside` returns true on equality too, so testing both directions
-      // covers target == a tracked path, target inside one, and target being an
-      // ancestor of one.
-      const knownPaths = listWorktreePaths(db);
-      if (
-        knownPaths.some(
-          (known) => isInsideWorktreeHome(target, known) || isInsideWorktreeHome(known, target),
-        )
-      ) {
-        return {
-          ok: false,
-          error: "This worktree is still linked to a ticket and can't be deleted here.",
-        };
+      // This is a destructive worktree act, so it takes the same lease the
+      // confirmed cleanup takes (VC-284 re-review C4). Without it, "serialized
+      // against every start" was only true of one of the two routes that
+      // delete a checkout — and two acts removing one directory, or a terminal
+      // being born inside this one mid-delete, were both still possible.
+      const lease = acquireDeletionLease(target);
+      if (lease === null) {
+        return { ok: false, error: "Something else is already changing this folder." };
       }
-      //   (c) never delete out from under work still in flight in it.
-      const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
-      if (busy !== null) return { ok: false, error: busyRefusal(busy) };
-      // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
-      // be bound to an orphan — end it here, in the same beat as the delete, the
-      // way `remove` does on the ticket paths. Nothing gates on the result: the
-      // Settings row that reached this channel printed the orphan's own
-      // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
-      await options.releaseAgentSites?.(target);
-      await rm(target, { recursive: true, force: true });
+      try {
+        // Re-verify RIGHT before the irreversible delete — the Settings report is
+        // a snapshot that can have gone stale since it was shown.
+        //   (b) never delete a worktree the DB still tracks (live OR archived —
+        //       listWorktreePaths includes archived rows by design), else a still-
+        //       linked ticket dead-ends at a vanished path.
+        // `isInside` returns true on equality too, so testing both directions
+        // covers target == a tracked path, target inside one, and target being an
+        // ancestor of one.
+        const knownPaths = listWorktreePaths(db);
+        if (
+          knownPaths.some(
+            (known) => isInsideWorktreeHome(target, known) || isInsideWorktreeHome(known, target),
+          )
+        ) {
+          return {
+            ok: false,
+            error: "This worktree is still linked to a ticket and can't be deleted here.",
+          };
+        }
+        //   (c) never delete out from under work still in flight in it.
+        const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
+        if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+        // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
+        // be bound to an orphan — end it here, in the same beat as the delete, the
+        // way `remove` does on the ticket paths. Nothing gates on the result: the
+        // Settings row that reached this channel printed the orphan's own
+        // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
+        await options.releaseAgentSites?.(target);
+        // Asked once more after that await, for the same reason the cleanup
+        // asks: the release takes time, and the lease keeps new work out but
+        // says nothing about work that was already there.
+        const stillBusy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
+        if (stillBusy !== null) return { ok: false, error: busyRefusal(stillBusy) };
+        await rm(target, { recursive: true, force: true });
+      } finally {
+        lease.release();
+      }
       // The cached scan still lists this directory; the next read must not.
       invalidateOrphanScan();
       // A dirty orphan left the board's attention list. An orphan is by

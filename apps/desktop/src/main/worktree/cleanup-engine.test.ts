@@ -32,6 +32,7 @@ function engineWith(now: () => number = () => 1000) {
 const ACCEPT = {
   source: "settings" as const,
   scanRevision: "rev1",
+  requestedItemIds: ["rev1:worktree:0"],
   retentionDays: 14,
   preservation: ["branches", "active"],
 };
@@ -110,6 +111,7 @@ describe("cleanup command core", () => {
     const receipt = await engine.reject({
       commandId: "cmd-9",
       scanRevision: "gone",
+      requestedItemIds: ["gone:worktree:0"],
       code: "scan-superseded",
       error: "That scan has been superseded.",
     });
@@ -125,6 +127,7 @@ describe("cleanup command core", () => {
     await engine.reject({
       commandId: "cmd-9",
       scanRevision: "rev1",
+      requestedItemIds: ["rev1:worktree:0"],
       code: "unknown-items",
       error: "no such items",
     });
@@ -132,6 +135,160 @@ describe("cleanup command core", () => {
     expect(retry.ok).toBe(false);
     if (retry.ok) return;
     expect(retry.code).toBe("conflict");
+  });
+
+  // The gateway rule (re-review S1): a used command id answers from the durable
+  // record BEFORE anything live is consulted, and the answer needs no scan.
+  describe("replay", () => {
+    it("says nothing about an id it has never seen", async () => {
+      const { engine } = engineWith();
+      expect(await engine.hasCommand("cmd-1")).toBe(false);
+      expect(
+        await engine.replay({
+          commandId: "cmd-1",
+          scanRevision: "rev1",
+          itemIds: ["rev1:worktree:0"],
+        }),
+      ).toBeNull();
+    });
+
+    it("replays the recorded run for the same request, in any id order", async () => {
+      const { engine } = engineWith();
+      await engine.accept({
+        commandId: "cmd-1",
+        ...ACCEPT,
+        requestedItemIds: ["rev1:worktree:0", "rev1:metadata:0"],
+        items: [planItem(), planItem({ id: "rev1:metadata:0", kind: "metadata" })],
+      });
+      await engine.settleItem({
+        commandId: "cmd-1",
+        itemId: "rev1:worktree:0",
+        state: "completed",
+        detail: "Removed the folder.",
+      });
+      await engine.finish({ commandId: "cmd-1" });
+
+      expect(await engine.hasCommand("cmd-1")).toBe(true);
+      const replayed = await engine.replay({
+        commandId: "cmd-1",
+        scanRevision: "rev1",
+        // Same set, different order, and repeated — a retry is a retry.
+        itemIds: ["rev1:metadata:0", "rev1:worktree:0", "rev1:worktree:0"],
+      });
+      expect(replayed?.ok).toBe(true);
+      if (replayed?.ok !== true) return;
+      expect(replayed.run.items[0]?.state).toBe("completed");
+      expect(replayed.receipt.status).toBe("completed");
+    });
+
+    it("calls a different request under a used id a conflict, and writes nothing", async () => {
+      const { engine, ledger } = engineWith();
+      await engine.accept({ commandId: "cmd-1", ...ACCEPT, items: [planItem()] });
+      const before = ledger.facts().length;
+
+      const other = await engine.replay({
+        commandId: "cmd-1",
+        scanRevision: "rev2",
+        itemIds: ["rev2:worktree:0"],
+      });
+
+      expect(other?.ok).toBe(false);
+      if (other?.ok !== false) return;
+      expect(other.code).toBe("conflict");
+      expect(ledger.facts()).toHaveLength(before);
+    });
+
+    it("repeats a refusal for the same refused request", async () => {
+      const { engine } = engineWith();
+      await engine.reject({
+        commandId: "cmd-9",
+        scanRevision: "gone",
+        requestedItemIds: ["gone:worktree:0"],
+        code: "scan-superseded",
+        error: "That scan has been superseded.",
+      });
+
+      const again = await engine.replay({
+        commandId: "cmd-9",
+        scanRevision: "gone",
+        itemIds: ["gone:worktree:0"],
+      });
+
+      expect(again?.ok).toBe(false);
+      if (again?.ok !== false) return;
+      expect(again.code).toBe("scan-superseded");
+      expect(again.run).toBeNull();
+    });
+  });
+
+  // A completed deletion that later grows a `rejected` receipt reads, to
+  // whoever takes the last receipt, as a command that never ran (re-review S1).
+  it("never records a refusal over a command id that was accepted", async () => {
+    const { engine, ledger } = engineWith();
+    await engine.accept({ commandId: "cmd-1", ...ACCEPT, items: [planItem()] });
+    await engine.finish({ commandId: "cmd-1" });
+    const before = ledger.facts().length;
+
+    const receipt = await engine.reject({
+      commandId: "cmd-1",
+      scanRevision: "rev-stale",
+      requestedItemIds: ["rev-stale:worktree:0"],
+      code: "scan-superseded",
+      error: "That scan has been superseded.",
+    });
+
+    // The command keeps the answer it already had.
+    expect(receipt.status).toBe("completed");
+    expect(ledger.facts()).toHaveLength(before);
+    expect((await engine.run("cmd-1"))?.finishedAt).not.toBeNull();
+  });
+
+  it("repeats one refusal rather than stacking a receipt per retry", async () => {
+    const { engine, ledger } = engineWith();
+    const reject = {
+      commandId: "cmd-9",
+      scanRevision: "gone",
+      requestedItemIds: ["gone:worktree:0"],
+      code: "scan-superseded" as const,
+      error: "That scan has been superseded.",
+    };
+    const first = await engine.reject(reject);
+    const after = ledger.facts().length;
+    const second = await engine.reject(reject);
+
+    expect(second).toEqual(first);
+    expect(ledger.facts()).toHaveLength(after);
+  });
+
+  it("records a refusal for a command row that somehow has no receipt", async () => {
+    const { engine, ledger } = engineWith();
+    // Not a state this core writes — reachable only from outside — but the
+    // refusal path must still be able to answer for it.
+    await ledger.transaction(async (tx) => {
+      await tx.insertCommand({
+        id: "cmd-orphaned",
+        intent: {
+          kind: "orphan.cleanup",
+          source: "settings",
+          scanRevision: "rev1",
+          requestedItemIds: [],
+          retentionDays: 14,
+          preservation: [],
+          items: [],
+        },
+        createdAt: 1,
+      });
+    });
+
+    const receipt = await engine.reject({
+      commandId: "cmd-orphaned",
+      scanRevision: "rev1",
+      requestedItemIds: [],
+      code: "unknown-items",
+      error: "nothing to do",
+    });
+
+    expect(receipt.status).toBe("rejected");
   });
 
   it("shows an announced-but-unsettled item as executing, never as pending", async () => {
@@ -249,36 +406,91 @@ describe("foldCleanupRun", () => {
     ).toBeNull();
   });
 
-  it("survives facts whose payloads are not the shapes it expects", () => {
-    const run = foldCleanupRun([
-      { id: "f1", commandId: "c", kind: "cleanup.accepted", payload: null, createdAt: 1 },
-      { id: "f2", commandId: "c", kind: "cleanup.accepted", payload: { intent: 7 }, createdAt: 2 },
-      {
-        id: "f3",
-        commandId: "c",
-        kind: "cleanup.accepted",
-        payload: { intent: { items: [7, null], source: "startup" } },
-        createdAt: 3,
-      },
-      {
-        id: "f4",
-        commandId: "c",
-        kind: "cleanup.item.settled",
-        payload: { itemId: "nope", state: "completed" },
-        createdAt: 4,
-      },
-      { id: "f5", commandId: "c", kind: "cleanup.run.finished", payload: {}, createdAt: 5 },
-    ]);
-    expect(run).not.toBeNull();
-    expect(run?.source).toBe("startup");
-    expect(run?.scanRevision).toBe("");
-    expect(run?.retentionDays).toBe(0);
-    expect(run?.preservation).toEqual([]);
-    expect(run?.items).toEqual([]);
-    expect(run?.finishedAt).toBe(5);
+  // The re-review's C3: JSON that parses but does not MEAN anything used to be
+  // defaulted away — a damaged accepted plan folded into "an empty finished
+  // run", which is a deletion history disappearing without anybody being told.
+  // Every one of these shapes is now a named fault.
+  it("refuses a damaged accepted plan instead of quietly emptying the run", () => {
+    const accepted = (intent: unknown) => [
+      { id: "f1", commandId: "c", kind: "cleanup.accepted" as const, payload: intent, createdAt: 1 },
+      { id: "f2", commandId: "c", kind: "cleanup.run.finished" as const, payload: {}, createdAt: 2 },
+    ];
+    const good = {
+      source: "settings",
+      scanRevision: "rev1",
+      retentionDays: 14,
+      preservation: ["branches"],
+      items: [planItem()],
+    };
+    for (const damaged of [
+      null,
+      { intent: 7 },
+      { intent: { ...good, source: "cron" } },
+      { intent: { ...good, scanRevision: 7 } },
+      { intent: { ...good, retentionDays: "14" } },
+      { intent: { ...good, preservation: "branches" } },
+      { intent: { ...good, preservation: ["branches", 7] } },
+      { intent: { ...good, items: "none" } },
+      { intent: { ...good, items: [7, null] } },
+      { intent: { ...good, items: [{ ...planItem(), path: 3 }] } },
+    ]) {
+      expect(() => foldCleanupRun(accepted(damaged))).toThrow(/damaged accepted plan/);
+    }
+    // And the undamaged one still folds.
+    expect(foldCleanupRun(accepted({ intent: good }))?.items[0]?.id).toBe("rev1:worktree:0");
   });
 
-  it("reads an unrecognised outcome as indeterminate rather than inventing one", () => {
+  it("refuses an unreadable item fact rather than calling it indeterminate", () => {
+    const accepted = {
+      id: "f1",
+      commandId: "c",
+      kind: "cleanup.accepted" as const,
+      payload: {
+        intent: {
+          source: "settings",
+          scanRevision: "rev1",
+          retentionDays: 14,
+          preservation: ["branches"],
+          items: [planItem({ id: "i1" })],
+        },
+      },
+      createdAt: 1,
+    };
+    // `indeterminate` is a thing this app WRITES about a mutation it watched.
+    // A row nobody can read is not that; it is a broken row, and it says so.
+    expect(() =>
+      foldCleanupRun([
+        accepted,
+        {
+          id: "f2",
+          commandId: "c",
+          kind: "cleanup.item.settled",
+          payload: { itemId: "i1", state: "from-the-future" },
+          createdAt: 2,
+        },
+      ]),
+    ).toThrow(/damaged item outcome/);
+    expect(() =>
+      foldCleanupRun([
+        accepted,
+        {
+          id: "f2",
+          commandId: "c",
+          kind: "cleanup.item.settled",
+          payload: { state: "completed" },
+          createdAt: 2,
+        },
+      ]),
+    ).toThrow(/damaged item outcome/);
+    expect(() =>
+      foldCleanupRun([
+        accepted,
+        { id: "f2", commandId: "c", kind: "cleanup.item.started", payload: {}, createdAt: 2 },
+      ]),
+    ).toThrow(/damaged item start/);
+  });
+
+  it("reads a reconciled outcome as established after the fact, with its own instant", () => {
     const run = foldCleanupRun([
       {
         id: "f1",
@@ -289,19 +501,8 @@ describe("foldCleanupRun", () => {
             source: "settings",
             scanRevision: "rev1",
             retentionDays: 14,
-            preservation: ["branches", 7],
-            items: [
-              {
-                id: "i1",
-                kind: "worktree",
-                path: "/wt",
-                projectId: "p",
-                projectName: "P",
-                projectPath: "/p",
-                branch: null,
-                gitReason: null,
-              },
-            ],
+            preservation: [],
+            items: [planItem({ id: "i1" }), planItem({ id: "i2", path: "/root/wt/VC-2" })],
           },
         },
         createdAt: 1,
@@ -310,15 +511,21 @@ describe("foldCleanupRun", () => {
         id: "f2",
         commandId: "c",
         kind: "cleanup.item.settled",
-        payload: { itemId: "i1", state: "from-the-future", detail: 9 },
-        createdAt: 2,
+        payload: { itemId: "i1", state: "completed", detail: "gone", reconciled: true },
+        createdAt: 900,
       },
-      { id: "f3", commandId: "c", kind: "cleanup.run.interrupted", payload: {}, createdAt: 3 },
+      {
+        id: "f3",
+        commandId: "c",
+        kind: "cleanup.item.settled",
+        payload: { itemId: "i2", state: "completed", detail: "gone" },
+        createdAt: 950,
+      },
     ]);
-    expect(run?.preservation).toEqual(["branches"]);
-    expect(run?.items[0]?.state).toBe("indeterminate");
-    expect(run?.items[0]?.detail).toBeNull();
-    expect(run?.interruptedAt).toBe(3);
+    expect(run?.items[0]?.reconciledAt).toBe(900);
+    // An outcome the run itself recorded carries no reconciliation instant: it
+    // happened when it says it happened.
+    expect(run?.items[1]?.reconciledAt).toBeNull();
   });
 
   it("ignores a run-level fact that arrives with no accepted plan", () => {

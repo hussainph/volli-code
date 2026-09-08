@@ -5,6 +5,7 @@ import {
   isOrphanAgeBasis,
   isOrphanCleanupItemKind,
   isOrphanCleanupItemOutcome,
+  isOrphanCleanupPlanItem,
   isOrphanCleanupRejectionCode,
   isOrphanCleanupSource,
   isOrphanKeptReason,
@@ -13,6 +14,7 @@ import {
   tallyOrphanCleanup,
   type OrphanCleanupItem,
   type OrphanCleanupItemState,
+  type OrphanCleanupPlanItem,
 } from "./worktree-orphans";
 
 function item(state: OrphanCleanupItemState, id: string = state): OrphanCleanupItem {
@@ -22,11 +24,27 @@ function item(state: OrphanCleanupItemState, id: string = state): OrphanCleanupI
     path: `/tmp/${id}`,
     projectId: "p1",
     projectName: "Project",
+    projectPath: "/repo",
     branch: null,
     state,
     detail: null,
     startedAt: null,
     settledAt: null,
+    reconciledAt: null,
+  };
+}
+
+function planItem(overrides: Partial<OrphanCleanupPlanItem> = {}): OrphanCleanupPlanItem {
+  return {
+    id: "rev1:worktree:0",
+    kind: "worktree",
+    path: "/wt/a",
+    projectId: "p1",
+    projectName: "Project",
+    projectPath: "/repo",
+    branch: "volli/VC-1",
+    gitReason: null,
+    ...overrides,
   };
 }
 
@@ -73,6 +91,45 @@ describe("orphan vocabulary guards", () => {
     expect(isCompletedOrphanCleanupItem("completed")).toBe(true);
     for (const state of ["pending", "executing", "skipped", "failed", "indeterminate"] as const) {
       expect(isCompletedOrphanCleanupItem(state)).toBe(false);
+    }
+  });
+});
+
+// The guard a durable reader uses before believing a stored plan (VC-284
+// re-review C3). It is deliberately whole-shape: a plan item that is missing a
+// path, or carries one of the wrong type, cannot be silently folded into a
+// shorter plan, because a shorter plan is a shorter deletion history.
+describe("isOrphanCleanupPlanItem", () => {
+  it("accepts a complete plan item of either kind", () => {
+    expect(isOrphanCleanupPlanItem(planItem())).toBe(true);
+    expect(
+      isOrphanCleanupPlanItem(
+        planItem({
+          kind: "metadata",
+          branch: null,
+          gitReason: "gitdir file points to non-existent location",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses anything that is not one", () => {
+    expect(isOrphanCleanupPlanItem(null)).toBe(false);
+    expect(isOrphanCleanupPlanItem([planItem()])).toBe(false);
+    expect(isOrphanCleanupPlanItem("rev1:worktree:0")).toBe(false);
+    for (const damaged of [
+      { id: "" },
+      { id: 7 },
+      { kind: "branch" },
+      { path: "" },
+      { path: 3 },
+      { projectId: null },
+      { projectName: 1 },
+      { projectPath: null },
+      { branch: 4 },
+      { gitReason: 4 },
+    ]) {
+      expect(isOrphanCleanupPlanItem({ ...planItem(), ...damaged })).toBe(false);
     }
   });
 });

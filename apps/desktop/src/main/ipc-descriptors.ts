@@ -862,12 +862,17 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     // the proposal it minted itself (VC-284 review C1), so this guard only has
     // to say the shape is a cleanup command — whether the revision is current
     // and the ids are real is a question only the plan can answer.
+    //
+    // The command id is held to UUID syntax like every other command channel
+    // (VC-284 re-review S1). It is the identity a destructive act is replayed
+    // under: a caller that may pick `"cmd-1"` can collide with another caller's
+    // id and be answered with somebody else's deletion.
     guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input)) return false;
       const { commandId, scanRevision, itemIds } = input;
-      if (typeof commandId !== "string" || commandId.length === 0) return false;
+      if (!isDurableCommandId(commandId)) return false;
       if (typeof scanRevision !== "string" || scanRevision.length === 0) return false;
       if (!Array.isArray(itemIds) || itemIds.length === 0) return false;
       return isNonEmptyStringList(itemIds);
@@ -1353,11 +1358,16 @@ function isModelSelectionShape(value: unknown): boolean {
 }
 
 /**
- * Automation commands are durable retry identities, not an IPC-local counter.
- * The renderer mints UUIDs, so a retry can carry the exact same intent through
- * another host without deriving an id from this machine.
+ * A durable command id: a UUID, never an IPC-local counter (docs/BOUNDARIES.md
+ * rule 1). The renderer mints one so a retry can carry the exact same intent
+ * through another host without deriving an id from this machine.
+ *
+ * Shared by every command channel rather than copied per feature (VC-284
+ * re-review S1): the orphan cleanup transports a DELETION under this id, and a
+ * transport that accepts `"cmd-1"` accepts an id another writer could mint too,
+ * which is exactly the cross-writer collision the rule exists to prevent.
  */
-function isAutomationCommandId(value: unknown): value is string {
+function isDurableCommandId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -1425,7 +1435,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-create"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input) || !isAutomationCommandId(input["commandId"])) return false;
+      if (!isRecord(input) || !isDurableCommandId(input["commandId"])) return false;
       const projectId = input["projectId"];
       if (projectId !== null && typeof projectId !== "string") return false;
       return isAutomationDraftShape(input);
@@ -1438,7 +1448,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       const [input] = args;
       if (
         !isRecord(input) ||
-        !isAutomationCommandId(input["commandId"]) ||
+        !isDurableCommandId(input["commandId"]) ||
         typeof input["automationId"] !== "string"
       ) {
         return false;
@@ -1451,7 +1461,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-delete"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string",
     invalidError: "Invalid automation delete request",
   },
@@ -1464,7 +1474,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-run"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       isAutomationRunTargetShape(args[0]["target"]) &&
       typeof args[0]["ticketId"] === "string" &&
       (args[0]["modelOverride"] === null || isModelSelectionShape(args[0]["modelOverride"])),
@@ -1489,7 +1499,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-arm"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["projectId"] === "string" &&
       isTicketStatus(args[0]["status"]) &&
       (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
@@ -1510,7 +1520,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-set-column-order"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["projectId"] === "string" &&
       isTicketStatus(args[0]["status"]) &&
       Array.isArray(args[0]["rankedAutomationIds"]) &&
@@ -1534,7 +1544,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",
@@ -1565,7 +1575,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-run-for-project"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["projectId"] === "string",
     invalidError: "Invalid automation run request",

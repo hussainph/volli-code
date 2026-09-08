@@ -156,6 +156,27 @@ class SqliteOrphanCleanupTransaction implements OrphanCleanupLedgerTransaction {
     ).all(limit);
     return rows.map((row) => row.id);
   }
+
+  /**
+   * The open runs, asked of the store rather than filtered out of a page of
+   * recent ones (VC-284 re-review C3). Accepted, never closed: a refused command
+   * has no run to reconcile, and a finished or already-interrupted one is
+   * settled. Oldest first, because that is the order they stopped in.
+   */
+  openCommandIds(): readonly string[] {
+    const rows = prepared<[], { id: string }>(
+      this.db,
+      `SELECT c.id
+         FROM worktree_cleanup_commands c
+        WHERE EXISTS (SELECT 1 FROM worktree_cleanup_facts f
+                       WHERE f.command_id = c.id AND f.kind = 'cleanup.accepted')
+          AND NOT EXISTS (SELECT 1 FROM worktree_cleanup_facts f
+                           WHERE f.command_id = c.id
+                             AND f.kind IN ('cleanup.run.finished', 'cleanup.run.interrupted'))
+        ORDER BY c.created_at ASC, c.rowid ASC`,
+    ).all();
+    return rows.map((row) => row.id);
+  }
 }
 
 /** The single-writer, serialized SQLite ledger the desktop composition uses. */

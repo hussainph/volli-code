@@ -214,8 +214,14 @@ function listWorktrees(git: RunGit, projectPath: string): ProjectListing {
  * vanished — is reported and left alone. Pruning is repo-wide, so a record we
  * may not touch is not merely skipped: it stops the prune for that project
  * entirely (`cleanup.ts`), because `git worktree prune` cannot be aimed.
+ *
+ * Exported because the cleanup has to ask it AGAIN immediately before pruning
+ * (VC-284 re-review C2): a ticket that started claiming a confirmed record
+ * after the scan changes nothing about the stale SET, so set equality alone
+ * would let a repo-wide prune drop ticket-linked metadata the policy protects.
+ * One definition, asked twice, is the only way the second answer can be trusted.
  */
-function metadataKeptReason(
+export function metadataKeptReason(
   container: OwnedContainer | undefined,
   knownPaths: ReadonlySet<string>,
   recordPath: string,

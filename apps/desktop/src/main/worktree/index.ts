@@ -33,6 +33,7 @@ export { reconcileInterruptedCleanups } from "./cleanup-recovery";
 // the directory it is removing (review C4).
 export {
   acquireDeletionLease,
+  acquireWorktreeStartLease,
   isUnderDeletion,
   resetDeletionLeasesForTest,
   UNDER_DELETION_REFUSAL,

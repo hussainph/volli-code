@@ -97,6 +97,32 @@ export interface OrphanCleanupPlanItem {
 }
 
 /**
+ * Whether a stored value is a plan item this build can act on.
+ *
+ * Used where a plan is read back out of durable storage rather than received
+ * from the code that minted it (VC-284 re-review C3): a record whose JSON parses
+ * but whose SHAPE is damaged must be a loud fault, not a silently emptied run —
+ * "this deletion history is unreadable" and "nothing was ever deleted" are
+ * different statements, and only one of them may be inferred from a bad row.
+ */
+export function isOrphanCleanupPlanItem(value: unknown): value is OrphanCleanupPlanItem {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item["id"] === "string" &&
+    item["id"].length > 0 &&
+    isOrphanCleanupItemKind(item["kind"]) &&
+    typeof item["path"] === "string" &&
+    item["path"].length > 0 &&
+    typeof item["projectId"] === "string" &&
+    typeof item["projectName"] === "string" &&
+    typeof item["projectPath"] === "string" &&
+    (item["branch"] === null || typeof item["branch"] === "string") &&
+    (item["gitReason"] === null || typeof item["gitReason"] === "string")
+  );
+}
+
+/**
  * Where one item of a cleanup got to.
  *
  * `pending` and `executing` are DERIVED from the facts recorded for the item,
@@ -138,6 +164,13 @@ export interface OrphanCleanupItem {
   path: string;
   projectId: string | null;
   projectName: string | null;
+  /**
+   * The project checkout this item's git command ran in, AS CONFIRMED. A later
+   * launch reconciles against this path rather than against wherever the
+   * database now says that project lives: the question is what happened to the
+   * repository the command was accepted for.
+   */
+  projectPath: string | null;
   branch: string | null;
   state: OrphanCleanupItemState;
   /** What happened, or the preservation rule that spared it. */
@@ -146,6 +179,18 @@ export interface OrphanCleanupItem {
   startedAt: number | null;
   /** Epoch ms the outcome was recorded, or `null` while it has none. */
   settledAt: number | null;
+  /**
+   * Epoch ms this outcome was established AFTER THE FACT, by a later launch
+   * asking git and disk what had happened — `null` for an outcome recorded by
+   * the run itself.
+   *
+   * It exists because the two are different claims and only one of them carries
+   * a time (VC-284 re-review C3): a run's own outcome is stamped when the
+   * mutation returned, while a reconciled one is stamped when somebody looked.
+   * The mutation itself happened somewhere between {@link startedAt} and this,
+   * and no surface may print this instant as the moment a folder was removed.
+   */
+  reconciledAt: number | null;
 }
 
 /**

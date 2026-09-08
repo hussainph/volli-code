@@ -43,6 +43,23 @@ export function createMemoryOrphanCleanupLedger(): MemoryOrphanCleanupLedger {
           receipts.push(receipt);
         },
         recentCommandIds: (limit) => order.slice(0, limit),
+        // Oldest first, and never truncated: the same statement the SQLite
+        // adapter makes, so a recovery test proves the rule and not the store.
+        openCommandIds: () =>
+          [...order]
+            .reverse()
+            .filter(
+              (commandId) =>
+                facts.some(
+                  (fact) => fact.commandId === commandId && fact.kind === "cleanup.accepted",
+                ) &&
+                !facts.some(
+                  (fact) =>
+                    fact.commandId === commandId &&
+                    (fact.kind === "cleanup.run.finished" ||
+                      fact.kind === "cleanup.run.interrupted"),
+                ),
+            ),
       });
     },
   };

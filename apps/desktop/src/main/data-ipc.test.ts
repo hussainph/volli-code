@@ -106,6 +106,12 @@ vi.mock("./worktree", async () => ({
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
   ...(await vi.importActual<typeof import("./worktree/activity")>("./worktree/activity")),
+  // NOT mocked either: the deletion lease is the serialization the manual
+  // delete and the cleanup share (VC-284 review C4), and a stand-in would let
+  // this channel claim a lease discipline it does not have.
+  ...(await vi.importActual<typeof import("./worktree/deletion-lease")>(
+    "./worktree/deletion-lease",
+  )),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
@@ -140,6 +146,7 @@ import {
   scanOrphans,
 } from "./worktree";
 import { orphanCleanupEngine } from "./worktree-runtime";
+import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
 import { updateTicketFieldsCommand } from "./ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import {
@@ -182,6 +189,9 @@ beforeEach(() => {
   // The orphan sweep is cached once per launch (module state) — drop it so each
   // test starts from a clean launch and its own mocked sweep runs.
   resetOrphanScanForTest();
+  // Same reason: the deletion lease is process-wide, so one test's leak must
+  // not refuse the next test's destructive path.
+  resetDeletionLeasesForTest();
   ctx = openTestDb();
   registerDataIpcHandlers({ ok: true, db: ctx.db });
 });
@@ -2425,6 +2435,7 @@ describe("volli:worktree-orphans", () => {
       commandId: "cmd-history",
       source: "settings",
       scanRevision: "rev-0",
+      requestedItemIds: [],
       retentionDays: 14,
       preservation: ["branches"],
       items: [],
@@ -2447,6 +2458,7 @@ describe("volli:worktree-orphans", () => {
       commandId: "cmd-damaged",
       source: "settings",
       scanRevision: "rev-0",
+      requestedItemIds: [],
       retentionDays: 14,
       preservation: [],
       items: [],
@@ -2521,8 +2533,16 @@ describe("volli:worktree-orphans", () => {
   }
 
   describe("volli:worktree-orphan-cleanup", () => {
+    // Command ids are UUIDs on this door (docs/BOUNDARIES.md rule 1): the id a
+    // DELETION is replayed under must not be one two callers could both mint.
+    const CLEANUP_COMMAND_ID = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
+    const SECOND_COMMAND_ID = "7a2b3c4d-5e6f-4071-9b02-3c4d5e6f7081";
+    const THIRD_COMMAND_ID = "8b3c4d5e-6f70-4182-ac13-4d5e6f708192";
+    const FOURTH_COMMAND_ID = "9c4d5e6f-7081-4293-bd24-5e6f708192a3";
+    const FIFTH_COMMAND_ID = "ad5e6f70-8192-43a4-8e35-6f708192a3b4";
+
     const run = {
-      id: "cmd-1",
+      id: CLEANUP_COMMAND_ID,
       source: "settings" as const,
       scanRevision: "rev-1",
       startedAt: 1,
@@ -2537,17 +2557,19 @@ describe("volli:worktree-orphans", () => {
           path: "/wt/orphan",
           projectId: "project-1",
           projectName: "Volli",
+          projectPath: "/repo",
           branch: "volli/VC-1-x",
           state: "completed" as const,
           detail: "Removed the folder.",
           startedAt: 1,
           settledAt: 2,
+          reconciledAt: null,
         },
       ],
     };
     const receipt = {
       id: "receipt-1",
-      commandId: "cmd-1",
+      commandId: CLEANUP_COMMAND_ID,
       status: "completed" as const,
       code: null,
       detail: null,
@@ -2568,7 +2590,7 @@ describe("volli:worktree-orphans", () => {
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
         {
-          commandId: "cmd-1",
+          commandId: CLEANUP_COMMAND_ID,
           scanRevision: "rev-1",
           itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
         },
@@ -2582,8 +2604,13 @@ describe("volli:worktree-orphans", () => {
           engine: expect.anything(),
         }),
         {
-          commandId: "cmd-1",
+          commandId: CLEANUP_COMMAND_ID,
           scanRevision: "rev-1",
+          // The ids as the caller sent them, kept so a retry is decidable from
+          // the durable record alone, and the window the proposal was measured
+          // against (re-review S1/C1).
+          requestedItemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+          retentionDays: 14,
           source: "settings",
           // Main's own plan items — paths the renderer never supplied, in the
           // order the proposal listed them.
@@ -2597,7 +2624,7 @@ describe("volli:worktree-orphans", () => {
 
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
-        { commandId: "cmd-2", scanRevision: "some-older-scan", itemIds: ["rev-1:worktree:0"] },
+        { commandId: SECOND_COMMAND_ID, scanRevision: "some-older-scan", itemIds: ["rev-1:worktree:0"] },
       );
 
       expect(result).toEqual({
@@ -2610,7 +2637,7 @@ describe("volli:worktree-orphans", () => {
       // hold is exactly what an audit wants to find.
       const rejected = ctx.db
         .prepare("SELECT status, code FROM worktree_cleanup_receipts WHERE command_id = ?")
-        .get("cmd-2");
+        .get(SECOND_COMMAND_ID);
       expect(rejected).toEqual({ status: "rejected", code: "scan-superseded" });
     });
 
@@ -2619,7 +2646,7 @@ describe("volli:worktree-orphans", () => {
 
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
-        { commandId: "cmd-3", scanRevision: "rev-1", itemIds: ["rev-1:worktree:99"] },
+        { commandId: THIRD_COMMAND_ID, scanRevision: "rev-1", itemIds: ["rev-1:worktree:99"] },
       );
 
       expect(result).toEqual({
@@ -2633,7 +2660,7 @@ describe("volli:worktree-orphans", () => {
     it("refuses any cleanup before a scan has ever run", async () => {
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
-        { commandId: "cmd-4", scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] },
+        { commandId: FOURTH_COMMAND_ID, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] },
       );
 
       expect(result).toEqual({ ok: false, code: "scan-superseded", error: expect.any(String) });
@@ -2645,7 +2672,7 @@ describe("volli:worktree-orphans", () => {
       await scanOnce();
 
       await invoke<Promise<WorktreeOrphanCleanupResult>>("volli:worktree-orphan-cleanup", {
-        commandId: "cmd-1",
+        commandId: CLEANUP_COMMAND_ID,
         scanRevision: "rev-1",
         itemIds: ["rev-1:worktree:0"],
       });
@@ -2657,11 +2684,138 @@ describe("volli:worktree-orphans", () => {
     it("rejects a request that names no items at all", async () => {
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
-        { commandId: "cmd-5", scanRevision: "rev-1", itemIds: [] },
+        { commandId: FIFTH_COMMAND_ID, scanRevision: "rev-1", itemIds: [] },
       );
 
       expect(result).toEqual({ ok: false, error: "Invalid cleanup request" });
       expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
+
+    it("rejects a command id that is not a UUID", async () => {
+      // The id a DELETION is replayed under. `"cmd-1"` is an id a second writer
+      // could mint too, and being answered with somebody else's deletion is
+      // exactly what docs/BOUNDARIES.md rule 1 exists to prevent.
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        { commandId: "cmd-1", scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] },
+      );
+
+      expect(result).toEqual({ ok: false, error: "Invalid cleanup request" });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
+
+    // The gateway rule (re-review S1). A cleanup invalidates the scan it ran
+    // against, so a retry validated against the CURRENT scan is told its
+    // command was superseded — a completed deletion reported as a failure, with
+    // a second deletion the obvious next step. The durable record answers
+    // first, and it needs no scan to do it.
+    it("replays a completed command instead of re-validating it against the scan it consumed", async () => {
+      const engine = orphanCleanupEngine(ctx.db);
+      // A real accepted+completed command under this id, as the first call left
+      // behind. The executor is mocked here, so it is recorded directly.
+      vi.mocked(cleanupOrphans).mockImplementation(async () => {
+        await engine.accept({
+          commandId: CLEANUP_COMMAND_ID,
+          source: "settings",
+          scanRevision: "rev-1",
+          requestedItemIds: ["rev-1:worktree:0"],
+          retentionDays: 14,
+          preservation: ["branches"],
+          items: [report.plan[1]!],
+        });
+        await engine.settleItem({
+          commandId: CLEANUP_COMMAND_ID,
+          itemId: "rev-1:worktree:0",
+          state: "completed",
+          detail: "Removed the folder.",
+        });
+        return engine.finish({ commandId: CLEANUP_COMMAND_ID });
+      });
+      await scanOnce();
+      const first = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        {
+          commandId: CLEANUP_COMMAND_ID,
+          scanRevision: "rev-1",
+          itemIds: ["rev-1:worktree:0"],
+        },
+      );
+      expect(first.ok).toBe(true);
+      // The first run dropped the cached scan, so nothing live can vouch for
+      // this revision any more.
+      vi.mocked(cleanupOrphans).mockClear();
+
+      const retry = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        {
+          commandId: CLEANUP_COMMAND_ID,
+          scanRevision: "rev-1",
+          itemIds: ["rev-1:worktree:0"],
+        },
+      );
+
+      expect(retry).toEqual({
+        ok: true,
+        run: expect.objectContaining({ id: CLEANUP_COMMAND_ID }),
+        receipt: expect.objectContaining({ status: "completed" }),
+      });
+      // Nothing ran a second time, and no scan was consulted to decide that.
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+      const receipts = ctx.db
+        .prepare("SELECT status FROM worktree_cleanup_receipts WHERE command_id = ? ORDER BY rowid")
+        .all(CLEANUP_COMMAND_ID) as { status: string }[];
+      // And no `rejected` receipt was stacked on top of the completion.
+      expect(receipts.map((row) => row.status)).toEqual(["accepted", "completed"]);
+    });
+
+    it("calls a used command id carrying a different request a conflict", async () => {
+      await scanOnce();
+      const engine = orphanCleanupEngine(ctx.db);
+      await engine.accept({
+        commandId: CLEANUP_COMMAND_ID,
+        source: "settings",
+        scanRevision: "rev-1",
+        requestedItemIds: ["rev-1:worktree:0"],
+        retentionDays: 14,
+        preservation: [],
+        items: [report.plan[1]!],
+      });
+
+      const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        {
+          commandId: CLEANUP_COMMAND_ID,
+          scanRevision: "rev-1",
+          itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+        },
+      );
+
+      expect(result).toEqual({ ok: false, code: "conflict", error: expect.any(String) });
+      expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
+    });
+
+    it("repeats one refusal for a retried superseded request, never a second receipt", async () => {
+      await scanOnce();
+      const request = {
+        commandId: SECOND_COMMAND_ID,
+        scanRevision: "some-older-scan",
+        itemIds: ["rev-1:worktree:0"],
+      };
+
+      const first = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        request,
+      );
+      const again = await invoke<Promise<WorktreeOrphanCleanupResult>>(
+        "volli:worktree-orphan-cleanup",
+        request,
+      );
+
+      expect(again).toEqual(first);
+      const receipts = ctx.db
+        .prepare("SELECT status FROM worktree_cleanup_receipts WHERE command_id = ?")
+        .all(SECOND_COMMAND_ID);
+      expect(receipts).toHaveLength(1);
     });
   });
 });
@@ -2834,11 +2988,58 @@ describe("volli:worktree-orphan-delete", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    expect(asked).toEqual([canonical]);
+    // Asked TWICE, and the second time is the point (VC-284 re-review C4):
+    // releasing the bindings takes time, and the answer from before that await
+    // is not an answer about the instant of the delete.
+    expect(asked).toEqual([canonical, canonical]);
     // Released while the directory still exists, so the executor stops in a cwd
     // that is still there.
     expect(order).toEqual([`release:${canonical}`, "dir:present"]);
     expect(existsSync(target)).toBe(false);
+  });
+
+  it("refuses when work appears in the target DURING the binding release", async () => {
+    const target = ownedPath("VC-6-late-arrival");
+    mkdirSync(target, { recursive: true });
+    let released = false;
+
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        busyWorktreeSites: async (probed) =>
+          released ? [{ directory: probed, surface: "terminal" as const }] : [],
+        releaseAgentSites: async () => {
+          released = true;
+          return { released: [], stillOpen: [] };
+        },
+      },
+    );
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/terminal/i) });
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it("refuses a path another destructive act is already holding", async () => {
+    const target = ownedPath("VC-7-contended");
+    mkdirSync(target, { recursive: true });
+    // A cleanup is mid-removal on this exact directory; the manual delete takes
+    // the same lease, so it skips rather than racing it (VC-284 re-review C4).
+    const held = acquireDeletionLease(realpathSync.native(target));
+
+    const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
+      "volli:worktree-orphan-delete",
+      { path: target },
+    );
+
+    expect(result).toEqual({ ok: false, error: "Something else is already changing this folder." });
+    expect(existsSync(target)).toBe(true);
+    held?.release();
   });
 
   it("still deletes the orphan when a binding refuses to close", async () => {

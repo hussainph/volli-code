@@ -1532,14 +1532,17 @@ describe("DATA_IPC descriptor table", () => {
   describe("volli:worktree-orphan-cleanup", () => {
     const { guard, invalidError } = DATA_IPC["volli:worktree-orphan-cleanup"];
 
+    // A caller-minted UUID, like every other command channel in this catalog.
+    const commandId = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
+
     it("accepts a command id, a scan revision, and the item ids confirmed from it", () => {
       expect(
-        guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
+        guard([{ commandId, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
       ).toBe(true);
       expect(
         guard([
           {
-            commandId: "cmd-1",
+            commandId,
             scanRevision: "rev-1",
             itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
           },
@@ -1547,10 +1550,22 @@ describe("DATA_IPC descriptor table", () => {
       ).toBe(true);
     });
 
+    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // `"cmd-1"` is an id a second writer could mint too, and cross-writer
+    // string equality has to mean "the same logical fact"
+    // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
+    it("rejects a command id that is not a UUID", () => {
+      for (const bad of ["cmd-1", "1", "", "6f1a2b3c4d5e4f608a912b3c4d5e6f70", 7, null]) {
+        expect(guard([{ commandId: bad, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }])).toBe(
+          false,
+        );
+      }
+    });
+
     // A cleanup with nothing to do would still open a durable record; refusing
     // the shape keeps the history a log of acts rather than of clicks.
     it("rejects a request that would change nothing", () => {
-      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [] }])).toBe(false);
     });
 
     // The channel takes ids, never paths: main resolves them against the plan
@@ -1563,11 +1578,11 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([null])).toBe(false);
       expect(guard([{ scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
       expect(guard([{ commandId: "", scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
-      expect(guard([{ commandId: "cmd-1", itemIds: ["a"] }])).toBe(false);
-      expect(guard([{ commandId: "cmd-1", scanRevision: "", itemIds: ["a"] }])).toBe(false);
-      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: "a" }])).toBe(false);
-      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [1] }])).toBe(false);
-      expect(guard([{ commandId: "cmd-1", scanRevision: "rev-1", itemIds: [""] }])).toBe(false);
+      expect(guard([{ commandId, itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: "a" }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [1] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [""] }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {

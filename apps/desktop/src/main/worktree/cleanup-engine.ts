@@ -34,6 +34,11 @@ import type {
   OrphanCleanupRun,
   OrphanCleanupSource,
 } from "@volli/shared";
+import {
+  isOrphanCleanupItemOutcome,
+  isOrphanCleanupPlanItem,
+  isOrphanCleanupSource,
+} from "@volli/shared";
 
 /** A value a durable host may answer synchronously today or asynchronously later. */
 type Awaitable<T> = T | Promise<T>;
@@ -47,6 +52,18 @@ export interface OrphanCleanupIntent {
   source: OrphanCleanupSource;
   /** The scan revision whose proposal was confirmed. */
   scanRevision: string;
+  /**
+   * The item ids the CALLER asked for, exactly as they arrived — before any
+   * scan resolved them into paths.
+   *
+   * This is what makes a retry decidable from durable storage alone (VC-284
+   * re-review S1): the host door compares a repeated `{ commandId,
+   * scanRevision, itemIds }` against these two fields and answers "the same
+   * request, here is its run" or "a different request under a used id" without
+   * consulting the in-memory scan — which the first run has usually already
+   * invalidated.
+   */
+  requestedItemIds: readonly string[];
   /** The retention window the proposal was measured against. */
   retentionDays: number;
   /** Preservation rule ids (`@volli/shared`) in force for this run. */
@@ -91,8 +108,19 @@ export interface OrphanCleanupLedgerTransaction {
   listFacts(commandId: string): Awaitable<readonly OrphanCleanupFact[]>;
   listReceipts(commandId: string): Awaitable<readonly OrphanCleanupReceipt[]>;
   appendReceipt(receipt: OrphanCleanupReceipt): Awaitable<void>;
-  /** Command ids, newest first, for the projection and the launch reconcile. */
+  /** Command ids, newest first, for the history projection. Bounded on purpose. */
   recentCommandIds(limit: number): Awaitable<readonly string[]>;
+  /**
+   * Every command that was accepted and never closed — no `cleanup.run.finished`
+   * and no `cleanup.run.interrupted` fact — oldest first, UNBOUNDED.
+   *
+   * Separate from {@link recentCommandIds} because recovery is not display
+   * (VC-284 re-review C3): reading the newest N commands and filtering them
+   * silently drops an older open run, and rejected command rows push accepted
+   * ones out of that window. A run that removed a directory and never finished
+   * has to be reconcilable however long ago it stopped.
+   */
+  openCommandIds(): Awaitable<readonly string[]>;
 }
 
 export interface OrphanCleanupLedger {
@@ -118,7 +146,46 @@ export type OrphanCleanupAcceptance =
       run: OrphanCleanupRun | null;
     };
 
+/**
+ * What a used command id says about a repeated request, decided from the
+ * durable record alone.
+ *
+ * `null` from {@link OrphanCleanupEngine.replay} means the id is unused and the
+ * caller should go on and validate the request normally. Anything else means
+ * this command has already been answered once, and THAT answer is the answer —
+ * the gateway rule the Automations service already follows
+ * (`automations/service.ts`), applied here because the thing being replayed is
+ * a directory deletion.
+ */
+export type OrphanCleanupReplay =
+  | { ok: true; run: OrphanCleanupRun; receipt: OrphanCleanupReceipt }
+  | {
+      ok: false;
+      code: OrphanCleanupRejectionCode;
+      error: string;
+      receipt: OrphanCleanupReceipt;
+      run: OrphanCleanupRun | null;
+    };
+
 export interface OrphanCleanupEngine {
+  /** Whether this command id has already been recorded. Asked BEFORE any live validation. */
+  hasCommand(commandId: string): Promise<boolean>;
+  /**
+   * The durable answer a used command id already has, or `null` when the id is
+   * new.
+   *
+   * This is the host door's FIRST question (VC-284 re-review S1). A cleanup
+   * invalidates the scan it ran against, so validating a retry against the
+   * current scan would answer `scan-superseded` for a command that in fact
+   * completed — turning a lost reply into a false failure, and inviting the
+   * person to run a second deletion. Comparing the request against the stored
+   * `scanRevision`/`requestedItemIds` instead needs no live scan at all.
+   */
+  replay(input: {
+    commandId: string;
+    scanRevision: string;
+    itemIds: readonly string[];
+  }): Promise<OrphanCleanupReplay | null>;
   /**
    * Records intent and answers with local acceptance. Idempotent on the
    * caller's command id: the same id with the same intent replays the first
@@ -129,6 +196,7 @@ export interface OrphanCleanupEngine {
     commandId: string;
     source: OrphanCleanupSource;
     scanRevision: string;
+    requestedItemIds: readonly string[];
     retentionDays: number;
     preservation: readonly string[];
     items: readonly OrphanCleanupPlanItem[];
@@ -142,6 +210,7 @@ export interface OrphanCleanupEngine {
   reject(input: {
     commandId: string;
     scanRevision: string;
+    requestedItemIds: readonly string[];
     code: OrphanCleanupRejectionCode;
     error: string;
   }): Promise<OrphanCleanupReceipt>;
@@ -154,6 +223,8 @@ export interface OrphanCleanupEngine {
     state: OrphanCleanupItemOutcome;
     detail: string | null;
     branch?: string | null;
+    /** True when a later launch established this outcome rather than the run itself. */
+    reconciled?: boolean;
   }): Promise<void>;
   /** Closes the run and completes its receipt. */
   finish(input: {
@@ -165,8 +236,12 @@ export interface OrphanCleanupEngine {
   run(commandId: string): Promise<OrphanCleanupRun | null>;
   /** The recent runs, newest first — the durable history Storage renders. */
   recentRuns(limit?: number): Promise<OrphanCleanupRun[]>;
-  /** Runs with neither a finished nor an interrupted fact: the ones a launch reconciles. */
-  openRuns(limit?: number): Promise<OrphanCleanupRun[]>;
+  /**
+   * Every run with neither a finished nor an interrupted fact, oldest first:
+   * the ones a launch reconciles. Unbounded, unlike the display history — an
+   * open run is work the world may still be carrying.
+   */
+  openRuns(): Promise<OrphanCleanupRun[]>;
 }
 
 /** Stable JSON for intent comparison — key order must not decide whether two intents match. */
@@ -190,16 +265,34 @@ function planItemToProjection(item: OrphanCleanupPlanItem): OrphanCleanupItem {
     path: item.path,
     projectId: item.projectId,
     projectName: item.projectName,
+    projectPath: item.projectPath,
     branch: item.branch,
     state: "pending",
     detail: null,
     startedAt: null,
     settledAt: null,
+    reconciledAt: null,
   };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A cleanup fact whose JSON parsed but whose meaning did not.
+ *
+ * Thrown rather than defaulted (VC-284 re-review C3). The fold is the only
+ * reader of a DELETION history: a damaged `cleanup.accepted` payload that
+ * quietly folds to "an empty finished run" makes a record of removed
+ * directories disappear without anybody being told. Loud here becomes "Couldn't
+ * read the cleanup history" at the channel, which is the true sentence.
+ */
+export class DamagedCleanupRecordError extends Error {
+  constructor(commandId: string, what: string) {
+    super(`Cleanup command ${commandId} has a damaged ${what} record`);
+    this.name = "DamagedCleanupRecordError";
+  }
 }
 
 /**
@@ -222,29 +315,41 @@ export function foldCleanupRun(facts: readonly OrphanCleanupFact[]): OrphanClean
     switch (fact.kind) {
       case "cleanup.accepted": {
         const intent = payload["intent"];
-        if (!isRecord(intent)) break;
-        const items = Array.isArray(intent["items"]) ? intent["items"] : [];
-        const projected = items
-          .filter((item): item is OrphanCleanupPlanItem => isRecord(item))
-          .map(planItemToProjection);
+        // Every field below is checked rather than defaulted: a plan that reads
+        // back as something other than a plan is a fault, and the one thing it
+        // may not become is a shorter plan.
+        if (
+          !isRecord(intent) ||
+          !isOrphanCleanupSource(intent["source"]) ||
+          typeof intent["scanRevision"] !== "string" ||
+          typeof intent["retentionDays"] !== "number" ||
+          !Array.isArray(intent["preservation"]) ||
+          !intent["preservation"].every((rule) => typeof rule === "string") ||
+          !Array.isArray(intent["items"]) ||
+          !intent["items"].every(isOrphanCleanupPlanItem)
+        ) {
+          throw new DamagedCleanupRecordError(fact.commandId, "accepted plan");
+        }
+        const projected = intent["items"].map(planItemToProjection);
         run = {
           id: fact.commandId,
-          source: intent["source"] === "startup" ? "startup" : "settings",
-          scanRevision: typeof intent["scanRevision"] === "string" ? intent["scanRevision"] : "",
+          source: intent["source"],
+          scanRevision: intent["scanRevision"],
           startedAt: fact.createdAt,
           finishedAt: null,
           interruptedAt: null,
-          preservation: Array.isArray(intent["preservation"])
-            ? intent["preservation"].filter((rule): rule is string => typeof rule === "string")
-            : [],
-          retentionDays: typeof intent["retentionDays"] === "number" ? intent["retentionDays"] : 0,
+          preservation: [...(intent["preservation"] as string[])],
+          retentionDays: intent["retentionDays"],
           items: projected,
         };
         for (const item of projected) byId.set(item.id, item);
         break;
       }
       case "cleanup.item.started": {
-        const item = byId.get(String(payload["itemId"]));
+        if (typeof payload["itemId"] !== "string") {
+          throw new DamagedCleanupRecordError(fact.commandId, "item start");
+        }
+        const item = byId.get(payload["itemId"]);
         // Never over a settled item: an outcome is final, and a stray start
         // fact after one must not reopen it.
         if (item === undefined || item.settledAt !== null) break;
@@ -253,16 +358,24 @@ export function foldCleanupRun(facts: readonly OrphanCleanupFact[]): OrphanClean
         break;
       }
       case "cleanup.item.settled": {
-        const item = byId.get(String(payload["itemId"]));
+        if (
+          typeof payload["itemId"] !== "string" ||
+          !isOrphanCleanupItemOutcome(payload["state"])
+        ) {
+          // An outcome nobody can read is not "indeterminate": indeterminate is
+          // a thing this app WROTE about a mutation it witnessed. This is a
+          // broken row, and it says so.
+          throw new DamagedCleanupRecordError(fact.commandId, "item outcome");
+        }
+        const item = byId.get(payload["itemId"]);
         if (item === undefined || item.settledAt !== null) break;
-        const state = payload["state"];
-        item.state =
-          state === "completed" || state === "skipped" || state === "failed"
-            ? state
-            : "indeterminate";
+        item.state = payload["state"];
         item.detail = typeof payload["detail"] === "string" ? payload["detail"] : null;
         if (typeof payload["branch"] === "string") item.branch = payload["branch"];
         item.settledAt = fact.createdAt;
+        // A reconciled outcome carries the instant somebody LOOKED, which is not
+        // the instant anything changed. Both travel, so no surface has to guess.
+        item.reconciledAt = payload["reconciled"] === true ? fact.createdAt : null;
         break;
       }
       case "cleanup.run.finished":
@@ -285,6 +398,17 @@ async function latestReceipt(
 ): Promise<OrphanCleanupReceipt | null> {
   const receipts = await tx.listReceipts(commandId);
   return receipts.at(-1) ?? null;
+}
+
+/** Same revision, same ids, order and duplicates disregarded. */
+function sameRequest(
+  intent: OrphanCleanupIntent,
+  request: { scanRevision: string; itemIds: readonly string[] },
+): boolean {
+  if (intent.scanRevision !== request.scanRevision) return false;
+  const recorded = new Set(intent.requestedItemIds);
+  const asked = new Set(request.itemIds);
+  return recorded.size === asked.size && [...asked].every((id) => recorded.has(id));
 }
 
 /** The transport-neutral cleanup command core. */
@@ -327,11 +451,57 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
   }
 
   return {
+    async hasCommand(commandId) {
+      return ports.ledger.transaction(async (tx) => (await tx.getCommand(commandId)) !== null);
+    },
+
+    async replay(input) {
+      return ports.ledger.transaction(async (tx) => {
+        const existing = await tx.getCommand(input.commandId);
+        if (existing === null) return null;
+        const receipt = (await latestReceipt(tx, input.commandId)) ?? {
+          id: ports.nextId(),
+          commandId: input.commandId,
+          status: "rejected" as const,
+          code: "conflict" as const,
+          detail: "This command has no receipt.",
+          recordedAt: ports.now(),
+        };
+        const run = await foldFor(tx, input.commandId);
+        // A used id with a DIFFERENT request is a conflict whatever its first
+        // answer was — and it is refused without appending anything, so the
+        // original answer stays the only answer this id has.
+        if (!sameRequest(existing.intent, input)) {
+          return {
+            ok: false as const,
+            code: "conflict" as const,
+            error: "This cleanup id was already used for a different request.",
+            receipt,
+            run,
+          };
+        }
+        // The same request again. If it was accepted, its run IS the answer; if
+        // it was refused, the refusal is — repeating either is free, and neither
+        // touches a directory.
+        if (run === null) {
+          return {
+            ok: false as const,
+            code: receipt.code ?? ("conflict" as const),
+            error: receipt.detail ?? "This cleanup id was already refused.",
+            receipt,
+            run: null,
+          };
+        }
+        return { ok: true as const, run, receipt };
+      });
+    },
+
     async accept(input) {
       const intent: OrphanCleanupIntent = {
         kind: "orphan.cleanup",
         source: input.source,
         scanRevision: input.scanRevision,
+        requestedItemIds: [...input.requestedItemIds],
         retentionDays: input.retentionDays,
         preservation: [...input.preservation],
         items: [...input.items],
@@ -396,11 +566,22 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
       return ports.ledger.transaction(async (tx) => {
         const existing = await tx.getCommand(input.commandId);
         const now = ports.now();
-        if (existing === null) {
+        if (existing !== null) {
+          // Never a second receipt over an id that already answered. An accepted
+          // one keeps its acceptance — the S1 finding: a completed deletion that
+          // later grows a `rejected` receipt reads, to whoever takes the last
+          // one, as a command that never ran. A refused one keeps its first
+          // refusal, so a client hammering a superseded revision cannot grow the
+          // log either. A command with no receipt at all is not a thing this
+          // core writes; if one is ever found, it gets the refusal below.
+          const receipt = await latestReceipt(tx, input.commandId);
+          if (receipt !== null) return receipt;
+        } else {
           const intent: OrphanCleanupIntent = {
             kind: "orphan.cleanup",
             source: "settings",
             scanRevision: input.scanRevision,
+            requestedItemIds: [...input.requestedItemIds],
             retentionDays: 0,
             preservation: [],
             items: [],
@@ -435,6 +616,7 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
         state: input.state,
         detail: input.detail,
         ...(input.branch === undefined ? {} : { branch: input.branch }),
+        ...(input.reconciled === true ? { reconciled: true } : {}),
       });
     },
 
@@ -483,9 +665,17 @@ export function createOrphanCleanupEngine(ports: OrphanCleanupEnginePorts): Orph
       });
     },
 
-    async openRuns(limit = RECENT_CLEANUP_RUNS) {
-      const runs = await this.recentRuns(limit);
-      return runs.filter((run) => run.finishedAt === null && run.interruptedAt === null);
+    async openRuns() {
+      return ports.ledger.transaction(async (tx) => {
+        const runs: OrphanCleanupRun[] = [];
+        for (const commandId of await tx.openCommandIds()) {
+          const run = await foldFor(tx, commandId);
+          // A refused command has no run at all, and an open one is by
+          // definition unfinished: the store already asked that question.
+          if (run !== null) runs.push(run);
+        }
+        return runs;
+      });
     },
   };
 }

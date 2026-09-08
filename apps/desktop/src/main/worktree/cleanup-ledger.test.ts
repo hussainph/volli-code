@@ -47,6 +47,7 @@ function planItem(overrides: Partial<OrphanCleanupPlanItem> = {}): OrphanCleanup
 const ACCEPT = {
   source: "settings" as const,
   scanRevision: "rev1",
+  requestedItemIds: ["rev1:worktree:0"],
   retentionDays: 14,
   preservation: ["branches"],
 };
@@ -135,6 +136,7 @@ describe("SqliteOrphanCleanupLedger", () => {
     await engine.reject({
       commandId: "cmd-9",
       scanRevision: "stale-revision",
+      requestedItemIds: ["stale-revision:worktree:0"],
       code: "scan-superseded",
       error: "That scan has been superseded.",
     });
@@ -160,6 +162,7 @@ describe("SqliteOrphanCleanupLedger", () => {
             kind: "orphan.cleanup",
             source: "settings",
             scanRevision: "rev1",
+            requestedItemIds: [],
             retentionDays: 14,
             preservation: [],
             items: [],

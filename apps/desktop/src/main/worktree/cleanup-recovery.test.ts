@@ -14,6 +14,7 @@ import type { OrphanCleanupPlanItem } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { cleanupOrphans } from "./cleanup";
+import { DEFAULT_RETENTION_TTL_DAYS } from "./retention";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
 import { reconcileInterruptedCleanups } from "./cleanup-recovery";
@@ -29,6 +30,8 @@ let minted = 0;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REAL_GIT_TIMEOUT_MS = 30_000;
+/** A caller-minted UUID, like every command id on a real door. */
+const COMMAND_ID = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
 
 beforeEach(() => {
   ctx = openTestDb();
@@ -140,8 +143,10 @@ describe("reconcileInterruptedCleanups", () => {
         cleanupOrphans(
           { worktree: f.deps, engine: engineThatDiesAfterMutating("rev1:worktree:0") },
           {
-            commandId: "cmd-1",
+            commandId: COMMAND_ID,
             scanRevision: "rev1",
+            requestedItemIds: ["rev1:worktree:0"],
+            retentionDays: DEFAULT_RETENTION_TTL_DAYS,
             items: [item(f.orphan, f.projectPath)],
             source: "settings",
           },
@@ -176,6 +181,7 @@ describe("reconcileInterruptedCleanups", () => {
         commandId: "cmd-1",
         source: "settings",
         scanRevision: "rev1",
+        requestedItemIds: ["rev1:worktree:0"],
         retentionDays: 14,
         preservation: ["branches"],
         items: [item(f.orphan, f.projectPath)],
@@ -205,6 +211,7 @@ describe("reconcileInterruptedCleanups", () => {
       commandId: "cmd-1",
       source: "settings",
       scanRevision: "rev1",
+      requestedItemIds: ["rev1:worktree:0"],
       retentionDays: 14,
       preservation: [],
       items: [item(orphan, projectPath)],
@@ -232,6 +239,7 @@ describe("reconcileInterruptedCleanups", () => {
       commandId: "cmd-1",
       source: "settings",
       scanRevision: "rev1",
+      requestedItemIds: ["i1", "i2", "i3"],
       retentionDays: 14,
       preservation: [],
       items: [
@@ -261,7 +269,7 @@ describe("reconcileInterruptedCleanups", () => {
     expect(reconciled?.items[0]?.detail).toBe("Removed the folder.");
   });
 
-  it("resolves an announced metadata prune against the project's current stale set", async () => {
+  it("never claims a prune it cannot prove, however the record now reads", async () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
@@ -288,28 +296,154 @@ describe("reconcileInterruptedCleanups", () => {
       commandId: "cmd-1",
       source: "settings",
       scanRevision: "rev1",
+      requestedItemIds: ["m1"],
       retentionDays: 14,
       preservation: [],
       items: [metadata],
     });
     await engine.beginItem({ commandId: "cmd-1", itemId: "m1" });
+    // Still stale is real evidence: nothing pruned it, so it failed.
     const stillThere = await reconcileInterruptedCleanups({ worktree: deps, engine });
     expect(stillThere[0]?.items[0]?.state).toBe("failed");
 
-    // The same window, but the prune had in fact landed before the app stopped.
+    // The record is gone now — but `git worktree prune` leaves no trace of
+    // itself, so "gone" is not evidence THIS command pruned it: a shell, a
+    // later cleanup or git's own housekeeping would look identical (re-review
+    // C3). The truthful answer is that this host cannot say.
     stillStale = false;
     await engine.accept({
       commandId: "cmd-2",
       source: "settings",
       scanRevision: "rev1",
+      requestedItemIds: ["m1"],
       retentionDays: 14,
       preservation: [],
       items: [metadata],
     });
     await engine.beginItem({ commandId: "cmd-2", itemId: "m1" });
-    const pruned = await reconcileInterruptedCleanups({ worktree: deps, engine });
-    expect(pruned[0]?.items[0]?.state).toBe("completed");
-    expect(pruned[0]?.items[0]?.detail).toMatch(/next launch/i);
+    const gone = await reconcileInterruptedCleanups({ worktree: deps, engine });
+    expect(gone[0]?.items[0]?.state).toBe("indeterminate");
+    expect(gone[0]?.items[0]?.detail).toMatch(/can no longer prove/i);
+    expect(gone[0]?.items[0]?.reconciledAt).not.toBeNull();
+  });
+
+  // The other half of the same rule: a record that came back to LIFE (git lists
+  // it again, not prunable) is not a pruned record either. The old code asked
+  // only "is it still prunable?", so this state read as a completed prune.
+  it("does not read a record that is live again as a record it pruned", async () => {
+    const home = tempDir("home");
+    const projectPath = tempDir("proj");
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    const record = join(home, "records", "VC-9");
+    const { git } = scriptedGit(
+      () =>
+        `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${record}\nHEAD b\nbranch refs/heads/volli/VC-9\n`,
+    );
+    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+
+    await engine.accept({
+      commandId: "cmd-3",
+      source: "settings",
+      scanRevision: "rev1",
+      requestedItemIds: ["m1"],
+      retentionDays: 14,
+      preservation: [],
+      items: [
+        {
+          id: "m1",
+          kind: "metadata",
+          path: record,
+          projectId: "proj-1",
+          projectName: "Volli",
+          projectPath,
+          branch: null,
+          gitReason: "gitdir file points to non-existent location",
+        },
+      ],
+    });
+    await engine.beginItem({ commandId: "cmd-3", itemId: "m1" });
+
+    const [reconciled] = await reconcileInterruptedCleanups({ worktree: deps, engine });
+
+    expect(reconciled?.items[0]?.state).toBe("indeterminate");
+  });
+
+  // `existsSync` answers false for a path it cannot stat for ANY reason, so an
+  // unreadable filesystem used to be reported as "the folder is gone" — a
+  // completed deletion invented out of a permissions error (re-review C3).
+  it("treats an unreadable path as unknown, not as a removed folder", async () => {
+    const home = tempDir("home");
+    const projectPath = tempDir("proj");
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    // A regular file standing where a directory's parent should be: `stat`
+    // fails with ENOTDIR, which is emphatically not "no such file".
+    const blocker = join(home, "not-a-directory");
+    writeFileSync(blocker, "");
+    const unreadable = join(blocker, "VC-8-orphan");
+    // Git says it is not registered — the same half of the answer a real
+    // removal leaves behind.
+    const { git } = scriptedGit(() => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`);
+    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+
+    await engine.accept({
+      commandId: "cmd-4",
+      source: "settings",
+      scanRevision: "rev1",
+      requestedItemIds: ["rev1:worktree:0"],
+      retentionDays: 14,
+      preservation: [],
+      items: [item(unreadable, projectPath)],
+    });
+    await engine.beginItem({ commandId: "cmd-4", itemId: "rev1:worktree:0" });
+
+    const [reconciled] = await reconcileInterruptedCleanups({ worktree: deps, engine });
+
+    expect(reconciled?.items[0]?.state).toBe("indeterminate");
+    expect(reconciled?.items[0]?.detail).toMatch(/can no longer tell/i);
+  });
+
+  // Recovery is not display. Reading "the newest 20 commands, then filtering"
+  // silently abandons an older open run — and a run that removed a directory
+  // and never finished has to be reconcilable however long ago it stopped.
+  it("reconciles an open run older than the display history keeps", async () => {
+    const home = tempDir("home");
+    const projectPath = tempDir("proj");
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    const { git } = scriptedGit(() => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`);
+    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    // Still on disk, no longer registered: the mixed state, so the assertion
+    // below is about the run being FOUND, not about which verdict it got.
+    mkdirSync(join(home, "long-gone"), { recursive: true });
+
+    await engine.accept({
+      commandId: "cmd-oldest",
+      source: "settings",
+      scanRevision: "rev1",
+      requestedItemIds: ["rev1:worktree:0"],
+      retentionDays: 14,
+      preservation: [],
+      items: [item(join(home, "long-gone"), projectPath)],
+    });
+    await engine.beginItem({ commandId: "cmd-oldest", itemId: "rev1:worktree:0" });
+    // Thirty later commands, every one of them closed: more than the display
+    // history's cap, so the open run is nowhere near the recent page.
+    for (let index = 0; index < 30; index += 1) {
+      await engine.accept({
+        commandId: `cmd-later-${index}`,
+        source: "settings",
+        scanRevision: "rev1",
+        requestedItemIds: [],
+        retentionDays: 14,
+        preservation: [],
+        items: [],
+      });
+      await engine.finish({ commandId: `cmd-later-${index}` });
+    }
+
+    const reconciled = await reconcileInterruptedCleanups({ worktree: deps, engine });
+
+    expect(reconciled.map((run) => run.id)).toEqual(["cmd-oldest"]);
+    expect(reconciled[0]?.items[0]?.state).toBe("indeterminate");
   });
 
   it("does nothing when every run closed normally", async () => {

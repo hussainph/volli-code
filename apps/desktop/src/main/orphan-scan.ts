@@ -52,7 +52,12 @@ export function orphanScanReport(
 
 /** A resolved plan, or the reason this request may not become one. */
 export type CleanupPlanResolution =
-  | { ok: true; items: OrphanCleanupPlanItem[] }
+  | {
+      ok: true;
+      items: OrphanCleanupPlanItem[];
+      /** The retention window this proposal was measured against, and shown under. */
+      retentionDays: number;
+    }
   | { ok: false; code: OrphanCleanupRejectionCode; error: string };
 
 /**
@@ -96,7 +101,11 @@ export async function resolveCleanupPlan(request: {
     return { ok: false, code: "unknown-items", error: "That cleanup selected nothing to do." };
   }
   // Plan order, not request order: what runs is what was proposed and shown.
-  return { ok: true, items: report.plan.filter((item) => items.includes(item)) };
+  return {
+    ok: true,
+    items: report.plan.filter((item) => items.includes(item)),
+    retentionDays: report.retentionDays,
+  };
 }
 
 /** Drops the cached scan, so the next read reflects a cleanup that just happened. */
