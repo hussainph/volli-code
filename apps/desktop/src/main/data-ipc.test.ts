@@ -2624,7 +2624,11 @@ describe("volli:worktree-orphans", () => {
 
       const result = await invoke<Promise<WorktreeOrphanCleanupResult>>(
         "volli:worktree-orphan-cleanup",
-        { commandId: SECOND_COMMAND_ID, scanRevision: "some-older-scan", itemIds: ["rev-1:worktree:0"] },
+        {
+          commandId: SECOND_COMMAND_ID,
+          scanRevision: "some-older-scan",
+          itemIds: ["rev-1:worktree:0"],
+        },
       );
 
       expect(result).toEqual({

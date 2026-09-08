@@ -550,7 +550,9 @@ describe("cleanupOrphans", () => {
     expect(run.items[0]).toEqual(
       expect.objectContaining({
         state: "skipped",
-        detail: expect.stringMatching(/was volli\/VC-1-what-was-scanned .* and is volli\/VC-1-stale/i),
+        detail: expect.stringMatching(
+          /was volli\/VC-1-what-was-scanned .* and is volli\/VC-1-stale/i,
+        ),
       }),
     );
   });
@@ -869,10 +871,7 @@ describe("cleanupOrphans", () => {
 
     const { run } = await cleanupOrphans(
       { worktree: f.deps, engine },
-      request([
-        metadataItem(f.stale[0]!, f.projectPath),
-        worktreeItem(f.paths[0]!, f.projectPath),
-      ]),
+      request([metadataItem(f.stale[0]!, f.projectPath), worktreeItem(f.paths[0]!, f.projectPath)]),
     );
 
     expect(run.items.map((item) => item.state)).toEqual(["failed", "completed"]);

@@ -127,11 +127,13 @@ const cleanupResult: WorktreeOrphanCleanupResult = {
         path: "/wt/stale-one",
         projectId: "p1",
         projectName: "Volli Code",
+        projectPath: "/repo",
         branch: "volli/VC-1-x",
         state: "completed",
         detail: "Removed the folder.",
         startedAt: 1,
         settledAt: 2,
+        reconciledAt: null,
       },
     ],
   },
@@ -156,7 +158,10 @@ beforeEach(() => {
     configurable: true,
     value: {
       worktree: { orphans, cleanupOrphans, deleteOrphan: vi.fn() },
-      retention: { getTtlDays: async () => ({ ok: true, days: 14 }) },
+      retention: {
+        getTtlDays: async () => ({ ok: true, days: 14 }),
+        setTtlDays: async (days: number) => ({ ok: true, days }),
+      },
       database: async () => ({ ok: true, sizeBytes: 1 }),
       fs: { revealInFinder: vi.fn() },
     },
@@ -219,11 +224,13 @@ function interruptedRun(overrides: Partial<OrphanCleanupRun> = {}): OrphanCleanu
         path: "/wt/already-gone",
         projectId: "p1",
         projectName: "Volli Code",
+        projectPath: "/repo",
         branch: "volli/VC-3-z",
         state: "completed",
         detail: "Removed the folder.",
         startedAt: removedAt,
         settledAt: removedAt,
+        reconciledAt: null,
       },
       {
         id: "i2",
@@ -231,11 +238,13 @@ function interruptedRun(overrides: Partial<OrphanCleanupRun> = {}): OrphanCleanu
         path: "/wt/never-reached",
         projectId: "p1",
         projectName: "Volli Code",
+        projectPath: "/repo",
         branch: null,
         state: "pending",
         detail: null,
         startedAt: null,
         settledAt: null,
+        reconciledAt: null,
       },
     ],
     ...overrides,
@@ -356,11 +365,13 @@ describe("Storage → Orphaned worktrees", () => {
           path: "/wt/stale-one",
           projectId: "p1",
           projectName: "Volli Code",
+          projectPath: "/repo",
           branch: "volli/VC-1-x",
           state: "failed",
           detail: "git refused: worktree is locked",
           startedAt: 1,
           settledAt: 2,
+          reconciledAt: null,
         },
       ],
     };
@@ -422,11 +433,13 @@ describe("Storage → Orphaned worktrees", () => {
               path: "/wt/uncertain",
               projectId: "p1",
               projectName: "Volli Code",
+              projectPath: "/repo",
               branch: null,
               state: "indeterminate",
               detail: "Volli stopped while removing this folder. Scan again.",
               startedAt: 1,
               settledAt: 2,
+              reconciledAt: null,
             },
           ],
         }),
@@ -460,11 +473,13 @@ describe("Storage → Orphaned worktrees", () => {
               path: "/wt/record",
               projectId: "p1",
               projectName: "Volli Code",
+              projectPath: "/repo",
               branch: null,
               state: "completed",
               detail: "Pruned this stale git record.",
               startedAt: at,
               settledAt: at,
+              reconciledAt: null,
             },
           ],
         },
@@ -477,5 +492,80 @@ describe("Storage → Orphaned worktrees", () => {
     // Metadata items are history too — a pruned record is a completed act.
     expect(text).toContain("/wt/record");
     expect(text).toContain("pruned during startup at");
+  });
+
+  // The re-review's S2: every item settled `failed`, then the app died before
+  // the run closed. Nothing is pending and the run never finished, so both
+  // callouts used to skip it — the one failure shape with no warning and no way
+  // back anywhere on the pane.
+  it("offers a way back from an interrupted run whose every item failed", async () => {
+    const at = Date.UTC(2026, 7, 18, 9, 30);
+    orphans.mockResolvedValueOnce({
+      ...scanned,
+      removable: [],
+      prunable: [],
+      runs: [
+        interruptedRun({
+          interruptedAt: at,
+          items: [
+            {
+              id: "i1",
+              kind: "worktree",
+              path: "/wt/would-not-go",
+              projectId: "p1",
+              projectName: "Volli Code",
+              projectPath: "/repo",
+              branch: "volli/VC-4-w",
+              state: "failed",
+              detail: "git refused: worktree is locked",
+              startedAt: at,
+              settledAt: at,
+              reconciledAt: null,
+            },
+          ],
+        }),
+      ],
+    });
+
+    await mountPane();
+    const text = container?.textContent ?? "";
+
+    expect(text).toContain("Interrupted cleanup");
+    expect(text).toContain("1 failed");
+    // The path and the reason are on the surface, with the recovery.
+    expect(text).toContain("/wt/would-not-go");
+    expect(text).toContain("git refused: worktree is locked");
+    expect(findByText("Scan again")).toBeTruthy();
+  });
+
+  // The re-review's C6: the retention window is what every date on this list
+  // was measured against.
+  it("marks the scan out of date when the retention window changes, and withdraws Clean up", async () => {
+    orphans.mockResolvedValue(scanned);
+
+    await mountPane();
+    expect(findByText("Clean up…")).toBeTruthy();
+
+    // The Retention field commits a new window — the same act that supersedes
+    // the cached revision in main.
+    const input = document.querySelector("#done-ttl-days") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "30");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // The field commits on blur, which React hears as `focusout`.
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+
+    const text = container?.textContent ?? "";
+    expect(text).toContain("Scan is out of date");
+    expect(text).toContain("changed from 14 to 30 day(s)");
+    // And the destructive door is closed until it has been scanned again.
+    expect(() => findByText("Clean up…")).toThrow();
   });
 });

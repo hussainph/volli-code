@@ -1536,9 +1536,9 @@ describe("DATA_IPC descriptor table", () => {
     const commandId = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
 
     it("accepts a command id, a scan revision, and the item ids confirmed from it", () => {
-      expect(
-        guard([{ commandId, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
-      ).toBe(true);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }])).toBe(
+        true,
+      );
       expect(
         guard([
           {
@@ -1556,9 +1556,9 @@ describe("DATA_IPC descriptor table", () => {
     // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
     it("rejects a command id that is not a UUID", () => {
       for (const bad of ["cmd-1", "1", "", "6f1a2b3c4d5e4f608a912b3c4d5e6f70", 7, null]) {
-        expect(guard([{ commandId: bad, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }])).toBe(
-          false,
-        );
+        expect(
+          guard([{ commandId: bad, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
+        ).toBe(false);
       }
     });
 

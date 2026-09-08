@@ -37,6 +37,22 @@ const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
  * held only across the materialization; the turn that follows is visible to the
  * activity guard the destructive paths ask.
  */
+/**
+ * Holds the worktree START lease across one materialization, or refuses
+ * (VC-284 re-review C4). Starts do not exclude each other, so the nested
+ * acquisition `reaffirm` → `prepare` makes is free; only a destructive act
+ * holding the path refuses one.
+ */
+async function withStartLease<T>(directory: string, work: () => Promise<T>): Promise<T> {
+  const lease = acquireWorktreeStartLease(directory);
+  if (lease === null) throw new Error(UNDER_DELETION_REFUSAL);
+  try {
+    return await work();
+  } finally {
+    lease.release();
+  }
+}
+
 export function createDesktopSessionLocationResolver(
   db: Database.Database,
 ): SessionLocationResolver {
@@ -49,22 +65,6 @@ export function createDesktopSessionLocationResolver(
       throw new Error(`Ticket ${session.ticketId} was not found in project ${project.id}`);
     }
     return { project, ticket };
-  };
-
-  /**
-   * Holds the worktree START lease across one materialization, or refuses
-   * (VC-284 re-review C4). Starts do not exclude each other, so the nested
-   * acquisition `reaffirm` → `prepare` makes is free; only a destructive act
-   * holding the path refuses one.
-   */
-  const withStartLease = async <T>(directory: string, work: () => Promise<T>): Promise<T> => {
-    const lease = acquireWorktreeStartLease(directory);
-    if (lease === null) throw new Error(UNDER_DELETION_REFUSAL);
-    try {
-      return await work();
-    } finally {
-      lease.release();
-    }
   };
 
   const prepare = async (session: Session): Promise<SessionLocation> => {

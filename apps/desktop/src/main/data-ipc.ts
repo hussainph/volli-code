@@ -1595,6 +1595,13 @@ export function registerDataIpcHandlers(
 
     "volli:retention-ttl-set": (input: RetentionTtlSetInput): RetentionTtlResult => {
       const stored = setRetentionTtlDays(db, input.days, Date.now());
+      // Every eligibility date the cached scan proposed was measured against the
+      // OLD window, so that proposal no longer describes this app's policy
+      // (VC-284 re-review C1/C6). Dropping it supersedes the revision: a
+      // confirmation still open from before the change is refused with
+      // `scan-superseded` rather than silently applying a window nobody
+      // reviewed, and the next read re-measures.
+      invalidateOrphanScan();
       // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
       // at once, so this is untargeted: every retention surface must re-evaluate.
       broadcastDataChanged({ kind: "retention" });

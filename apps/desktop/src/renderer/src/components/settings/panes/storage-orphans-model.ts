@@ -94,6 +94,25 @@ export function hasCleanupWork(scan: OrphansScan): boolean {
   return !planCleanup(scan).isEmpty;
 }
 
+/**
+ * Whether the retention window has moved since this scan measured its
+ * proposal (VC-284 re-review C6).
+ *
+ * Every eligibility date on screen was computed against `scan.retentionDays`.
+ * Change the setting and those dates describe a policy that no longer exists —
+ * so the plan is stale, the confirmation must not be openable, and the row says
+ * to scan again. Main agrees from the other side: a retention write supersedes
+ * the cached revision, so a confirmation left open is refused rather than run.
+ */
+export function isScanStale(scan: OrphansScan, retentionDays: number | null): boolean {
+  return retentionDays !== null && retentionDays !== scan.retentionDays;
+}
+
+/** The row that says why the list on screen may not be acted on. */
+export function staleScanNote(scan: OrphansScan, retentionDays: number): string {
+  return `The retention window changed from ${scan.retentionDays} to ${retentionDays} day(s) after this scan, so these dates were measured against the old one. Scan again to see what is eligible now.`;
+}
+
 /** Local date, or `null` when there is no timestamp to show. */
 function day(at: number | null): string | null {
   return at === null ? null : new Date(at).toLocaleDateString();
@@ -131,17 +150,28 @@ export function describeRemovable(
   return `${entry.projectName} — eligible for cleanup since ${since} (${basis}, past the ${options.retentionDays}-day retention window). ${branchPart}`;
 }
 
-/** A kept row: which project, the deadline and its basis when there is one, or the honest reason there isn't. */
+/**
+ * A kept row: which project, the deadline and its basis when there is one, or
+ * the honest reason there isn't.
+ *
+ * An ACTIVE row carries its eligibility date too (VC-284 re-review C6). The
+ * acceptance asks Storage to show each KNOWN eligibility date and its basis,
+ * and a checkout that is old enough but occupied has one — saying only "in use"
+ * hides the fact that it is otherwise eligible, which is exactly what a person
+ * wondering why it is still listed needs to know.
+ */
 export function describeKept(entry: KeptWorktreeOrphan): string {
   const prefix = `${entry.projectName} — `;
+  const until = day(entry.removableAt);
+  const basis = entry.ageBasis === null ? "" : ` (${ageBasisText(entry.ageBasis)})`;
   if (entry.reason === "active") {
-    return `${prefix}Kept — ${entry.detail ?? "in use right now"}.`;
+    const eligibility =
+      until === null ? "" : ` Eligible for cleanup since ${until}${basis}, but kept while in use.`;
+    return `${prefix}Kept — ${entry.detail ?? "in use right now"}.${eligibility}`;
   }
   if (entry.reason === "age-unknown") {
     return `${prefix}Kept — Volli can't tell when this was last used.`;
   }
-  const until = day(entry.removableAt);
-  const basis = entry.ageBasis === null ? "" : ` (${ageBasisText(entry.ageBasis)})`;
   return until === null
     ? `${prefix}Kept — used recently.`
     : `${prefix}Kept until ${until}${basis} — used recently.`;
@@ -195,8 +225,23 @@ export interface HistoryRow {
  * found, and the one thing this function exists to make impossible to repeat.
  */
 export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem): string {
-  const when = moment(item.settledAt ?? run.finishedAt ?? run.startedAt);
   const project = item.projectName ?? "Unknown project";
+  // An outcome a later launch established is NOT timestamped as the moment the
+  // change happened (VC-284 re-review C3/C6): nobody watched that instant. What
+  // is known is the window — the cleanup started, the app stopped, and this is
+  // when somebody looked — so the row says that rather than printing the launch
+  // clock as a removal time.
+  if (item.reconciledAt !== null) {
+    const started = moment(item.startedAt ?? run.startedAt);
+    const confirmed = moment(item.reconciledAt);
+    const subject = item.kind === "metadata" ? "Stale git record pruned" : "Folder removed";
+    const branchPart =
+      item.kind === "metadata" || item.branch === null
+        ? ""
+        : ` Branch ${item.branch} is still in git.`;
+    return `${project} — ${subject} by the cleanup that began at ${started}; Volli stopped before recording it and confirmed it at ${confirmed}.${branchPart}`;
+  }
+  const when = moment(item.settledAt ?? run.finishedAt ?? run.startedAt);
   if (item.kind === "metadata") {
     const verb = run.source === "startup" ? "pruned during startup" : "pruned by cleanup";
     return `${project} — stale git record ${verb} at ${when}.`;
@@ -314,15 +359,22 @@ export function describeInterrupted(run: OrphanCleanupRun): string {
   return `A cleanup was interrupted on ${when}: ${parts.join(", ")}. Scan again to review what is left.`;
 }
 
-/** Runs that stopped mid-flight and still have work nobody accounted for. */
+/**
+ * Runs that stopped mid-flight and still owe somebody an account.
+ *
+ * Two facts qualify a run, not one (VC-284 re-review S2). `interruptedAt` is
+ * the interruption itself, recorded by the launch that found the run open — so
+ * a run whose every item settled `failed` before the app died still surfaces,
+ * with its Scan-again. The older rule only looked for unsettled items, which
+ * meant the all-failed interruption was the one failure shape with no callout
+ * and no recovery anywhere on the pane.
+ */
 export function unfinishedRuns(runs: readonly OrphanCleanupRun[]): OrphanCleanupRun[] {
   return runs.filter(
     (run) =>
       run.finishedAt === null &&
-      run.items.some(
-        (item) =>
-          item.state === "pending" || item.state === "executing" || item.state === "indeterminate",
-      ),
+      (run.interruptedAt !== null ||
+        run.items.some((item) => item.state !== "completed" && item.state !== "skipped")),
   );
 }
 

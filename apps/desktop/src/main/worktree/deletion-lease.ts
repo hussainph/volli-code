@@ -69,7 +69,11 @@ function conflicting(path: string, kinds: readonly LeaseKind[]): boolean {
   return false;
 }
 
-function take(path: string, kind: LeaseKind, blockedBy: readonly LeaseKind[]): DeletionLease | null {
+function take(
+  path: string,
+  kind: LeaseKind,
+  blockedBy: readonly LeaseKind[],
+): DeletionLease | null {
   if (conflicting(path, blockedBy)) return null;
   const id = (nextLeaseId += 1);
   held.set(id, { id, path: canonicalize(path), kind });

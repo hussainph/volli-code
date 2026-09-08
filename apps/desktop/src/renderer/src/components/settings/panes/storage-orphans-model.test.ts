@@ -25,11 +25,13 @@ import {
   describeUnreadableProject,
   hasCleanupWork,
   historyRows,
+  isScanStale,
   orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
   runsWithFailures,
+  staleScanNote,
   unfinishedRuns,
   type OrphansScan,
 } from "./storage-orphans-model";
@@ -74,11 +76,13 @@ function item(overrides: Partial<OrphanCleanupItem> = {}): OrphanCleanupItem {
     path: "/wt/one",
     projectId: "p1",
     projectName: "Proj",
+    projectPath: "/repo",
     branch: "volli/VC-1-x",
     state: "completed",
     detail: "Removed the folder.",
     startedAt: AT,
     settledAt: AT,
+    reconciledAt: null,
     ...overrides,
   };
 }
@@ -199,14 +203,17 @@ describe("what a row says", () => {
     ).toBe("Proj One — Kept — Volli can't tell when this was last used.");
   });
 
-  it("names what is live inside an active worktree", () => {
+  // The re-review's C6: an occupied checkout that is otherwise past the window
+  // HAS a known eligibility date, and hiding it leaves the row unable to answer
+  // the question a person is asking — why is this still on the list?
+  it("names what is live inside an active worktree, and still says since when it was eligible", () => {
     expect(describeKept({ ...keptBase, reason: "active", detail: "a running terminal" })).toBe(
-      "Proj One — Kept — a running terminal.",
+      `Proj One — Kept — a running terminal. Eligible for cleanup since ${new Date(AT).toLocaleDateString()} (the folder's last modification), but kept while in use.`,
     );
   });
 
   it("falls back to a generic phrase when an active worktree names nothing specific", () => {
-    expect(describeKept({ ...keptBase, reason: "active", detail: null })).toBe(
+    expect(describeKept({ ...keptBase, reason: "active", detail: null, removableAt: null })).toBe(
       "Proj One — Kept — in use right now.",
     );
   });
@@ -495,7 +502,7 @@ describe("an interrupted run", () => {
     );
   });
 
-  it("surfaces only runs that stopped with pending, executing, or indeterminate work left", () => {
+  it("surfaces every open run that still owes an account, and nothing that settled clean", () => {
     const pending = run({ id: "pending", finishedAt: null, items: [item({ state: "pending" })] });
     const executing = run({
       id: "executing",
@@ -507,6 +514,23 @@ describe("an interrupted run", () => {
       finishedAt: null,
       items: [item({ state: "indeterminate" })],
     });
+    // The shape the re-review found with no callout and no recovery anywhere:
+    // every item settled `failed`, then the app died before the run closed.
+    // Nothing is pending, nothing is executing — and it is still a cleanup that
+    // stopped, with failures nobody has been told about.
+    const allFailedAndOpen = run({
+      id: "all-failed",
+      finishedAt: null,
+      items: [item({ state: "failed", detail: "git said no" })],
+    });
+    // The interruption FACT, stamped by the launch that found the run open: it
+    // qualifies the run on its own, whatever its items settled as.
+    const interrupted = run({
+      id: "interrupted",
+      finishedAt: null,
+      interruptedAt: AT + 5,
+      items: [item({ state: "failed" }), item({ id: "b", state: "skipped" })],
+    });
     const settledButOpen = run({
       id: "settled-open",
       finishedAt: null,
@@ -515,10 +539,16 @@ describe("an interrupted run", () => {
     const finished = run({ id: "finished", finishedAt: AT, items: [item({ state: "pending" })] });
 
     expect(
-      unfinishedRuns([pending, executing, indeterminate, settledButOpen, finished]).map(
-        (entry) => entry.id,
-      ),
-    ).toEqual(["pending", "executing", "indeterminate"]);
+      unfinishedRuns([
+        pending,
+        executing,
+        indeterminate,
+        allFailedAndOpen,
+        interrupted,
+        settledButOpen,
+        finished,
+      ]).map((entry) => entry.id),
+    ).toEqual(["pending", "executing", "indeterminate", "all-failed", "interrupted"]);
   });
 });
 
@@ -544,10 +574,14 @@ describe("a run that finished with trouble in it", () => {
     ).toEqual([]);
   });
 
-  it("is not reported as troubled while it is still open, even with a failure recorded", () => {
-    expect(
-      runsWithFailures([run({ finishedAt: null, items: [item({ state: "failed" })] })]),
-    ).toEqual([]);
+  // An open run is not a FINISHED run with trouble in it, so this projection
+  // stays quiet about one — `unfinishedRuns` is where it surfaces, with its own
+  // Scan again (re-review S2). What must never happen is neither of them
+  // claiming it.
+  it("is not reported as troubled while it is still open, because the interrupted callout has it", () => {
+    const open = run({ finishedAt: null, items: [item({ state: "failed" })] });
+    expect(runsWithFailures([open])).toEqual([]);
+    expect(unfinishedRuns([open]).map((entry) => entry.id)).toEqual(["run-1"]);
   });
 
   it("counts what went wrong and points at the rows that explain it, with the one recovery", () => {
@@ -638,6 +672,57 @@ describe("a refused cleanup command", () => {
   it("gives conflict its own honest sentence, without suggesting a rescan", () => {
     expect(cleanupRejectionMessage("conflict", "commandId already ran with a different plan")).toBe(
       "Couldn't clean up: commandId already ran with a different plan.",
+    );
+  });
+});
+
+// The re-review's C6: the retention window is what every eligibility date on
+// the list was measured against, so changing it makes the proposal on screen a
+// statement about a policy that no longer exists.
+describe("a scan measured against a retention window that has since moved", () => {
+  it("is stale, and says what changed and how to fix it", () => {
+    const report = scan({ retentionDays: 14 });
+    expect(isScanStale(report, 14)).toBe(false);
+    // Nothing to compare against yet (the setting has not loaded) is not stale:
+    // an unknown is not a difference.
+    expect(isScanStale(report, null)).toBe(false);
+    expect(isScanStale(report, 30)).toBe(true);
+    expect(staleScanNote(report, 30)).toBe(
+      "The retention window changed from 14 to 30 day(s) after this scan, so these dates were measured against the old one. Scan again to see what is eligible now.",
+    );
+  });
+});
+
+// The re-review's C3/C6: an outcome a later launch established has no known
+// mutation time — only a window — and printing the launch clock as the moment a
+// folder was removed is a claim about a deletion nobody watched.
+describe("an outcome recorded by a later launch", () => {
+  it("says when the cleanup began and when the outcome was confirmed, never that it happened at launch", () => {
+    const reconciledAt = AT + 60_000;
+    const meta = describeCompleted(
+      run({ finishedAt: null, interruptedAt: reconciledAt }),
+      item({ startedAt: AT, settledAt: reconciledAt, reconciledAt }),
+    );
+
+    expect(meta).toBe(
+      `Proj — Folder removed by the cleanup that began at ${new Date(AT).toLocaleString()}; Volli stopped before recording it and confirmed it at ${new Date(reconciledAt).toLocaleString()}. Branch volli/VC-1-x is still in git.`,
+    );
+    // And never the plain "Removed by cleanup at <launch time>" sentence.
+    expect(meta).not.toContain("Removed by cleanup at");
+  });
+
+  it("says the same about a pruned record, and about one with no branch", () => {
+    const reconciledAt = AT + 60_000;
+    expect(
+      describeCompleted(
+        run({ source: "startup" }),
+        item({ kind: "metadata", branch: null, startedAt: null, reconciledAt }),
+      ),
+    ).toBe(
+      `Proj — Stale git record pruned by the cleanup that began at ${new Date(AT).toLocaleString()}; Volli stopped before recording it and confirmed it at ${new Date(reconciledAt).toLocaleString()}.`,
+    );
+    expect(describeCompleted(run(), item({ branch: null, reconciledAt }))).toContain(
+      "confirmed it at",
     );
   });
 });

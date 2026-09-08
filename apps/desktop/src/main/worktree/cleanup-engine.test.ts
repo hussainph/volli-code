@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrphanCleanupPlanItem } from "@volli/shared";
 
 import { createOrphanCleanupEngine, foldCleanupRun } from "./cleanup-engine";
+import type { OrphanCleanupFact } from "./cleanup-engine";
 import { createMemoryOrphanCleanupLedger } from "./cleanup-ledger-memory";
 
 function planItem(overrides: Partial<OrphanCleanupPlanItem> = {}): OrphanCleanupPlanItem {
@@ -390,6 +391,14 @@ describe("cleanup command core", () => {
   });
 });
 
+/** One accepted-plus-finished fact pair, so a fold has a whole run to read. */
+function acceptedFacts(intent: unknown): OrphanCleanupFact[] {
+  return [
+    { id: "f1", commandId: "c", kind: "cleanup.accepted", payload: intent, createdAt: 1 },
+    { id: "f2", commandId: "c", kind: "cleanup.run.finished", payload: {}, createdAt: 2 },
+  ];
+}
+
 describe("foldCleanupRun", () => {
   it("has no run for facts that never accepted anything", () => {
     expect(
@@ -411,10 +420,6 @@ describe("foldCleanupRun", () => {
   // run", which is a deletion history disappearing without anybody being told.
   // Every one of these shapes is now a named fault.
   it("refuses a damaged accepted plan instead of quietly emptying the run", () => {
-    const accepted = (intent: unknown) => [
-      { id: "f1", commandId: "c", kind: "cleanup.accepted" as const, payload: intent, createdAt: 1 },
-      { id: "f2", commandId: "c", kind: "cleanup.run.finished" as const, payload: {}, createdAt: 2 },
-    ];
     const good = {
       source: "settings",
       scanRevision: "rev1",
@@ -434,10 +439,10 @@ describe("foldCleanupRun", () => {
       { intent: { ...good, items: [7, null] } },
       { intent: { ...good, items: [{ ...planItem(), path: 3 }] } },
     ]) {
-      expect(() => foldCleanupRun(accepted(damaged))).toThrow(/damaged accepted plan/);
+      expect(() => foldCleanupRun(acceptedFacts(damaged))).toThrow(/damaged accepted plan/);
     }
     // And the undamaged one still folds.
-    expect(foldCleanupRun(accepted({ intent: good }))?.items[0]?.id).toBe("rev1:worktree:0");
+    expect(foldCleanupRun(acceptedFacts({ intent: good }))?.items[0]?.id).toBe("rev1:worktree:0");
   });
 
   it("refuses an unreadable item fact rather than calling it indeterminate", () => {

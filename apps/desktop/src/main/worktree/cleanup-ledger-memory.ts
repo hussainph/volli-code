@@ -46,8 +46,8 @@ export function createMemoryOrphanCleanupLedger(): MemoryOrphanCleanupLedger {
         // Oldest first, and never truncated: the same statement the SQLite
         // adapter makes, so a recovery test proves the rule and not the store.
         openCommandIds: () =>
-          [...order]
-            .reverse()
+          order
+            .toReversed()
             .filter(
               (commandId) =>
                 facts.some(

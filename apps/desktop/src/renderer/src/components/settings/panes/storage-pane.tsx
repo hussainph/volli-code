@@ -47,11 +47,13 @@ import {
   describeRunFailures,
   describeUnreadableProject,
   historyRows,
+  isScanStale,
   orphanPolicyNote,
   planCleanup,
   preservationHistoryRows,
   retentionNote,
   runsWithFailures,
+  staleScanNote,
   unfinishedRuns,
   type CleanupPlan,
   type OrphansScan,
@@ -89,11 +91,18 @@ import { toastError } from "@renderer/lib/toast";
 const CONFIRM_BELOW_DAYS = 7;
 
 export function StoragePane() {
+  // The retention window is what every eligibility date in the orphan list was
+  // measured against, so the two halves of this pane are not independent
+  // (VC-284 re-review C6): committing a new window makes the list on screen a
+  // statement about a policy that no longer exists. Retention says so, and the
+  // orphan list refuses to act on a stale proposal until it has been scanned
+  // again — main supersedes the revision from its own side at the same moment.
+  const [retentionDays, setRetentionDays] = React.useState<number | null>(null);
   return (
     <>
-      <RetentionSection />
+      <RetentionSection onDays={setRetentionDays} />
       <PiSessionLogsSection />
-      <OrphansSection />
+      <OrphansSection retentionDays={retentionDays} />
       <DatabaseSection />
     </>
   );
@@ -109,7 +118,7 @@ export function StoragePane() {
  * the box on blur. Select-all, type `1`, click away, and a one-day sweep is
  * armed with no confirmation and nothing on screen that changed.
  */
-function RetentionSection() {
+function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
   const [days, setDays] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
 
@@ -119,8 +128,10 @@ function RetentionSection() {
       .getTtlDays()
       .then((result) => {
         if (cancelled) return;
-        if (result.ok) setDays(String(result.days));
-        else toastError(`Couldn't load the retention setting: ${result.error}`);
+        if (result.ok) {
+          setDays(String(result.days));
+          onDays(result.days);
+        } else toastError(`Couldn't load the retention setting: ${result.error}`);
         setLoaded(true);
       })
       .catch((error: unknown) => {
@@ -131,7 +142,10 @@ function RetentionSection() {
     return () => {
       cancelled = true;
     };
-  }, []);
+    // `onDays` is a setState function from the pane above — stable for the life
+    // of the mount, and listed because the read it feeds is the one that tells
+    // the orphan list which window its dates were measured against.
+  }, [onDays]);
 
   return (
     <PrefSection title="Retention" icon={TreeStructureIcon}>
@@ -170,6 +184,9 @@ function RetentionSection() {
               if (!result.ok) return { ok: false, error: result.error };
               // Adopt what main clamped it to, not what was typed.
               setDays(String(result.days));
+              // And tell the orphan list, whose every date was measured against
+              // the window this just replaced.
+              onDays(result.days);
               return { ok: true, value: String(result.days) };
             } catch (error) {
               return { ok: false, error: errorMessage(error) };
@@ -525,7 +542,7 @@ function truncateMiddle(value: string, max = 56): string {
  * orphan past the retention window — the same act the app ran, unasked, at
  * every launch.
  */
-function OrphansSection() {
+function OrphansSection({ retentionDays: setting }: { retentionDays: number | null }) {
   const [state, setState] = React.useState<AsyncState<OrphansScan>>({ status: "loading" });
   const [pendingDelete, setPendingDelete] = React.useState<DirtyWorktreeOrphan | null>(null);
   const [deleting, setDeleting] = React.useState(false);
@@ -640,7 +657,10 @@ function OrphansSection() {
     }
   }
 
-  const plan = state.status === "ready" ? planCleanup(state.data) : null;
+  // The proposal describes a retention window that has since been replaced, so
+  // it may be READ but not acted on (VC-284 re-review C6).
+  const stale = state.status === "ready" && isScanStale(state.data, setting);
+  const plan = state.status === "ready" && !stale ? planCleanup(state.data) : null;
   // The window every eligibility date on this list was measured against, read
   // from the scan rather than re-fetched: the two must be the same number.
   const retentionDays = state.status === "ready" ? state.data.retentionDays : null;
@@ -693,6 +713,20 @@ function OrphansSection() {
              * check against a policy is a date nobody can argue with.
              */}
             <ItemRow name="Retention" meta={orphanPolicyNote(report.retentionDays)} />
+
+            {/*
+             * The retention window moved after this scan ran, so every date
+             * below was measured against a policy that is no longer in force.
+             * The Clean up row is gone until it has been scanned again, and
+             * main refuses the old revision from its own side.
+             */}
+            {stale && setting !== null ? (
+              <ItemRow name="Scan is out of date" meta={staleScanNote(report, setting)}>
+                <Button size="xs" variant="outline" disabled={busy} onClick={() => void load(true)}>
+                  Scan again
+                </Button>
+              </ItemRow>
+            ) : null}
 
             {/*
              * A cleanup the app never finished. It is stated before anything
