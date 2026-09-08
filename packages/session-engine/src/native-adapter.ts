@@ -1,6 +1,7 @@
 import type {
   AuthoritySnapshot,
   ModelSelection,
+  RuntimeMessageSettle,
   RuntimeObservation,
   SessionAttachmentContinuity,
   SessionInteraction,
@@ -65,6 +66,14 @@ export type HarnessCommand =
       attachmentId: string;
       message: UIMessage;
       delivery: NativeMessageDelivery;
+      /**
+       * How long the dispatch waits before it answers (VC-324). Optional and
+       * absent by default, which is `"turn"` — the behaviour every caller but
+       * the supervision door has always had. It rides the runtime command, not
+       * the durable {@link SessionCommandIntent}: what a Command means does not
+       * change with how long its sender waited for it.
+       */
+      settle?: RuntimeMessageSettle;
       model: { providerId: string; modelId: string } | null;
       agent: string | null;
       variant: string | null;
@@ -111,6 +120,16 @@ export type DeliveryReceipt =
       status: "accepted";
       acceptedAt: number;
       native: SessionNativeReference | null;
+      /**
+       * Whether this delivery OPENED the turn it landed in, rather than
+       * joining one already running (VC-324).
+       *
+       * Transport detail, not durable receipt content: `#recordDelivery` maps
+       * named fields into the ledger's own receipt and this is not one of
+       * them. Optional and absent from every adapter that does not answer the
+       * question.
+       */
+      turnOpened?: boolean;
     }
   | {
       commandId: string;

@@ -1289,9 +1289,10 @@ class PiBinding implements BindingHandle {
         command.commandId,
         attachments.images,
         resources,
+        command.settle ?? "turn",
       );
       return outcome.kind === "delivered"
-        ? this.#accepted(command.commandId)
+        ? this.#accepted(command.commandId, outcome.turnOpened)
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
     } catch (error) {
       // The prompt reached Pi and something after it failed. "Unknown" is the
@@ -1533,8 +1534,16 @@ class PiBinding implements BindingHandle {
     parked.settle.reject(new Error("The question was withdrawn before anyone answered it."));
   }
 
-  #accepted(commandId: string): DeliveryReceipt {
-    return { commandId, status: "accepted", acceptedAt: this.#now(), native: this.#native };
+  #accepted(commandId: string, turnOpened?: boolean): DeliveryReceipt {
+    return {
+      commandId,
+      status: "accepted",
+      acceptedAt: this.#now(),
+      native: this.#native,
+      // Carried only when the runtime answered the question (VC-324): a submit
+      // that settled on the turn's end never opened one that is still running.
+      ...(turnOpened === undefined ? {} : { turnOpened }),
+    };
   }
 
   #rejected(commandId: string, code: string, detail: string): DeliveryReceipt {

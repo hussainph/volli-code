@@ -575,6 +575,42 @@ describe("sendSessionMessageOperation", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it("settles on the turn opening and reports that a new turn was opened", async () => {
+    const command = vi.fn(async () => ({ receipt: { status: "accepted" }, turnOpened: true }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    const outcome = await sendSessionMessageOperation(p, sendInput());
+
+    expect(outcome).toMatchObject({ midTurn: false, turnOpened: true });
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ delivery: "steer", settle: "opened" }),
+      }),
+    );
+  });
+
+  it("reports no opened turn when the steer joined one already running", async () => {
+    const command = vi.fn(async () => ({ receipt: { status: "accepted" }, turnOpened: false }));
+    const { ports: p } = ports(
+      [projection({ attachments: [openAttachment()], turnActive: true })],
+      { command },
+    );
+
+    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
+      midTurn: true,
+      turnOpened: false,
+    });
+  });
+
+  it("claims no opened turn when the runtime did not answer the question", async () => {
+    const command = vi.fn(async () => ({ receipt: { status: "accepted" } }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
+      turnOpened: false,
+    });
+  });
+
   it("is a SuperviseSessionError for every refusal, so the door can word it", async () => {
     const { ports: missing } = ports([]);
     await expect(sendSessionMessageOperation(missing, sendInput())).rejects.toBeInstanceOf(

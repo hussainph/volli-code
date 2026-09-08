@@ -1560,6 +1560,36 @@ async function attachSession(
     };
     type PendingDelivery = PendingMessageDelivery | PendingRetryDelivery;
     let pendingRunDelivery: PendingDelivery | undefined;
+    /**
+     * The gate one `settle: "opened"` submit waits on, and whether the turn it
+     * was waiting for actually opened (VC-324).
+     *
+     * At most one exists at a time, because only an IDLE attachment takes this
+     * path and the submit that took it holds the attachment until Pi is
+     * streaming. `opened` is set where the `{kind:"turn", state:"started"}`
+     * observation has already been committed and the Command marked accepted,
+     * so a caller released by it is released on a durable fact rather than on a
+     * callback having fired.
+     */
+    let turnOpening: { opened: boolean; release: () => void } | undefined;
+    const reportTurnOpened = (): void => {
+      const opening = turnOpening;
+      if (opening === undefined) return;
+      turnOpening = undefined;
+      opening.opened = true;
+      opening.release();
+    };
+    /**
+     * A detached run's own rejection, held for the next command boundary.
+     *
+     * The same bargain {@link OrderedObservationDelivery} already makes for an
+     * observer that threw: a failure nobody is waiting on is retained rather
+     * than thrown into a Pi callback, and the next command to reach a boundary
+     * consumes it. A turn that FAILS needs none of this — it raises its
+     * Attention from the run-end handler exactly as it does when the submit is
+     * awaited, because nothing there reads who is waiting.
+     */
+    let detachedRunFailure: unknown;
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
     const persistAcceptedDelivery = async (
@@ -1599,6 +1629,12 @@ async function attachSession(
     const observationDelivery = new OrderedObservationDelivery(observe);
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
+    /** Everything one command boundary owes its caller: an observer that threw, or a detached run that did. */
+    const consumeRunFailure = (): unknown => {
+      const detached = detachedRunFailure;
+      detachedRunFailure = undefined;
+      return observationDelivery.consumeFailure() ?? detached;
+    };
 
     // Assigned the statement after `new Agent` and read only from inside a Pi
     // callback, which cannot fire before a run starts. Declared here because the
@@ -2167,6 +2203,11 @@ async function attachSession(
             acceptedUserMessages.add(delivery.message);
           }
         }
+        // Last, and only here: a `settle: "opened"` caller is released once the
+        // turn's own start is committed and its Command is durably accepted
+        // (VC-324). Everything it was promised has happened; the run has not
+        // ended, and it never claimed it had.
+        reportTurnOpened();
         return;
       }
 
@@ -2366,6 +2407,7 @@ async function attachSession(
         commandId,
         images = [],
         resources = [],
+        settle = "turn",
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -2399,9 +2441,11 @@ async function attachSession(
           pendingQueuedDeliveries.set(message, pending);
           if (delivery === "steer") agent.steer(message);
           else agent.followUp(message);
+          // No `turnOpened`: this message joined a turn that was already
+          // running, which is the distinction a supervisor reads (VC-324).
           return { kind: "delivered", delivery };
         }
-        observationDelivery.consumeFailure();
+        consumeRunFailure();
         // Before the message is composed, not after: compaction can change what
         // the context holds, and the Brief is prepended on an empty one. Held
         // as a rewrite so an explicit `/compact` arriving meanwhile is refused
@@ -2421,9 +2465,42 @@ async function attachSession(
           message,
           resources,
         };
-        await agent.prompt(message);
-        await settleRun();
-        const failed = observationDelivery.consumeFailure();
+        const run = async (): Promise<void> => {
+          await agent.prompt(message);
+          await settleRun();
+        };
+        if (settle === "opened") {
+          // The run is STARTED here and awaited nowhere: this call answers when
+          // the turn has opened, and the turn's own end reaches the Session
+          // through the observations it publishes either way (VC-324).
+          const released = Promise.withResolvers<void>();
+          const opening = { opened: false, release: released.resolve };
+          turnOpening = opening;
+          void run()
+            /* v8 ignore next 3 -- Pi settles provider failures into observations; a rejection here is defensive. */
+            .catch((error: unknown) => {
+              detachedRunFailure ??= error;
+            })
+            // A run that ended without ever opening a turn must not park its
+            // caller for the life of the attachment. Releasing here leaves
+            // `opened` false, which is what the answer below reads.
+            .finally(() => {
+              if (turnOpening === opening) turnOpening = undefined;
+              released.resolve();
+            });
+          await released.promise;
+          // The same command boundary the awaited path keeps, read at the
+          // moment this one answers: a run that failed on its way to opening a
+          // turn, or an observer that threw committing the turn's start, is
+          // this caller's to be told about.
+          const failed = consumeRunFailure();
+          if (failed !== undefined) {
+            throw failed;
+          }
+          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened };
+        }
+        await run();
+        const failed = consumeRunFailure();
         if (failed !== undefined) {
           throw failed;
         }

@@ -2960,6 +2960,48 @@ describe("SessionRuntime native adapter contract", () => {
     );
   });
 
+  it("carries a settle mode to the adapter and answers which turn the delivery landed in", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    const plain = await runtime.command({
+      commandId: "settle-default",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("default-settle") },
+    });
+    expect(adapter.commands.at(-1)).not.toHaveProperty("settle");
+    expect(plain).not.toHaveProperty("turnOpened");
+
+    adapter.dispatchReceipt = {
+      commandId: "settle-opened",
+      status: "accepted",
+      acceptedAt: 200,
+      native: null,
+      turnOpened: true,
+    };
+    const opened = await runtime.command({
+      commandId: "settle-opened",
+      sessionId,
+      command: {
+        kind: "message.submit",
+        message: userMessage("opened-settle"),
+        delivery: "steer",
+        settle: "opened",
+      },
+    });
+
+    expect(adapter.commands.at(-1)).toMatchObject({
+      kind: "message.submit",
+      delivery: "steer",
+      settle: "opened",
+    });
+    expect(opened.turnOpened).toBe(true);
+    // The durable Receipt still says only that the runtime accepted the
+    // Command; how the delivery landed is transport detail (VC-324).
+    expect(opened.receipt).toMatchObject({ status: "accepted" });
+    expect(opened.receipt).not.toHaveProperty("turnOpened");
+  });
+
   it("returns previously recorded receipts and rejects commands with no live route", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
