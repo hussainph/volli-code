@@ -263,10 +263,21 @@ export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem
  */
 export function describeSettled(run: OrphanCleanupRun, item: OrphanCleanupItem): string {
   if (item.state === "completed") return describeCompleted(run, item);
-  const when = moment(item.settledAt ?? run.finishedAt ?? run.startedAt);
   const project = item.projectName ?? "Unknown project";
   const subject = item.kind === "metadata" ? "stale git record" : "folder";
   const reason = item.detail ?? "no reason recorded";
+  // Same rule as a completed one: an outcome a later launch established is
+  // stamped when somebody LOOKED, so the row says "recorded at", never that
+  // this is when the act failed (VC-284 re-review C3/C6).
+  if (item.reconciledAt !== null) {
+    const confirmed = moment(item.reconciledAt);
+    const verdict =
+      item.state === "failed"
+        ? `this ${subject} was not changed`
+        : `Volli can't say what happened to this ${subject}`;
+    return `${project} — ${verdict}; recorded at ${confirmed} by the launch after Volli stopped: ${reason}`;
+  }
+  const when = moment(item.settledAt ?? run.finishedAt ?? run.startedAt);
   if (item.state === "skipped") return `${project} — ${subject} kept at ${when}: ${reason}`;
   if (item.state === "failed") {
     return `${project} — cleanup of this ${subject} failed at ${when}: ${reason}`;

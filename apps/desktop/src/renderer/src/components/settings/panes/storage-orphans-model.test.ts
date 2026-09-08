@@ -711,6 +711,39 @@ describe("an outcome recorded by a later launch", () => {
     expect(meta).not.toContain("Removed by cleanup at");
   });
 
+  it("says a reconciled failure and a reconciled unknown were recorded at the launch, not that they happened then", () => {
+    const reconciledAt = AT + 60_000;
+    const at = new Date(reconciledAt).toLocaleString();
+    const interrupted = run({ finishedAt: null, interruptedAt: reconciledAt });
+    expect(
+      historyRows([
+        {
+          ...interrupted,
+          items: [
+            item({
+              id: "a",
+              state: "failed",
+              detail: "Volli stopped before this folder was removed; it is still here.",
+              settledAt: reconciledAt,
+              reconciledAt,
+            }),
+            item({
+              id: "b",
+              kind: "metadata",
+              state: "indeterminate",
+              detail: "Volli stopped while pruning this record. Scan again.",
+              settledAt: reconciledAt,
+              reconciledAt,
+            }),
+          ],
+        },
+      ]).map((row) => row.meta),
+    ).toEqual([
+      `Proj — this folder was not changed; recorded at ${at} by the launch after Volli stopped: Volli stopped before this folder was removed; it is still here.`,
+      `Proj — Volli can't say what happened to this stale git record; recorded at ${at} by the launch after Volli stopped: Volli stopped while pruning this record. Scan again.`,
+    ]);
+  });
+
   it("says the same about a pruned record, and about one with no branch", () => {
     const reconciledAt = AT + 60_000;
     expect(
