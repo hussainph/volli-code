@@ -67,7 +67,40 @@ export type MarkdownImageResolution =
   | { kind: "unresolved" };
 
 /** Schemes that mean "somewhere else on the network". Refused as {@link MarkdownImageResolution} `remote`. */
-const REMOTE_SCHEME = /^(?:https?|ftps?|ws?s):/i;
+const REMOTE_SCHEME = /^(?:https?|ftps?|wss?):/i;
+/** Inert, self-contained bytes. Image types only — a bare `data:` is a document, not a picture. */
+const DATA_IMAGE = /^data:image\/[a-z0-9.+-]+[;,]/i;
+/** Any scheme at all — asked last, so a bare file name is never read as one. */
+const ANY_SCHEME = /^[a-z][a-z0-9.+-]*:/i;
+
+/**
+ * What a markdown URL NAMES, before any surface decides what to do about it.
+ *
+ * One classification, because every markdown renderer in this app has to make
+ * it and they must not disagree: the transcript, the Ticket body, and the file
+ * Preview each resolve a source differently (Blobs, attachments, repository
+ * paths) but "this is remote" and "this is some other scheme" mean the same
+ * thing in all three, and a surface that answered `unresolved` where another
+ * said `remote` would tell a person the wrong thing about the same URL.
+ */
+export type MarkdownUrlKind =
+  /** Inert image bytes carried by the URL itself. */
+  | "data-image"
+  /** Somewhere on the network, the protocol-relative `//host/path` form included. */
+  | "remote"
+  /** Some other scheme: an app's own, `file:`, or one that executes. */
+  | "scheme"
+  /** No scheme at all — a name, to be resolved against something. */
+  | "path";
+
+/** See {@link MarkdownUrlKind}. Leading and trailing space is not part of a URL. */
+export function classifyMarkdownUrl(value: string): MarkdownUrlKind {
+  const trimmed = value.trim();
+  if (DATA_IMAGE.test(trimmed)) return "data-image";
+  if (REMOTE_SCHEME.test(trimmed) || trimmed.startsWith("//")) return "remote";
+  if (ANY_SCHEME.test(trimmed)) return "scheme";
+  return "path";
+}
 
 /**
  * The materialized attachment name each Blob hash answers to, for
@@ -147,15 +180,20 @@ export function resolveMarkdownImageSrc(
   const hash = parseBlobUrl(trimmed);
   if (hash !== null) return { kind: "render", src: blobUrl(hash) };
 
-  // Inert, self-contained bytes. Image types only — see the module note.
-  if (/^data:image\/[a-z0-9.+-]+[;,]/i.test(trimmed)) return { kind: "render", src: trimmed };
-
-  if (REMOTE_SCHEME.test(trimmed)) return { kind: "remote" };
-
-  // Any other scheme (`file:`, `javascript:`, an app scheme) names something a
-  // renderer on this origin must not or cannot load. Checked before the path
-  // branch so a scheme can never be mistaken for a bare file name.
-  if (/^[a-z][a-z0-9.+-]*:/i.test(trimmed)) return { kind: "unresolved" };
+  switch (classifyMarkdownUrl(trimmed)) {
+    // Inert, self-contained bytes. Image types only — see the module note.
+    case "data-image":
+      return { kind: "render", src: trimmed };
+    case "remote":
+      return { kind: "remote" };
+    // Any other scheme (`file:`, `javascript:`, an app scheme) names something a
+    // renderer on this origin must not or cannot load. Asked before the path
+    // branch so a scheme can never be mistaken for a bare file name.
+    case "scheme":
+      return { kind: "unresolved" };
+    case "path":
+      break;
+  }
 
   const name = attachmentNameFrom(trimmed);
   if (name === null) return { kind: "unresolved" };

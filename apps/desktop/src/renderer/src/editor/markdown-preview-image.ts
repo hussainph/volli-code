@@ -27,7 +27,7 @@
  *
  * Pure: no reads, no DOM, no `window`. The component beside it does the asking.
  */
-import { dirNameOf, imageMimeType, markdownImageNotice } from "@volli/shared";
+import { classifyMarkdownUrl, dirNameOf, imageMimeType, markdownImageNotice } from "@volli/shared";
 
 import type { FileContent } from "../../../ipc/contract";
 
@@ -52,13 +52,6 @@ const UNRESOLVED_SRC = `${PREVIEW_IMAGE_SCHEME}unresolved`;
 const UNRESOLVED: PreviewImageSource = { kind: "unresolved" };
 const REMOTE: PreviewImageSource = { kind: "remote" };
 
-/** Inert image bytes written into the markdown itself. Image types only — a bare `data:` is a document. */
-const DATA_IMAGE = /^data:image\/[a-z0-9.+-]+[;,]/i;
-/** Schemes that mean "somewhere else on the network", plus the protocol-relative form. */
-const REMOTE_SCHEME = /^(?:https?|ftps?|wss?):/i;
-/** Any scheme at all — checked after the two above, so a bare file name is never read as one. */
-const ANY_SCHEME = /^[a-z][a-z0-9.+-]*:/i;
-
 /**
  * How to draw one `![alt](src)` (or `<img src>`) written in the markdown file
  * at `markdownRelPath`.
@@ -77,11 +70,20 @@ export function previewImageSource(input: {
 }): PreviewImageSource {
   const trimmed = input.src.trim();
   if (trimmed === "") return UNRESOLVED;
-  if (DATA_IMAGE.test(trimmed)) return { kind: "inline", src: trimmed };
-  if (REMOTE_SCHEME.test(trimmed) || trimmed.startsWith("//")) return REMOTE;
-  // Every other scheme — `file:`, `javascript:`, `volli-blob:`, and the
-  // preview's own — names something this surface must not or cannot read.
-  if (ANY_SCHEME.test(trimmed)) return UNRESOLVED;
+  // The app's ONE reading of what a markdown URL names (@volli/shared), so this
+  // surface and the chat transcript cannot disagree about the same string.
+  switch (classifyMarkdownUrl(trimmed)) {
+    case "data-image":
+      return { kind: "inline", src: trimmed };
+    case "remote":
+      return REMOTE;
+    // Every other scheme — `file:`, `javascript:`, `volli-blob:`, and the
+    // preview's own — names something this surface must not or cannot read.
+    case "scheme":
+      return UNRESOLVED;
+    case "path":
+      break;
+  }
   // An absolute path is a claim about the disk, not about the checkout.
   if (trimmed.startsWith("/")) return UNRESOLVED;
 
@@ -120,8 +122,9 @@ export function parsePreviewImageSrc(src: string | undefined): PreviewImageSourc
     const relPath = decodePath(src.slice(FILE_SRC_PREFIX.length));
     return relPath === null ? UNRESOLVED : { kind: "repo-file", relPath };
   }
-  if (DATA_IMAGE.test(src)) return { kind: "inline", src };
-  if (REMOTE_SCHEME.test(src) || src.startsWith("//")) return REMOTE;
+  const named = classifyMarkdownUrl(src);
+  if (named === "data-image") return { kind: "inline", src };
+  if (named === "remote") return REMOTE;
   return UNRESOLVED;
 }
 
