@@ -305,6 +305,7 @@ describe("migration compaction logging", () => {
 
     logMigrationCompaction(report, logger);
 
+    expect(MIGRATION_COMPACTION_LOG_PREFIX).toBe("[migration compaction]");
     expect(logger.info).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledExactlyOnceWith(MIGRATION_COMPACTION_LOG_PREFIX, report);
   });
