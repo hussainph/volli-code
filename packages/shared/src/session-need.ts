@@ -141,29 +141,37 @@ export function sessionPersonNeed(
 }
 
 /**
- * WHICH thing in a Session needs the person right now (VC-295 round 2).
+ * WHICH thing in a Session needs the person right now (VC-295).
  *
- * ── ONE DERIVATION, TWO READERS ───────────────────────────────────────────
- * A notification names the item it is about so a click can land on it, and a
- * window reports the item it is showing so an alert about that exact item is
- * not shouted twice. Round 1 had the producer compute one and the comparison
- * ignore it, which is how a Session with a question on screen came to swallow
- * the alert about the failure that had just stopped it. Both sides now call
- * this, so the comparison is between two answers to the same question.
+ * ── ONE DERIVATION, THREE READERS ─────────────────────────────────────────
+ * A notification names the item it is about so a click can land on it; a window
+ * reports the item it is showing so an alert about that exact item is not
+ * shouted twice; and the chat plane draws that item. All three have to agree,
+ * or a click opens a Session and selects nothing while the window claims it was
+ * already showing the thing.
  *
- * ── THE PRECEDENCE IS {@link sessionPersonNeed}'S ─────────────────────────
- * Deliberately the same order, because the two answers travel together: the
- * need says a person is wanted and this says what for. A failure outranks a
- * question (a card over a dead transport cannot be answered), a stopped Session
- * names nothing, and an Attention nobody can act on — a rate limit, a retry —
- * is not an item at all. That last one matters for suppression rather than for
- * clicks: reporting a rate limit as "the thing on screen" would silence the
- * question that arrives while it stands.
+ * ── SO THE RULE IS THE SURFACE'S RULE ─────────────────────────────────────
+ * Round 3's correction. This used to scan for the first qualifying attention,
+ * while the blocker row draws `attention.primary` — which the ledger defines as
+ * the NEWEST active attention. With two live attentions the two disagreed, and
+ * both failures follow from that: a deep link to a card nothing draws, and a
+ * window reporting an attention nobody can see as "already visible", which
+ * suppressed the alert for it.
  *
- * A blocking question raised as an Attention (`permission_required`,
- * `auth_required`, `input_required`) is named as an attention, because that is
- * what it durably is; an `interaction.opened` question is named as an
- * interaction. `sessionAwaitsUser` already accepts either, and so does this.
+ * So the order below is the order the plane resolves in:
+ *
+ *  1. **A stopped Session names nothing.** Its work was ended on purpose.
+ *  2. **The primary attention, when it is a failure** — `sessionBlocker`'s
+ *     third source, and the one it never lets a card hide.
+ *  3. **Otherwise the open question**, because an open card takes the place of
+ *     the `input_required` / `permission_required` row it is the answer to.
+ *  4. **Otherwise the primary attention, when a person is what it is blocked
+ *     on** — the same row, with no card in front of it.
+ *  5. **Otherwise nothing.** Including the case where a newer attention nobody
+ *     can act on (a rate limit, a retry) has covered an older failure: that
+ *     failure is not on screen anywhere, so naming it would send a click to a
+ *     card the app is not drawing. The alert still fires — `sessionPersonNeed`
+ *     still answers `error` — it simply opens the Session and no more.
  *
  * ── THE SHAPE IT ASKS FOR ─────────────────────────────────────────────────
  * Structural, and deliberately narrower than a whole `SessionProjection`: main
@@ -171,26 +179,31 @@ export function sessionPersonNeed(
  * presentation projection, which carries no `stopped` at all. Absent reads the
  * same as `null` — a shape that cannot express a stop is a shape that never
  * reports one, and the two callers must not answer differently about the same
- * Session merely because they hold different views of it.
+ * Session merely because they hold different views of it. `primary` is READ
+ * rather than recomputed, so this cannot drift from the fold that produced it.
  */
 export function sessionNotificationItem(projection: {
   interactions: { active: readonly { id: string }[] };
-  attention: { active: readonly { id: string; kind: SessionAttentionKind }[] };
+  attention: {
+    active: readonly { id: string; kind: SessionAttentionKind }[];
+    primary: { id: string; kind: SessionAttentionKind } | null;
+  };
   stopped?: SessionProjection["stopped"];
 }): SessionNotificationItem {
   if (projection.stopped != null) return NO_SESSION_NOTIFICATION_ITEM;
-  const failing = projection.attention.active.find((attention) =>
-    (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(attention.kind),
-  );
-  if (failing !== undefined) return { interactionId: null, attentionId: failing.id };
+  const primary = projection.attention.primary;
+  const isFailure =
+    primary !== null &&
+    (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(primary.kind);
+  if (primary !== null && isFailure) return { interactionId: null, attentionId: primary.id };
   const question = projection.interactions.active[0];
   if (question !== undefined) return { interactionId: question.id, attentionId: null };
-  const asking = projection.attention.active.find((attention) =>
+  const asking =
+    primary !== null &&
     (SESSION_USER_BLOCKING_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(
-      attention.kind,
-    ),
-  );
-  return asking === undefined
-    ? NO_SESSION_NOTIFICATION_ITEM
-    : { interactionId: null, attentionId: asking.id };
+      primary.kind,
+    );
+  return asking && primary !== null
+    ? { interactionId: null, attentionId: primary.id }
+    : NO_SESSION_NOTIFICATION_ITEM;
 }

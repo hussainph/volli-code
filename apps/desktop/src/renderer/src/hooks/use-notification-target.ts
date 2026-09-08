@@ -19,6 +19,16 @@
  *    a person reading one question swallow the alert about the failure beside
  *    it. `sessionNotificationItem` is the same derivation the producer used.
  *
+ * ── ONE KNOWN, DELIBERATE IMPRECISION ────────────────────────────────────
+ * A click can ask the blocker row to show an OLDER live attention than the
+ * primary (`sessionBlocker`'s `revealedAttentionId`). While that override
+ * stands, this reports the primary-derived item rather than the revealed one,
+ * so an alert about the primary is suppressed although the row is showing
+ * something else. It is left that way on purpose: the person is looking at that
+ * exact Session, in a focused window, having just clicked into it — and the
+ * alternative is a reactive channel out of the plane's local override, which
+ * would make what a window reports depend on a render.
+ *
  * The report is advisory and one-way. If it never arrives — a dropped send, a
  * window still booting — the cost is one duplicate notification, which is the
  * harmless direction: the expensive failure is a person never being told their

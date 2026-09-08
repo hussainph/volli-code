@@ -1092,6 +1092,9 @@ export function ChatPlane({
     {
       sessionError: session.sessionError,
       attention: projection?.attention ?? EMPTY_ATTENTION,
+      // The failure a notification click named, so the row shows THAT problem
+      // rather than whichever one happens to be newest (VC-295).
+      revealedAttentionId: revealed?.attentionId ?? null,
       catalogState,
       catalogError,
       sessionModel,

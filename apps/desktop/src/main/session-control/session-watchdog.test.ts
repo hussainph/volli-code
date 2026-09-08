@@ -248,22 +248,25 @@ describe("createSessionWatchdog", () => {
   });
 });
 
+/** One failure attention, as a ledger fold reports it. */
+const WEDGE_FAILURE = {
+  id: "attention-1",
+  kind: "adapter_disconnected",
+  attachmentId: null,
+  detail: null,
+  diagnostic: null,
+};
+
 describe("the wedge alert's target (VC-295 round 2)", () => {
   it("names the failure the wedged Session is already carrying", async () => {
     // A wedge often IS a broken transport: the Attention is what a person can
     // act on, so the click has to land on it rather than on the Session's top.
     const failing = projection({
       attention: {
-        active: [
-          {
-            id: "attention-1",
-            kind: "adapter_disconnected",
-            attachmentId: null,
-            detail: null,
-            diagnostic: null,
-          },
-        ],
-        primary: null,
+        active: [WEDGE_FAILURE],
+        // The ledger's own answer: the newest active attention, and the row the
+        // plane draws — so the alert names the item a click will land on.
+        primary: WEDGE_FAILURE,
       } as unknown as SessionProjection["attention"],
     });
     const h = harness({ projections: [failing] });

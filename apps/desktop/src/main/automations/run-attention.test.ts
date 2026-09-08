@@ -111,10 +111,10 @@ function state(
   sessionId = SESSION_ID,
 ): SessionProjection {
   const interactions = { active: kind === "waiting" ? [{ id: "ask-1" }] : [], all: [] };
-  const attention = {
-    active: kind === "error" ? [{ id: "a1", kind: "configuration_invalid" }] : [],
-    all: [],
-  };
+  const active = kind === "error" ? [{ id: "a1", kind: "configuration_invalid" }] : [];
+  // `primary` as the ledger folds it — the newest active attention — because
+  // that is the row the chat plane draws and the item a click lands on.
+  const attention = { active, primary: active.at(-1) ?? null };
   return {
     session: { id: sessionId, title, projectId: "project-1", ticketId: "ticket-1" },
     interactions,

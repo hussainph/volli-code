@@ -298,6 +298,13 @@ export function parseNotificationTarget(raw: unknown): NotificationTarget | null
  *    Session, and a Session is not its ticket. Suppression means "the person is
  *    looking at exactly this", and anything looser silences an alert for work
  *    that is merely nearby.
+ *  - **The SCOPE is part of the identity too.** Project and ticket are compared
+ *    alongside the local ids (round 3). They are UUIDs today, so a collision is
+ *    not reachable from this build — which is exactly why dropping them looked
+ *    free, and exactly why it must not be: a scoped-id scheme, an import, or a
+ *    fixture that reuses an id would turn a silent suppression in the wrong
+ *    workspace into a bug nobody can see, because its only symptom is an alert
+ *    that never arrives.
  *  - **The ITEM is part of the identity.** A Session match compares the open
  *    question and the failure as well as the Session id. Round 1 of this ticket
  *    compared only the id, which meant a person reading one question in a
@@ -321,13 +328,17 @@ export function notificationTargetMatches(
     case "session": {
       const shown = active as SessionNotificationTarget;
       return (
+        target.projectId === shown.projectId &&
+        target.ticketId === shown.ticketId &&
         target.sessionId === shown.sessionId &&
         target.interactionId === shown.interactionId &&
         target.attentionId === shown.attentionId
       );
     }
-    case "ticket":
-      return target.ticketId === (active as TicketNotificationTarget).ticketId;
+    case "ticket": {
+      const shown = active as TicketNotificationTarget;
+      return target.projectId === shown.projectId && target.ticketId === shown.ticketId;
+    }
     case "update":
       return true;
   }

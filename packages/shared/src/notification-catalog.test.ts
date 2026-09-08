@@ -167,6 +167,29 @@ describe("notificationTargetMatches", () => {
     expect(notificationTargetMatches(session("s1"), session("s1"))).toBe(true);
   });
 
+  it("does not match the same local id under another project", () => {
+    // Round 3. Ids are UUIDs today, but the scope is part of the target and a
+    // comparison that drops it is one import, one fixture, or one future
+    // scoped-id scheme away from silencing another workspace's alert.
+    expect(notificationTargetMatches(session("s1"), session("s1", { projectId: "p2" }))).toBe(
+      false,
+    );
+  });
+
+  it("does not match the same Session id claimed under another ticket", () => {
+    expect(notificationTargetMatches(session("s1"), session("s1", { ticketId: "t2" }))).toBe(false);
+    expect(notificationTargetMatches(session("s1"), session("s1", { ticketId: null }))).toBe(false);
+  });
+
+  it("does not match a ticket id under another project", () => {
+    expect(
+      notificationTargetMatches(
+        { kind: "ticket", projectId: "p1", ticketId: "t1" },
+        { kind: "ticket", projectId: "p2", ticketId: "t1" },
+      ),
+    ).toBe(false);
+  });
+
   it("does not match a different Session", () => {
     expect(notificationTargetMatches(session("s1"), session("s2"))).toBe(false);
   });
