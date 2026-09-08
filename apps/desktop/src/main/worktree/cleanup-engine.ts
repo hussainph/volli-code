@@ -62,8 +62,13 @@ export interface OrphanCleanupIntent {
    * request, here is its run" or "a different request under a used id" without
    * consulting the in-memory scan — which the first run has usually already
    * invalidated.
+   *
+   * Optional only because a STORED row can predate the field: every write this
+   * core makes sets it (the accept input requires it), and a row without one
+   * falls back to the ids of the plan it accepted rather than throwing on a
+   * command that really ran.
    */
-  requestedItemIds: readonly string[];
+  requestedItemIds?: readonly string[];
   /** The retention window the proposal was measured against. */
   retentionDays: number;
   /** Preservation rule ids (`@volli/shared`) in force for this run. */
@@ -400,13 +405,21 @@ async function latestReceipt(
   return receipts.at(-1) ?? null;
 }
 
-/** Same revision, same ids, order and duplicates disregarded. */
+/**
+ * Same revision, same ids — order and duplicates disregarded, because a retry
+ * is a retry however the caller assembled its list.
+ *
+ * A record written before `requestedItemIds` existed falls back to the ids of
+ * the plan it accepted, which is what the caller must have asked for: an older
+ * row is a command that really ran, and it has to stay replayable rather than
+ * throwing on a field it never carried.
+ */
 function sameRequest(
   intent: OrphanCleanupIntent,
   request: { scanRevision: string; itemIds: readonly string[] },
 ): boolean {
   if (intent.scanRevision !== request.scanRevision) return false;
-  const recorded = new Set(intent.requestedItemIds);
+  const recorded = new Set(intent.requestedItemIds ?? intent.items.map((item) => item.id));
   const asked = new Set(request.itemIds);
   return recorded.size === asked.size && [...asked].every((id) => recorded.has(id));
 }

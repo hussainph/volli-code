@@ -409,6 +409,85 @@ describe("cleanupOrphans", () => {
   // now written BEFORE the last look, and these cases change the world from
   // inside that write to prove the gate still catches it.
   describe("the seam between announcing intent and mutating", () => {
+    /** Every ordered act of one item, so the shape of the run is the assertion. */
+    function timelineEngine(timeline: string[]): OrphanCleanupEngine {
+      return {
+        ...engine,
+        beginItem: async (input) => {
+          timeline.push("announced");
+          await engine.beginItem(input);
+        },
+        settleItem: async (input) => {
+          timeline.push(`settled:${input.state}`);
+          await engine.settleItem(input);
+        },
+      };
+    }
+
+    it("asks what is live, then removes, with no durable write in between", async () => {
+      const f = fixture();
+      const timeline: string[] = [];
+      const deps: WorktreeDeps = {
+        ...f.deps,
+        git: (args, cwd) => {
+          if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") timeline.push("removed");
+          return f.deps.git(args, cwd);
+        },
+      };
+
+      await cleanupOrphans(
+        {
+          worktree: deps,
+          engine: timelineEngine(timeline),
+          busyWorktreeSites: async () => {
+            timeline.push("asked-what-is-live");
+            return [];
+          },
+          releaseAgentSites: async () => {
+            timeline.push("released");
+            return { released: [], stillOpen: [] };
+          },
+        },
+        request([worktreeItem(f.paths[0]!, f.projectPath)]),
+      );
+
+      // The intent is durable BEFORE the last look, and the last look is the
+      // last thing that happens before the folder goes. Nothing — no write, no
+      // release, no second question — sits between them.
+      expect(timeline).toEqual([
+        "asked-what-is-live",
+        "released",
+        "announced",
+        "asked-what-is-live",
+        "removed",
+        "settled:completed",
+      ]);
+    });
+
+    it("lists the stale records, then prunes, with no durable write in between", async () => {
+      const f = fixture();
+      const timeline: string[] = [];
+      const deps: WorktreeDeps = {
+        ...f.deps,
+        git: (args, cwd) => {
+          const verbs = verb(args);
+          if (verbs[0] === "worktree" && verbs[1] === "list") timeline.push("listed");
+          if (verbs[0] === "worktree" && verbs[1] === "prune") timeline.push("pruned");
+          return f.deps.git(args, cwd);
+        },
+      };
+
+      await cleanupOrphans(
+        { worktree: deps, engine: timelineEngine(timeline) },
+        request([metadataItem(f.stale[0]!, f.projectPath)]),
+      );
+
+      // `git worktree prune` cannot be aimed, so the set it will take is
+      // re-listed and then pruned in the same turn: a record going stale in
+      // between is a record nobody confirmed.
+      expect(timeline).toEqual(["announced", "listed", "pruned", "settled:completed"]);
+    });
+
     /** An engine whose `beginItem` write runs `mutate` while it is in flight. */
     function engineThatChangesTheWorldWhileAnnouncing(mutate: () => void): OrphanCleanupEngine {
       return {

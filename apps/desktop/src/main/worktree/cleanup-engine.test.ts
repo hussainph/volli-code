@@ -199,6 +199,40 @@ describe("cleanup command core", () => {
       expect(ledger.facts()).toHaveLength(before);
     });
 
+    it("replays a command recorded before requested ids were kept, from its plan", async () => {
+      const { engine, ledger } = engineWith();
+      // A row written by an earlier build of this branch: a real command that
+      // really ran, with no `requestedItemIds` on it. It stays replayable \u2014 the
+      // ids it accepted are what its caller must have asked for.
+      const { requestedItemIds: _dropped, ...intent } = {
+        kind: "orphan.cleanup" as const,
+        source: "settings" as const,
+        scanRevision: "rev1",
+        requestedItemIds: ["rev1:worktree:0"],
+        retentionDays: 14,
+        preservation: [],
+        items: [planItem()],
+      };
+      await ledger.transaction(async (tx) => {
+        await tx.insertCommand({ id: "cmd-old", intent, createdAt: 1 });
+        await tx.appendFact({
+          id: "f1",
+          commandId: "cmd-old",
+          kind: "cleanup.accepted",
+          payload: { intent },
+          createdAt: 1,
+        });
+      });
+
+      const replayed = await engine.replay({
+        commandId: "cmd-old",
+        scanRevision: "rev1",
+        itemIds: ["rev1:worktree:0"],
+      });
+
+      expect(replayed?.ok).toBe(true);
+    });
+
     it("repeats a refusal for the same refused request", async () => {
       const { engine } = engineWith();
       await engine.reject({
