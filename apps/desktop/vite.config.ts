@@ -126,7 +126,19 @@ export default defineConfig(({ mode }) => ({
       // inheriting root src/renderer. @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
-        test: { name: "main", environment: "node", include: ["src/main/**/*.test.ts"] },
+        test: {
+          name: "main",
+          environment: "node",
+          include: ["src/main/**/*.test.ts"],
+          // Stated again here, and it is not redundant: `renderer` above
+          // INHERITS this cap through `extends: true` while this project
+          // inherits nothing, and vitest refuses a run whose projects disagree
+          // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
+          // exactly what a `--maxWorkers` flag on the command line produced
+          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // governs the pool they share.
+          ...SHARED_MACHINE_TEST_WORKERS,
+        },
       },
     ],
     coverage: {
