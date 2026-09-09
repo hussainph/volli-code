@@ -33,6 +33,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
+import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
@@ -52,6 +53,8 @@ import {
 import { describe, expect, it, vi } from "vite-plus/test";
 import { attachRefreshableCatalog, piDevCatalogSource, PiFileModelsStore } from "./model-catalog";
 import { piContext } from "./pi-context";
+import { toAnthropicMessages } from "./provider-compaction";
+import { projectedContextTokens } from "./token-counting";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
@@ -294,6 +297,7 @@ interface TestModelDefinition {
   id: string;
   reasoning?: boolean;
   contextWindow?: number;
+  baseUrl?: string;
   compat?: Model<"anthropic-messages">["compat"];
   thinkingLevelMap?: Model<string>["thinkingLevelMap"];
 }
@@ -322,6 +326,7 @@ function modelsWithStream(
     // and a generic api string matches none of them — so the write goes through
     // the mutable shape the faux provider actually built.
     const merged = { ...model } as Omit<Model<string>, "compat"> & { compat?: unknown };
+    if (override?.baseUrl !== undefined) merged.baseUrl = override.baseUrl;
     if (override?.compat !== undefined) {
       merged.compat = override.compat;
     }
@@ -5331,6 +5336,142 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
+  it("compacts between tool rounds without waiting for another user message", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("old answer")),
+          recording(calls, (emit) => {
+            // Below the 111,616 threshold: the unmeasured read result is what
+            // crosses it. Last-reply usage alone must not decide this request.
+            emit.occupies(111_615);
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("checkpoint for the tool loop")),
+          recording(calls, (emit) => {
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("finished the same turn")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage(PASTED);
+    expect(calls).toHaveLength(5);
+    expect(calls[3]?.messages).toContain("checkpoint for the tool loop");
+    expect(calls[3]?.messages).not.toContain("old answer");
+    expect(calls[3]?.context.some((message) => message.role === "toolResult")).toBe(true);
+    expect(calls[4]?.messages).toContain("checkpoint for the tool loop");
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    expect(kinds(attachment.observations).filter((kind) => kind.startsWith("turn:"))).toEqual([
+      "turn:started",
+      "turn:completed",
+      "turn:started",
+      "turn:completed",
+    ]);
+    await handle.close();
+  });
+
+  it("caps output against the model-aware size of unmeasured input", async () => {
+    const attachment = fixture();
+    const script = scriptedStream([settles("answer")]);
+    let ceiling = 0;
+    let occupied = 0;
+    const stream: StreamFn = (model, context, options) => {
+      ceiling = options?.maxTokens ?? 0;
+      occupied = projectedContextTokens(
+        context.messages,
+        model,
+        context.systemPrompt,
+        context.tools,
+      );
+      return script(model, context, options);
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream, [{ id: MODEL_ID, contextWindow: 48_000 }]),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("dense input ".repeat(8_000));
+    expect(ceiling).toBeGreaterThan(0);
+    expect(ceiling).toBeLessThan(16_384);
+    expect(ceiling + occupied).toBeLessThanOrEqual(48_000 - 4096);
+    await handle.close();
+  });
+
+  it("automatically compacts a 264k OpenAI Codex tool loop", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const faux = fauxProvider({
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      models: [{ id: "gpt-5.3-codex", contextWindow: 264_000 }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      streamSimple: scriptedStream([
+        recording(calls, settles("old answer")),
+        recording(calls, (emit) => {
+          emit.occupies(250_000);
+          emit.toolCall("read", { path: "MARKER.txt" });
+          emit.finish();
+        }),
+        recording(calls, settles("checkpoint for Codex")),
+        recording(calls, settles("finished the same turn")),
+      ]) as typeof faux.provider.streamSimple,
+    });
+    const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+    const handle = await runtime.startSession({
+      ...attachment.spec,
+      model: { providerId: "openai-codex", modelId: "gpt-5.3-codex", reasoningLevel: "off" },
+    });
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage(PASTED);
+    expect(calls).toHaveLength(4);
+    expect(calls[3]?.messages).toContain("checkpoint for Codex");
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    await handle.close();
+  });
+
+  it("budgets an incoming Unicode message before sending it", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("old answer")),
+          recording(calls, settlesHolding("recent answer", 100_000)),
+          recording(calls, settles("checkpoint before the paste")),
+          recording(calls, settles("accepted the paste")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember this");
+    await handle.submitUserMessage(PASTED);
+    const pasted = "追加情報".repeat(6_000);
+    await handle.submitUserMessage(pasted);
+    expect(calls).toHaveLength(4);
+    expect(calls[3]?.messages).toContain("checkpoint before the paste");
+    expect(calls[3]?.messages.split(pasted)).toHaveLength(2);
+    expect(compactions(attachment.observations)).toEqual([
+      expect.objectContaining({ state: "compacted", reason: "threshold" }),
+    ]);
+    await handle.close();
+  });
+
   it("does not report a failed compaction after a message that carried an image (VC-155)", async () => {
     // The durable acceptance marker for an image message holds block-array
     // content, and the marker validator once refused that shape outright. The
@@ -5716,6 +5857,191 @@ describe("compacting a context that reached its reserve", () => {
       chatModel,
       chatModel,
     ]);
+  });
+});
+
+describe("provider-native context persistence", () => {
+  it.each([
+    [true, undefined],
+    [true, "other-beta"],
+    [false, undefined],
+  ] as const)(
+    "preserves Claude's native blocks or meters failed maintenance (success=%s, beta=%s)",
+    async (success, beta) => {
+      const attachment = fixture();
+      const nativeBlock = {
+        type: "compaction",
+        content: "native Claude summary",
+        encrypted_content: "metadata",
+      };
+      const fetch = vi.fn(
+        async (url: string) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith("count_tokens")
+                ? { input_tokens: 60_000 }
+                : {
+                    stop_reason: "compaction",
+                    content: [{ ...nativeBlock, content: success ? nativeBlock.content : null }],
+                    usage: { input_tokens: 1000, output_tokens: 50 },
+                  },
+            ),
+            { headers: { "content-type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", fetch);
+      try {
+        const requests: unknown[] = [];
+        const headers: unknown[] = [];
+        const script = scriptedStream([
+          settles("original answer"),
+          settlesHolding("recent answer", 200_000),
+          ...(success ? [] : [(emit: EmitApi) => emit.fail("local summarizer unavailable")]),
+          settles("finished"),
+        ]);
+        const stream: StreamFn = async (model, context, options) => {
+          const payload = { messages: toAnthropicMessages(context.messages) };
+          requests.push((await options?.onPayload?.(payload, model)) ?? payload);
+          headers.push(options?.headers);
+          return script(model, context, options);
+        };
+        const models = modelsWithStream(stream, [
+          { id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" },
+        ]);
+        if (beta)
+          models.getModel("anthropic", "claude-opus-4-6")!.headers = { "anthropic-beta": beta };
+        const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+        const handle = await runtime.startSession({
+          ...attachment.spec,
+          model: { providerId: "anthropic", modelId: "claude-opus-4-6", reasoningLevel: "off" },
+        });
+        await handle.submitUserMessage("original request");
+        await handle.submitUserMessage(PASTED);
+        await handle.submitUserMessage("continue");
+        expect(fetch).toHaveBeenCalledTimes(2);
+        if (success) {
+          expect(
+            (requests.at(-1) as { messages: { content: unknown[] }[] }).messages[0]?.content[0],
+          ).toEqual(nativeBlock);
+          expect(headers.at(-1)).toMatchObject({
+            "anthropic-beta": [beta, "compact-2026-01-12"].filter(Boolean).join(","),
+          });
+        } else {
+          expect(JSON.stringify(requests.at(-1))).toContain("original answer");
+          expect(compactions(attachment.observations)).toEqual([
+            expect.objectContaining({ state: "failed" }),
+          ]);
+        }
+        expect(attachment.observations).toContainEqual(
+          expect.objectContaining({
+            kind: "usage",
+            usage: expect.objectContaining({
+              cause: "compaction",
+              inputTokens: 1000,
+              outputTokens: 50,
+            }),
+          }),
+        );
+        await handle.close();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it("round-trips the canonical OpenAI window across restart and restores original history on model switch", async () => {
+    const attachment = fixture();
+    const canonical = [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "retained by OpenAI" }],
+      },
+      { type: "compaction", id: "cpt_test", encrypted_content: "opaque-checkpoint" },
+    ];
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            output: canonical,
+            usage: { input_tokens: 1000, output_tokens: 50 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const faux = fauxProvider({
+        api: "openai-responses",
+        provider: "openai",
+        models: [
+          { id: "gpt-5.3-codex", contextWindow: 264_000 },
+          { id: "gpt-5.4", contextWindow: 264_000 },
+        ],
+      });
+      const requests: unknown[] = [];
+      const projectors: ((payload: unknown) => unknown)[] = [];
+      const script = scriptedStream([
+        settles("original answer"),
+        settlesHolding("recent answer", 250_000),
+        settles("after checkpoint"),
+        settles("after restart"),
+        settles("after model switch"),
+      ]);
+      const models = createModels();
+      models.setProvider({
+        ...faux.provider,
+        getModels: () =>
+          faux.provider
+            .getModels()
+            .map((model) => Object.assign({}, model, { baseUrl: "https://api.openai.com/v1" })),
+        streamSimple: (async (model, context, options) => {
+          const payload = { input: convertResponsesMessages(model, context, new Set(["openai"])) };
+          projectors.push((value) => options?.onPayload?.(value, model));
+          requests.push((await options?.onPayload?.(payload, model)) ?? payload);
+          return script(model, context, options);
+        }) as StreamFn as typeof faux.provider.streamSimple,
+      });
+      const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+      const spec = {
+        ...attachment.spec,
+        model: { providerId: "openai", modelId: "gpt-5.3-codex", reasoningLevel: "off" as const },
+      };
+      const first = await runtime.startSession(spec);
+      await first.submitUserMessage("original request");
+      await first.submitUserMessage(PASTED.repeat(4));
+      await first.submitUserMessage("continue");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect((requests[2] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
+      expect(JSON.stringify(requests[2])).not.toContain("original answer");
+      expect(() => projectors[2]!(null)).toThrow("malformed");
+      expect(() => projectors[2]!({ input: [] })).toThrow("missing");
+      const recovery = first.recovery!;
+      expect(JSON.stringify(compactionEntries(recovery.sessionFilePath))).toContain(
+        "opaque-checkpoint",
+      );
+      await first.close();
+      const second = await runtime.startSession({ ...spec, recovery });
+      await second.submitUserMessage("resume");
+      expect((requests[3] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await expect(
+        second.selectModel({
+          providerId: "openai",
+          modelId: "gpt-5.3-codex",
+          reasoningLevel: "off",
+        }),
+      ).resolves.toEqual({ kind: "selected" });
+      await expect(
+        second.selectModel({ providerId: "openai", modelId: "gpt-5.4", reasoningLevel: "off" }),
+      ).resolves.toEqual({ kind: "selected" });
+      await second.submitUserMessage("use the other model");
+      expect(JSON.stringify(requests[4])).not.toContain("opaque-checkpoint");
+      expect(JSON.stringify(requests[4])).toContain("original answer");
+      await second.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -6468,6 +6794,13 @@ describe("compacting because somebody asked", () => {
       // Its own sentence: this Session is idle, and being told a turn is running
       // would send the reader looking for one that is not there.
       message: "This context is already being compacted.",
+    });
+    await expect(
+      handle.selectModel({ providerId: PROVIDER_ID, modelId: MODEL_ID, reasoningLevel: "off" }),
+    ).resolves.toEqual({
+      kind: "rejected",
+      reason: "busy-unsupported",
+      message: "The context is being compacted.",
     });
     release.resolve();
     await expect(first).resolves.toEqual({ kind: "compacted" });
@@ -7569,57 +7902,39 @@ describe("the Cache Prefix a Session sends", () => {
     expect(stripped.provider).toBe(PROVIDER_ID);
   });
 
-  it("never compacts in the middle of a tool round", async () => {
-    // "Don't compact in the middle of a tool round": an assistant turn whose
-    // `tool_use` is still waiting on its `tool_result` goes back with its
-    // reasoning intact, so the model finishes the round with it. Safe today
-    // by construction — the threshold path is reached only from the idle
-    // prompt path, ahead of a message — and pinned here so a compaction added
-    // at the end of a turn, or between tool rounds, fails this rather than a
-    // provider.
-    const OVER_RESERVE = 200_000;
+  it("compacts only after tool results land and drops retained reasoning", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
       models: modelsWithStream(
         scriptedStream([
-          // The window is already spent when the round opens …
           recording(calls, (emit) => {
-            emit.occupies(OVER_RESERVE);
+            emit.occupies(200_000);
             emit.thinking("", "sig-1");
             emit.toolCall("read", { path: "MARKER.txt" });
             emit.finish();
           }),
-          // … and the round still finishes on the same context.
-          recording(calls, (emit) => {
-            emit.occupies(OVER_RESERVE);
-            emit.text("the marker reads volli-marker-42");
-            emit.finish();
-          }),
           recording(calls, settles("## Goal\nread the marker")),
+          recording(calls, settles("the marker reads volli-marker-42")),
           recording(calls, settles("after the summary")),
         ]),
       ),
     });
     const handle = await runtime.startSession(attachment.spec);
-
     await handle.submitUserMessage("read the marker");
     await handle.submitUserMessage("carry on");
     await handle.close();
 
     expect(calls).toHaveLength(4);
-    // The second call is the round's own continuation: the Session's tools,
-    // the tool result, the reasoning that asked for it, and no summary.
-    expect(calls[1]?.toolNames).not.toEqual([]);
-    expect(calls[1]?.messages).toContain("volli-marker-42");
-    expect(calls[1]?.messages).not.toContain("compacted into the following summary");
-    expect(signaturesOn(wireOf(calls[1]!))).toEqual(["sig-1"]);
-    expectAppendOnly(calls[0]!, calls[1]!);
-    // The compaction the measurement earned happens at the head of the next
-    // message, once the round is over.
-    expect(calls[2]?.toolNames).toEqual([]);
-    expect(calls[3]?.messages).toContain("compacted into the following summary");
+    expect(calls[1]?.toolNames).toEqual([]);
+    // The next provider request has BOTH the call and its completed result.
+    // Reasoning tied to the replaced prefix must not cross that boundary.
+    expect(calls[2]?.toolNames).not.toEqual([]);
+    expect(calls[2]?.messages).toContain("volli-marker-42");
+    expect(calls[2]?.context.some((message) => message.role === "toolResult")).toBe(true);
+    expect(calls[2]?.messages).toContain("compacted into the following summary");
+    expect(signaturesOn(wireOf(calls[2]!))).toEqual([]);
     expect(compactions(attachment.observations)).toEqual([
       expect.objectContaining({ state: "compacted", reason: "threshold" }),
     ]);

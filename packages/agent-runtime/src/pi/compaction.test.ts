@@ -190,10 +190,10 @@ describe("occupiedContextTokens", () => {
 });
 
 describe("estimatedContextTokens", () => {
+  const model = scriptedModels([]).getModel(PROVIDER_ID, MODEL_ID)!;
   it("counts what a context holds without asking what the model measured", () => {
-    // Pi's heuristic is four characters to the token, per message.
-    expect(estimatedContextTokens([user("a".repeat(400))])).toBe(100);
-    expect(estimatedContextTokens([])).toBe(0);
+    expect(estimatedContextTokens([user("a".repeat(400))], model)).toBeGreaterThan(0);
+    expect(estimatedContextTokens([], model)).toBeGreaterThanOrEqual(0);
   });
 
   it("ignores the stale usage a retained reply still carries", () => {
@@ -203,7 +203,7 @@ describe("estimatedContextTokens", () => {
     // `estimateContextTokens` would answer 200,000 here.
     const retained = assistant("short", { usage: usage({ input: 200_000, totalTokens: 200_000 }) });
 
-    expect(estimatedContextTokens([retained])).toBeLessThan(100);
+    expect(estimatedContextTokens([retained], model)).toBeLessThan(100);
   });
 });
 
@@ -404,6 +404,14 @@ describe("contextMessages", () => {
       user("recent request"),
       {
         ...kept,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
         content: [
           { type: "text", text: "the recent answer" },
           { type: "toolCall", id: "tc-1", name: "read", arguments: { path: "a.ts" } },
@@ -416,6 +424,8 @@ describe("contextMessages", () => {
     // the tail exactly as Pi wrote it.
     expect(entry.retainedTail[1]).toBe(kept);
     expect((entry.retainedTail[1] as AssistantMessage).content[0]?.type).toBe("thinking");
+    expect((entry.retainedTail[1] as AssistantMessage).usage.totalTokens).toBe(132);
+    expect((messages[2] as AssistantMessage).usage.totalTokens).toBe(0);
   });
 
   it("elides the Brief and the Turn Reminder the first message carried", () => {

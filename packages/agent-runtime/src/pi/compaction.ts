@@ -1,40 +1,7 @@
 /**
- * Context compaction: the mechanism, not the policy.
- *
- * Pi 0.84.1 ships compaction's primitives and its durable data model but no
- * orchestrator — `shouldCompact`, `prepareCompaction` and `compact` are exported
- * and nothing in the package ever calls them, and `AgentHarness`, which would
- * have owned the loop, rejects every operation with `HarnessNotImplemented`.
- * Volli builds on the lower-level `Agent` regardless. So this module is the
- * caller Pi does not have, and deliberately no more than that: every decision it
- * makes is Pi's own rule invoked, never a rule restated here.
- *
- * The policy those rules are run under — whether a Session compacts on its own
- * — is `CompactionPolicy` in `@volli/shared`, resolved into the
- * `CompactionSettings` this module is handed by whoever calls it. Nothing here
- * reads it, and nothing here defaults it.
- *
- * Three things are worth stating plainly, because each is a place a
- * reimplementation would drift.
- *
- * **Compaction is linear.** It appends a `CompactionEntry` as a child of the
- * current leaf. Nothing on disk is rewritten and nothing is deleted: the
- * pre-compaction history stays exactly where it was, as the ancestor path, and
- * is only dropped from the payload sent to the provider.
- *
- * **The elision rule is Pi's**, taken from `session/context.js` rather than
- * copied: the last compaction entry, then everything after it. {@link
- * contextMessages} is a one-line call into `buildSessionContext` for exactly
- * that reason — the live message array and a restart-time replay must apply one
- * rule, and two spellings of it would be one rule until the first time they
- * disagreed.
- *
- * **Occupancy is measured, never estimated.** Pi's own `estimateContextTokens`
- * mixes the last measured usage with a character heuristic for everything after
- * it; {@link occupiedContextTokens} takes only the measured half. A model that
- * has never reported usage has no occupancy here, and a Session with no
- * occupancy never trips the threshold — which is the direction to be wrong in,
- * since the alternative is compacting a conversation on the strength of a guess.
+ * Durable context compaction. Volli owns request-boundary scheduling and
+ * model-aware budgeting; Pi supplies local summary generation and the linear
+ * compaction entry. History stays on disk and only provider context is elided.
  */
 
 import {
@@ -42,11 +9,8 @@ import {
   compact,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
-  estimateTokens,
   getLastAssistantUsage,
-  getOrThrow,
   insertEntry,
-  prepareCompaction,
   setValue,
   shouldCompact,
   type AgentMessage,
@@ -55,11 +19,19 @@ import {
   type CustomEntry,
   type Entry,
   type MessageEntry,
+  type JsonValue,
   type NewEntry,
   type Session,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import type { Api, Model, Models, Tool, Usage } from "@earendil-works/pi-ai";
 import type { SessionUsage } from "@volli/shared";
+import { prepareModelCompaction } from "./compaction-preparation";
+import {
+  compactProviderNative,
+  providerCompactionFromDetails,
+  nativeCompactionSupport,
+} from "./provider-compaction";
+import { estimateContextTokens, projectedContextTokens } from "./token-counting";
 import { piContext, type Context } from "./pi-context";
 import { withoutReasoning } from "./reasoning";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
@@ -101,24 +73,12 @@ export function contextWindowOf(model: { readonly contextWindow: number }): numb
  * not.
  */
 export function occupiedContextTokens(path: readonly Entry[]): number | undefined {
-  const usage = getLastAssistantUsage([...path]);
+  const boundary = path.findLastIndex((entry) => entry.type === "compaction");
+  const usage = getLastAssistantUsage(path.slice(boundary + 1));
   return usage === undefined ? undefined : calculateContextTokens(usage);
 }
 
-/**
- * Pi's reserve rule, unchanged: `used > window − reserve`.
- *
- * Not a percentage of the window. Seventy percent of Gemini's million-token
- * window would strand three hundred thousand tokens of usable headroom, while
- * the same fraction of a small window would leave too little room for the reply.
- * A reserve is the quantity that actually has to fit.
- *
- * The window is required, not optional: "this model reports no usable window"
- * is {@link contextWindowOf} returning nothing, and a caller holding nothing has
- * already been told the answer. Unmeasured occupancy is the case that genuinely
- * belongs here, because it is a property of the conversation rather than of the
- * model, and it never compacts.
- */
+/** Apply the resolved reserve policy to measured-plus-estimated request occupancy. */
 export function compactionDue(
   occupied: number | undefined,
   contextWindow: number,
@@ -179,23 +139,33 @@ export function conversationPath(entries: readonly Entry[], reader: Conversation
   });
 }
 
-/**
- * What a context is expected to occupy before anything has measured it.
- *
- * Pi's per-message character heuristic, summed — deliberately not its
- * `estimateContextTokens`, which would start from the newest measured usage in
- * the list. On a *compacted* context that measurement is the one number this
- * must not use: the retained tail still carries the usage of the reply that
- * overflowed, and reading it back would report the window as full immediately
- * after emptying it.
- *
- * This is the one estimate in this module and it decides nothing. Compaction
- * still triggers on measurement alone ({@link occupiedContextTokens}); an
- * estimate is only what can honestly be said about a context the model has not
- * answered on yet.
- */
-export function estimatedContextTokens(messages: readonly AgentMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+/** An unmeasured post-compaction estimate, never a billed token count. */
+export function estimatedContextTokens(
+  messages: readonly AgentMessage[],
+  model: Model<Api>,
+): number {
+  return estimateContextTokens(messages, model);
+}
+
+/** Expand opaque checkpoints from original history when changing model/provider. */
+export function compactionPathForModel(path: readonly Entry[], model: Model<Api>): Entry[] {
+  return path.filter((entry) => {
+    if (entry.type !== "compaction") return true;
+    const state = providerCompactionFromDetails(entry.details);
+    return (
+      state === undefined ||
+      (state.kind === model.api &&
+        state.model === model.id &&
+        nativeCompactionSupport(model).supported)
+    );
+  });
+}
+
+function withoutNativeCompactions(path: readonly Entry[]): Entry[] {
+  return path.filter(
+    (entry) =>
+      entry.type !== "compaction" || providerCompactionFromDetails(entry.details) === undefined,
+  );
 }
 
 /**
@@ -274,11 +244,19 @@ function entryToContextMessages(entry: Entry): AgentMessage[] {
   switch (entry.type) {
     case "message":
       return replayableMessage(entry.message) ? [entry.message] : [];
-    case "compaction":
+    case "compaction": {
+      const native = providerCompactionFromDetails(entry.details);
+      // OpenAI's canonical window can retain substantial input. Its placeholder
+      // must not count as the whole checkpoint. Estimate the serialized native
+      // window until a real reply meters it; onPayload replaces this text before
+      // sending, and local/model-switch fallback reconstructs original history.
+      const summary =
+        native?.kind === "openai-responses" ? JSON.stringify(native.items) : entry.summary;
       return [
-        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-        ...entry.retainedTail.filter(replayableMessage),
+        createCompactionSummaryMessage(summary, entry.tokensBefore, entry.timestamp),
+        ...entry.retainedTail.filter(replayableMessage).map(withoutRetainedUsage),
       ];
+    }
     case "branch_summary":
       return entry.summary
         ? [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)]
@@ -286,6 +264,26 @@ function entryToContextMessages(entry: Entry): AgentMessage[] {
     case "custom":
       return [];
   }
+}
+
+/**
+ * Retained replies measured the OLD prefix. Clear only their live-context
+ * usage, not the durable message or its separately recorded bill. New replies
+ * can then establish a measurement without timestamps or heuristic boundaries.
+ */
+function withoutRetainedUsage(message: AgentMessage): AgentMessage {
+  if (message.role !== "assistant") return message;
+  return {
+    ...message,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
 }
 
 /** A compaction entry whose retained tail carries no reasoning; anything else as is. */
@@ -316,7 +314,7 @@ export type CompactionOutcome =
   /** Pi found nothing to compact — an empty path, or one already ending in a compaction. */
   | { kind: "skipped" }
   /** The summarization call failed or was aborted. Nothing was written. */
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; usage?: SessionUsage | null };
 
 export interface CompactionInput {
   /** The Pi session this attachment owns; the entry is appended to its main lane. */
@@ -328,6 +326,8 @@ export interface CompactionInput {
   model: Model<Api>;
   /** The executor's rule, already resolved from the configured policy. */
   settings: CompactionSettings;
+  systemPrompt?: string;
+  tools?: readonly Tool[];
   /** Extra focus for the summary. Only an explicit request carries any. */
   customInstructions?: string;
   /**
@@ -348,29 +348,82 @@ export interface CompactionInput {
 }
 
 /**
- * Summarize the compactable history and append the result as a durable entry.
- *
- * The whole operation is Pi's: `prepareCompaction` chooses the cut point and
- * decides whether there is anything to do, `compact` generates the summary and
- * reports what the call cost, and the entry is the type Pi's own storage,
- * context builder and cut-point search already understand. The one thing added
- * here is the JSON round trip — Pi's session storage rejects a payload
- * containing `undefined`, and a provider's usage block carries optional fields
- * that are exactly that.
- *
- * No reasoning level is passed. A summarizer is asked to restructure text it has
- * been handed, not to think about it, and paying for reasoning tokens on
- * context maintenance would add cost without improving the checkpoint.
+ * Prefer a supported provider-native checkpoint; otherwise generate a local Pi
+ * summary. Both paths append one linear compaction entry and preserve the
+ * original history. JSON round-tripping removes undefined optional fields
+ * which Pi's durable storage does not accept.
  */
 export async function compactSession(input: CompactionInput): Promise<CompactionOutcome> {
-  // `getOrThrow`, not a failure arm. `prepareCompaction` is pure and has no path
-  // to an error in 0.84.1, so a handled branch here would be untestable
-  // decoration; this way a future version that does fail reaches the caller as a
-  // thrown error rather than being filed as "nothing to compact".
-  const prepared = getOrThrow(prepareCompaction([...input.path], input.settings));
+  const path = compactionPathForModel(input.path, input.model);
+  let prepared = prepareModelCompaction(path, input.settings, input.model);
   if (prepared === undefined) return { kind: "skipped" };
-
+  const tokensBefore = projectedContextTokens(
+    contextMessages(path),
+    input.model,
+    input.systemPrompt,
+    input.tools,
+  );
+  prepared.tokensBefore = tokensBefore;
   const context = piContext(input.signal);
+  // Compact the prefix, preserving Pi's safe call/result tail. The native
+  // output window is canonical for that prefix and is never pruned itself.
+  const prior = path.findLast((entry) => entry.type === "compaction");
+  const previousState =
+    prior?.type === "compaction" ? providerCompactionFromDetails(prior.details) : undefined;
+  const prefix = [
+    ...(prior?.type === "compaction"
+      ? [createCompactionSummaryMessage(prior.summary, prior.tokensBefore, prior.timestamp)]
+      : []),
+    ...prepared.messagesToSummarize,
+    ...prepared.turnPrefixMessages,
+  ];
+  const native =
+    prefix.length === 0
+      ? { kind: "unsupported" as const }
+      : await compactProviderNative({
+          model: input.model,
+          models: input.models,
+          messages: prefix,
+          enabled: true,
+          systemPrompt: input.systemPrompt,
+          tools: input.tools,
+          previousState,
+          customInstructions: input.customInstructions,
+          signal: input.signal,
+        });
+  if (native.kind === "compacted") {
+    const entry = await appendCompactionEntry(
+      input.sidecar,
+      durableJson({
+        type: "compaction",
+        id: input.sidecar.idGenerator.next(),
+        parentId: null,
+        summary: native.textSummary || "Provider-native context checkpoint.",
+        retainedTail: input.retainedTail?.(prepared.retainedTail) ?? prepared.retainedTail,
+        tokensBefore,
+        usage: native.rawUsage,
+        details: { providerCompaction: native.state } as unknown as JsonValue,
+        fromHook: false,
+      }),
+      context,
+    );
+    return {
+      kind: "compacted",
+      entry,
+      messages: contextMessages([...path, entry]),
+      usage: native.usage,
+    };
+  }
+  if (input.signal?.aborted) return { kind: "failed", message: "Compaction aborted." };
+  // A native checkpoint is opaque, not a portable prose summary. If native
+  // compaction is unavailable, rebuild the ORIGINAL history before asking Pi
+  // to summarize; never summarize an empty placeholder and lose the state.
+  if (previousState !== undefined) {
+    // Removing earlier native entries cannot remove the non-compaction leaf
+    // which made the first preparation applicable.
+    prepared = prepareModelCompaction(withoutNativeCompactions(path), input.settings, input.model)!;
+    prepared.tokensBefore = tokensBefore;
+  }
   // No reasoning level and no retry policy: the two `undefined`s Pi 0.85.0 moved
   // ahead of the context are the same two defaults 0.84.3 applied when the
   // arguments were optional, spelled out because they no longer are.
@@ -384,9 +437,23 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     undefined,
     context,
   );
-  if (!result.ok) return { kind: "failed", message: sanitizeDiagnostic(result.error.message) };
+  const nativeUsage = native.kind === "failed" ? native.rawUsage : undefined;
+  if (!result.ok)
+    return {
+      kind: "failed",
+      message: sanitizeDiagnostic(result.error.message),
+      ...(nativeUsage
+        ? {
+            usage: sessionUsageFrom(
+              nativeUsage,
+              { provider: input.model.provider, model: input.model.id, api: input.model.api },
+              "compaction",
+            ),
+          }
+        : {}),
+    };
 
-  const compacted = result.value;
+  const compacted = { ...result.value, usage: combinedUsage(result.value.usage, nativeUsage) };
   const provisioned: NewEntry<CompactionEntry> = {
     type: "compaction",
     id: input.sidecar.idGenerator.next(),
@@ -417,6 +484,19 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
       "compaction",
     ),
   };
+}
+
+function combinedUsage(left: Usage | undefined, right: Usage | undefined): Usage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  const usage: Usage = { ...left, cost: { ...left.cost } };
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    usage[key] += right[key];
+    usage.cost[key] += right.cost[key];
+  }
+  usage.totalTokens += right.totalTokens;
+  usage.cost.total += right.cost.total;
+  return usage;
 }
 
 /**

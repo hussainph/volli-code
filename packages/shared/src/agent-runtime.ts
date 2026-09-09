@@ -1537,17 +1537,16 @@ export type CompactionObservation =
       /** The durable compaction entry in the executor's own history. */
       entryId: string;
       /**
-       * What the context held before, as the executor measured it: the model's
-       * own last reported usage, not a guess.
+       * Occupancy before compaction: the last provider measurement plus an
+       * estimate of unmeasured messages, or a full estimate before first usage.
        */
       tokensBefore: number;
       /**
        * What the compacted context is expected to hold, as the executor
        * estimates it.
        *
-       * An estimate on purpose, and the asymmetry with `tokensBefore` is the
-       * honest one: nothing has measured the new context yet, and nothing can
-       * until the model next answers on it.
+       * An estimate on purpose: nothing has measured the new context yet,
+       * and nothing can until the model next answers on it.
        */
       tokensAfter: number;
       occurredAt?: number;
