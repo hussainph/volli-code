@@ -154,6 +154,31 @@ export {
   DEFAULT_RETENTION_TTL_DAYS,
 } from "./retention";
 export type { ReclaimDeps, ReclaimOutcome } from "./retention";
+
+// Trim (VC-340): the git-ignored artifacts a finished worktree keeps carrying,
+// removed without removing the checkout. Enumerated the way git defines
+// "ignored", minus a preserved-configuration allowlist that is a user setting.
+export {
+  countIgnoredArtifacts,
+  DEFAULT_TRIM_KEEP_PATTERNS,
+  keepReasonFor,
+  listIgnoredPaths,
+  trimIgnoredArtifacts,
+} from "./trim";
+export type {
+  BusyWorktreeSites,
+  TrimInput,
+  WorktreeBusySite,
+  WorktreeTrimKeep,
+  WorktreeTrimRemoval,
+  WorktreeTrimReport,
+} from "./trim";
+export {
+  defaultTrimSettings,
+  getTrimSettings,
+  setTrimSettings,
+  TRIM_SETTINGS_KEY,
+} from "./trim-settings";
 // Worktree OWNERSHIP (VC-113): which containers under the shared
 // `~/.volli/worktrees` root belong to THIS database, and therefore which paths
 // any destructive route may touch.
