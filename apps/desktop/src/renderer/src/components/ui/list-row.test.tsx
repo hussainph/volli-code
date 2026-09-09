@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ListRow } from "./list-row";
 
@@ -68,5 +71,53 @@ describe("ListRow", () => {
 
     // A button inside a button is not markup; the shell is what holds both.
     expect(html.indexOf("Copy")).toBeGreaterThan(html.indexOf("</button>"));
+  });
+});
+
+describe("a ListRow a wrapper has merged its own listeners onto", () => {
+  let container: HTMLElement | null = null;
+
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    container = document.createElement("div");
+    document.body.append(container);
+  });
+
+  afterEach(() => {
+    container?.remove();
+    container = null;
+    vi.unstubAllGlobals();
+  });
+
+  function clickRow(props: Partial<React.ComponentProps<typeof ListRow>>): void {
+    const root = createRoot(container!);
+    act(() => root.render(<ListRow primary="rail.tsx" onActivate={null} {...props} />));
+    act(() => container?.querySelector("button")?.click());
+    act(() => root.unmount());
+  }
+
+  it("still opens: a merged onClick runs BESIDE the activation, never instead of it", () => {
+    // The bug this pins: `{...rest}` landed after `onClick={onActivate}`, so a
+    // Radix trigger wrapping a row — Tooltip closes itself on click — replaced
+    // the activation outright. The row went on ringing and highlighting and
+    // opened nothing at all.
+    const onActivate = vi.fn();
+    const fromWrapper = vi.fn();
+
+    clickRow({ onActivate, onClick: fromWrapper });
+
+    expect(fromWrapper).toHaveBeenCalledTimes(1);
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets that wrapper cancel the activation by preventing the default", () => {
+    const onActivate = vi.fn();
+
+    clickRow({
+      onActivate,
+      onClick: (event) => event.preventDefault(),
+    });
+
+    expect(onActivate).not.toHaveBeenCalled();
   });
 });

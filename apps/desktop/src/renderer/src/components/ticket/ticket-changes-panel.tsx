@@ -11,6 +11,16 @@
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
  * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
+ *
+ * THE LIST IS A LIST, NOT A LISTBOX (VC-311). A `role="option"` row may not
+ * hold interactive descendants, and this one holds three — the activation
+ * target plus Copy/Open — so the old `listbox`/`option` pair was an ARIA
+ * content-model violation screen readers answer by flattening the row. A plain
+ * `list` of `listitem`s permits named interactive children; the keyboard model
+ * is the tab order itself (row button, then its actions, focus-ringed by
+ * `ListRow`), and the row whose diff is on screen carries `aria-current`
+ * rather than `aria-selected`, which without a listbox parent announced
+ * nothing anyway.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
@@ -42,10 +52,10 @@ import {
 import {
   applyChangeSetRefresh,
   presentChangeRowWithRecency,
-  selectChangeRow,
   type ChangeRowPresentation,
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
+import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
 import {
   formatWorktreeState,
@@ -59,6 +69,7 @@ import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Notice } from "@renderer/components/ui/notice";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { isTextClipped } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 
@@ -123,6 +134,77 @@ function ChangesTitle({ count }: { count: number }) {
       <Badge variant="count-pill">{count}</Badge>
     </>
   );
+}
+
+/**
+ * One line of a change row's text, ellipsized at its START so the end a reader
+ * tells two files apart by — the extension, the deepest directory — never
+ * leaves the screen (VC-311).
+ *
+ * THREE PARTS, and all three are load-bearing. `dir="rtl"` moves the ellipsis
+ * to the line's start edge, because that edge is the box's inline END. Alone it
+ * would also park a short name against the right margin and reorder the
+ * neutrals around a value like `(final) report.md`, so `text-left` puts a name
+ * back where a name belongs and the inner `dir="ltr"` run keeps every
+ * character in its own order. Measured in Chromium rather than assumed: a
+ * clipped line keeps its tail against the right edge, and a short one starts
+ * flush left, unmoved.
+ *
+ * ONE TEXT NODE, deliberately. The obvious middle-truncation — a truncating
+ * head span beside a `shrink-0` tail span — draws correctly and then lies to
+ * everything that READS the row: flex items are block-level boxes, so Chromium
+ * answers `innerText` and a copy with `split-view-divider\n.test.tsx`.
+ * Find-in-page, the clipboard and this repo's own Change Set smokes all go
+ * through that text, and a value drawn in one run cannot break in the middle of
+ * a filename. What start-truncation drops off the front, the row's reveal and
+ * its accessible name still carry in full.
+ */
+function ChangeRowLine({
+  value,
+  lineRef,
+  className,
+}: {
+  value: string;
+  lineRef?: React.Ref<HTMLSpanElement>;
+  className?: string;
+}) {
+  return (
+    <span
+      ref={lineRef}
+      dir="rtl"
+      data-slot="changes-row-line"
+      className={cn("block truncate text-left", className)}
+    >
+      <span dir="ltr">{value}</span>
+    </span>
+  );
+}
+
+/**
+ * THE ROW'S FULL-PATH VIEW, on the row rather than on a line.
+ *
+ * It has to be the row. A keyboard has one stop here — the activation target —
+ * so a reveal hung off each line would open two identical bubbles at once when
+ * both lines clip, and open nothing at all when the clipped line is the name
+ * (the case a rail hits first, since the name line is the one that carries a
+ * long filename). Radix opens this on the row's own hover and focus; all this
+ * hook adds is the refusal: a row drawing everything it holds has nothing to
+ * reveal, and a bubble over it is the noise that teaches people to ignore the
+ * ones that matter. Measured at the moment of the ask, across every line the
+ * row drew — the argument `ui/value-reveal.tsx` makes for one element, applied
+ * to the pair.
+ */
+function useRowReveal(lines: readonly React.RefObject<HTMLElement | null>[]): {
+  open: boolean;
+  onOpenChange(next: boolean): void;
+} {
+  const [open, setOpen] = React.useState(false);
+  const linesRef = React.useRef(lines);
+  linesRef.current = lines;
+  const onOpenChange = React.useCallback((next: boolean) => {
+    setOpen(next && linesRef.current.some((line) => isTextClipped(line.current)));
+  }, []);
+  return { open, onOpenChange };
 }
 
 /** Working tree, local commits, and remote state — visible without opening another page. */
@@ -200,16 +282,139 @@ function HeaderAction({
   );
 }
 
-/** Presentational flat list — unit-tested via renderToStaticMarkup. */
+/**
+ * One list item: the row, its two lines, its actions, and the reveal that
+ * belongs to all of them. Its own component because a row owns hooks now (a
+ * ref per line, and the reveal's state), and hooks cannot live in a `.map`.
+ */
+function ChangeRow({
+  row,
+  current,
+  onSelectRow,
+}: {
+  row: ChangeListRow;
+  /** This row's diff is the tab on screen. */
+  current: boolean;
+  onSelectRow(path: string): void;
+}) {
+  const nameRef = React.useRef<HTMLSpanElement>(null);
+  const pathRef = React.useRef<HTMLSpanElement>(null);
+  const lines = React.useMemo(() => [nameRef, pathRef], []);
+  const reveal = useRowReveal(lines);
+  const status = CHANGE_STATUS[row.statusKind];
+  const StatusIcon = status.icon;
+  const pathLine = row.renameFrom ?? row.parentPath;
+  return (
+    <li>
+      <Tooltip open={reveal.open} onOpenChange={reveal.onOpenChange}>
+        <TooltipTrigger asChild>
+          <ListRow
+            density="two-line"
+            selected={current}
+            data-testid="ticket-changes-row"
+            data-path={row.path}
+            data-current={current ? "true" : undefined}
+            // One AX stop per row: the name carries status, the FULL path (the
+            // visible lines truncate), counts in words, rename origin and
+            // recency — everything VoiceOver must say, because the glyph, the
+            // status word and the counts it can also see say it for sighted
+            // readers in three different places.
+            aria-label={row.accessibleName}
+            // The list is not a selection widget, so the row on screen marks
+            // itself CURRENT instead. `aria-selected` without a listbox parent
+            // was announced by nothing.
+            aria-current={current ? "true" : undefined}
+            onActivate={() => onSelectRow(row.path)}
+            leading={<StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />}
+            primary={
+              <ChangeRowLine
+                value={row.filename}
+                lineRef={nameRef}
+                className="min-w-0 flex-1 text-ui font-medium"
+              />
+            }
+            primaryTrailing={
+              <>
+                {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
+                  <span
+                    data-testid="ticket-changes-updated"
+                    aria-label={row.updatedDescription}
+                    className="shrink-0 text-label font-medium text-primary-text"
+                  >
+                    {row.updatedLabel}
+                  </span>
+                ) : null}
+                {/* The status word yields to the row's hover actions — they
+                    occupy the same strip, and the glyph on the left has
+                    already said which kind of change this is. */}
+                <span
+                  className={cn(
+                    "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
+                    "group-data-[narrow=true]/rail:sr-only",
+                    status.ink,
+                  )}
+                >
+                  {row.statusLabel}
+                </span>
+              </>
+            }
+            secondary={
+              <span className="flex min-w-0 items-baseline text-ui text-muted-foreground/70">
+                {/* The rename mark is a MARK, so it is pinned outside the line
+                    the ellipsis eats into rather than riding in its text. */}
+                {row.renameFrom === null ? null : <span className="shrink-0">←&nbsp;</span>}
+                <ChangeRowLine value={pathLine} lineRef={pathRef} className="min-w-0 flex-1" />
+              </span>
+            }
+            // A fixed column, so the numbers line up down the list and the
+            // filename's truncation point never moves with them.
+            trailing={
+              <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
+                {row.binary ? (
+                  <span className="text-muted-foreground">Binary</span>
+                ) : row.insertions === null || row.deletions === null ? null : (
+                  <>
+                    <span className="font-medium text-positive">+{row.insertions}</span>
+                    <span className="font-medium text-destructive">−{row.deletions}</span>
+                  </>
+                )}
+              </span>
+            }
+            // Overlaid rather than parked after the counts: the actions only
+            // exist on hover, and a slot reserved for them would indent every
+            // row's counts for the one row a pointer is over.
+            actions={
+              <RailRowActions
+                path={row.path}
+                onOpen={onSelectRow}
+                className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
+              />
+            }
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-72 text-wrap font-mono">
+          {row.renameFrom === null ? row.path : `${row.path} ← ${row.renameFrom}`}
+        </TooltipContent>
+      </Tooltip>
+    </li>
+  );
+}
+
+/** Presentational flat list. */
 export function TicketChangesList({
   rows,
-  focusPath,
+  currentPath,
   onSelectRow,
   error,
   hiddenCount = 0,
 }: {
   rows: readonly ChangeListRow[];
-  focusPath: string | null;
+  /**
+   * The path whose diff tab is on screen, or `null` for none. Derived from the
+   * surface's active tab rather than remembered here, so it cannot outlive the
+   * tab it names (VC-311).
+   */
+  currentPath: string | null;
   onSelectRow(path: string): void;
   error?: string | null;
   /** Paths the snapshot cap left out — surfaced as a trailing row, never hidden. */
@@ -248,79 +453,16 @@ export function TicketChangesList({
     <ul
       data-testid="ticket-changes-list"
       className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scroll-padding-bottom:2rem]"
-      role="listbox"
       aria-label="Change Set"
     >
-      {rows.map((row) => {
-        const focused = focusPath === row.path;
-        const status = CHANGE_STATUS[row.statusKind];
-        const StatusIcon = status.icon;
-        return (
-          <li key={row.path} role="option" aria-selected={focused}>
-            <ListRow
-              density="two-line"
-              selected={focused}
-              data-testid="ticket-changes-row"
-              data-path={row.path}
-              data-focused={focused ? "true" : undefined}
-              aria-label={`${row.statusLabel}: ${row.path}`}
-              onActivate={() => onSelectRow(row.path)}
-              leading={<StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />}
-              primary={row.filename}
-              primaryTrailing={
-                <>
-                  {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
-                    <span
-                      data-testid="ticket-changes-updated"
-                      aria-label={row.updatedDescription}
-                      className="shrink-0 text-label font-medium text-primary-text"
-                    >
-                      {row.updatedLabel}
-                    </span>
-                  ) : null}
-                  {/* The status word yields to the row's hover actions — they
-                      occupy the same strip, and the glyph on the left has
-                      already said which kind of change this is. */}
-                  <span
-                    className={cn(
-                      "shrink-0 text-label font-medium transition-opacity duration-100 group-focus-within:opacity-0 group-hover:opacity-0 motion-reduce:transition-none",
-                      "group-data-[narrow=true]/rail:sr-only",
-                      status.ink,
-                    )}
-                  >
-                    {row.statusLabel}
-                  </span>
-                </>
-              }
-              secondary={row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
-              // A fixed column, so the numbers line up down the list and the
-              // filename's truncation point never moves with them.
-              trailing={
-                <span className="flex w-[72px] shrink-0 justify-end gap-1 font-mono text-ui tabular-nums">
-                  {row.binary ? (
-                    <span className="text-muted-foreground">Binary</span>
-                  ) : row.insertions === null || row.deletions === null ? null : (
-                    <>
-                      <span className="font-medium text-positive">+{row.insertions}</span>
-                      <span className="font-medium text-destructive">−{row.deletions}</span>
-                    </>
-                  )}
-                </span>
-              }
-              // Overlaid rather than parked after the counts: the actions only
-              // exist on hover, and a slot reserved for them would indent every
-              // row's counts for the one row a pointer is over.
-              actions={
-                <RailRowActions
-                  path={row.path}
-                  onOpen={onSelectRow}
-                  className="absolute top-[5px] right-20 z-10 rounded-md bg-accent/90 px-1 shadow-raised"
-                />
-              }
-            />
-          </li>
-        );
-      })}
+      {rows.map((row) => (
+        <ChangeRow
+          key={row.path}
+          row={row}
+          current={currentPath === row.path}
+          onSelectRow={onSelectRow}
+        />
+      ))}
       {hiddenCount > 0 ? (
         <li
           data-testid="ticket-changes-truncated"
@@ -353,7 +495,11 @@ export function TicketChangesPanel({
   onOpenDiff,
 }: {
   ticket: Ticket;
-  /** Observed so refresh can be proven never to mutate it (decision #46/#48). */
+  /**
+   * The surface's active tab. It is the ONE truthful answer to "which file is
+   * the person looking at", so the list's current row is read off it rather
+   * than remembered from the last click (decision #46/#48, VC-311).
+   */
   activeTabId: string;
   /** Ticket-owned passive awareness shared by every File/Diff representation. */
   recency: ChangeRecencyState;
@@ -363,8 +509,6 @@ export function TicketChangesPanel({
   const [nav, setNav] = React.useState<ChangesNavigatorState>(() => ({
     revision: null,
     files: [] as ChangeSetFile[],
-    activeTabId,
-    listFocusPath: null,
     hiddenCount: 0,
   }));
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
@@ -376,12 +520,6 @@ export function TicketChangesPanel({
   const [watchAttempt, setWatchAttempt] = React.useState(0);
   const [filtering, setFiltering] = React.useState(false);
   const [query, setQuery] = React.useState("");
-
-  // Mirror the host's active tab into navigator state for the refresh contract
-  // without ever letting a refresh write it back.
-  React.useEffect(() => {
-    setNav((prev) => (prev.activeTabId === activeTabId ? prev : { ...prev, activeTabId }));
-  }, [activeTabId]);
 
   // A refresh spans several git reads over the whole worktree, and a write storm
   // can outpace it. Never stack overlapping loads: a request arriving mid-load
@@ -477,7 +615,6 @@ export function TicketChangesPanel({
 
   const handleSelect = React.useCallback(
     (path: string) => {
-      setNav((prev) => selectChangeRow(prev, path).state);
       const row = filesRef.current.find((file) => file.path === path);
       // Deliberate click — the only place we ask the host to open a tab.
       if (row !== undefined) onOpenDiff(row);
@@ -554,7 +691,9 @@ export function TicketChangesPanel({
       {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
       <TicketChangesList
         rows={rows}
-        focusPath={nav.listFocusPath}
+        // Never a remembered click: a diff the person closed stops being the
+        // current row the moment its tab is gone.
+        currentPath={parseDiffTabId(activeTabId)}
         onSelectRow={handleSelect}
         error={error}
         hiddenCount={nav.hiddenCount}
