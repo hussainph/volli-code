@@ -81,6 +81,7 @@ import { Button } from "@renderer/components/ui/button";
 import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
+import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
 
@@ -98,6 +99,10 @@ export function StoragePane() {
   return (
     <>
       <RetentionSection onDays={setRetentionDays} />
+      {/* Processes come before the two file sweeps: a running `next dev` is
+          costing memory right now, while an orphaned folder is costing disk
+          nobody is waiting on (VC-341). */}
+      <RunningProcessesSection />
       <PiSessionLogsSection />
       <OrphansSection retentionDays={retentionDays} />
       <DatabaseSection />

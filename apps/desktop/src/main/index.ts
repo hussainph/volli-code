@@ -100,7 +100,13 @@ import {
   listRunsForTicket,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
-import { getTicket, getTicketBrief, getTicketRow } from "./db/tickets-repo";
+import {
+  getTicket,
+  getTicketBrief,
+  getTicketRow,
+  listWorktreePathsForSessions,
+  listWorktreeRefs,
+} from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
@@ -304,6 +310,10 @@ import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
+import { getAutoReapPolicy } from "./process/auto-reap-settings";
+import { createAutoReapWatch } from "./process/auto-reap-watch";
+import { registerOrphanProcessIpcHandlers } from "./process/ipc";
+import { OrphanProcessService } from "./process/orphan-processes";
 import { SpawnLedger } from "./process/spawn-ledger";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
@@ -2218,6 +2228,28 @@ app.whenReady().then(async () => {
   // no scan and no deletion. The read-only inventory must run before its
   // confirmed reclaim can name any main-owned item ids.
   registerPiSessionOrphanIpcHandlers(dbHandle, piSessionsDirectory);
+  // The orphan PROCESS sweep (VC-341), the same explicit shape one directory
+  // over: registration scans nothing and signals nothing. Its liveness inputs
+  // are read at CALL time — a Session that ends between two scans has to change
+  // the answer — and the terminal manager is reached through the ref the
+  // worktree guards already use, because this registration runs before it
+  // exists.
+  const orphanProcesses = dbHandle.ok
+    ? new OrphanProcessService({
+        ledger: spawnLedger,
+        worktrees: () => listWorktreeRefs(dbHandle.db),
+        // A writing caller is live exactly while its attachment token is valid,
+        // which is the same fact `volli doctor` reports as the Session check.
+        liveSessionIds: () => sessionTokens.liveSessionIds(),
+        liveWorktreePaths: () =>
+          listWorktreePathsForSessions(dbHandle.db, sessionTokens.liveSessionIds()),
+        // A terminal tab standing in a worktree is a person looking at it.
+        openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+        policy: () => getAutoReapPolicy(dbHandle.db),
+        notify: (title, message) => new Notification({ title, body: message }).show(),
+      })
+    : null;
+  registerOrphanProcessIpcHandlers(dbHandle, orphanProcesses);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
@@ -2885,6 +2917,14 @@ app.whenReady().then(async () => {
     const retention = getRetentionWatcher(db, { busyWorktreeSites, releaseAgentSites });
     mainWindow.webContents.once("did-finish-load", () => retention.start());
     app.on("browser-window-focus", () => retention.triggerNow());
+
+    // The opt-in automatic reap (VC-341), on the same after-first-paint terms.
+    // With the setting off — the default — a tick reads one `app_state` row and
+    // stops, so a machine that never turns this on pays nothing for it.
+    if (orphanProcesses !== null) {
+      const autoReap = createAutoReapWatch(orphanProcesses);
+      mainWindow.webContents.once("did-finish-load", () => autoReap.start());
+    }
   }
 
   // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
@@ -3423,6 +3463,23 @@ app.whenReady().then(async () => {
             // deliberately does not do: a diagnostic must not write to the
             // user's dotfiles as a side effect of being asked a question.
             skillConflicts: [],
+            // The orphan process count (VC-341). Read from the latest sweep
+            // when it is recent enough to still be true, and swept afresh
+            // otherwise: `doctor` may cost a `ps` and an `lsof`, but two
+            // doctors in a row must not cost two. A launch with no sweep
+            // leaves this undefined, which the check reports as unknown
+            // rather than as a healthy zero.
+            ...(orphanProcesses === null
+              ? {}
+              : {
+                  orphanProcesses: await orphanProcesses
+                    .freshInventory()
+                    .then((inventory) => ({
+                      total: inventory.candidates.length,
+                      reapable: inventory.reapableCount,
+                    }))
+                    .catch(() => undefined),
+                }),
           }),
           doctorRepair: repairSessionEnvironment,
         }).execute
