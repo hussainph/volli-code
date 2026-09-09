@@ -33,6 +33,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
+  '@earendil-works/pi-agent-core@0.85.0': 3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b
   '@earendil-works/pi-ai@0.85.0': 741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6
   restty@0.2.0: a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af
 
@@ -364,7 +365,7 @@ importers:
         version: 0.0.74
       '@earendil-works/pi-agent-core':
         specifier: 0.85.0
-        version: 0.85.0(ws@8.21.3)(zod@4.4.3)
+        version: 0.85.0(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-ai':
         specifier: 0.85.0
         version: 0.85.0(patch_hash=741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6)(ws@8.21.3)(zod@4.4.3)
@@ -374,6 +375,9 @@ importers:
       '@volli/shared':
         specifier: workspace:*
         version: link:../shared
+      gpt-tokenizer:
+        specifier: ^4.0.0
+        version: 4.0.0
       jsdom:
         specifier: ^30.0.1
         version: 30.0.1(@noble/hashes@2.3.0)
@@ -5330,6 +5334,9 @@ packages:
     resolution: {integrity: sha512-6tfZ91bOr7bOXnK7PRDCGBLa1H4U080YHNaAQ2KsMGlLEzRbk44nsZF2E1IeRc3vtJHPVbKCYgdFbaGO2ljd8g==}
     engines: {node: '>=10.19.0'}
 
+  gpt-tokenizer@4.0.0:
+    resolution: {integrity: sha512-YAWIyzvuVUHEfW7tFfFAxH8qQb+Q3RU9nYOTy7skMNX5qzU6Q8jxTHZLyO56ug1vYvCR7wndzpd3jwD86/mhjQ==}
+
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
@@ -8521,7 +8528,7 @@ snapshots:
     dependencies:
       esbuild: 0.28.1
 
-  '@earendil-works/pi-agent-core@0.85.0(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-agent-core@0.85.0(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@earendil-works/chord': 0.85.0
       '@earendil-works/pi-ai': 0.85.0(patch_hash=741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6)(ws@8.21.3)(zod@4.4.3)
@@ -12699,6 +12706,8 @@ snapshots:
       lowercase-keys: 2.0.0
       p-cancelable: 2.1.1
       responselike: 2.0.1
+
+  gpt-tokenizer@4.0.0: {}
 
   graceful-fs@4.2.11: {}
 

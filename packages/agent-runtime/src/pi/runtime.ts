@@ -16,6 +16,7 @@ import {
   type JsonValue,
   type MessageEntry,
   type Session,
+  type StreamFn,
 } from "@earendil-works/pi-agent-core";
 import {
   Agent,
@@ -48,7 +49,7 @@ import {
   type AuthoritySnapshot,
   type CompactionObservation,
   type CompactionPolicy,
-  type CompactionReason,
+  type CompactionWorkReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ObservabilitySink,
@@ -74,15 +75,24 @@ import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
   compactionDue,
+  compactionPathForModel,
   compactSession,
   contextMessages,
   contextWindowOf,
   conversationPath,
   estimatedContextTokens,
-  occupiedContextTokens,
   type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
+import { projectedContextTokens } from "./token-counting";
+import {
+  ANTHROPIC_COMPACT_BETA,
+  nativeCompactionAvailable,
+  providerCompactionFromDetails,
+  projectOpenAICompaction,
+  projectAnthropicCompaction,
+  type NativeRequestObservation,
+} from "./provider-compaction";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import {
@@ -94,9 +104,11 @@ import type { RefreshableCatalogs } from "./model-catalog";
 import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
+  providerErrorClassForStatus,
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { headerUsageUpdate } from "./usage-limits/passive";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
@@ -148,9 +160,20 @@ export function autoRetryDelayMs(attempt: number): number {
  * has to be recovered from one of those rather than imported by name. Doing it
  * this way rather than restating the union keeps the check honest: it still
  * fails to compile if Pi ever drops or renames one of the three.
+ *
+ * The check is one-directional now, and deliberately. Volli names a fourth
+ * reason — `checkpoint`, a provider-native checkpoint this Session can no
+ * longer use — that Pi has no producer for and no word for, so the assertion
+ * is that each of PI's reasons is still one of VOLLI's rather than that the
+ * two lists are equal.
  */
 type PiCompactionReason = Extract<HarnessEvent, { type: "compaction_start" }>["reason"];
-const COMPACTION_REASON_VALUES = COMPACTION_REASONS satisfies readonly PiCompactionReason[];
+const PI_COMPACTION_REASONS = [
+  "manual",
+  "threshold",
+  "overflow",
+] as const satisfies readonly PiCompactionReason[];
+const COMPACTION_WORK_REASON_VALUES: readonly CompactionWorkReason[] = PI_COMPACTION_REASONS;
 
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
@@ -543,6 +566,51 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
 
+/**
+ * The room a request leaves for the reply it is about to ask for.
+ *
+ * Not the compaction reserve and not a second spelling of it: this one is
+ * subtracted from a single request's own output ceiling, where the reserve is
+ * the threshold a Session compacts at. They are separated because they answer
+ * to different pressures — the ceiling wants to be tight, the threshold wants
+ * to be early — and one number serving both was how a 1M-window Session ended
+ * up compacting 16,384 tokens from the end of its window.
+ */
+const OUTPUT_CEILING_HEADROOM_TOKENS = 4_096;
+
+/**
+ * The smallest output ceiling this runtime will impose on itself. Below it the
+ * estimate stops being a safety margin and starts being the failure — see
+ * `outputCeiling`.
+ */
+const MIN_OUTPUT_CEILING_TOKENS = 4_096;
+
+/**
+ * How much of a model's window a Session keeps free of conversation.
+ *
+ * Volli configures no per-model reserve — those were retired with the policy
+ * that carried them (VC-155) and nothing here brings them back: there is no
+ * setting, no ladder of numbers, and no question a person is asked. What this
+ * does is stop treating the executor's ONE fixed number as if it described
+ * every window. Pi defaults its reserve to 16,384 tokens, which is a sensible
+ * allowance on a 200k model and a rounding error on a 1M one: a Session that
+ * waits until 983,616 tokens are spent has left itself less than one dense
+ * tool result of room, and a single unmeasured round can carry it past the
+ * window before the next check. So the threshold is the LARGER of the
+ * executor's own reserve and a share of the window — the executor's number
+ * where the executor's number is the bigger claim, and a proportional one
+ * where it is not.
+ *
+ * Deliberately not applied to Pi's summary generation, which keeps the smaller
+ * reserve: that number bounds how long a summary may be, and a 1M-window model
+ * has no reason to write an 80,000-token one.
+ */
+const THRESHOLD_HEADROOM_SHARE = 0.1;
+
+function thresholdHeadroom(reserveTokens: number, contextWindow: number): number {
+  return Math.max(reserveTokens, Math.ceil(contextWindow * THRESHOLD_HEADROOM_SHARE));
+}
+
 interface ReasoningElisionMarker {
   kind: "reasoning-dropped";
 }
@@ -718,15 +786,19 @@ function isRecoverableObservation(value: unknown): boolean {
         isSessionUsage(value["usage"])
       );
     case "compaction":
-      if (!isOneOf(value["reason"], COMPACTION_REASON_VALUES)) return false;
       // Whole numbers, because the durable ledger reads them as integers and a
       // marker this accepted but the ledger refused would be a Session that
-      // recovers and then cannot be read.
+      // recovers and then cannot be read. The two arms take different reason
+      // lists for the same reason: `checkpoint` says nothing was compacted, so
+      // a compacted marker carrying it is one the ledger would refuse.
       return value["state"] === "compacted"
-        ? typeof value["entryId"] === "string" &&
+        ? isOneOf(value["reason"], COMPACTION_WORK_REASON_VALUES) &&
+            typeof value["entryId"] === "string" &&
             wholeNumber(value["tokensBefore"]) &&
             wholeNumber(value["tokensAfter"])
-        : value["state"] === "failed" && typeof value["message"] === "string";
+        : value["state"] === "failed" &&
+            isOneOf(value["reason"], COMPACTION_REASONS) &&
+            typeof value["message"] === "string";
     case "activity":
       return (
         typeof value["turnId"] === "string" &&
@@ -1329,9 +1401,25 @@ async function attachSession(
      * restart, with nothing anywhere saying so. {@link contextMessages} is Pi's
      * own elision rule and is the only way messages are derived here.
      */
-    const recoveredContext = contextMessages(
+    //
+    // The route, not the catalog, decides whether a durable native checkpoint
+    // may be replayed: a Session whose credential is now an OAuth subscription
+    // or points at another endpoint would otherwise send opaque state to a
+    // backend that never minted it. Resolved once here and again on model
+    // selection, which is when a Session's route is re-decided anyway.
+    const nativeRoute = await nativeCompactionAvailable(model, models, spec.signal);
+    const replayable = compactionPathForModel(
       conversationPath(withDroppedReasoning(recoveredEntries), conversationReader),
+      model,
+      nativeRoute,
     );
+    const recoveredPath = replayable.path;
+    const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
+    let nativeCompactionState =
+      recoveredCompaction?.type === "compaction"
+        ? providerCompactionFromDetails(recoveredCompaction.details)
+        : undefined;
+    const recoveredContext = contextMessages(recoveredPath);
     // A reply withheld from the middle of history invalidates every reasoning
     // block after it under a provider that chains them, and the attach knows it
     // did that. Dropping the reasoning from the whole replay is the doc's
@@ -1432,6 +1520,32 @@ async function attachSession(
       activeAttentionReasons.add("partial-turn");
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
+    // An unreadable checkpoint is a recovered Session, not an unattachable one:
+    // the history it replaced is still on disk and is what {@link contextMessages}
+    // just rebuilt from. Said out loud rather than recovered in silence: the
+    // person's context just grew back to what it was before a compaction they
+    // watched happen, and the next turn may compact again for a threshold they
+    // did not see fill. Said ONCE — the fact recurs on every attach because the
+    // damaged entry is still on disk, and a notice that reappeared on every
+    // restart would be noise about one event.
+    if (
+      replayable.discarded.length > 0 &&
+      !recoveredObservations.some(
+        (observation) =>
+          observation.kind === "compaction" &&
+          observation.state === "failed" &&
+          observation.reason === "checkpoint",
+      )
+    ) {
+      for (const reason of new Set(replayable.discarded)) {
+        await persistObservation({
+          kind: "compaction",
+          state: "failed",
+          reason: "checkpoint",
+          message: sanitizeDiagnostic(reason),
+        });
+      }
+    }
     // No preflight before the tools are built. There is no boundary left to
     // prove: an attachment that hands Pi its own environment cannot fail for
     // want of `sandbox-exec`, and a caller who injects a contained environment
@@ -1494,7 +1608,7 @@ async function attachSession(
     let autoRetryPending = false;
     let resumingTurn = false;
     /**
-     * Whether this turn has already spent its one compaction.
+     * Whether this turn has already spent its one overflow recovery.
      *
      * Pi keeps a flag of this name in its own lane state for the same reason: a
      * turn that overflows, compacts, retries and overflows again has learned
@@ -1707,6 +1821,60 @@ async function attachSession(
       };
     };
 
+    /**
+     * The output ceiling this request may honestly ask for.
+     *
+     * Pi's simple adapter clamps `max_tokens` against the context using its own
+     * chars/4 estimate, which understates dense code and JSON badly enough that
+     * a request can reserve more output than the window has left. A model-aware
+     * ceiling replaces it; the adapter is free to clamp further.
+     *
+     * **It is floored, and the floor is the point.** The occupancy half of this
+     * subtraction is an ESTIMATE, and a deliberately conservative one — an
+     * opaque provider checkpoint has no local token count at all. An estimate
+     * that reads high must not be able to hand the model a one-token answer:
+     * that turns "we may be near the window" into a Session that produces
+     * nothing, silently, with no error to recover from. Below the floor this
+     * stops shrinking and lets the provider be the one to say no — which is a
+     * refusal overflow recovery already knows how to answer.
+     */
+    const outputCeiling = (
+      requestModel: Parameters<StreamFn>[0],
+      context: Parameters<StreamFn>[1],
+    ): number | undefined => {
+      const window = contextWindowOf(requestModel);
+      if (window === undefined) return undefined;
+      const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
+      const occupied = projectedContextTokens(
+        context.messages,
+        requestModel,
+        context.systemPrompt,
+        context.tools,
+      );
+      return Math.max(
+        floor,
+        Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
+      );
+    };
+
+    const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      const maxTokens = outputCeiling(requestModel, context);
+      return models.streamSimple(requestModel, context, {
+        ...options,
+        ...(maxTokens === undefined ? {} : { maxTokens }),
+        ...(nativeCompactionState?.kind === "anthropic-messages"
+          ? {
+              headers: {
+                ...options?.headers,
+                "anthropic-beta": [requestModel.headers?.["anthropic-beta"], ANTHROPIC_COMPACT_BETA]
+                  .filter(Boolean)
+                  .join(","),
+              },
+            }
+          : {}),
+      });
+    };
+
     const agent = new Agent({
       initialState: {
         systemPrompt: composeSystemPrompt({
@@ -1719,7 +1887,19 @@ async function attachSession(
         tools,
         messages: recoveredMessages,
       },
-      streamFn: instrumentStreamFn(models.streamSimple.bind(models), {
+      onPayload: (payload) => {
+        if (nativeCompactionState === undefined) return undefined;
+        if (typeof payload !== "object" || payload === null)
+          throw new Error("Native compaction payload is malformed.");
+        const projected =
+          nativeCompactionState.kind === "openai-responses"
+            ? projectOpenAICompaction(payload as { input?: unknown }, nativeCompactionState)
+            : projectAnthropicCompaction(payload as { messages?: unknown }, nativeCompactionState);
+        if (projected === undefined)
+          throw new Error("Native compaction checkpoint is missing from the request.");
+        return projected;
+      },
+      streamFn: instrumentStreamFn(streamWithCompaction, {
         sink: host.observability,
         runId,
         now: host.now,
@@ -1863,7 +2043,11 @@ async function attachSession(
      * rather than beside it — the global switch IS `enabled`, which
      * `shouldCompact` reads — not a second condition wrapped around Pi's rule.
      * The reserve is always the executor's own default: per-model reserve
-     * budgets were retired with the policy that carried them (VC-155).
+     * budgets were retired with the policy that carried them (VC-155). What
+     * the THRESHOLD uses is that default widened by {@link thresholdHeadroom}
+     * on a large window — derived, never configured. These settings are also
+     * what Pi's summary generation is run under, and it keeps the unwidened
+     * number: the reserve bounds how long a summary may be.
      *
      * **What switching automatic compaction off does to the overflow path:
      * nothing.** `enabled` is read by `shouldCompact` and by nothing else in
@@ -1935,8 +2119,53 @@ async function attachSession(
      * the next turn may well be refused for context length, and a refusal with
      * no record of the summary that was tried first reads as arbitrary.
      */
+    /**
+     * What a native compaction's own HTTP calls contribute to instrumentation.
+     *
+     * Native compaction is the one model call this runtime makes that does not
+     * go through `streamSimple`, and a request that skips that seam skips both
+     * things the seam does: the passive Usage Window read off the response's
+     * rate-limit headers, and the attempt envelope every other provider request
+     * emits. Neither absence is visible — a Usage Window would simply read stale
+     * after a compaction, and the spend would appear in the ledger with no
+     * request behind it — which is exactly why they are worth closing.
+     *
+     * The header mapping is the same product-owned function `instrumentStreamFn`
+     * uses, not a second copy of it. Token counts are deliberately NOT here:
+     * compaction spend is recorded as its own `usage.recorded` fact against the
+     * compaction entry, and repeating it on the envelope would double it in any
+     * surface that reads both.
+     */
+    const observeNativeRequest = (observation: NativeRequestObservation): void => {
+      const requestModel = agent.state.model;
+      try {
+        const update = headerUsageUpdate(requestModel.provider, observation.headers, host.now());
+        if (update !== null) host.usageLimits?.holder.apply(requestModel.provider, update);
+      } catch {
+        // A lost capture, never a lost compaction.
+      }
+      try {
+        host.observability.record({
+          kind: "provider-attempt",
+          providerId: requestModel.provider,
+          modelId: requestModel.id,
+          api: requestModel.api,
+          stopReason: observation.status < 400 ? "stop" : "error",
+          ...(observation.status < 400
+            ? {}
+            : { providerErrorClass: providerErrorClassForStatus(observation.status) }),
+          durationMs: observation.durationMs,
+          runId,
+        });
+      } catch {
+        // A sink that throws costs the measurement, never the compaction.
+      }
+    };
+
     const compactContext = async (input: {
-      reason: CompactionReason;
+      // Only the three reasons a compaction is ATTEMPTED for; `checkpoint`
+      // reports a compaction that stopped being usable and runs no work.
+      reason: CompactionWorkReason;
       path: readonly Entry[];
       signal: AbortSignal | undefined;
       /** What to keep, in the requester's words. Only a person supplies these. */
@@ -1959,6 +2188,9 @@ async function attachSession(
           // generated by the model currently selected in the chat pane.
           model: agent.state.model,
           settings: compactionSettings(),
+          systemPrompt: agent.state.systemPrompt,
+          tools: agent.state.tools,
+          onNativeRequest: observeNativeRequest,
           // The resources this Session had activated ride INSIDE the durable
           // entry, ahead of the kept turns, rather than being inserted into
           // the live array once the entry is written. What the model is sent
@@ -1996,17 +2228,18 @@ async function attachSession(
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written.
           agent.state.messages = outcome.messages;
+          nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
         // loses the summary rather than the bill: the summary is recoverable
         // from Pi's own entry, and spend that went unrecorded is not.
-        if (outcome.kind === "compacted" && outcome.usage !== null) {
+        if (outcome.usage != null) {
           await commitObservation(
             await persistObservation({
               kind: "usage",
               // Named after the compaction entry, which is what makes a
               // replayed compaction land on the bill it already has.
-              entryId: outcome.entry.id,
+              entryId: outcome.kind === "compacted" ? outcome.entry.id : randomUUID(),
               // Compaction has no turn of its own. Inventing one here would
               // put maintenance spend inside a conversation unit it is not in.
               turnId: null,
@@ -2027,7 +2260,7 @@ async function attachSession(
                   // whole tokens, and a fractional one would recover and then
                   // fail to decode.
                   tokensBefore: Math.floor(outcome.entry.tokensBefore),
-                  tokensAfter: estimatedContextTokens(agent.state.messages),
+                  tokensAfter: estimatedContextTokens(agent.state.messages, agent.state.model),
                 }
               : { kind: "compaction", state: "failed", reason, message: outcome.message },
           ),
@@ -2046,55 +2279,38 @@ async function attachSession(
     };
 
     /**
-     * Make room for the turn that is about to start, if the last reply says the
-     * window is nearly spent.
-     *
-     * **Why here, and not when the previous turn ended.** The measurement is the
-     * same either way — it is the last reply's usage in both cases — but the
-     * multi-second freeze is not. Compacting at the end of a turn spends it
-     * after the transcript has already gone idle, which reads as an application
-     * that has stopped responding. Compacting at the head of the next message
-     * spends it inside a wait the person is already watching, where it is
-     * indistinguishable from a slow model. That is the whole reason compaction
-     * emits no turn of its own: the freeze it would need a spinner for is
-     * already inside one.
-     *
-     * Only the idle prompt path reaches this. A queued or steering message joins
-     * a run Pi is already streaming, where the context is fixed and rewriting it
-     * underneath would corrupt the turn in flight — which is also why this
-     * cannot be the only compaction there is, and why a run that spends the
-     * window on its own tool traffic is {@link recoverFromFailure}'s to catch.
-     *
-     * A failed compaction changes nothing and stops nothing. The user's
-     * message still goes to the model on the context that was already there:
-     * this is maintenance, and refusing to deliver a message because maintenance
-     * failed would turn a recoverable Session into a stuck one.
-     *
-     * That holds for every way it can fail, not just the summary call. A
-     * provider that refuses to summarize is already reported as an outcome, but
-     * the reads and the append around it can throw, and an exception here would
-     * reach the caller as a REFUSED MESSAGE — the one thing this path promises
-     * never to do, failing in the way a person would least connect to the cause.
-     * So the throw is turned into the failure this already knows how to say.
-     * Nothing is swallowed: it lands on the ledger as `context.compaction_failed`
-     * and draws its own line in the transcript, exactly as a refused summary
-     * does.
+     * Make room before a request, using the last provider measurement plus the
+     * unmeasured suffix (including an incoming user message or tool results).
+     * The idle path holds the context rewrite lock; the tool-loop path runs at
+     * Pi's prepareNextTurn boundary, where no provider request is in flight.
+     * Maintenance failures are durable notices, not rejected user messages.
      */
-    const compactBeforeTurn = async (): Promise<void> => {
+    const compactBeforeTurn = async (
+      additional: readonly AgentMessage[] = [],
+      signal: AbortSignal | undefined = spec.signal,
+    ): Promise<boolean> => {
       // Asked first because it is free. A model whose catalog reports no usable
       // window can never trip the threshold, and the branch read below costs the
       // whole history — there is no reason to pay it for an answer already known.
       const contextWindow = contextWindowOf(agent.state.model);
-      if (contextWindow === undefined) return;
+      if (contextWindow === undefined) return false;
       try {
+        const settings = compactionSettings();
+        if (!settings.enabled) return false;
+        const thresholdSettings = {
+          ...settings,
+          reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
+        };
+        const occupied = projectedContextTokens(
+          [...agent.state.messages, ...additional],
+          agent.state.model,
+          agent.state.systemPrompt,
+          agent.state.tools,
+        );
+        if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
         const path = await conversationBranch();
-        if (!compactionDue(occupiedContextTokens(path), contextWindow, compactionSettings()))
-          return;
-        // The attachment's own lifetime bounds it, like every other provider
-        // call here. Nothing else can: no turn has started, so there is no turn
-        // to interrupt, and a person pressing stop before their message has been
-        // delivered is stopping something that has not begun.
-        await compactContext({ reason: "threshold", path, signal: spec.signal });
+        const outcome = await compactContext({ reason: "threshold", path, signal });
+        return outcome.kind === "compacted";
       } catch (error) {
         // Reported through the channel a refused summary already uses. If THIS
         // throws the sidecar itself is unwritable, which is not a maintenance
@@ -2108,7 +2324,16 @@ async function attachSession(
             message: sanitizeDiagnostic(errorMessage(error)),
           }),
         );
+        return false;
       }
+    };
+
+    // Pi 0.85 provides a safe replacement boundary BETWEEN tool rounds. The
+    // loop owns a separate context snapshot: replacing Agent.state alone would
+    // appear to compact while the next request still sent the entire history.
+    agent.prepareNextTurnWithContext = async ({ context }, signal) => {
+      const changed = await compactBeforeTurn([...pendingQueuedDeliveries.keys()], signal);
+      return changed ? { context: { ...context, messages: [...agent.state.messages] } } : undefined;
     };
 
     /**
@@ -2119,13 +2344,8 @@ async function attachSession(
      * the same answer — that the run may be resumed in place. Everything else is
      * the user's to decide, and says so by returning false.
      *
-     * **Overflow is where a long run's context is answered.** Compaction at the
-     * head of a message cannot help a turn that fills the window with its own
-     * tool results, because by then the turn is streaming and rewriting its
-     * context would corrupt it. So the provider's refusal is the trigger: it is
-     * the only honest signal that arrives at a moment when rewriting the context
-     * is safe again, which is exactly now — the loop has ended, and nothing will
-     * read the message array until the retry does.
+     * Overflow remains a one-shot recovery for provider limits the proactive
+     * budget could not predict. It runs only after the failed loop has ended.
      *
      * The retry continues from what the compacted context ends with, and that is
      * not a coincidence to leave unstated: the reply that failed is dropped from
@@ -2447,7 +2667,16 @@ async function attachSession(
         // rather than admitted onto a context this turn is already composing
         // against; everything from here to `prompt` is synchronous, so there is
         // no gap between releasing it and Pi owning the array itself.
-        await rewritingTheContext(compactBeforeTurn);
+        await rewritingTheContext(() =>
+          compactBeforeTurn([
+            queuedUserMessage(
+              agent.state.messages.length === 0
+                ? composeFirstUserMessage(spec, framedText)
+                : framedText,
+              images,
+            ),
+          ]),
+        );
         const delivered =
           agent.state.messages.length === 0
             ? composeFirstUserMessage(spec, framedText)
@@ -2564,8 +2793,33 @@ async function attachSession(
             message: "The model cannot change while Pi is running.",
           };
         }
-        agent.state.model = selected;
-        agent.state.thinkingLevel = selection.reasoningLevel;
+        if (rewritingContext)
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The context is being compacted.",
+          };
+        // Opaque state is model-bound. Reconstruct from durable original history
+        // on a model switch rather than pretending its placeholder is a summary.
+        // The new pair's own resolved route decides: the same catalog model
+        // reached through OAuth or an endpoint override cannot replay a
+        // checkpoint the metered public API minted (VC-331).
+        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        await rewritingTheContext(async () => {
+          const { path } = compactionPathForModel(
+            await conversationBranch(),
+            selected,
+            selectedRoute,
+          );
+          const latest = path.findLast((entry) => entry.type === "compaction");
+          nativeCompactionState =
+            latest?.type === "compaction"
+              ? providerCompactionFromDetails(latest.details)
+              : undefined;
+          agent.state.messages = contextMessages(path);
+          agent.state.model = selected;
+          agent.state.thinkingLevel = selection.reasoningLevel;
+        });
         return { kind: "selected" };
       },
 
@@ -2599,8 +2853,8 @@ async function attachSession(
        * fact filed to the ledger and nothing else.
        *
        * **Refused while Pi is running, never queued.** Rewriting the context
-       * under a live turn corrupts the turn in flight, which is why both
-       * automatic paths only ever run when Pi is idle. Queueing it instead
+       * under a live turn corrupts the turn in flight, which is why automatic
+       * maintenance uses idle or between-request boundaries. Queueing it instead
        * would answer a different question than the one asked: by the time the
        * turn ended the reply would already be in the context, so what ran
        * would not be the compaction the person requested when they requested

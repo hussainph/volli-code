@@ -16,6 +16,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   attemptStopReason,
   instrumentStreamFn,
+  providerErrorClassForStatus,
   providerErrorClass,
   recordObservationToSink,
   teeObservationsToSink,
@@ -110,6 +111,25 @@ describe("providerErrorClass", () => {
   it("uses unknown when Pi supplied no provider diagnostic", () => {
     expect(providerErrorClass("error", undefined)).toBe("unknown");
   });
+
+  it.each([
+    [401, "auth"],
+    [403, "auth"],
+    [429, "rate-limit"],
+    [503, "overloaded"],
+    [529, "overloaded"],
+    [408, "timeout"],
+    [504, "timeout"],
+    [400, "invalid-request"],
+    [404, "invalid-request"],
+    [500, "unknown"],
+    [200, "unknown"],
+  ] as const)(
+    "maps HTTP %i to %s for a direct request that has no prose to read",
+    (status, expected) => {
+      expect(providerErrorClassForStatus(status)).toBe(expected);
+    },
+  );
 });
 
 describe("teeObservationsToSink", () => {
