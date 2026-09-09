@@ -92,7 +92,14 @@ describe("SessionBlocker hit testing", () => {
       </div>,
     );
 
-    expect(html).toMatch(/^<div class="pointer-events-none"><div class="[^"]*pointer-events-auto/);
+    // The rule, not the markup: an overlay that lets clicks through, and the
+    // blocker inside it opting back in. Asserted without pinning attribute
+    // ORDER — the element grew a `data-slot` ahead of its class and the whole
+    // hit-testing claim went with it, which is a test describing a render
+    // rather than a behaviour.
+    expect(html).toMatch(
+      /^<div class="pointer-events-none"><div\b[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
+    );
     expect(html).toContain('aria-label="Dismiss"');
   });
 });
