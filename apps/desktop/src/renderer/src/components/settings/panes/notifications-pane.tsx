@@ -1,69 +1,204 @@
 /**
- * Settings → Notifications — designed, and now half plumbed (VC-75, VC-133).
+ * Settings → Notifications — the preview, finished (VC-75's write half, built
+ * in VC-295).
  *
- * Volli already POSTS native notifications: a finished retention sweep, a
- * staged update, a session signal. What did not exist was any preference
- * governing them — main constructed a `Notification` and showed it, with
- * nothing consulted in between.
+ * This pane spent two tickets as an `Unavailable` preview whose own comment
+ * said why: the vocabulary and the read existed, nothing wrote the preference,
+ * and only one call site in main consulted it. All three are now true — a
+ * validated `notifications.set` command writes the machine-local record, one
+ * delivery path reads it for every alert the app posts, and the categories
+ * below are the ones a producer actually maps to (`@volli/shared`'s
+ * `notification-catalog.ts`, whose test fails if a switch loses its last
+ * producer).
  *
- * **What VC-133 changed, and what it deliberately did not.** That ticket's rule
- * — notify an unattended Run when its Session enters `waiting` or `error` — was
- * required to read through THESE preferences rather than ship a second,
- * parallel Automations-only switch. So the vocabulary and the read now exist
- * (`@volli/shared`'s `notification-preferences.ts`, `main/notification-
- * preferences.ts`), and the `needs-you` event genuinely governs that one call
- * site. What is still missing is the WRITE: nothing sets the `app_state` key,
- * so every read answers the all-on defaults and these switches are still a
- * preview.
+ * ── WHAT CHANGED IN THE WORDS, AND WHY ────────────────────────────────────
+ * "A session finishes" is gone. No production source ever posted it, so the
+ * switch was a control that did nothing; the completion Volli genuinely
+ * observes is a merged pull request, and that is what the row now says. The
+ * stored id is still `finished` — renaming it would silently reset every
+ * machine's choice for a wording change.
  *
- * Finishing it is VC-75's: a durable `set` command (docs/BOUNDARIES.md rule 5,
- * the way `automation.set-enabled` is), this pane bound to it, and the other
- * three events honoured at their own call sites.
+ * ── WHAT THIS PAGE IS ALLOWED TO CLAIM ABOUT THE OS ───────────────────────
+ * Two facts, and no third. Electron answers `Notification.isSupported()`, and
+ * it reports a delivery that FAILED. It does not give this app a reliable read
+ * of the OS authorization state, so nothing here says "Allowed" or "Denied" —
+ * a denied notification's `show()` succeeds in silence, and a page that
+ * inferred permission from it would be confidently wrong in exactly the case
+ * somebody came here to diagnose. So: the switches are Volli's answer, the
+ * hint says the system owns the rest, and a reported failure is shown as the
+ * fault it is with the one route that fixes it.
  *
- * Shown rather than hidden because the absence is itself the surprising part:
- * an app that sends OS notifications and offers no way to turn them off looks
- * like it lost the setting, not like it never had one. Saying so is better
- * than an empty rail slot.
- *
- * The ids come from the shared vocabulary rather than a local copy, so the
- * preview and the policy cannot come to offer different switches. Only the
- * LABELS live here — wording is this surface's business.
+ * The view is only ever set from what main READ BACK — the answer to a write,
+ * or a push after the view moved — so a switch on this page cannot show a
+ * value the database did not accept. The push matters for the fault half: a
+ * delivery failure lands in the background at whatever moment the OS refuses
+ * an alert, and this page may already be open when it does (round 5). It
+ * subscribes first and reads second, like every other primed surface, so a
+ * push that lands between the two is not lost.
  */
+import * as React from "react";
 import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
-import { NOTIFICATION_EVENTS, type NotificationEvent } from "@volli/shared";
+import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
+import { errorMessage, NOTIFICATION_EVENTS, type NotificationEvent } from "@volli/shared";
 
-import { PrefRow, PrefSection, Unavailable } from "@renderer/components/settings/kit";
+import type { NotificationSettingsView } from "../../../../../ipc/contract";
+import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
+import { Notice } from "@renderer/components/ui/notice";
 import { Switch } from "@renderer/components/ui/switch";
+import { toastError } from "@renderer/lib/toast";
 
 /**
- * How each event reads in a row. A total `Record`, so an event added to
+ * How each category reads in a row. A total `Record`, so an event added to
  * {@link NOTIFICATION_EVENTS} fails to compile here until it has been given
- * words — which is what keeps "the events listed are the ones main genuinely
- * posts" true without anybody having to remember it.
+ * words — the same mechanism that kept the preview honest, now guarding a page
+ * whose switches do something.
+ *
+ * The hints name the PRODUCERS, because that is the only way a person can tell
+ * what a category will cost them. They are the one exception CLAUDE.md's
+ * "let controls talk" rule leaves room for: a mute switch's blast radius is not
+ * visible in its label, and getting it wrong is silence.
  */
-const EVENT_LABELS: Record<NotificationEvent, string> = {
-  "needs-you": "An agent needs my input",
-  finished: "A session finishes",
-  swept: "Volli reclaims a worktree",
-  update: "An update is ready",
+const EVENT_ROWS: Record<NotificationEvent, { label: string; hint: React.ReactNode }> = {
+  "needs-you": {
+    label: "An agent needs my input",
+    hint: (
+      <>
+        An unattended Automation Run that stops to ask or breaks, a session the watchdog finds
+        wedged, and a terminal harness that reports it is waiting on a human.
+      </>
+    ),
+  },
+  finished: {
+    label: "A pull request merges",
+    hint: <>Volli watches the pull request on a ticket&rsquo;s branch and says when it lands.</>,
+  },
+  swept: {
+    label: "Volli reclaims a worktree",
+    hint: <>A ticket&rsquo;s folder removed after its time in Done. The branch is kept.</>,
+  },
+  update: {
+    label: "An update is ready",
+    hint: (
+      <>
+        Sent when a downloaded update is waiting to install. With a Volli window open, the
+        sidebar&rsquo;s update badge announces it instead.
+      </>
+    ),
+  },
 };
 
+const SYSTEM_SETTINGS_ROUTE = "System Settings → Notifications → Volli Code";
+
 export function NotificationsPane() {
+  const [view, setView] = React.useState<NotificationSettingsView | null>(null);
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = window.api.notifications.onSettingsChanged((next) => {
+      if (!cancelled) setView(next);
+    });
+    void window.api.notifications
+      .settings()
+      .then((result) => {
+        if (cancelled) return;
+        // A failed read leaves the rows disabled rather than showing switches
+        // whose position nothing stands behind.
+        if (result.ok) setView(result.settings);
+        else toastError(`Couldn't read notification settings: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toastError(`Couldn't read notification settings: ${errorMessage(error)}`);
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  async function choose(event: NotificationEvent | null, next: boolean): Promise<void> {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const result = await window.api.notifications.set(event, next);
+      if (!result.ok) {
+        // The switch stays where it was: nothing was stored, so nothing on
+        // screen may move.
+        toastError(`Couldn't change notifications: ${result.error}`);
+        return;
+      }
+      setView(result.settings);
+    } catch (error) {
+      toastError(`Couldn't change notifications: ${errorMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const preferences = view?.preferences ?? null;
+  const disabled = preferences === null || saving;
+  const failure = view?.deliveryFailure ?? null;
+
   return (
-    <Unavailable
-      what="Notification preferences"
-      meanwhile="To turn notifications off, open System Settings and select Notifications."
-    >
+    <>
+      {view !== null && !view.supported ? (
+        <Notice
+          tone="error"
+          icon={WarningCircleIcon}
+          title="This system can't show notifications"
+          detail="Volli has nowhere to post these, so the switches below have no effect here."
+        />
+      ) : null}
+      {failure !== null ? (
+        <Notice
+          tone="error"
+          icon={WarningCircleIcon}
+          title="The system didn't deliver the last notification"
+          detail={`${failure.message} Check that Volli Code is allowed to notify in ${SYSTEM_SETTINGS_ROUTE}.`}
+        />
+      ) : null}
+
       <PrefSection title="Notifications" icon={BellIcon}>
-        <PrefRow label="Notify me">
-          <Switch checked />
+        <PrefRow
+          label="Notify me"
+          htmlFor="notify-me"
+          hint={
+            <>
+              Volli asks the system to show these; the system decides whether they appear, and{" "}
+              {SYSTEM_SETTINGS_ROUTE} is where that is allowed or refused. One isn&rsquo;t sent when
+              the exact question, failure, or ticket it is about is already in front of you in the
+              focused Volli window — a window behind another app, or one showing something else,
+              still gets it.
+            </>
+          }
+        >
+          <Switch
+            id="notify-me"
+            checked={preferences?.enabled ?? false}
+            disabled={disabled}
+            onCheckedChange={(next) => void choose(null, next)}
+          />
         </PrefRow>
         {NOTIFICATION_EVENTS.map((event) => (
-          <PrefRow key={event} label={EVENT_LABELS[event]}>
-            <Switch checked />
+          <PrefRow
+            key={event}
+            label={EVENT_ROWS[event].label}
+            htmlFor={`notify-${event}`}
+            hint={EVENT_ROWS[event].hint}
+          >
+            <Switch
+              id={`notify-${event}`}
+              checked={preferences?.events[event] ?? false}
+              // Off under a master switch that is off, exactly as the delivery
+              // rule reads it (`enabled && events[event]`): a category switch
+              // that could still be moved while nothing can be posted would be
+              // offering a choice with no effect.
+              disabled={disabled || preferences?.enabled === false}
+              onCheckedChange={(next) => void choose(event, next)}
+            />
           </PrefRow>
         ))}
       </PrefSection>
-    </Unavailable>
+    </>
   );
 }

@@ -69,6 +69,7 @@ export * from "./session";
 export * from "./session-provenance";
 export * from "./session-need";
 export * from "./notification-preferences";
+export * from "./notification-catalog";
 export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";

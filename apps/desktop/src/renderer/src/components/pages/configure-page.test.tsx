@@ -74,14 +74,26 @@ describe("Configure → Worktrees", () => {
 });
 
 describe("Configure → Sessions", () => {
-  it("offers the harness choice without a scope switch", () => {
+  it("offers the Chat model default without an inert Harness setting or scope switch", () => {
     const html = renderConfigure("sessions");
 
-    expect(html).toContain("Harness");
-    expect(html).toContain("New sessions");
+    expect(html).toContain("Chat");
+    expect(html).toContain("Model");
+    expect(html).not.toContain("Harness");
+    expect(html).not.toContain("Terminal companion");
+    expect(html).not.toContain("New sessions");
     // Scope is the surface, not a mode: an Inherit/Custom pair per row is the
     // exact vocabulary this redesign removed (see kit/override.tsx).
     expect(html).not.toContain("Inherit");
+  });
+
+  it("indexes the visible Chat section and retires the removed Harness vocabulary", () => {
+    const category = configureGroups(project)
+      .flatMap((group) => group.categories)
+      .find((candidate) => candidate.key === "sessions");
+
+    expect(category?.keywords).toContain("chat");
+    expect(category?.keywords).not.toContain("harness");
   });
 
   it("keeps a disabled model picker visible while its catalogue loads", () => {

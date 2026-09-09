@@ -23,6 +23,8 @@ import {
   BROWSER_IPC,
   SHELL_CHANNELS,
   SHELL_IPC,
+  NOTIFICATION_CHANNELS,
+  NOTIFICATION_IPC,
 } from "./ipc-descriptors";
 
 describe("SHELL_IPC descriptor table (VC-270)", () => {
@@ -224,6 +226,55 @@ describe("UPDATE_IPC descriptor table", () => {
   });
 });
 
+describe("NOTIFICATION_IPC descriptor table (VC-295)", () => {
+  it("derives the whole notification surface from its descriptors", () => {
+    expect(NOTIFICATION_CHANNELS).toEqual(Object.keys(NOTIFICATION_IPC));
+    expect(NOTIFICATION_CHANNELS).toEqual([
+      "volli:notifications-get",
+      "volli:notifications-set",
+      "volli:notifications-pending-activation",
+    ]);
+  });
+
+  it("refuses stray arguments on the two read requests", () => {
+    for (const channel of [
+      "volli:notifications-get",
+      "volli:notifications-pending-activation",
+    ] as const) {
+      const { guard, invalidError } = NOTIFICATION_IPC[channel];
+      expect(guard([])).toBe(true);
+      expect(guard(["junk"])).toBe(false);
+      expect(invalidError).toBe("Invalid request");
+    }
+  });
+
+  describe("volli:notifications-set", () => {
+    const { guard, invalidError } = NOTIFICATION_IPC["volli:notifications-set"];
+
+    it("accepts a switch move on a category and on the master switch", () => {
+      expect(guard([{ event: "needs-you", enabled: false }])).toBe(true);
+      expect(guard([{ event: null, enabled: true }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      // Shape only — whether "sessions" names a category is the service's
+      // question, and its refusal is a sentence rather than this message.
+      expect(guard([{ event: "sessions", enabled: false }])).toBe(true);
+      expect(guard([{ event: "needs-you", enabled: "off" }])).toBe(false);
+      expect(guard([{ event: 7, enabled: true }])).toBe(false);
+      expect(guard([{ enabled: true }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard(["needs-you"])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ event: null, enabled: true }, "extra"])).toBe(false);
+    });
+
+    it("names what was wrong with the request", () => {
+      expect(invalidError).toBe("Invalid notification preference");
+    });
+  });
+});
+
 describe("DATA_IPC descriptor table", () => {
   describe("volli:data-bootstrap (no-arg request)", () => {
     const { guard } = DATA_IPC["volli:data-bootstrap"];
@@ -393,29 +444,21 @@ describe("DATA_IPC descriptor table", () => {
     const { guard } = DATA_IPC["volli:project-session-defaults"];
     const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
 
-    it("accepts both fields null — the shape that clears both overrides", () => {
-      expect(guard([{ id: "p1", harness: null, model: null }])).toBe(true);
+    it("accepts null to clear the Chat model override", () => {
+      expect(guard([{ id: "p1", model: null }])).toBe(true);
     });
 
-    it("accepts a harness and a full model selection", () => {
-      expect(guard([{ id: "p1", harness: "codex", model }])).toBe(true);
+    it("accepts a full model selection", () => {
+      expect(guard([{ id: "p1", model }])).toBe(true);
     });
 
     it("rejects a model missing a field or carrying an unknown reasoning level", () => {
-      expect(guard([{ id: "p1", harness: null, model: { providerId: "a", modelId: "b" } }])).toBe(
-        false,
-      );
-      expect(
-        guard([{ id: "p1", harness: null, model: { ...model, reasoningLevel: "extreme" } }]),
-      ).toBe(false);
-    });
-
-    it("rejects a non-string harness", () => {
-      expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
+      expect(guard([{ id: "p1", model: { providerId: "a", modelId: "b" } }])).toBe(false);
+      expect(guard([{ id: "p1", model: { ...model, reasoningLevel: "extreme" } }])).toBe(false);
     });
 
     it("rejects a missing id, non-record payload, or wrong arity", () => {
-      expect(guard([{ harness: null, model: null }])).toBe(false);
+      expect(guard([{ model: null }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });

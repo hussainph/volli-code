@@ -35,6 +35,8 @@ import type {
   // Imported for `typeof` only — see the Session RPC door below. `import type`
   // of a const is legal and fully erased, which is exactly why these three can
   // be named here at all.
+  NotificationEvent,
+  NotificationTarget,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
@@ -206,6 +208,9 @@ import type {
   TicketStatusEntriesResult,
   TicketUpdateInput,
   TicketsResult,
+  NotificationPendingActivationResult,
+  NotificationSettingsResult,
+  NotificationSettingsView,
   UiZoomCommand,
   UnsavedDocumentsReport,
   UpdateChannel,
@@ -493,7 +498,7 @@ const api = {
     /** Replaces this project's per-skill rules wholesale — the Configure Skills table (VC-111). */
     setSkillModes: (input: ProjectSkillModesInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-skill-modes", input),
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
     /**
@@ -1251,6 +1256,50 @@ const api = {
       ipcRenderer.on("volli:update-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:update-state" satisfies VolliIpcEvent, listener);
+    },
+  },
+  /**
+   * Notification preferences and the click that comes back (VC-295).
+   *
+   * `setActiveTarget` is a `send`, not an invoke: it flips on every navigation,
+   * needs no reply, and main's copy is advisory — a report that never arrives
+   * costs one duplicate alert, which is the harmless direction of that trade.
+   */
+  notifications: {
+    /** The preferences plus what this machine knows about delivery. */
+    settings: (): Promise<NotificationSettingsResult> => invoke("volli:notifications-get"),
+    /** One switch move; `event: null` is the master switch. Answers with the stored view. */
+    set: (event: NotificationEvent | null, enabled: boolean): Promise<NotificationSettingsResult> =>
+      invoke("volli:notifications-set", { event, enabled }),
+    /**
+     * The view moved behind the page: a write in another window, or a delivery
+     * failure that landed (or was retired) while Settings was open. The whole
+     * view every time.
+     */
+    onSettingsChanged: (callback: (view: NotificationSettingsView) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, view: NotificationSettingsView) =>
+        callback(view);
+      ipcRenderer.on("volli:notification-settings" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:notification-settings" satisfies VolliIpcEvent, listener);
+    },
+    /** What this window is showing, so main can suppress an alert for it. */
+    setActiveTarget: (target: NotificationTarget | null): void => {
+      ipcRenderer.send("volli:notification-active-target" satisfies VolliIpcChannel, target);
+    },
+    /** The target of a click that arrived before this window existed, taken once. */
+    pendingActivation: (): Promise<NotificationPendingActivationResult> =>
+      invoke("volli:notifications-pending-activation"),
+    /** A native alert was clicked; the payload is where it points. */
+    onActivated: (callback: (target: NotificationTarget) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, target: NotificationTarget) =>
+        callback(target);
+      ipcRenderer.on("volli:notification-activated" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:notification-activated" satisfies VolliIpcEvent,
+          listener,
+        );
     },
   },
   fs: {
